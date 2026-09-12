@@ -1,0 +1,20 @@
+# Explicit build-context allowlist: never send local secrets or media to Docker.
+**
+!Dockerfile
+!server/
+!server/**
+!web-dist/
+!web-dist/**
+server/target/
+server/**/target/
+dashboard/node_modules/
+dashboard/dist/
+**/.env
+**/.env.*
+**/*.log
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite-*
+**/.DS_Store
+**/*.tsbuildinfo

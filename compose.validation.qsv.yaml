@@ -1,0 +1,10 @@
+# Opt-in GPU acceptance overlay; never merge into production Compose.
+services:
+  server:
+    devices:
+      - "${VIPTV_TEST_QSV_DEVICE:?Set a render device}:/dev/dri/renderD128"
+    group_add:
+      - "${VIPTV_TEST_RENDER_GID:?Set the render device numeric group}"
+    environment:
+      VIPTV_QSV_DEVICE: /dev/dri/renderD128
+      LIBVA_DRIVER_NAME: iHD

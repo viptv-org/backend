@@ -1,0 +1,21 @@
+# Optional host integration: reuse the existing connected iptv-warp namespace.
+# Apply together with compose.yaml. No proxy port is published to the host.
+services:
+  viptv:
+    environment:
+      VIPTV_WARP_PROXY: http://iptv-warp:8899
+    networks:
+      - default
+      - warp
+  warp-egress:
+    build: ./deploy/warp
+    image: viptv:warp-egress
+    restart: unless-stopped
+    network_mode: container:iptv-warp
+    read_only: true
+    tmpfs:
+      - /tmp
+networks:
+  warp:
+    external: true
+    name: cloudflare-net

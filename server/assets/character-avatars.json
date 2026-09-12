@@ -1,0 +1,250 @@
+{
+  "disney": [
+    {
+      "name": "Mickey Mouse",
+      "url": "https://static.wikia.nocookie.net/disney/images/2/2e/Disney_Mickey_Mouse.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Mickey_Mouse"
+    },
+    {
+      "name": "Minnie Mouse",
+      "url": "https://static.wikia.nocookie.net/disney/images/6/67/Minnie_Mouse.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Minnie_Mouse"
+    },
+    {
+      "name": "Donald Duck",
+      "url": "https://static.wikia.nocookie.net/disney/images/a/ab/Donald_Duck_Disney_1.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Donald_Duck"
+    },
+    {
+      "name": "Daisy Duck",
+      "url": "https://static.wikia.nocookie.net/disney/images/c/c9/Classic_Daisy_Duck.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Daisy_Duck"
+    },
+    {
+      "name": "Goofy",
+      "url": "https://static.wikia.nocookie.net/disney/images/e/e5/Goofy.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Goofy"
+    },
+    {
+      "name": "Pluto",
+      "url": "https://static.wikia.nocookie.net/disney/images/1/13/Pluto_the_pup.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Pluto"
+    },
+    {
+      "name": "Chip and Dale",
+      "url": "https://static.wikia.nocookie.net/disney/images/3/35/ChipAndDale.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Chip_and_Dale"
+    },
+    {
+      "name": "Scrooge McDuck",
+      "url": "https://static.wikia.nocookie.net/disney/images/5/54/Scrooge_McDuck.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Scrooge_McDuck"
+    },
+    {
+      "name": "Oswald the Lucky Rabbit",
+      "url": "https://static.wikia.nocookie.net/disney/images/4/4b/Oswald_cartoon.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Oswald_the_Lucky_Rabbit"
+    },
+    {
+      "name": "Pete",
+      "url": "https://static.wikia.nocookie.net/disney/images/7/7e/Pete.PNG/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Pete"
+    },
+    {
+      "name": "Clarabelle Cow",
+      "url": "https://static.wikia.nocookie.net/disney/images/f/f7/Clarabelle_Juice.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Clarabelle_Cow"
+    },
+    {
+      "name": "Elsa",
+      "url": "https://static.wikia.nocookie.net/disney/images/9/95/Profile_-_Elsa.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Elsa"
+    },
+    {
+      "name": "Anna",
+      "url": "https://static.wikia.nocookie.net/disney/images/0/0f/Profile_-_Anna.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Anna"
+    },
+    {
+      "name": "Olaf",
+      "url": "https://static.wikia.nocookie.net/disney/images/5/53/Profile_-_Olaf.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Olaf"
+    }
+  ],
+  "princesses": [
+    {
+      "name": "Ariel",
+      "url": "https://static.wikia.nocookie.net/disney/images/8/8a/Profile_-_Ariel.jpg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Ariel"
+    },
+    {
+      "name": "Belle",
+      "url": "https://static.wikia.nocookie.net/disney/images/1/1b/Profile_-_Belle.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Belle"
+    },
+    {
+      "name": "Cinderella",
+      "url": "https://static.wikia.nocookie.net/disney/images/e/e5/Profile_-_Cinderella.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Cinderella"
+    },
+    {
+      "name": "Snow White",
+      "url": "https://static.wikia.nocookie.net/disney/images/3/33/Profile_-_Snow_White.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Snow_White"
+    },
+    {
+      "name": "Aurora",
+      "url": "https://static.wikia.nocookie.net/disney/images/2/2a/Profile_-_Aurora.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Aurora"
+    },
+    {
+      "name": "Jasmine",
+      "url": "https://static.wikia.nocookie.net/disney/images/c/cd/Profile_-_Jasmine.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Jasmine"
+    },
+    {
+      "name": "Pocahontas",
+      "url": "https://static.wikia.nocookie.net/disney/images/7/7b/Profile_-_Pocahontas.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Pocahontas"
+    },
+    {
+      "name": "Tiana",
+      "url": "https://static.wikia.nocookie.net/disney/images/f/fa/Profile_-_Tiana.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Tiana"
+    },
+    {
+      "name": "Rapunzel",
+      "url": "https://static.wikia.nocookie.net/disney/images/a/ae/Profile_-_Rapunzel.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Rapunzel"
+    },
+    {
+      "name": "Moana",
+      "url": "https://static.wikia.nocookie.net/disney/images/7/7d/Profile_-_Moana.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Moana"
+    }
+  ],
+  "animal-friends": [
+    {
+      "name": "Simba",
+      "url": "https://static.wikia.nocookie.net/disney/images/3/37/Profile_-_Simba.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Simba"
+    },
+    {
+      "name": "Nala",
+      "url": "https://static.wikia.nocookie.net/disney/images/5/55/Profile_-_Nala.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Nala"
+    },
+    {
+      "name": "Timon",
+      "url": "https://static.wikia.nocookie.net/disney/images/4/45/Profile_-_Timon.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Timon"
+    },
+    {
+      "name": "Pumbaa",
+      "url": "https://static.wikia.nocookie.net/disney/images/e/e6/Profile_-_Pumbaa.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Pumbaa"
+    },
+    {
+      "name": "Winnie the Pooh",
+      "url": "https://static.wikia.nocookie.net/disney/images/0/03/Profile_-_Winnie_the_Pooh.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Winnie_the_Pooh"
+    },
+    {
+      "name": "Tigger",
+      "url": "https://static.wikia.nocookie.net/disney/images/6/60/Profile_-_Tigger.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Tigger"
+    },
+    {
+      "name": "Eeyore",
+      "url": "https://static.wikia.nocookie.net/disney/images/1/1c/Profile_-_Eeyore.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Eeyore"
+    },
+    {
+      "name": "Piglet",
+      "url": "https://static.wikia.nocookie.net/disney/images/5/5d/Profile_-_Piglet.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Piglet"
+    },
+    {
+      "name": "Stitch",
+      "url": "https://static.wikia.nocookie.net/disney/images/b/b7/Profile_-_Stitch.jpg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Stitch"
+    },
+    {
+      "name": "Bambi",
+      "url": "https://static.wikia.nocookie.net/disney/images/c/ce/Profile_-_Bambi.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Bambi"
+    },
+    {
+      "name": "Dumbo",
+      "url": "https://static.wikia.nocookie.net/disney/images/e/e2/Profile_-_Dumbo.jpg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Dumbo"
+    },
+    {
+      "name": "Thumper",
+      "url": "https://static.wikia.nocookie.net/disney/images/1/16/Profile_-_Thumper.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Thumper"
+    }
+  ],
+  "villains": [
+    {
+      "name": "Maleficent",
+      "url": "https://static.wikia.nocookie.net/disney/images/0/05/Profile_-_Maleficent.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Maleficent"
+    },
+    {
+      "name": "Ursula",
+      "url": "https://static.wikia.nocookie.net/disney/images/7/72/Profile_-_Ursula.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Ursula"
+    },
+    {
+      "name": "Jafar",
+      "url": "https://static.wikia.nocookie.net/disney/images/6/60/Profile_-_Jafar.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Jafar"
+    },
+    {
+      "name": "Scar",
+      "url": "https://static.wikia.nocookie.net/disney/images/6/66/Profile_-_Scar.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Scar"
+    },
+    {
+      "name": "Hades",
+      "url": "https://static.wikia.nocookie.net/disney/images/2/2c/Profile_-_Hades.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Hades"
+    },
+    {
+      "name": "Cruella De Vil",
+      "url": "https://static.wikia.nocookie.net/disney/images/9/92/Profile_-_Cruella.png/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Cruella_De_Vil"
+    },
+    {
+      "name": "Captain Hook",
+      "url": "https://static.wikia.nocookie.net/disney/images/0/0b/Profile_-_Captain_Hook.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Captain_Hook"
+    },
+    {
+      "name": "Gaston",
+      "url": "https://static.wikia.nocookie.net/disney/images/d/d4/Profile_-_Gaston.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Gaston"
+    },
+    {
+      "name": "Queen of Hearts",
+      "url": "https://static.wikia.nocookie.net/disney/images/6/61/Profile_-_Queen_of_Hearts.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Queen_of_Hearts"
+    },
+    {
+      "name": "Dr. Facilier",
+      "url": "https://static.wikia.nocookie.net/disney/images/3/3f/Profile_-_Dr._Facilier.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Dr._Facilier"
+    },
+    {
+      "name": "Yzma",
+      "url": "https://static.wikia.nocookie.net/disney/images/f/f2/Profile_-_Yzma.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Yzma"
+    },
+    {
+      "name": "Mother Gothel",
+      "url": "https://static.wikia.nocookie.net/disney/images/f/f9/Profile_-_Mother_Gothel.jpeg/revision/latest/scale-to-width-down/160?format=png",
+      "source": "https://disney.fandom.com/wiki/Mother_Gothel"
+    }
+  ]
+}

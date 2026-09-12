@@ -1,0 +1,364 @@
+{
+  "source": "vynxc/viptv",
+  "commit": "7d6b4131a44d87b58edcf12709af5851da387176",
+  "files": [
+    {
+      "source": ".dockerignore",
+      "destination": ".dockerignore",
+      "sha256": "89ac5165e0f3a12c7724d0ca25c7a51638f30dabe2ba360037b9b31f6e954dcd",
+      "extracted_sha256": "cdd968157dd9695970f2292b1a89ed709e7c457ffd0349bd9043869d11cde16a"
+    },
+    {
+      "source": ".env.example",
+      "destination": ".env.example",
+      "sha256": "8d2fe214b35ca561c77bf82afed1e9e47b368671702389ebad8f39c272c57863"
+    },
+    {
+      "source": "DEPLOYMENT.md",
+      "destination": "DEPLOYMENT.md",
+      "sha256": "98cd9bbe715ecb7cfe7321e75810601ad5e4bcc9d8a812cab22c725277491606"
+    },
+    {
+      "source": "Dockerfile",
+      "destination": "Dockerfile",
+      "sha256": "76f6a1644769cc429a3ecb381758f62c7e13d975e5fec26a4a7b8abf132720e3",
+      "extracted_sha256": "b64c5561ba817d1b0a474219100dbf85c76ce3460d9c7671272fe5a3702f27cd"
+    },
+    {
+      "source": "compose.qsv.yaml",
+      "destination": "compose.qsv.yaml",
+      "sha256": "3c35361bb7e5172353554aa0f4c39a01ad1b2ac6cc3579255f59809997be5471"
+    },
+    {
+      "source": "compose.validation.qsv.yaml",
+      "destination": "compose.validation.qsv.yaml",
+      "sha256": "c70b92ecb86fbf3f5423432fbc87aa74f038f65ed7f395ad871df50baeb887d1"
+    },
+    {
+      "source": "compose.validation.yaml",
+      "destination": "compose.validation.yaml",
+      "sha256": "fdea62966a98dcad169b0361dd1901ecadadfe45c4d4a2dd519acf017ec66eed"
+    },
+    {
+      "source": "compose.warp.yaml",
+      "destination": "compose.warp.yaml",
+      "sha256": "48831f2c53cf36791056737e65b2e2079419db8b7bdcd0fe810f503edd5e84c2"
+    },
+    {
+      "source": "compose.yaml",
+      "destination": "compose.yaml",
+      "sha256": "72bdee95cc933de4ce780f15996fdff4cc40d50e2f7e80ef724e4ead8f009787",
+      "extracted_sha256": "adc939816371792d4ee1d3a38388b9e28b1dfc559d141718dd593c50bf1f8235"
+    },
+    {
+      "source": "deploy/warp/Dockerfile",
+      "destination": "deploy/warp/Dockerfile",
+      "sha256": "fe82d97ddb1995f3af67fc6b5b3778c201f145de8363c82f7918662ed47c6593"
+    },
+    {
+      "source": "deploy/warp/tinyproxy.conf",
+      "destination": "deploy/warp/tinyproxy.conf",
+      "sha256": "64a62d27879d7eed61f83d63eebf7ddca2f63134409ffe292f327b72e842e09e"
+    },
+    {
+      "source": "scripts/container-check.sh",
+      "destination": "scripts/container-check.sh",
+      "sha256": "8ad4794f83d5086a66662f50b01681539e80f34936a0de37d0eb28ffe6bb5dc8"
+    },
+    {
+      "source": "scripts/host-check.sh",
+      "destination": "scripts/host-check.sh",
+      "sha256": "4fe768f839aab01f610876e46aa3bfc7285c3f5bbf157f79910973cf247d64f0"
+    },
+    {
+      "source": "scripts/qsv-frame-check.py",
+      "destination": "scripts/qsv-frame-check.py",
+      "sha256": "004245519e7060907f0e9c562438d3cef7a65a7e2781106f5fdb1193cc104a78"
+    },
+    {
+      "source": "server/.gitignore",
+      "destination": "server/.gitignore",
+      "sha256": "7a86dbcfb930eaa8af4a945e968af3f22e9621f6b54f124e1f501c037cef5cb7"
+    },
+    {
+      "source": "server/AUTH.md",
+      "destination": "server/AUTH.md",
+      "sha256": "c58dd016b1768ed3542bea781d2b74bad8377f65020c4bfc675633ff106c007e"
+    },
+    {
+      "source": "server/Cargo.lock",
+      "destination": "server/Cargo.lock",
+      "sha256": "ea543c596f0b46e0ef6edc96b45701b4223c8f762d34abf029bcfa657f2e0e1d"
+    },
+    {
+      "source": "server/Cargo.toml",
+      "destination": "server/Cargo.toml",
+      "sha256": "20a483b26dde4a25fcc509fac8588b5f10ae10425a01813ea8dc7457da3239c7"
+    },
+    {
+      "source": "server/README.md",
+      "destination": "server/README.md",
+      "sha256": "d1a0409c5c28bd5f412181b511badd82758c258e5bb24cf5607e46bc3082b36f"
+    },
+    {
+      "source": "server/assets/character-avatars.json",
+      "destination": "server/assets/character-avatars.json",
+      "sha256": "c4173dcf60f5ee3a026a7247e89c23b80e3b467173c0d209c551566dfd94daa5"
+    },
+    {
+      "source": "server/examples/family_tv_pilot.rs",
+      "destination": "server/examples/family_tv_pilot.rs",
+      "sha256": "75a6393287eb30e9702140a36bea239a33a73c6f2552a6b1b495a9bdd90cb182"
+    },
+    {
+      "source": "server/src/activity.rs",
+      "destination": "server/src/activity.rs",
+      "sha256": "41ac23c0f7d15bec5e8c10dbf3ecb96e3b0c7f194a5b4f4a0788ae1e9863ac7c"
+    },
+    {
+      "source": "server/src/addon.rs",
+      "destination": "server/src/addon.rs",
+      "sha256": "2544d3bd448b2db521d055e866c1dab45e56c5e0529739dcdef9d6756bfd281e"
+    },
+    {
+      "source": "server/src/auth.rs",
+      "destination": "server/src/auth.rs",
+      "sha256": "fb815f6c160865687d00c0508375b2632015eb21c3bbfb8affdb9eb85c8e0d15"
+    },
+    {
+      "source": "server/src/auth_integration_tests.rs",
+      "destination": "server/src/auth_integration_tests.rs",
+      "sha256": "b04b9dd5f26c06e4660200e9d537c8dc1a19da07739b8cc66f64769ec840e938"
+    },
+    {
+      "source": "server/src/automation.rs",
+      "destination": "server/src/automation.rs",
+      "sha256": "1174e4e20fa0ab5ed20f1264dfe80db6aee118f86bb9c37d9c7cea6f1250e6b0"
+    },
+    {
+      "source": "server/src/continuation.rs",
+      "destination": "server/src/continuation.rs",
+      "sha256": "e35632f32629a18e7204f648f0f15de3aa559e0fbb11eadc3c6afab78a0c4467"
+    },
+    {
+      "source": "server/src/contract_tests.rs",
+      "destination": "server/src/contract_tests.rs",
+      "sha256": "38a029f8cbbffc92c2771e1a95b5c092727174e9bd055b4788bbc5e66e2fd02d"
+    },
+    {
+      "source": "server/src/country_names.json",
+      "destination": "server/src/country_names.json",
+      "sha256": "84d1ab0cbb9dbbf79272c0b35284a2586a100410fc24fe1b3eb06a84609d7270"
+    },
+    {
+      "source": "server/src/guides.rs",
+      "destination": "server/src/guides.rs",
+      "sha256": "05e23d73ad0c9fd7b9d8adfc9766031b2f8ae81741ecffce0f81d1a57ea628c3"
+    },
+    {
+      "source": "server/src/health.rs",
+      "destination": "server/src/health.rs",
+      "sha256": "32f54ee68abc91dc6188c71dcac934abdd1a202ff04c72b0e58e8b692f1aab35"
+    },
+    {
+      "source": "server/src/kids.rs",
+      "destination": "server/src/kids.rs",
+      "sha256": "9ddfb3af4ac82bf9fb3cb0cd5ce013d3026128700a18650dcac584f5326774ce"
+    },
+    {
+      "source": "server/src/lib.rs",
+      "destination": "server/src/lib.rs",
+      "sha256": "d87ec5dd27e107bc193bd4551dda6399ecee52a7bc3b4f990875dd655be1450d"
+    },
+    {
+      "source": "server/src/library.rs",
+      "destination": "server/src/library.rs",
+      "sha256": "c2dbefed2f6be2810f5ca11dbafae851b68d2ab5c243d204433ee8a4ca3f8c71"
+    },
+    {
+      "source": "server/src/lineup.rs",
+      "destination": "server/src/lineup.rs",
+      "sha256": "0af3573e2e6aaab05a43294ca7630e5a4efe7af70150fd9f0ffdacc86aad02f8"
+    },
+    {
+      "source": "server/src/lineup/matching.rs",
+      "destination": "server/src/lineup/matching.rs",
+      "sha256": "77b4eb33c6e67305baa6e2da53baff90d3dbb19dc0259fb7ffa04616de07813d"
+    },
+    {
+      "source": "server/src/live_catalog.rs",
+      "destination": "server/src/live_catalog.rs",
+      "sha256": "b9c0b74b9e6cc2b5d89d38010004878048feceada160d5fa112a7de9097ada23"
+    },
+    {
+      "source": "server/src/live_policy.rs",
+      "destination": "server/src/live_policy.rs",
+      "sha256": "707db133916af0cb05afe66c6f9bde91ac6a3c637d23d4667a469d8c2f03d57f"
+    },
+    {
+      "source": "server/src/main.rs",
+      "destination": "server/src/main.rs",
+      "sha256": "c563d3e821100b68d3e0d7147d9be4687cb0e8cfc9338eee0cbf1a645af2de23"
+    },
+    {
+      "source": "server/src/playback.rs",
+      "destination": "server/src/playback.rs",
+      "sha256": "2e27c208d6d81ec29d443167c116c7a3b861fc56378005b76d13eb91798be20b"
+    },
+    {
+      "source": "server/src/playback/direct.rs",
+      "destination": "server/src/playback/direct.rs",
+      "sha256": "e295ab5ba4e203bf3ee3a877612c8467ad8528de71591fab31706c0e8f6adcc3"
+    },
+    {
+      "source": "server/src/playback/hardware.rs",
+      "destination": "server/src/playback/hardware.rs",
+      "sha256": "8fb54ce306a165ce5604ff3abf92806a97708c6593c3e87f927a13c55a7d3efa"
+    },
+    {
+      "source": "server/src/preferences.rs",
+      "destination": "server/src/preferences.rs",
+      "sha256": "fc76e92adba61e83bb3ca61e13b1c1aa593f822b33299546709037ce2d96bc8c"
+    },
+    {
+      "source": "server/src/provider.rs",
+      "destination": "server/src/provider.rs",
+      "sha256": "d5a01cd50e58bfadf698d70866c99fb7415f531f9370583c9722522eac74f119"
+    },
+    {
+      "source": "server/src/provider/accounts.rs",
+      "destination": "server/src/provider/accounts.rs",
+      "sha256": "57001d3206cca490308bd3b8c84779ac29ab176bf1413ab9af2ad1ab5a9c61f8"
+    },
+    {
+      "source": "server/src/provider/egress.rs",
+      "destination": "server/src/provider/egress.rs",
+      "sha256": "4549e936a4224c957959bdbcadab35bf4d7bd5624481ae3c8698b92420f4ddff"
+    },
+    {
+      "source": "server/src/provider/pools.rs",
+      "destination": "server/src/provider/pools.rs",
+      "sha256": "8ee36556e001cb191b72b1e221cf9c6db097329a31e83ecb70a0690947a2f6e2"
+    },
+    {
+      "source": "server/src/provider/selection.rs",
+      "destination": "server/src/provider/selection.rs",
+      "sha256": "ada313838a723685413444914ad5e3df7133b393e6602c1c4276916cc9a40bed"
+    },
+    {
+      "source": "server/src/service_health.rs",
+      "destination": "server/src/service_health.rs",
+      "sha256": "e45f8ac84a423b17a7d854d74843cbfb33630d71bf9789497e030d7c583d342f"
+    },
+    {
+      "source": "server/src/session.rs",
+      "destination": "server/src/session.rs",
+      "sha256": "8c077230ce0004f05d8170cc98bca37b0bbdb21e8451e8294d69ba4169f3899c"
+    },
+    {
+      "source": "server/src/session/live.rs",
+      "destination": "server/src/session/live.rs",
+      "sha256": "701b107f8be1b1ca632de3e75517e139998734e1bf80ae48e9ef14f2c1019729"
+    },
+    {
+      "source": "server/src/session/shared.rs",
+      "destination": "server/src/session/shared.rs",
+      "sha256": "39fdad98e2cbe286721722ab8dac88df2bfffbb330e67ca73e78340a5c5180ba"
+    },
+    {
+      "source": "server/src/session/shared/tests.rs",
+      "destination": "server/src/session/shared/tests.rs",
+      "sha256": "6fabf0d1b6644543cf85325f72c5d0f4844135cdc9bacd14d61c7b07d727af27"
+    },
+    {
+      "source": "server/src/util.rs",
+      "destination": "server/src/util.rs",
+      "sha256": "e8c7fba671bf8aa1a2b166596f9d2af715a29efd2b3e55742ffea11ca096a6ad"
+    },
+    {
+      "source": "server/tests/api.rs",
+      "destination": "server/tests/api.rs",
+      "sha256": "fe0a4eaaa7babbdbf3b40b0d44aa1660e3fc31158f0fcbe5a753effed820f095"
+    },
+    {
+      "source": "server/tests/auth_http_flow.rs",
+      "destination": "server/tests/auth_http_flow.rs",
+      "sha256": "722200cd3395415dc2f3809084e8179d492caf51c3a5c35ba9108d005d0501d8"
+    },
+    {
+      "source": "server/tests/auth_migration.rs",
+      "destination": "server/tests/auth_migration.rs",
+      "sha256": "d440b0d9cfcc4ea66df3038cd7b2fbbee926b96a60023534c4c5a7773dbeb5dc"
+    },
+    {
+      "source": "server/tests/auth_surface.rs",
+      "destination": "server/tests/auth_surface.rs",
+      "sha256": "ffa214926fbe09158400ace51daad203523d7cc29997d5e8e8d5b2b3c38d6095"
+    },
+    {
+      "source": "server/tests/dashboard_routes.rs",
+      "destination": "server/tests/dashboard_routes.rs",
+      "sha256": "d576440c299b267e71651725e17ec647edf5bd38c81947ef299c742b6c431603"
+    },
+    {
+      "source": "tests/Dockerfile.integration",
+      "destination": "tests/Dockerfile.integration",
+      "sha256": "4f8df4e7727ddc67c08ea13a23d34c012b33c2bb7f0d50b831ed5a8287fe1bc7"
+    },
+    {
+      "source": "tests/README.md",
+      "destination": "tests/README.md",
+      "sha256": "aea3887b77e18e27c5014b1e45637a3f59021e5808e4e85467664059e7630eaf"
+    },
+    {
+      "source": "tests/account_smoke.py",
+      "destination": "tests/account_smoke.py",
+      "sha256": "280cee14d8e767d8b5d1ba1879b97154bdf9da092441b356327306900117391b"
+    },
+    {
+      "source": "tests/generate_long_fixture.sh",
+      "destination": "tests/generate_long_fixture.sh",
+      "sha256": "a8b8e4c91eeca48f37abf6aafeaa9589a5c40927fc935982370f3cbd7521b330"
+    },
+    {
+      "source": "tests/incremental_providers.py",
+      "destination": "tests/incremental_providers.py",
+      "sha256": "3a6a7df39be886227a71532a073a0f1b690f591cca413f330f39d5e4616f4118"
+    },
+    {
+      "source": "tests/live_deployment_check.py",
+      "destination": "tests/live_deployment_check.py",
+      "sha256": "4d7b3b7a9f59aea69a45c59d73c0e9f608a3f4c0803782ea19ca78cf9eaae578"
+    },
+    {
+      "source": "tests/mock_upstream.py",
+      "destination": "tests/mock_upstream.py",
+      "sha256": "35c9a55d1c4fde7525dd538ff2fcc02456a7db722e50d1f37791054edb2172f2"
+    },
+    {
+      "source": "tests/smoke.py",
+      "destination": "tests/smoke.py",
+      "sha256": "cdee9e9d738f35ce915c2ed1e5683ac6d5f8e5be8fc693d55c532012a6fa1137"
+    },
+    {
+      "source": "tests/sustained_playback.py",
+      "destination": "tests/sustained_playback.py",
+      "sha256": "86867f237478dc90832b03a213e06412787c0ca3ec87253d75da3d8808270571"
+    },
+    {
+      "source": "tests/test_host_check.py",
+      "destination": "tests/test_host_check.py",
+      "sha256": "22a5c9d33a2bd424276cac38a58b3610a7c7f46c69f487966471440bf469b77b"
+    },
+    {
+      "source": "tests/validate_deployment.cjs",
+      "destination": "tests/validate_deployment.cjs",
+      "sha256": "147c95502b8aab1f27ef770412f20aa5af073378bfb43d9fc4c53d0b157daf47"
+    }
+  ],
+  "packaging_changes": [
+    ".dockerignore",
+    "Dockerfile",
+    "compose.yaml"
+  ]
+}

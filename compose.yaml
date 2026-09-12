@@ -1,0 +1,44 @@
+services:
+  viptv:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: viptv:local
+    init: true
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # LAN reachable by default. Limit to your LAN interface/firewall; never port-forward.
+      - "${VIPTV_PUBLISH_IP:-0.0.0.0}:${VIPTV_PORT:-8080}:8080"
+    environment:
+      # Required exact public HTTPS dashboard origin; Compose stops if it is unset/empty.
+      VIPTV_AUTH_ORIGIN: "${VIPTV_AUTH_ORIGIN:?Set VIPTV_AUTH_ORIGIN to the public HTTPS origin}"
+      VIPTV_BIND: "0.0.0.0:8080"
+      VIPTV_DATABASE: /data/viptv.sqlite
+      VIPTV_MEDIA_DIR: /cache/hls
+      VIPTV_DASHBOARD_DIST: /app/dashboard
+      VIPTV_MAX_SESSIONS: "${VIPTV_MAX_SESSIONS:-2}"
+      VIPTV_SESSION_TTL: "${VIPTV_SESSION_TTL:-120}"
+      VIPTV_DIRECT_PLAY: "${VIPTV_DIRECT_PLAY:-1}"
+    volumes:
+      - viptv_data:/data
+    # Ephemeral generated media; the tmpfs size bounds generated cache storage, not CPU/worker throughput.
+    tmpfs:
+      - /cache:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
+    # No CPU, memory, swap, or PID quota: FFmpeg may use every host core/thread.
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  viptv_data:
+    name: viptv_viptv_data

@@ -1,0 +1,11 @@
+# Optional Intel Quick Sync. Apply with compose.yaml and compose.warp.yaml.
+# Get the numeric render-device group with: stat -c %g /dev/dri/renderD128
+services:
+  viptv:
+    devices:
+      - "${VIPTV_QSV_DEVICE:-/dev/dri/renderD128}:/dev/dri/renderD128"
+    group_add:
+      - "${VIPTV_RENDER_GID:?Set VIPTV_RENDER_GID to the render device numeric group}"
+    environment:
+      VIPTV_QSV_DEVICE: /dev/dri/renderD128
+      LIBVA_DRIVER_NAME: iHD

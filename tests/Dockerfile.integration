@@ -1,0 +1,19 @@
+# Test-only derivative: production remains Python-free.
+ARG VIPTV_BASE_IMAGE=viptv:local
+FROM ${VIPTV_BASE_IMAGE}
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
+# Build with tests/ as the context (root .dockerignore excludes tests).
+COPY --chown=10001:10001 *.py /app/tests/
+# Normalize directory traversal separately from source-file read permissions.
+RUN chmod 0555 /app/tests && chmod 0444 /app/tests/*.py
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER 10001:10001
+WORKDIR /app
+# Fail at build time if the actual unprivileged test user cannot read the fixtures.
+RUN python3 -c "from pathlib import Path; files=list(Path('/app/tests').glob('*.py')); assert files; [compile(p.read_bytes(), str(p), 'exec') for p in files]"
+HEALTHCHECK NONE
+ENTRYPOINT []
+CMD ["python3", "tests/smoke.py"]
