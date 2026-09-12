@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 use viptv_server::{
     playback::{Config, PlaybackManager},
-    router, App,
+    router_with_tv, App,
 };
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -91,10 +91,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("unknown command".into());
     }
     let dashboard = std::env::var_os("VIPTV_DASHBOARD_DIST").map(PathBuf::from);
+    let tv_dashboard = std::env::var_os("VIPTV_TV_DIST").map(PathBuf::from);
     let bind = std::env::var("VIPTV_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("VIPTV server listening");
-    axum::serve(listener, router(app, dashboard))
+    axum::serve(listener, router_with_tv(app, dashboard, tv_dashboard))
         .with_graceful_shutdown(async {
             #[cfg(unix)]
             {

@@ -11,11 +11,12 @@ Rust/Axum, SQLite, Xtream and Stremio-compatible addons, managed FFmpeg HLS. Req
 | `VIPTV_DATABASE` | `data/viptv.sqlite` |
 | `VIPTV_MEDIA_DIR` | `data/hls` (dedicated writable session storage; do not share between running instances) |
 | `VIPTV_DASHBOARD_DIST` | Optional dashboard built assets directory, SPA fallback |
+| `VIPTV_TV_DIST` | Optional TV React built assets directory, mounted only at `/tv` with SPA fallback |
 | `VIPTV_FFMPEG`, `VIPTV_FFPROBE` | Executable paths, default `ffmpeg`, `ffprobe` |
 | `VIPTV_MAX_SESSIONS` | `3`, range 1–32 |
 | `VIPTV_SESSION_TTL` | `120` seconds, range 30–3600 |
 
-Bind behind a TLS reverse proxy for use beyond a trusted network. Health, registration/login/recovery and credential-exchange endpoints, device pairing initiation/polling, and expiring media-capability URLs are public entry points; application and account administration require authentication. No permissive CORS is enabled: serve dashboard assets on the API origin or proxy `/api` and `/media` through its origin. Proxy SSE without buffering. Secrets are never included in playback responses or process error messages; SQLite necessarily stores provider credentials, so protect database/backup permissions. Do not expose process listings or FFmpeg command lines to untrusted local users. Addon manifests may themselves contain installation credentials, and the owner-only addon API displays their configured URL.
+Bind behind a TLS reverse proxy for use beyond a trusted network. Health, registration/login/recovery and credential-exchange endpoints, device pairing initiation/polling, and expiring media-capability URLs are public entry points; application and account administration require authentication. No permissive CORS is enabled: serve dashboard assets on the API origin or proxy `/api` and `/media` through its origin. `VIPTV_TV_DIST` keeps the TV app on that same HTTPS origin at `/tv`; it does not replace the account dashboard at `/`. Vizio should load that hosted URL. A Tizen installation should be a thin signed launcher for that hosted `/tv/?platform=tizen` URL, rather than a packaged local-origin copy of the React bundle. Proxy SSE without buffering. Secrets are never included in playback responses or process error messages; SQLite necessarily stores provider credentials, so protect database/backup permissions. Do not expose process listings or FFmpeg command lines to untrusted local users. Addon manifests may themselves contain installation credentials, and the owner-only addon API displays their configured URL.
 
 ## Accounts and onboarding
 

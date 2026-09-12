@@ -615,7 +615,18 @@ fn source_card(
     card
 }
 
+/// Backward-compatible application router with the optional account dashboard at `/`.
 pub fn router(app: App, dashboard: Option<std::path::PathBuf>) -> Router {
+    router_with_tv(app, dashboard, None)
+}
+
+/// Mount the account dashboard at `/` and the TV React bundle at `/tv` without
+/// changing API/media origins or enabling cross-origin credentials.
+pub fn router_with_tv(
+    app: App,
+    dashboard: Option<std::path::PathBuf>,
+    tv_dashboard: Option<std::path::PathBuf>,
+) -> Router {
     automation::start(&app);
     health::start(&app);
     guides::start(&app);
@@ -805,6 +816,18 @@ pub fn router(app: App, dashboard: Option<std::path::PathBuf>) -> Router {
                 get(move || dashboard_entry(device_index.clone())),
             )
             .fallback_service(
+                tower_http::services::ServeDir::new(&path).not_found_service(
+                    tower_http::services::ServeFile::new(path.join("index.html")),
+                ),
+            );
+    }
+    if let Some(path) = tv_dashboard {
+        let tv_index = path.join("index.html");
+        let tv_entry = tv_index.clone();
+        r = r
+            .route("/tv", get(move || dashboard_entry(tv_entry.clone())))
+            .nest_service(
+                "/tv/",
                 tower_http::services::ServeDir::new(&path).not_found_service(
                     tower_http::services::ServeFile::new(path.join("index.html")),
                 ),
