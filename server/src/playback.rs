@@ -38,6 +38,9 @@ pub struct Capabilities {
     pub aac: bool,
     /// Opt-in only: old clients retain managed HLS.
     pub direct_play: bool,
+    /// Omitted by legacy clients; runtime probes may disable either transport.
+    pub direct_mp4: Option<bool>,
+    pub direct_hls: Option<bool>,
     pub hevc_sdr: bool,
 }
 impl Default for Capabilities {
@@ -49,6 +52,8 @@ impl Default for Capabilities {
             hevc: false,
             aac: true,
             direct_play: false,
+            direct_mp4: None,
+            direct_hls: None,
             hevc_sdr: false,
         }
     }
@@ -1828,9 +1833,9 @@ fn direct_format(
     }
     let format = probe.format.get("format_name")?.as_str()?;
     if format.split(',').any(|f| f == "hls") {
-        Some("hls")
+        caps.direct_hls.unwrap_or(true).then_some("hls")
     } else if format.split(',').any(|f| f == "mp4" || f == "mov") {
-        Some("mp4")
+        caps.direct_mp4.unwrap_or(true).then_some("mp4")
     } else {
         None
     }
@@ -2358,6 +2363,46 @@ impl Probe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_transport_capabilities_preserve_legacy_and_gate_inspected_format() {
+        let mut probe: Probe = serde_json::from_value(serde_json::json!({
+            "streams": [
+                {"codec_type":"video","codec_name":"h264","width":1280,"height":720,
+                 "pix_fmt":"yuv420p","profile":"High","level":41,
+                 "avg_frame_rate":"30/1","r_frame_rate":"30/1"},
+                {"codec_type":"audio","codec_name":"aac","profile":"LC","channels":2}
+            ],
+            "format":{"format_name":"mov,mp4"}
+        }))
+        .unwrap();
+        let legacy: Capabilities = serde_json::from_value(serde_json::json!({
+            "direct_play":true,"h264":true,"aac":true
+        }))
+        .unwrap();
+        assert!(legacy.direct_play);
+        assert!(!Capabilities::default().direct_play);
+        let selection = TrackSelection::default();
+        for (format, expected) in [("mov,mp4", "mp4"), ("hls", "hls")] {
+            probe.format["format_name"] = serde_json::json!(format);
+            assert_eq!(
+                direct_format(&probe, &legacy, probe.streams.get(1), &selection),
+                Some(expected)
+            );
+            for (mp4, hls) in [(true, false), (false, true), (false, false)] {
+                let caps = Capabilities {
+                    direct_mp4: Some(mp4),
+                    direct_hls: Some(hls),
+                    ..legacy.clone()
+                };
+                let supported = if expected == "mp4" { mp4 } else { hls };
+                assert_eq!(
+                    direct_format(&probe, &caps, probe.streams.get(1), &selection),
+                    supported.then_some(expected)
+                );
+            }
+        }
+    }
 
     #[cfg(unix)]
     #[tokio::test]

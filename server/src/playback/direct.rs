@@ -656,6 +656,63 @@ mod tests {
             _provider: None,
         })
     }
+    #[tokio::test]
+    async fn redirects_stay_server_side_and_reject_private_cross_origin() {
+        let app = Router::new()
+            .route(
+                "/redirect.m3u8",
+                get(|| async {
+                    Response::builder()
+                        .status(302)
+                        .header(header::LOCATION, "/actual.m3u8?secret=private")
+                        .body(Body::empty())
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/actual.m3u8",
+                get(|| async { "#EXTM3U\n#EXTINF:6,\nsegment.ts?secret=private\n" }),
+            )
+            .route(
+                "/unsafe.m3u8",
+                get(|| async {
+                    Response::builder()
+                        .status(302)
+                        .header(header::LOCATION, "http://127.0.0.1:1/private.m3u8")
+                        .body(Body::empty())
+                        .unwrap()
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let direct = Direct::prepare(
+            base.join("/redirect.m3u8").unwrap(),
+            &HashMap::new(),
+            "hls",
+            permits(),
+        )
+        .await
+        .unwrap();
+        let response = direct
+            .serve("index.m3u8", Method::GET, HeaderMap::new())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!response.headers().contains_key(header::LOCATION));
+        let playlist = String::from_utf8(bytes(response).await.to_vec()).unwrap();
+        assert!(!playlist.contains("secret"));
+        assert!(!playlist.contains("http"));
+        let unsafe_result = Direct::prepare(
+            base.join("/unsafe.m3u8").unwrap(),
+            &HashMap::new(),
+            "hls",
+            permits(),
+        )
+        .await;
+        assert!(matches!(unsafe_result, Err(error) if error == "Unsafe media destination"));
+        task.abort();
+    }
     async fn bytes(response: Response) -> Bytes {
         axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024)
             .await

@@ -828,7 +828,7 @@ pub fn router_with_tv(
             .route("/tv", get(move || dashboard_entry(tv_entry.clone())))
             .nest_service(
                 "/tv/",
-                tower_http::services::ServeDir::new(&path).not_found_service(
+                tower_http::services::ServeDir::new(&path).fallback(
                     tower_http::services::ServeFile::new(path.join("index.html")),
                 ),
             );

@@ -37,12 +37,35 @@ fn application() -> (Router, tempfile::TempDir) {
 fn tv_application() -> (Router, tempfile::TempDir, tempfile::TempDir) {
     let dashboard = tempfile::tempdir().unwrap();
     let tv = tempfile::tempdir().unwrap();
-    std::fs::write(dashboard.path().join("index.html"), "<html>dashboard</html>").unwrap();
+    std::fs::write(
+        dashboard.path().join("index.html"),
+        "<html>dashboard</html>",
+    )
+    .unwrap();
     std::fs::write(tv.path().join("index.html"), "<html>tv shell</html>").unwrap();
     std::fs::write(tv.path().join("asset.js"), "window.viptv=true").unwrap();
-    let playback = PlaybackManager::new(Config { ffmpeg: "missing".into(), ffprobe: "missing".into(), root: dashboard.path().join("hls"), max_sessions: 1, ttl: Duration::from_secs(30) });
-    let app = App::new(rusqlite::Connection::open_in_memory().unwrap(), reqwest::Client::new(), playback).unwrap();
-    (router_with_tv(app, Some(dashboard.path().to_path_buf()), Some(tv.path().to_path_buf())), dashboard, tv)
+    let playback = PlaybackManager::new(Config {
+        ffmpeg: "missing".into(),
+        ffprobe: "missing".into(),
+        root: dashboard.path().join("hls"),
+        max_sessions: 1,
+        ttl: Duration::from_secs(30),
+    });
+    let app = App::new(
+        rusqlite::Connection::open_in_memory().unwrap(),
+        reqwest::Client::new(),
+        playback,
+    )
+    .unwrap();
+    (
+        router_with_tv(
+            app,
+            Some(dashboard.path().to_path_buf()),
+            Some(tv.path().to_path_buf()),
+        ),
+        dashboard,
+        tv,
+    )
 }
 
 async fn get(app: &Router, uri: &str) -> axum::response::Response {
@@ -111,14 +134,23 @@ async fn tv_bundle_has_its_own_same_origin_mount_without_replacing_dashboard_or_
         let response = get(&app, uri).await;
         assert_eq!(response.status(), StatusCode::OK, "{uri}");
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
-        assert!(body.windows(b"tv shell".len()).any(|window| window == b"tv shell"));
+        assert!(body
+            .windows(b"tv shell".len())
+            .any(|window| window == b"tv shell"));
     }
     let asset = get(&app, "/tv/asset.js").await;
     assert_eq!(asset.status(), StatusCode::OK);
     let body = to_bytes(asset.into_body(), 64 * 1024).await.unwrap();
-    assert!(body.windows(b"window.viptv=true".len()).any(|window| window == b"window.viptv=true"));
+    assert!(body
+        .windows(b"window.viptv=true".len())
+        .any(|window| window == b"window.viptv=true"));
     let dashboard = get(&app, "/").await;
     let body = to_bytes(dashboard.into_body(), 64 * 1024).await.unwrap();
-    assert!(body.windows(b"dashboard".len()).any(|window| window == b"dashboard"));
-    assert_eq!(get(&app, "/api/definitely-missing").await.status(), StatusCode::NOT_FOUND);
+    assert!(body
+        .windows(b"dashboard".len())
+        .any(|window| window == b"dashboard"));
+    assert_eq!(
+        get(&app, "/api/definitely-missing").await.status(),
+        StatusCode::NOT_FOUND
+    );
 }
