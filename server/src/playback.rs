@@ -41,6 +41,12 @@ pub struct Capabilities {
     /// Omitted by legacy clients; runtime probes may disable either transport.
     pub direct_mp4: Option<bool>,
     pub direct_hls: Option<bool>,
+    /// A WebCodecs client reads original containers itself. When set, the
+    /// original file may be served as a byte-range resource for any container
+    /// this client can demux, with the codecs it declares below.
+    pub direct_files: Option<bool>,
+    pub direct_video_codecs: Option<Vec<String>>,
+    pub direct_audio_codecs: Option<Vec<String>>,
     pub hevc_sdr: bool,
 }
 impl Default for Capabilities {
@@ -54,6 +60,9 @@ impl Default for Capabilities {
             direct_play: false,
             direct_mp4: None,
             direct_hls: None,
+            direct_files: None,
+            direct_video_codecs: None,
+            direct_audio_codecs: None,
             hevc_sdr: false,
         }
     }
@@ -695,10 +704,12 @@ impl PlaybackManager {
                     let id = Uuid::new_v4().to_string();
                     let capability =
                         format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-                    let filename = if format == "mp4" {
-                        "source.mp4"
-                    } else {
+                    let filename = if format == "hls" {
                         "index.m3u8"
+                    } else {
+                        // Original files are served under their own container
+                        // name; the client demuxes them itself.
+                        Box::leak(format!("source.{format}").into_boxed_str())
                     };
                     // A native file can only retain one default audio track here;
                     // arbitrary track changes deliberately return to managed HLS.
@@ -1815,20 +1826,106 @@ fn header_block(headers: &HashMap<String, String>) -> Result<String, String> {
     }
     Ok(out)
 }
+/// Formats a WebCodecs client can demux itself, mapped to their file extension.
+fn direct_file_extension(format: &str) -> Option<&'static str> {
+    for (name, extension) in [
+        ("mp4", "mp4"),
+        ("mov", "mov"),
+        ("matroska", "mkv"),
+        ("webm", "webm"),
+        ("mpegts", "ts"),
+        ("ogg", "ogg"),
+        ("adts", "aac"),
+        ("flac", "flac"),
+        ("wav", "wav"),
+        ("mp3", "mp3"),
+    ] {
+        if format.split(',').any(|f| f == name) {
+            return Some(extension);
+        }
+    }
+    None
+}
+
+/// ffprobe's codec name against the codec identifiers a WebCodecs client reports.
+fn declared_codec(declared: &[String], codec: Option<&str>) -> bool {
+    let Some(codec) = codec else {
+        return false;
+    };
+    declared.iter().any(|name| {
+        let normalized = name.trim().to_ascii_lowercase();
+        let normalized = normalized.as_str();
+        match normalized {
+            "avc" | "h264" => codec == "h264",
+            "hevc" | "h265" => codec == "hevc",
+            "aac" | "mp4a" => codec == "aac",
+            "dts" => codec == "dts",
+            other => codec == other || codec.starts_with(other),
+        }
+    })
+}
+
+/// The original file may be served when the client reads the container and every
+/// codec in it, and the picture is one this path can hand over unmodified.
+fn direct_file_format(
+    probe: &Probe,
+    caps: &Capabilities,
+    audio: Option<&ProbeStream>,
+) -> Option<&'static str> {
+    if caps.direct_files != Some(true)
+        || probe
+            .streams
+            .iter()
+            .filter(|s| s.codec_type.as_deref() == Some("video"))
+            .count()
+            != 1
+        || probe.interlaced()
+        || !matches!(probe.hdr_transfer(), Ok(None))
+    {
+        return None;
+    }
+    let video = probe.video().ok()?;
+    let extension = direct_file_extension(probe.format.get("format_name")?.as_str()?)?;
+    let width = caps.max_width.min(3840);
+    let height = caps.max_height.min(2160);
+    let fits =
+        |value: Option<u32>, limit: u32| value.is_some_and(|v| v >= 2 && v <= limit && v % 2 == 0);
+    if !fits(video.width, width) || !fits(video.height, height) {
+        return None;
+    }
+    let video_codecs = caps.direct_video_codecs.as_deref().unwrap_or_default();
+    if !declared_codec(video_codecs, video.codec_name.as_deref()) {
+        return None;
+    }
+    let audio_codecs = caps.direct_audio_codecs.as_deref().unwrap_or_default();
+    if audio.is_some_and(|stream| !declared_codec(audio_codecs, stream.codec_name.as_deref())) {
+        return None;
+    }
+    Some(extension)
+}
+
 fn direct_format(
     probe: &Probe,
     caps: &Capabilities,
     audio: Option<&ProbeStream>,
     selection: &TrackSelection,
 ) -> Option<&'static str> {
-    if selection.subtitle_track_index.is_some()
-        || selection.preferred_subtitle_language.is_some()
-        || probe
-            .streams
-            .iter()
-            .filter(|s| s.codec_type.as_deref() == Some("audio"))
-            .count()
-            > 1
+    // Chosen subtitle tracks are delivered by a managed session, never by handing
+    // the untouched file to the client.
+    if selection.subtitle_track_index.is_some() || selection.preferred_subtitle_language.is_some() {
+        return None;
+    }
+    // A WebCodecs client reads the original container itself, so it is not bound
+    // by the native envelope's single-audio-stream or AAC-only rules.
+    if let Some(extension) = direct_file_format(probe, caps, audio) {
+        return Some(extension);
+    }
+    if probe
+        .streams
+        .iter()
+        .filter(|s| s.codec_type.as_deref() == Some("audio"))
+        .count()
+        > 1
         || probe
             .streams
             .iter()
@@ -1927,6 +2024,18 @@ fn stable_hls_target_duration(bytes: Vec<u8>) -> Vec<u8> {
 fn media_type(file: &str) -> Option<&'static str> {
     if matches!(file, "index.m3u8" | "master.m3u8" | "index_vtt.m3u8") {
         return Some("application/vnd.apple.mpegurl");
+    }
+    // Original containers are handed over whole; the WebCodecs client demuxes
+    // them, so a neutral type is both accurate and preferable to a guess.
+    if file.starts_with("source.") {
+        return Some(match file.rsplit('.').next() {
+            Some("mp4") => "video/mp4",
+            Some("mov") => "video/quicktime",
+            Some("mkv") => "video/x-matroska",
+            Some("webm") => "video/webm",
+            Some("ts") => "video/mp2t",
+            _ => "application/octet-stream",
+        });
     }
     if let Some(digits) = file
         .strip_prefix("index")
@@ -2442,6 +2551,100 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_webcodecs_client_gets_the_original_container_it_declares() {
+        let probe: Probe = serde_json::from_value(serde_json::json!({
+            "streams": [
+                {"codec_type":"video","codec_name":"h264","width":1920,"height":1080,
+                 "pix_fmt":"yuv420p","profile":"High","level":41,
+                 "avg_frame_rate":"24/1","r_frame_rate":"24/1"},
+                {"codec_type":"audio","codec_name":"eac3","channels":6}
+            ],
+            "format":{"format_name":"matroska,webm"}
+        }))
+        .unwrap();
+        let selection = TrackSelection::default();
+        let declared: Capabilities = serde_json::from_value(serde_json::json!({
+            "direct_play": true, "h264": true, "aac": true,
+            "max_width": 3840, "max_height": 2160,
+            "direct_files": true,
+            "direct_video_codecs": ["avc", "hevc", "av1"],
+            "direct_audio_codecs": ["aac", "ac3", "eac3", "dts"]
+        }))
+        .unwrap();
+        // Matroska with Dolby audio was previously remuxed; a client that reads the
+        // container and both codecs now receives the original file.
+        assert_eq!(
+            direct_format(&probe, &declared, probe.streams.get(1), &selection),
+            Some("mkv")
+        );
+        for (caps, reason) in [
+            (
+                Capabilities {
+                    direct_files: Some(false),
+                    ..declared.clone()
+                },
+                "no file path",
+            ),
+            (
+                Capabilities {
+                    direct_video_codecs: Some(vec!["hevc".into()]),
+                    ..declared.clone()
+                },
+                "video codec not declared",
+            ),
+            (
+                Capabilities {
+                    direct_audio_codecs: Some(vec!["aac".into()]),
+                    ..declared.clone()
+                },
+                "audio codec not declared",
+            ),
+            (
+                Capabilities {
+                    max_height: 720,
+                    ..declared.clone()
+                },
+                "above the declared envelope",
+            ),
+            (
+                Capabilities {
+                    direct_files: Some(true),
+                    h264: true,
+                    aac: true,
+                    ..Capabilities::default()
+                },
+                "nothing declared",
+            ),
+        ] {
+            assert_eq!(
+                direct_format(&probe, &caps, probe.streams.get(1), &selection),
+                None,
+                "{reason} must stay on managed delivery"
+            );
+        }
+        // An interlaced picture is still converted rather than handed over raw.
+        let interlaced: Probe = serde_json::from_value(serde_json::json!({
+            "streams": [
+                {"codec_type":"video","codec_name":"h264","width":1920,"height":1080,
+                 "pix_fmt":"yuv420p","profile":"High","level":41,"field_order":"tt",
+                 "avg_frame_rate":"25/1","r_frame_rate":"50/1"},
+                {"codec_type":"audio","codec_name":"eac3","channels":6}
+            ],
+            "format":{"format_name":"matroska,webm"}
+        }))
+        .unwrap();
+        assert_eq!(
+            direct_format(
+                &interlaced,
+                &declared,
+                interlaced.streams.get(1),
+                &selection
+            ),
+            None
+        );
     }
 
     #[cfg(unix)]

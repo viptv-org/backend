@@ -90,7 +90,9 @@ impl Direct {
             validator: None,
             permits,
         };
-        if format == "mp4" {
+        // Original files of any container need the same byte-range discovery as
+        // MP4; only HLS uses playlist rewriting and per-segment routing.
+        if format != "hls" {
             let response = direct
                 .request(direct.root.clone(), Some("bytes=0-0"))
                 .await?;
@@ -279,7 +281,7 @@ impl Direct {
             return Err("Media expired".into());
         }
         if let Some(size) = self.size {
-            if file != "source.mp4" {
+            if !file.starts_with("source.") {
                 return Err("Media not found".into());
             }
             let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
