@@ -182,6 +182,8 @@ enum ProbeFailure {
     Spawn,
     OutputRead,
     Oversized,
+    /// Metadata that exceeded the stdout budget, which a smaller entry set can fix.
+    OversizedOutput,
     InvalidJson,
     Protocol,
     Http(u16),
@@ -1581,20 +1583,43 @@ impl PlaybackManager {
         headers: &str,
         permits: Option<Arc<InputPermits>>,
     ) -> Option<Probe> {
+        let mut unparsable = false;
         for attempt in 0..2 {
-            match self.probe_attempt(url, headers, permits.clone()).await {
+            match self
+                .probe_attempt(url, headers, permits.clone(), false)
+                .await
+            {
                 Ok(probe) => return Some(probe),
                 Err(category) => {
                     tracing::warn!(?category, "Source probe failed");
+                    unparsable |= matches!(
+                        category,
+                        ProbeFailure::InvalidJson | ProbeFailure::OversizedOutput
+                    );
                     if attempt == 1 || !category.retryable() {
-                        return None;
+                        break;
                     }
                     // Caller-owned playback/provider permits remain held during this delay.
                     sleep(Duration::from_millis(1500)).await;
                 }
             }
         }
-        None
+        if !unparsable {
+            return None;
+        }
+        // Unreadable metadata is usually a noisy or oversized response rather
+        // than a dead source. Ask again for the smallest sufficient field set
+        // instead of refusing something the server can still deliver.
+        match self.probe_attempt(url, headers, permits, true).await {
+            Ok(probe) => {
+                tracing::info!("Reduced source probe succeeded");
+                Some(probe)
+            }
+            Err(category) => {
+                tracing::warn!(?category, "Reduced source probe failed");
+                None
+            }
+        }
     }
 
     async fn probe_attempt(
@@ -1602,6 +1627,7 @@ impl PlaybackManager {
         url: &str,
         headers: &str,
         permits: Option<Arc<InputPermits>>,
+        reduced: bool,
     ) -> Result<Probe, ProbeFailure> {
         let mut cmd = Command::new(&self.config.ffprobe);
         cmd.kill_on_drop(true)
@@ -1609,13 +1635,20 @@ impl PlaybackManager {
             .stderr(Stdio::piped());
         cmd.args(["-v", "error"]);
         input_args(&mut cmd, headers);
+        // The reduced form keeps every field the delivery decision needs, including
+        // SDR/HDR transfer evidence, while shrinking a response that failed to parse.
+        let entries = if reduced {
+            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,channels,avg_frame_rate,color_transfer"
+        } else {
+            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,profile,level,channels,avg_frame_rate,r_frame_rate,color_transfer,color_primaries,color_space,field_order:stream_tags=language,title:stream_disposition=default,comment,hearing_impaired,visual_impaired,forced:stream_side_data"
+        };
         cmd.args([
             "-analyzeduration",
             "5000000",
             "-probesize",
             "5000000",
             "-show_entries",
-            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,profile,level,channels,avg_frame_rate,r_frame_rate,color_transfer,color_primaries,color_space,field_order:stream_tags=language,title:stream_disposition=default,comment,hearing_impaired,visual_impaired,forced:stream_side_data",
+            entries,
             "-of",
             "json",
             "-i",
@@ -1635,7 +1668,14 @@ impl PlaybackManager {
             // Read both pipes concurrently. A limit violation short-circuits all readers
             // and kills the child rather than draining attacker-controlled output forever.
             tokio::try_join!(
-                probe_output(stdout, PROBE_STDOUT_LIMIT),
+                async {
+                    probe_output(stdout, PROBE_STDOUT_LIMIT)
+                        .await
+                        .map_err(|failure| match failure {
+                            ProbeFailure::Oversized => ProbeFailure::OversizedOutput,
+                            other => other,
+                        })
+                },
                 probe_output(stderr, PROBE_STDERR_LIMIT),
                 async { child.wait().await.map_err(|_| ProbeFailure::Exit) },
             )
@@ -2685,12 +2725,14 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
                 "printf 'Protocol not on whitelist\\nHTTP error 404 Not Found\\n' >&2; exit 1",
                 1,
             ),
-            ("printf 'not json'", 1),
+            // Unreadable or oversized metadata earns exactly one reduced-entry
+            // retry: a noisy response is not evidence of a dead source.
+            ("printf 'not json'", 2),
             (
                 "printf 'not json'; printf 'HTTP error 404 Not Found\\n' >&2; exit 1",
-                1,
+                2,
             ),
-            ("head -c 1048577 /dev/zero", 1),
+            ("head -c 1048577 /dev/zero", 2),
             ("head -c 65537 /dev/zero >&2; exit 1", 1),
         ] {
             let root = tempfile::tempdir().unwrap();
@@ -2714,10 +2756,34 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
         std::fs::remove_file(root.path().join("probe.sh")).unwrap();
         assert!(matches!(
             manager
-                .probe_attempt("http://example.com/video", "", None)
+                .probe_attempt("http://example.com/video", "", None, false)
                 .await,
             Err(ProbeFailure::Spawn)
         ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn unreadable_probe_output_falls_back_to_a_reduced_entry_set() {
+        let root = tempfile::tempdir().unwrap();
+        // The full scheme answers with something the parser cannot read; the
+        // reduced scheme (three `-show_entries`, detected by its own count file)
+        // must still describe the source instead of failing playback.
+        let manager = scripted_probe(
+            root.path(),
+            r#"for arg in "$@"; do case "$arg" in *stream_side_data*) printf '%s' 'not json'; exit 0; esac; done; printf '%s' '{"format":{"format_name":"matroska,webm","duration":"120"},"streams":[{"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"pix_fmt":"yuv420p"},{"index":1,"codec_type":"audio","codec_name":"aac","channels":2}]}'"#,
+        );
+        let probe = manager
+            .probe("http://example.com/video", "", None)
+            .await
+            .expect("a reduced probe must describe a source whose full probe was unreadable");
+        assert_eq!(probe.format.get("format_name").and_then(|v| v.as_str()), Some("matroska,webm"));
+        assert_eq!(probe.duration(), Some(120.0));
+        assert_eq!(
+            std::fs::read(root.path().join("probe.sh.count")).unwrap().len(),
+            2,
+            "one full attempt then one reduced attempt"
+        );
     }
 
     #[cfg(target_os = "linux")]
