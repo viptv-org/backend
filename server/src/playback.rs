@@ -172,8 +172,8 @@ const PROBE_STDERR_LIMIT: usize = 64 * 1024;
 // change the advertised target duration during a session.
 const HLS_INITIAL_SEGMENT_SECONDS: u32 = 1;
 const HLS_SEGMENT_SECONDS: u32 = 2;
-const HLS_WINDOW_SECONDS: u32 = 32;
-const HLS_DELETE_GRACE_SECONDS: u32 = 12;
+const HLS_WINDOW_SECONDS: u32 = 120;
+const HLS_DELETE_GRACE_SECONDS: u32 = 60;
 const PROBE_CACHE_TTL: Duration = Duration::from_secs(120);
 const PROBE_CACHE_CAP: usize = 128;
 
