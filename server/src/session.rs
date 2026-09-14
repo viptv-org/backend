@@ -27,6 +27,17 @@ pub(super) struct PlaybackRequest {
     #[serde(skip)]
     preferences: preferences::Preferences,
 }
+// One track selection for both the direct and family startup paths.
+fn track_selection(v: &PlaybackRequest) -> playback::TrackSelection {
+    playback::TrackSelection {
+        audio_track_index: v.audio_track_index,
+        audio_language: v.audio_language.clone(),
+        subtitle_track_index: v.subtitle_track_index,
+        preferred_audio_language: Some(v.preferences.audio_language.clone()),
+        preferred_subtitle_language: (v.preferences.subtitles_enabled && !v.subtitles_off)
+            .then(|| v.preferences.subtitle_language.clone()),
+    }
+}
 pub(super) async fn start_playback(
     State(a): State<App>,
     axum::Json(mut v): axum::Json<PlaybackRequest>,
@@ -147,6 +158,7 @@ async fn start_playback_inner(a: App, v: PlaybackRequest) -> ApiResult {
             return start_family(a, &v, family).await;
         }
     }
+    let selection = track_selection(&v);
     let (url, headers, live, provider_id, kind) = match (v.stream_id, v.channel_id) {
         (Some(id), None) => {
             a.check_resource(&a.identity(), "stream", &id)?;
@@ -198,14 +210,7 @@ async fn start_playback_inner(a: App, v: PlaybackRequest) -> ApiResult {
             v.force_transcode,
             live,
             permit,
-            playback::TrackSelection {
-                audio_track_index: v.audio_track_index,
-                audio_language: v.audio_language.clone(),
-                subtitle_track_index: v.subtitle_track_index,
-                preferred_audio_language: Some(v.preferences.audio_language.clone()),
-                preferred_subtitle_language: (v.preferences.subtitles_enabled && !v.subtitles_off)
-                    .then(|| v.preferences.subtitle_language.clone()),
-            },
+            selection,
         )
         .await?;
     publish(a, r, source_lease, false).await
@@ -459,14 +464,7 @@ async fn prepare_family(
             v.force_transcode,
             true,
             Some(permit),
-            playback::TrackSelection {
-                audio_track_index: v.audio_track_index,
-                audio_language: v.audio_language.clone(),
-                subtitle_track_index: v.subtitle_track_index,
-                preferred_audio_language: Some(v.preferences.audio_language.clone()),
-                preferred_subtitle_language: (v.preferences.subtitles_enabled && !v.subtitles_off)
-                    .then(|| v.preferences.subtitle_language.clone()),
-            },
+            track_selection(v),
         );
         let remaining = deadline
             .saturating_duration_since(Instant::now())

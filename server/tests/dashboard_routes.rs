@@ -11,6 +11,21 @@ use viptv_server::{
     router, router_with_tv, App,
 };
 
+// Both fixtures keep one session and unavailable media tools; only the mount differs.
+fn test_playback(
+    root: &std::path::Path,
+    ffmpeg: &str,
+    ffprobe: &str,
+) -> std::sync::Arc<PlaybackManager> {
+    PlaybackManager::new(Config {
+        ffmpeg: ffmpeg.into(),
+        ffprobe: ffprobe.into(),
+        root: root.join("hls"),
+        max_sessions: 1,
+        ttl: Duration::from_secs(30),
+    })
+}
+
 fn application() -> (Router, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -18,17 +33,10 @@ fn application() -> (Router, tempfile::TempDir) {
         "<!doctype html><html><body>VIPTV device activation</body></html>",
     )
     .unwrap();
-    let playback = PlaybackManager::new(Config {
-        ffmpeg: "missing-test-ffmpeg".into(),
-        ffprobe: "missing-test-ffprobe".into(),
-        root: root.path().join("hls"),
-        max_sessions: 1,
-        ttl: Duration::from_secs(30),
-    });
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),
-        playback,
+        test_playback(root.path(), "missing-test-ffmpeg", "missing-test-ffprobe"),
     )
     .unwrap();
     (router(app, Some(root.path().to_path_buf())), root)
@@ -44,17 +52,10 @@ fn tv_application() -> (Router, tempfile::TempDir, tempfile::TempDir) {
     .unwrap();
     std::fs::write(tv.path().join("index.html"), "<html>tv shell</html>").unwrap();
     std::fs::write(tv.path().join("asset.js"), "window.viptv=true").unwrap();
-    let playback = PlaybackManager::new(Config {
-        ffmpeg: "missing".into(),
-        ffprobe: "missing".into(),
-        root: dashboard.path().join("hls"),
-        max_sessions: 1,
-        ttl: Duration::from_secs(30),
-    });
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),
-        playback,
+        test_playback(dashboard.path(), "missing", "missing"),
     )
     .unwrap();
     (

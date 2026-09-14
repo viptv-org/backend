@@ -327,7 +327,7 @@ pub(crate) async fn renew(
                 .as_array()
                 .and_then(|rows| rows.iter().find(|p| p["id"] == id))
                 .cloned()
-                .ok_or("Provider not found".into())
+                .ok_or_else(|| "Provider not found".into())
         })
         .await?;
     Ok(axum::Json(result))

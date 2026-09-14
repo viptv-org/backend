@@ -134,6 +134,10 @@ fn sibling_spelling(value: &str) -> String {
         .replace("fs 1", "fs1")
         .replace("fs 2", "fs2")
 }
+// Country, language and feed words never identify a channel on their own.
+fn generic_word(w: &str) -> bool {
+    decorated(w) || matches!(w, "us" | "usa" | "en" | "eng" | "english" | "east" | "west")
+}
 fn normalized(value: &str) -> String {
     sibling_spelling(
         &words(value)
@@ -147,13 +151,7 @@ fn input_key(name: &str) -> String {
     sibling_spelling(
         &words(name)
             .into_iter()
-            .filter(|w| {
-                !decorated(w)
-                    && !matches!(
-                        w.as_str(),
-                        "us" | "usa" | "en" | "eng" | "english" | "east" | "west"
-                    )
-            })
+            .filter(|w| !generic_word(w))
             .collect::<Vec<_>>()
             .join(" "),
     )
@@ -188,14 +186,7 @@ fn evidence(
     let market = words(channel["market"].as_str().unwrap_or(""));
     let stripped = tokens
         .iter()
-        .filter(|w| {
-            !decorated(w)
-                && !matches!(
-                    w.as_str(),
-                    "us" | "usa" | "en" | "eng" | "english" | "east" | "west"
-                )
-                && !market.contains(w)
-        })
+        .filter(|w| !generic_word(w) && !market.contains(w))
         .cloned()
         .collect::<Vec<_>>()
         .join(" ");

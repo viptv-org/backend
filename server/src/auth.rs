@@ -511,7 +511,7 @@ pub(crate) fn update_profile(
         profile_json(profile_id, &name, style, &seed, complete),
     )
 }
-fn unauthorized() -> ApiError {
+pub(crate) fn unauthorized() -> ApiError {
     ApiError(StatusCode::UNAUTHORIZED, "Unauthorized".into())
 }
 fn forbidden() -> ApiError {
@@ -988,6 +988,15 @@ fn username(v: &Value) -> Result<String, ApiError> {
         return Err("Invalid username".into());
     }
     Ok(s)
+}
+// Accepts either device-flow spelling and normalizes it before hashing.
+fn pairing_code(v: &Value) -> Result<String, ApiError> {
+    Ok(v.get("user_code")
+        .or_else(|| v.get("code"))
+        .and_then(Value::as_str)
+        .ok_or("Missing user_code")?
+        .trim()
+        .to_uppercase())
 }
 fn event(db: &Connection, kind: &str, id: Option<i64>) -> Result<(), ApiError> {
     db.execute(
@@ -1497,13 +1506,7 @@ fn dispatch_prepared(
         }
         "/auth/device/deny" => {
             let principal = p.as_ref().ok_or_else(unauthorized)?;
-            let code = v
-                .get("user_code")
-                .or_else(|| v.get("code"))
-                .and_then(Value::as_str)
-                .ok_or("Missing user_code")?
-                .trim()
-                .to_uppercase();
+            let code = pairing_code(v)?;
             db.execute(
                 "DELETE FROM auth_pairings WHERE code_hash=?1",
                 [hash(&code)],
@@ -1735,13 +1738,7 @@ fn dispatch_prepared(
         }
         "/auth/device/lookup" => {
             let _principal = p.as_ref().ok_or_else(unauthorized)?;
-            let code = v
-                .get("user_code")
-                .or_else(|| v.get("code"))
-                .and_then(Value::as_str)
-                .ok_or("Missing user_code")?
-                .trim()
-                .to_uppercase();
+            let code = pairing_code(v)?;
             let row = db.query_row(
                 "SELECT device_name,expires,account_id IS NOT NULL FROM auth_pairings WHERE code_hash=?1 AND expires>?2",
                 params![hash(&code), now()],
@@ -1758,13 +1755,7 @@ fn dispatch_prepared(
                 return Err("Pairing scope is determined by the signed-in account".into());
             }
             let id = principal.account_id().ok_or_else(unauthorized)?;
-            let code = v
-                .get("user_code")
-                .or_else(|| v.get("code"))
-                .and_then(Value::as_str)
-                .ok_or("Missing user_code")?
-                .trim()
-                .to_uppercase();
+            let code = pairing_code(v)?;
             let code_hash = hash(&code);
             db.execute("DELETE FROM auth_pairings WHERE expires<=?1", [now()])
                 .map_err(crate::db_error)?;
@@ -1904,7 +1895,7 @@ async fn info(
             let presentation_required = profiles.is_empty() || profiles.iter().any(|profile| profile["setup_complete"] != true);
             json!({
                 "account_id":account_id.to_string(),
-                "account":account.clone(),
+                "account":account,
                 "user":account,
                 "role":role,
                 "profile_id":profile_id.map(|value| value.to_string()),
@@ -1938,7 +1929,7 @@ async fn info(
             let mut statement=db.prepare("SELECT id,account_id,device_name,kind,profile_id,created_at FROM auth_sessions WHERE (?1 OR account_id=?2) AND refresh_expires>?3 AND kind=?4 ORDER BY created_at DESC LIMIT 1000").map_err(crate::db_error)?;
             let rows=statement.query_map(params![admin_devices,p.account_id(),now(),kind],|row|{
                 let session_id=row.get::<_,String>(0)?;
-                Ok(json!({"id":session_id.clone(),"session_id":session_id,"account_id":row.get::<_,i64>(1)?.to_string(),"device_name":row.get::<_,String>(2)?,"kind":row.get::<_,String>(3)?,"profile_id":row.get::<_,Option<i64>>(4)?.map(|value|value.to_string()),"created_at":row.get::<_,i64>(5)?.to_string()}))
+                Ok(json!({"id":session_id,"session_id":session_id,"account_id":row.get::<_,i64>(1)?.to_string(),"device_name":row.get::<_,String>(2)?,"kind":row.get::<_,String>(3)?,"profile_id":row.get::<_,Option<i64>>(4)?.map(|value|value.to_string()),"created_at":row.get::<_,i64>(5)?.to_string()}))
             }).map_err(crate::db_error)?.collect::<Result<Vec<_>,_>>().map_err(crate::db_error)?;
             if path == "/auth/sessions" {
                 json!({"sessions":rows})

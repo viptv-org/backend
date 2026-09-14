@@ -341,21 +341,7 @@ pub(crate) async fn refresh(
             let db = s.lock()?;
             accounts::owner(&auth, &db)?;
             let pool = ensure(&db, id)?;
-            let provider = db
-                .query_row(
-                    "SELECT id,name,url,username,password FROM providers WHERE id=?1 AND enabled=1",
-                    [id],
-                    |r| {
-                        Ok(Provider {
-                            id: r.get(0)?,
-                            name: r.get(1)?,
-                            url: r.get(2)?,
-                            username: r.get(3)?,
-                            password: r.get(4)?,
-                        })
-                    },
-                )
-                .map_err(|_| "Provider not found or disabled")?;
+            let provider = provider_row(&db, id)?;
             let mut gates = s
                 .playback_gates
                 .lock()

@@ -32,6 +32,16 @@ fn forbidden() -> ApiError {
 fn parent_required() -> ApiError {
     ApiError(StatusCode::FORBIDDEN, "Parent PIN required".into())
 }
+// One stored-PIN lookup; callers bind either a known account id or a nullable one.
+fn stored_pin(db: &Connection, account: impl rusqlite::ToSql) -> Result<Option<String>, ApiError> {
+    db.query_row(
+        "SELECT pin_hash FROM parent_controls WHERE account_id=?1",
+        [account],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(db_error)
+}
 pub(crate) fn revision(db: &Connection, p: &auth::Principal) -> Result<i64, ApiError> {
     let auth::Principal::Account { profile_id, .. } = p;
     db.query_row(
@@ -197,14 +207,7 @@ async fn verify_pin(app: &App, pin: String) -> Result<String, ApiError> {
     .await?;
     let db = app.db.lock().unwrap();
     app.request_lease().validate(&db)?;
-    let current: Option<String> = db
-        .query_row(
-            "SELECT pin_hash FROM parent_controls WHERE account_id=?1",
-            [account],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(db_error)?;
+    let current = stored_pin(&db, account)?;
     if !valid || current.as_deref() != Some(snapshot.as_str()) {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
@@ -227,14 +230,7 @@ pub(crate) async fn unlock(
     let verified = verify_pin(&app, pin_text(&value, "pin")?).await?;
     let db = app.db.lock().unwrap();
     app.request_lease().validate(&db)?;
-    let current: Option<String> = db
-        .query_row(
-            "SELECT pin_hash FROM parent_controls WHERE account_id=?1",
-            [app.identity().account_id()],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(db_error)?;
+    let current = stored_pin(&db, app.identity().account_id())?;
     if current.as_deref() != Some(verified.as_str()) {
         return Err(parent_required());
     }
@@ -252,14 +248,7 @@ pub(crate) async fn set_pin(
         app.request_lease().validate(&db)?;
         auth::require_household_manager(&app.identity())?;
         let account = app.identity().account_id().ok_or("Account required")?;
-        let existing: Option<String> = db
-            .query_row(
-                "SELECT pin_hash FROM parent_controls WHERE account_id=?1",
-                [account],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(db_error)?;
+        let existing = stored_pin(&db, account)?;
         if existing.is_none() {
             require_parent(&db, &app.identity())?;
         }
@@ -286,14 +275,7 @@ pub(crate) async fn set_pin(
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction().map_err(db_error)?;
     app.request_lease().validate(&tx)?;
-    let current: Option<String> = tx
-        .query_row(
-            "SELECT pin_hash FROM parent_controls WHERE account_id=?1",
-            [account],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(db_error)?;
+    let current = stored_pin(&tx, account)?;
     if current != existing {
         return Err(ApiError(
             StatusCode::CONFLICT,

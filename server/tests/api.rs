@@ -85,6 +85,14 @@ async fn request_as(
     (status, serde_json::from_slice(&b).unwrap_or(Value::Null))
 }
 
+// One loopback upstream: base URL plus the task that must be aborted by the caller.
+async fn serve_upstream(mock: Router) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    (format!("http://{address}"), upstream)
+}
+
 // Protocol fixtures for the media-tool seam, not real decoder acceptance. Physical
 // Roku and real FFmpeg checks separately validate the produced media.
 #[cfg(unix)]
@@ -1961,12 +1969,10 @@ async fn renewed_credentials_discard_obsolete_catalog_and_guide_fetches() {
             })
         }
     }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let (address, upstream) = serve_upstream(mock).await;
     let (state, _dir) = app_state();
     let app = router(state.clone(), None);
-    let(_,provider)=request(&app,"POST","/api/providers",json!({"name":"Existing","url":format!("http://{address}"),"username":"login","password":"old-password","enable_movies":false,"enable_series":false})).await;
+    let(_,provider)=request(&app,"POST","/api/providers",json!({"name":"Existing","url":address,"username":"login","password":"old-password","enable_movies":false,"enable_series":false})).await;
     let id = provider["id"].as_i64().unwrap();
     let raw = format!("iptv:{id}:1");
     state.db.lock().unwrap().execute("INSERT INTO provider_live(id,provider_id,stream_id,name) VALUES(?1,?2,'1','Original channel')",rusqlite::params![raw,id]).unwrap();
@@ -2147,12 +2153,10 @@ async fn account_reports_lower_allowances_without_double_counting_local_use() {
             async move { axum::Json(json!({"user_info":source.lock().unwrap().clone()})) }
         }),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let (address, upstream) = serve_upstream(mock).await;
     let (state, _dir) = app_state();
     let app = router(state.clone(), None);
-    let(_,p)=request(&app,"POST","/api/providers",json!({"name":"Account","url":format!("http://{address}"),"username":"private","password":"secret","max_connections":4})).await;
+    let(_,p)=request(&app,"POST","/api/providers",json!({"name":"Account","url":address,"username":"private","password":"secret","max_connections":4})).await;
     let id = p["id"].as_i64().unwrap();
     let first = state
         .providers
@@ -2275,12 +2279,16 @@ async fn late_account_report_cannot_replace_a_newer_full_usage_observation() {
         if first {while !release.load(Ordering::SeqCst) {tokio::time::sleep(Duration::from_millis(5)).await;}}
         axum::Json(json!({"user_info":{"auth":1,"status":"Active","max_connections":"1","active_cons":if first {"0"}else{"1"}}}))
     }}));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let (address, upstream) = serve_upstream(mock).await;
     let (state, _dir) = app_state();
     let app = router(state.clone(), None);
-    let(_,provider)=request(&app,"POST","/api/providers",json!({"name":"Account","url":format!("http://{address}"),"username":"private","password":"secret"})).await;
+    let (_, provider) = request(
+        &app,
+        "POST",
+        "/api/providers",
+        json!({"name":"Account","url":address,"username":"private","password":"secret"}),
+    )
+    .await;
     let id = provider["id"].as_i64().unwrap();
     let path = format!("/api/providers/{id}/status");
     let old_app = app.clone();
@@ -3161,13 +3169,11 @@ async fn scheduled_catalog_job_refreshes_twenty_accounts_with_partial_failure_an
             _=>(StatusCode::BAD_REQUEST,axum::Json(json!({"unexpected_scope":true})))
         }
     }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let (address, upstream) = serve_upstream(mock).await;
     let (state, _dir) = app_state();
     let app = router(state.clone(), None);
     for id in 1..=20 {
-        state.providers.add(json!({"name":format!("Account {id}"),"url":format!("http://{address}"),"username":format!("account{id}"),"password":"synthetic-secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
+        state.providers.add(json!({"name":format!("Account {id}"),"url":address,"username":format!("account{id}"),"password":"synthetic-secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
     }
     state.db.lock().unwrap().execute("INSERT INTO provider_live(id,provider_id,stream_id,name) VALUES('iptv:19:old',19,'old','Previous valid channel')",[]).unwrap();
     let(_,channel)=request(&app,"POST","/api/lineup",json!({"name":"Cartoon East","network":"Cartoon Network","feed":"east","market":"","category":"Kids","number":1,"enabled":true,"candidates":[]})).await;
@@ -3275,11 +3281,9 @@ async fn cancelled_catalog_job_does_not_publish_late_metadata() {
             }
         }),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let (address, upstream) = serve_upstream(mock).await;
     let (state, _dir) = app_state();
-    state.providers.add(json!({"name":"One","url":format!("http://{address}"),"username":"fixture","password":"secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
+    state.providers.add(json!({"name":"One","url":address,"username":"fixture","password":"secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
     state.db.lock().unwrap().execute("INSERT INTO provider_live(id,provider_id,stream_id,name) VALUES('iptv:1:old',1,'old','Last good channel')",[]).unwrap();
     let app = router(state.clone(), None);
     request(
@@ -3357,11 +3361,9 @@ async fn empty_automated_catalog_retains_last_good_scope() {
             })
         }),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let (address, upstream) = serve_upstream(mock).await;
     let (state, _dir) = app_state();
-    state.providers.add(json!({"name":"One","url":format!("http://{address}"),"username":"fixture","password":"secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
+    state.providers.add(json!({"name":"One","url":address,"username":"fixture","password":"secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
     state.db.lock().unwrap().execute("INSERT INTO provider_live(id,provider_id,stream_id,name) VALUES('iptv:1:old',1,'old','Last good channel')",[]).unwrap();
     let app = router(state.clone(), None);
     request(
@@ -3421,11 +3423,9 @@ async fn broken_category_catalog_retains_last_good_identity_evidence() {
             })
         }),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let (address, upstream) = serve_upstream(mock).await;
     let (state, _dir) = app_state();
-    state.providers.add(json!({"name":"One","url":format!("http://{address}"),"username":"fixture","password":"secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
+    state.providers.add(json!({"name":"One","url":address,"username":"fixture","password":"secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
     state.db.lock().unwrap().execute("INSERT INTO provider_live(id,provider_id,stream_id,name,category_id,category) VALUES('iptv:1:old',1,'old','Last good channel','1','US EN')",[]).unwrap();
     let app = router(state.clone(), None);
     request(
@@ -3498,12 +3498,10 @@ async fn catalog_restart_resumes_pending_accounts_and_honors_persisted_due_time(
             }
         }),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let (address, upstream) = serve_upstream(mock).await;
     let (state, _media) = app_state();
     for name in ["one", "two"] {
-        state.providers.add(json!({"name":name,"url":format!("http://{address}"),"username":name,"password":"secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
+        state.providers.add(json!({"name":name,"url":address,"username":name,"password":"secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
     }
     let app = router(state.clone(), None);
     request(
@@ -3619,11 +3617,9 @@ async fn timed_out_catalog_transaction_rolls_back_before_publication() {
             })
         }),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let (address, upstream) = serve_upstream(mock).await;
     let (state, _dir) = app_state();
-    state.providers.add(json!({"name":"One","url":format!("http://{address}"),"username":"fixture","password":"secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
+    state.providers.add(json!({"name":"One","url":address,"username":"fixture","password":"secret","enable_live":true,"enable_movies":false,"enable_series":false})).unwrap();
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
     let entered = Arc::new(Mutex::new(Some(entered_tx)));
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();

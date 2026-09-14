@@ -129,6 +129,24 @@ impl Provider {
     }
 }
 
+// Single enabled-provider row mapping, shared by locked and already-locked callers.
+fn provider_row(db: &Connection, id: i64) -> Result<Provider, String> {
+    db.query_row(
+        "SELECT id,name,url,username,password FROM providers WHERE id=?1 AND enabled=1",
+        [id],
+        |r| {
+            Ok(Provider {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                url: r.get(2)?,
+                username: r.get(3)?,
+                password: r.get(4)?,
+            })
+        },
+    )
+    .map_err(|_| "Provider not found or disabled".into())
+}
+
 #[derive(Clone, Debug)]
 struct Candidate {
     id: String,
@@ -143,6 +161,27 @@ struct Candidate {
     extension: String,
     poster: Option<String>,
     override_id: Option<String>,
+}
+
+// Both candidate queries select the same leading columns in the same order.
+fn candidate_row(
+    r: &rusqlite::Row<'_>,
+    override_id: Option<String>,
+) -> rusqlite::Result<Candidate> {
+    Ok(Candidate {
+        id: r.get(0)?,
+        provider_id: r.get(1)?,
+        stream_id: r.get(2)?,
+        kind: r.get(3)?,
+        name: r.get(4)?,
+        normalized: r.get(5)?,
+        year: r.get(6)?,
+        imdb_id: r.get(7)?,
+        tmdb_id: r.get(8)?,
+        extension: r.get(9)?,
+        poster: r.get(10)?,
+        override_id,
+    })
 }
 
 impl ProviderService {
@@ -172,21 +211,8 @@ impl ProviderService {
     }
 
     fn provider(&self, id: i64) -> Result<Provider, String> {
-        self.lock()?
-            .query_row(
-                "SELECT id,name,url,username,password FROM providers WHERE id=?1 AND enabled=1",
-                [id],
-                |r| {
-                    Ok(Provider {
-                        id: r.get(0)?,
-                        name: r.get(1)?,
-                        url: r.get(2)?,
-                        username: r.get(3)?,
-                        password: r.get(4)?,
-                    })
-                },
-            )
-            .map_err(|_| "Provider not found or disabled".into())
+        let db = self.lock()?;
+        provider_row(&db, id)
     }
 
     fn scopes(&self, id: i64) -> Result<[bool; 3], String> {
@@ -989,20 +1015,7 @@ impl ProviderService {
             )) ORDER BY v.provider_id,v.id").map_err(db_error)?;
         let rows = stmt
             .query_map(params![kind, ids, title, year], |r| {
-                Ok(Candidate {
-                    id: r.get(0)?,
-                    provider_id: r.get(1)?,
-                    stream_id: r.get(2)?,
-                    kind: r.get(3)?,
-                    name: r.get(4)?,
-                    normalized: r.get(5)?,
-                    year: r.get(6)?,
-                    imdb_id: r.get(7)?,
-                    tmdb_id: r.get(8)?,
-                    extension: r.get(9)?,
-                    poster: r.get(10)?,
-                    override_id: r.get(11)?,
-                })
+                candidate_row(r, r.get(11)?)
             })
             .map_err(db_error)?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(db_error)
@@ -1035,22 +1048,7 @@ impl ProviderService {
                     MAX_LAZY_DETAILS as i64,
                     only_provider
                 ],
-                |r| {
-                    Ok(Candidate {
-                        id: r.get(0)?,
-                        provider_id: r.get(1)?,
-                        stream_id: r.get(2)?,
-                        kind: r.get(3)?,
-                        name: r.get(4)?,
-                        normalized: r.get(5)?,
-                        year: r.get(6)?,
-                        imdb_id: r.get(7)?,
-                        tmdb_id: r.get(8)?,
-                        extension: r.get(9)?,
-                        poster: r.get(10)?,
-                        override_id: None,
-                    })
-                },
+                |r| candidate_row(r, None),
             )
             .map_err(db_error)?;
         Ok(rows

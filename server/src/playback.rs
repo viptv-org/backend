@@ -386,6 +386,12 @@ struct ProbeCacheEntry {
     probe: Arc<Probe>,
     inserted: Instant,
 }
+// Drop expired entries; anything a caller still holds stays for reuse.
+fn prune_probe_cache(cache: &mut HashMap<[u8; 32], ProbeCacheEntry>, now: Instant) {
+    cache.retain(|_, entry| {
+        Arc::strong_count(&entry.probe) > 1 || now.duration_since(entry.inserted) < PROBE_CACHE_TTL
+    });
+}
 
 pub struct PlaybackManager {
     config: Config,
@@ -1543,10 +1549,7 @@ impl PlaybackManager {
         let now = Instant::now();
         {
             let mut cache = self.probe_cache.lock().await;
-            cache.retain(|_, entry| {
-                Arc::strong_count(&entry.probe) > 1
-                    || now.duration_since(entry.inserted) < PROBE_CACHE_TTL
-            });
+            prune_probe_cache(&mut cache, now);
             if let Some(entry) = cache.get(&key) {
                 tracing::debug!("Reused bounded source probe metadata");
                 return Some(entry.probe.clone());
@@ -1554,10 +1557,7 @@ impl PlaybackManager {
         }
         let probe = Arc::new(self.probe(url, headers, permits).await?);
         let mut cache = self.probe_cache.lock().await;
-        cache.retain(|_, entry| {
-            Arc::strong_count(&entry.probe) > 1
-                || now.duration_since(entry.inserted) < PROBE_CACHE_TTL
-        });
+        prune_probe_cache(&mut cache, now);
         if cache.len() >= PROBE_CACHE_CAP {
             if let Some(oldest) = cache
                 .iter()
@@ -1669,12 +1669,12 @@ impl PlaybackManager {
             // and kills the child rather than draining attacker-controlled output forever.
             tokio::try_join!(
                 async {
-                    probe_output(stdout, PROBE_STDOUT_LIMIT)
-                        .await
-                        .map_err(|failure| match failure {
+                    probe_output(stdout, PROBE_STDOUT_LIMIT).await.map_err(
+                        |failure| match failure {
                             ProbeFailure::Oversized => ProbeFailure::OversizedOutput,
                             other => other,
-                        })
+                        },
+                    )
                 },
                 probe_output(stderr, PROBE_STDERR_LIMIT),
                 async { child.wait().await.map_err(|_| ProbeFailure::Exit) },
@@ -2777,10 +2777,15 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
             .probe("http://example.com/video", "", None)
             .await
             .expect("a reduced probe must describe a source whose full probe was unreadable");
-        assert_eq!(probe.format.get("format_name").and_then(|v| v.as_str()), Some("matroska,webm"));
+        assert_eq!(
+            probe.format.get("format_name").and_then(|v| v.as_str()),
+            Some("matroska,webm")
+        );
         assert_eq!(probe.duration(), Some(120.0));
         assert_eq!(
-            std::fs::read(root.path().join("probe.sh.count")).unwrap().len(),
+            std::fs::read(root.path().join("probe.sh.count"))
+                .unwrap()
+                .len(),
             2,
             "one full attempt then one reduced attempt"
         );

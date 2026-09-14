@@ -27,32 +27,28 @@ impl Browser {
             .join("; ")
     }
 }
-fn application() -> (Router, tempfile::TempDir) {
-    let root = tempfile::tempdir().unwrap();
-    let playback = PlaybackManager::new(Config {
+// Both fixtures use the same unavailable media tools and session budget.
+fn test_playback(root: &std::path::Path) -> std::sync::Arc<PlaybackManager> {
+    PlaybackManager::new(Config {
         ffmpeg: "missing-test-ffmpeg".into(),
         ffprobe: "missing-test-ffprobe".into(),
-        root: root.path().join("hls"),
+        root: root.join("hls"),
         max_sessions: 2,
         ttl: Duration::from_secs(30),
-    });
+    })
+}
+fn application() -> (Router, tempfile::TempDir) {
+    let root = tempfile::tempdir().unwrap();
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),
-        playback,
+        test_playback(root.path()),
     )
     .unwrap();
     (router(app, None), root)
 }
 fn owner_application() -> (Router, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
-    let playback = PlaybackManager::new(Config {
-        ffmpeg: "missing-test-ffmpeg".into(),
-        ffprobe: "missing-test-ffprobe".into(),
-        root: root.path().join("hls"),
-        max_sessions: 2,
-        ttl: Duration::from_secs(30),
-    });
     let mut db = rusqlite::Connection::open_in_memory().unwrap();
     db.execute_batch(
         "PRAGMA foreign_keys=ON;CREATE TABLE profiles(id INTEGER PRIMARY KEY,name TEXT NOT NULL);",
@@ -60,7 +56,7 @@ fn owner_application() -> (Router, tempfile::TempDir) {
     .unwrap();
     auth::init(&db).unwrap();
     auth::create_owner_offline(&mut db, "owner", "Owner", "secure-owner-password").unwrap();
-    let app = App::new(db, reqwest::Client::new(), playback).unwrap();
+    let app = App::new(db, reqwest::Client::new(), test_playback(root.path())).unwrap();
     (router(app, None), root)
 }
 async fn browser_request(

@@ -822,8 +822,7 @@ pub fn router_with_tv(
             );
     }
     if let Some(path) = tv_dashboard {
-        let tv_index = path.join("index.html");
-        let tv_entry = tv_index.clone();
+        let tv_entry = path.join("index.html");
         r = r
             .route("/tv", get(move || dashboard_entry(tv_entry.clone())))
             .nest_service(
@@ -835,42 +834,34 @@ pub fn router_with_tv(
     }
     r
 }
-async fn privacy_page() -> Response {
+// Static HTML responses share one non-cacheable envelope.
+fn html_page(body: impl IntoResponse) -> Response {
     (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        r#"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>VIPTV Privacy Policy</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e0e0e0;background:#101112}h1{color:#fff}a{color:#90a0ff}</style></head><body><h1>Privacy Policy</h1><p>VIPTV is a private streaming application. We do not collect, store, or share personal information beyond what is strictly necessary to provide the service.</p><p>Account credentials are stored securely and are never shared with third parties. Playback sessions are ephemeral and not logged.</p><p>For questions, contact vynxcai@gmail.com.</p><p><a href="/">Back to VIPTV</a></p></body></html>"#,
+        body,
     )
         .into_response()
 }
+async fn privacy_page() -> Response {
+    html_page(
+        r#"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>VIPTV Privacy Policy</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e0e0e0;background:#101112}h1{color:#fff}a{color:#90a0ff}</style></head><body><h1>Privacy Policy</h1><p>VIPTV is a private streaming application. We do not collect, store, or share personal information beyond what is strictly necessary to provide the service.</p><p>Account credentials are stored securely and are never shared with third parties. Playback sessions are ephemeral and not logged.</p><p>For questions, contact vynxcai@gmail.com.</p><p><a href="/">Back to VIPTV</a></p></body></html>"#,
+    )
+}
 
 async fn terms_page() -> Response {
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
+    html_page(
         r#"<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>VIPTV Terms of Use</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 20px;line-height:1.6;color:#e0e0e0;background:#101112}h1{color:#fff}a{color:#90a0ff}</style></head><body><h1>Terms of Use</h1><p>VIPTV is provided as-is for personal, non-commercial use. Users are responsible for their own content and streaming sources.</p><p>The service is for authorized users only. Unauthorized access or redistribution is prohibited.</p><p>We reserve the right to modify or discontinue the service at any time.</p><p><a href="/">Back to VIPTV</a></p></body></html>"#,
     )
-        .into_response()
 }
 
 async fn dashboard_entry(path: PathBuf) -> Response {
     const MAX_INDEX_BYTES: usize = 2 * 1024 * 1024;
     match tokio::fs::read(path).await {
-        Ok(bytes) if bytes.len() <= MAX_INDEX_BYTES => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-                (header::CACHE_CONTROL, "no-store"),
-            ],
-            bytes,
-        )
-            .into_response(),
+        Ok(bytes) if bytes.len() <= MAX_INDEX_BYTES => html_page(bytes),
         Ok(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CACHE_CONTROL, "no-store")],
@@ -919,7 +910,7 @@ fn capture_lease(
 ) -> Result<ResourceLease, ApiError> {
     // Authentication already succeeded. Resolve its credential once to a stable lease;
     // downstream media requests carry only the playback capability, not this credential.
-    let token = token.ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Unauthorized".into()))?;
+    let token = token.ok_or_else(auth::unauthorized)?;
     let db = app.db.lock().unwrap();
     let session_id = db.query_row("SELECT id FROM auth_sessions WHERE access_hash=?1 AND account_id=?2 AND id IS ?3 AND access_expires>?4", params![format!("{:x}",Sha256::digest(token.as_bytes())), principal.account_id(), principal.session_id(), util::now()], |r| r.get::<_,String>(0)).optional().map_err(db_error)?;
     let policy_revision = kids::revision(&db, &principal)?;
@@ -933,7 +924,7 @@ fn capture_lease(
 }
 async fn authorize_resources(State(mut app): State<App>, mut req: Request, next: Next) -> Response {
     let Some(principal) = req.extensions().get::<auth::Principal>().cloned() else {
-        return ApiError(StatusCode::UNAUTHORIZED, "Unauthorized".into()).into_response();
+        return auth::unauthorized().into_response();
     };
     let credential = req
         .headers()
@@ -1239,10 +1230,7 @@ async fn profiles(State(a): State<App>) -> ApiResult {
     blocking(move || {
         let db = a.db.lock().unwrap();
         a.request_lease().validate(&db)?;
-        let account_id = a
-            .identity()
-            .account_id()
-            .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Unauthorized".into()))?;
+        let account_id = a.identity().account_id().ok_or_else(auth::unauthorized)?;
         Ok(axum::Json(json!(auth::list_profiles(&db, account_id)?)))
     })
     .await
@@ -1252,10 +1240,7 @@ async fn create_profile(State(a): State<App>, axum::Json(v): axum::Json<Value>) 
         let mut db = a.db.lock().unwrap();
         let tx = db.transaction().map_err(db_error)?;
         a.request_lease().validate(&tx)?;
-        let account_id = a
-            .identity()
-            .account_id()
-            .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Unauthorized".into()))?;
+        let account_id = a.identity().account_id().ok_or_else(auth::unauthorized)?;
         kids::require_parent(&tx, &a.identity())?;
         let profile = auth::create_profile(&tx, account_id, &v)?;
         tx.commit().map_err(db_error)?;
@@ -1272,10 +1257,7 @@ async fn update_profile(
         let mut db = a.db.lock().unwrap();
         let tx = db.transaction().map_err(db_error)?;
         a.request_lease().validate(&tx)?;
-        let account_id = a
-            .identity()
-            .account_id()
-            .ok_or_else(|| ApiError(StatusCode::UNAUTHORIZED, "Unauthorized".into()))?;
+        let account_id = a.identity().account_id().ok_or_else(auth::unauthorized)?;
         kids::require_parent(&tx, &a.identity())?;
         let profile = auth::update_profile(&tx, account_id, id, &v)?;
         tx.commit().map_err(db_error)?;
