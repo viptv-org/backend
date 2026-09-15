@@ -615,6 +615,7 @@ impl PlaybackManager {
             )
             .await
             .ok_or_else(|| {
+                tracing::warn!(live, "Playback source inspection failed");
                 "Could not inspect source video safely; try another stream".to_owned()
             })?;
         let probe_ms = probe_started.elapsed().as_millis() as u64;
@@ -1599,13 +1600,19 @@ impl PlaybackManager {
     ) -> Option<Probe> {
         let mut unparsable = false;
         for attempt in 0..2 {
+            let attempt_started = Instant::now();
             match self
                 .probe_attempt(url, headers, permits.clone(), false)
                 .await
             {
                 Ok(probe) => return Some(probe),
                 Err(category) => {
-                    tracing::warn!(?category, "Source probe failed");
+                    tracing::warn!(
+                        ?category,
+                        attempt,
+                        probe_ms = attempt_started.elapsed().as_millis() as u64,
+                        "Source probe failed"
+                    );
                     unparsable |= matches!(
                         category,
                         ProbeFailure::InvalidJson | ProbeFailure::OversizedOutput
