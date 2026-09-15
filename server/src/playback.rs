@@ -875,8 +875,11 @@ impl PlaybackManager {
                 }
             }
             input_args(&mut cmd, &header_block);
-            // Pace VOD too: bounded rolling HLS must not race past a player's position.
-            cmd.arg("-re");
+            // Live inputs must stay realtime; VOD can fill the rolling window as fast
+            // as FFmpeg can produce it so browser playback has actual headroom.
+            if live {
+                cmd.arg("-re");
+            }
             if position > 0.0 {
                 cmd.arg("-ss").arg(format!("{position:.3}"));
             }
@@ -2079,7 +2082,9 @@ async fn cache_safe(dir: &std::path::Path, require_progress: bool) -> bool {
             continue;
         }; // deletion race
         bytes = bytes.saturating_add(meta.len());
-        if count > 64 || meta.len() > 32 * 1024 * 1024 || bytes > 384 * 1024 * 1024 {
+        // The configured 120s window plus 60s delete grace can retain up to
+        // 180 two-second AV/VTT files; leave a small margin for playlists.
+        if count > 256 || meta.len() > 32 * 1024 * 1024 || bytes > 384 * 1024 * 1024 {
             tracing::warn!("Playback cache watchdog limit exceeded");
             return false;
         }
