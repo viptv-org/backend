@@ -63,7 +63,15 @@ async fn blocking<T: Send + 'static>(
 pub struct ApiError(pub StatusCode, pub String);
 impl From<String> for ApiError {
     fn from(s: String) -> Self {
-        Self(StatusCode::BAD_REQUEST, s)
+        // Interruption and capacity conditions are not client mistakes. Reporting
+        // them as 400 makes the client show a generic failure, and reporting
+        // capacity as 429 tells the viewer to retry something that will never
+        // succeed until they stop a session.
+        let status = match s.as_str() {
+            "Playback capacity reached" => StatusCode::SERVICE_UNAVAILABLE,
+            _ => StatusCode::BAD_REQUEST,
+        };
+        Self(status, s)
     }
 }
 impl From<&str> for ApiError {

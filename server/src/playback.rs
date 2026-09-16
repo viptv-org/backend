@@ -599,6 +599,9 @@ impl PlaybackManager {
             .slots
             .clone()
             .try_acquire_owned()
+            // Distinct from a provider-connection limit: this is the server's own
+            // session budget (VIPTV_MAX_SESSIONS), which needs the viewer to stop
+            // something rather than to retry. It is reported as 503, not 429.
             .map_err(|_| "Playback capacity reached".to_owned())?;
         let permits = Arc::new(InputPermits {
             _playback: permit,
@@ -619,7 +622,10 @@ impl PlaybackManager {
                 "Could not inspect source video safely; try another stream".to_owned()
             })?;
         let probe_ms = probe_started.elapsed().as_millis() as u64;
-        probe.ensure_supported()?;
+        // The capability envelope gates only the managed/transcode path. Original
+        // delivery is decided below from the client's declared decoders, so an
+        // HDR, wide-gamut or otherwise unusual source is still playable whenever
+        // the client can demux and decode it.
         let selected_input = probe.select_audio(&selection)?;
         let caption_index = selection.subtitle_track_index.or_else(|| {
             let language = selection.preferred_subtitle_language.as_deref()?;
@@ -768,6 +774,10 @@ impl PlaybackManager {
                 );
             }
         }
+        // Managed output re-encodes into the envelope the browser declared, so the
+        // inspected source must be inside it. Original delivery above is exempt:
+        // there the client's own decoders, not this policy, decide.
+        probe.ensure_supported()?;
         let hdr = probe.hdr_transfer()?.is_some();
         let interlaced = probe.interlaced();
         let mut transforms = Vec::new();
@@ -808,13 +818,9 @@ impl PlaybackManager {
         // discard reference frames. Only decoding provides accurate arbitrary seeks.
         // At offset zero, copy compatible H264 video even when audio alone needs AAC
         // conversion. This avoids wasting CPU re-encoding already-compatible pictures.
-        let max_h264_level = if width >= 1920 && height >= 1080 {
-            41
-        } else {
-            40
-        };
-        let copy_video =
-            !force && position == 0.0 && probe.compatible_video(width, height, max_h264_level);
+        let copy_video = !force
+            && position == 0.0
+            && probe.compatible_video(width, height, h264_copy_level(width, height));
         // Copy audio independently at zero offset. After input-side seeking,
         // decoded audio is required to keep MPEGTS/WebVTT on the same clock.
         let copy_audio = !force && position == 0.0 && probe.compatible_audio_stream(selected_input);
@@ -1838,12 +1844,20 @@ fn header_block(headers: &HashMap<String, String>) -> Result<String, String> {
 }
 /// Formats a WebCodecs client can demux itself, mapped to their file extension.
 fn direct_file_extension(format: &str) -> Option<&'static str> {
+    // Every container FFmpeg can name that a WebCodecs demuxer may also read.
+    // A missing entry here is not a decode failure, only a lost direct path, so
+    // this list is deliberately wider than the native-envelope list below.
     for (name, extension) in [
         ("mp4", "mp4"),
         ("mov", "mov"),
+        ("m4v", "m4v"),
         ("matroska", "mkv"),
         ("webm", "webm"),
         ("mpegts", "ts"),
+        ("mpeg", "mpg"),
+        ("avi", "avi"),
+        ("flv", "flv"),
+        ("asf", "wmv"),
         ("ogg", "ogg"),
         ("adts", "aac"),
         ("flac", "flac"),
@@ -1877,6 +1891,10 @@ fn declared_codec(declared: &[String], codec: Option<&str>) -> bool {
 
 /// The original file may be served when the client reads the container and every
 /// codec in it, and the picture is one this path can hand over unmodified.
+/// The original-container path for a WebCodecs client. This client demuxes the
+/// file itself and its decoders handle HDR and wide-gamut sources, so unlike the
+/// native envelope it is not restricted by transfer characteristics or primaries.
+/// Interlacing is still excluded because the demuxer feeds a progressive decoder.
 fn direct_file_format(
     probe: &Probe,
     caps: &Capabilities,
@@ -1890,7 +1908,6 @@ fn direct_file_format(
             .count()
             != 1
         || probe.interlaced()
-        || !matches!(probe.hdr_transfer(), Ok(None))
     {
         return None;
     }
@@ -2223,6 +2240,27 @@ struct ProbeStream {
     #[serde(default)]
     side_data_list: Vec<serde_json::Value>,
 }
+/// The H.264 level this engine may pass through for a given output size.
+///
+/// Levels are per pixels-per-second, so a level is a function of both size and
+/// frame rate — not a flat per-resolution cap. Level 4.0 covers 1080p30 but
+/// **not** a 720p60 channel, which is where a flat "720p is level 4.0" rule
+/// silently forced a full re-encode of an ordinary source.
+///
+/// 1920x1080 normally needs level 4.0/4.1; at 60fps it needs 4.2. Since the
+/// frame rate is not passed here, an HD source is allowed up to 4.2 and any
+/// smaller source is additionally allowed 4.1. Anything above this was authored
+/// for hardware beyond a browser's guaranteed baseline and is converted instead.
+fn h264_copy_level(width: u32, height: u32) -> u32 {
+    if width >= 1920 && height >= 1080 {
+        42
+    } else if width >= 1280 && height >= 720 {
+        41
+    } else {
+        40
+    }
+}
+
 fn conservative_frame_rate(rate: Option<&str>) -> bool {
     let Some((numerator, denominator)) = rate.and_then(|r| r.split_once('/')) else {
         return false;
@@ -2237,7 +2275,7 @@ fn conservative_frame_rate(rate: Option<&str>) -> bool {
     else {
         return false;
     };
-    numerator > 0 && denominator > 0 && u128::from(numerator) <= u128::from(denominator) * 30
+    numerator > 0 && denominator > 0 && u128::from(numerator) <= u128::from(denominator) * 60
 }
 
 impl ProbeStream {
@@ -2474,12 +2512,8 @@ impl Probe {
     }
     #[cfg(test)]
     fn compatible_audio(&self, width: u32, height: u32, audio: Option<&ProbeStream>) -> bool {
-        let max_h264_level = if width >= 1920 && height >= 1080 {
-            41
-        } else {
-            40
-        };
-        self.compatible_video(width, height, max_h264_level) && self.compatible_audio_stream(audio)
+        self.compatible_video(width, height, h264_copy_level(width, height))
+            && self.compatible_audio_stream(audio)
     }
     fn compatible_video(&self, width: u32, height: u32, max_h264_level: u32) -> bool {
         if self.interlaced() || !matches!(self.hdr_transfer(), Ok(None)) {
@@ -2655,6 +2689,167 @@ mod tests {
                 interlaced.streams.get(1),
                 &selection
             ),
+            None
+        );
+    }
+
+    #[test]
+    fn original_file_containers_cover_the_observed_catalogue() {
+        // Every container format_name the providers actually serve must have a
+        // direct path; a missing entry silently costs the raw-file rung.
+        for (format, expected) in [
+            ("mov,mp4,m4a,3gp,3g2,mj2", "mp4"),
+            ("matroska,webm", "mkv"),
+            ("avi", "avi"),
+            ("mpegts", "ts"),
+            ("flv", "flv"),
+            ("asf", "wmv"),
+            ("mpeg", "mpg"),
+            ("ogg", "ogg"),
+            ("wav", "wav"),
+            ("mp3", "mp3"),
+            ("flac", "flac"),
+            ("adts", "aac"),
+        ] {
+            assert_eq!(direct_file_extension(format), Some(expected), "{format}");
+        }
+        // An unlisted container keeps managed delivery rather than failing.
+        assert_eq!(direct_file_extension("unknown,container"), None);
+    }
+
+    /// A real live 720p60 channel must be stream-copied, not re-encoded.
+    ///
+    /// Every field below is the value ffprobe reports for production IPTV live
+    /// sources (H.264 High 4.1, yuv420p, progressive, BT.709 SDR, 1280x720 at
+    /// 59.94fps, AAC-LC stereo in MPEG-TS). Re-encoding this in realtime cannot
+    /// keep up, so the managed HLS window underruns and playback stutters.
+    #[test]
+    fn a_720p60_live_channel_is_copied_instead_of_re_encoded() {
+        let probe: Probe = serde_json::from_value(serde_json::json!({
+            "streams": [
+                {"codec_type":"video","codec_name":"h264","profile":"High","level":41,
+                 "pix_fmt":"yuv420p","width":1280,"height":720,"field_order":"progressive",
+                 "color_transfer":"bt709","color_primaries":"bt709","color_space":"bt709",
+                 "avg_frame_rate":"60000/1001","r_frame_rate":"60000/1001"},
+                {"codec_type":"audio","codec_name":"aac","profile":"LC","channels":2}
+            ],
+            "format":{"format_name":"mpegts"}
+        }))
+        .unwrap();
+        assert!(
+            probe.compatible_audio(1280, 720, probe.streams.get(1)),
+            "a 720p60 H.264/AAC live channel must take the copy/remux path"
+        );
+    }
+
+    #[test]
+    fn copy_level_scales_with_pixels_per_second_not_resolution_alone() {
+        // A flat per-resolution cap is what broke 720p60 sources.
+        assert_eq!(h264_copy_level(1280, 720), 41);
+        assert_eq!(h264_copy_level(1920, 1080), 42);
+        assert_eq!(h264_copy_level(3840, 2160), 42);
+        assert_eq!(h264_copy_level(854, 480), 40);
+        // Frame rate ceiling admits 60fps but still refuses far-out values.
+        for rate in ["60000/1001", "60/1", "30/1", "24/1", "25/1", "50/1"] {
+            assert!(
+                conservative_frame_rate(Some(rate)),
+                "{rate} must pass through"
+            );
+        }
+        for rate in ["120/1", "0/1", "bogus", ""] {
+            assert!(
+                !conservative_frame_rate(Some(rate)),
+                "{rate} must not be treated as a copyable rate"
+            );
+        }
+        assert!(!conservative_frame_rate(None));
+    }
+
+    #[test]
+    fn an_hdr_original_file_is_delivered_to_a_client_that_can_decode_it() {
+        // Production sources are commonly HDR10/HLG with partial or absent colour
+        // tags. A WebCodecs client decodes these itself, so the native SDR
+        // envelope must not refuse the original file before it is offered.
+        let selection = TrackSelection::default();
+        let declared: Capabilities = serde_json::from_value(serde_json::json!({
+            "direct_play": true, "h264": true, "aac": true,
+            "max_width": 3840, "max_height": 2160, "hevc": true, "hevc_sdr": false,
+            "direct_files": true,
+            "direct_video_codecs": ["avc", "hevc", "av1"],
+            "direct_audio_codecs": ["aac", "ac3", "eac3", "dts"]
+        }))
+        .unwrap();
+        for (label, colour) in [
+            (
+                "tagged HDR10",
+                serde_json::json!({"color_transfer":"smpte2084","color_primaries":"bt2020","color_space":"bt2020nc"}),
+            ),
+            (
+                "untagged HDR10",
+                serde_json::json!({"color_transfer":"smpte2084"}),
+            ),
+            ("HLG", serde_json::json!({"color_transfer":"arib-std-b67"})),
+            (
+                "wide gamut without transfer",
+                serde_json::json!({"color_primaries":"bt2020","color_space":"bt2020nc"}),
+            ),
+            (
+                "mastering-display side data only",
+                serde_json::json!({"side_data_list":[{"side_data_type":"Mastering display metadata"}]}),
+            ),
+        ] {
+            let mut video = serde_json::json!({
+                "codec_type":"video","codec_name":"hevc","width":3840,"height":1608,
+                "pix_fmt":"yuv420p10le","profile":"Main 10","level":153,
+                "avg_frame_rate":"24/1","r_frame_rate":"24/1"
+            });
+            for (key, value) in colour.as_object().unwrap() {
+                video[key] = value.clone();
+            }
+            let probe: Probe = serde_json::from_value(serde_json::json!({
+                "streams": [
+                    video,
+                    {"codec_type":"audio","codec_name":"eac3","channels":6}
+                ],
+                "format":{"format_name":"matroska,webm"}
+            }))
+            .unwrap();
+            assert_eq!(
+                direct_format(&probe, &declared, probe.streams.get(1), &selection),
+                Some("mkv"),
+                "{label} must reach the client as the original file"
+            );
+        }
+    }
+
+    /// Interlacing still forces conversion even for a WebCodecs client: the
+    /// demuxer feeds a progressive decoder that cannot reconstruct fields.
+    #[test]
+    fn hdr_is_permitted_for_original_files_but_never_above_the_declared_envelope() {
+        let selection = TrackSelection::default();
+        let declared: Capabilities = serde_json::from_value(serde_json::json!({
+            "direct_play": true, "h264": true, "aac": true,
+            "max_width": 1920, "max_height": 1080,
+            "direct_files": true,
+            "direct_video_codecs": ["hevc"],
+            "direct_audio_codecs": ["eac3"]
+        }))
+        .unwrap();
+        let probe: Probe = serde_json::from_value(serde_json::json!({
+            "streams": [
+                {"codec_type":"video","codec_name":"hevc","width":3840,"height":2160,
+                 "pix_fmt":"yuv420p10le","profile":"Main 10","level":153,
+                 "color_transfer":"smpte2084","color_primaries":"bt2020","color_space":"bt2020nc",
+                 "avg_frame_rate":"24/1","r_frame_rate":"24/1"},
+                {"codec_type":"audio","codec_name":"eac3","channels":6}
+            ],
+            "format":{"format_name":"matroska,webm"}
+        }))
+        .unwrap();
+        // HDR is no longer a refusal, but a resolution above the declared
+        // envelope still is.
+        assert_eq!(
+            direct_format(&probe, &declared, probe.streams.get(1), &selection),
             None
         );
     }
@@ -3247,17 +3442,26 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
         assert!(dimensions(&caps).is_err());
     }
     #[test]
-    fn remux_rates_are_known_positive_and_at_most_thirty() {
-        for rate in ["24/1", "24000/1001", "30000/1001", "30/1"] {
-            assert!(conservative_frame_rate(Some(rate)));
+    fn remux_rates_admit_up_to_sixty_frames_per_second() {
+        for rate in [
+            "24/1",
+            "24000/1001",
+            "30000/1001",
+            "30/1",
+            "50/1",
+            // A 720p60 channel is an ordinary source; the old 30fps ceiling
+            // silently forced a full re-encode of it.
+            "60000/1001",
+            "60/1",
+        ] {
+            assert!(conservative_frame_rate(Some(rate)), "{rate}");
         }
         for rate in [
             "0/0",
             "0/1",
             "30/0",
-            "31/1",
-            "60000/1001",
-            "60/1",
+            "120/1",
+            "120000/1001",
             "NaN",
             "30",
             "-1/1",
@@ -3265,7 +3469,7 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
             "18446744073709551616/1",
             "1/",
         ] {
-            assert!(!conservative_frame_rate(Some(rate)));
+            assert!(!conservative_frame_rate(Some(rate)), "{rate}");
         }
         assert!(!conservative_frame_rate(None));
     }
@@ -3343,20 +3547,28 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
         assert!(!multichannel.compatible(1280, 720));
         let level_41: Probe =
             serde_json::from_str(&good.replace("\"level\":40", "\"level\":41")).unwrap();
-        assert!(!level_41.compatible(1280, 720));
+        // A 720p source at level 4.1 is the common live case and must be copied.
+        assert!(level_41.compatible(1280, 720));
         assert!(level_41.compatible(1920, 1080));
+        // Level 5.1 is authored for hardware beyond the browser baseline.
+        let level_51: Probe =
+            serde_json::from_str(&good.replace("\"level\":40", "\"level\":51")).unwrap();
+        assert!(!level_51.compatible(1280, 720));
+        assert!(!level_51.compatible(1920, 1080));
         for bad in [
             good.replace("h264", "hevc"),
             good.replace("yuv420p", "yuv420p10le"),
             good.replace("\"channels\":2", "\"channels\":6"),
             good.replace("\"level\":40", "\"level\":51"),
+            // Above the copyable rate, not merely above 30fps: a 720p60 channel
+            // is now copied, so 120fps is the case that must still convert.
             good.replace(
                 "\"avg_frame_rate\":\"30000/1001\"",
-                "\"avg_frame_rate\":\"60/1\"",
+                "\"avg_frame_rate\":\"120/1\"",
             ),
             good.replace(
                 "\"r_frame_rate\":\"30000/1001\"",
-                "\"r_frame_rate\":\"60000/1001\"",
+                "\"r_frame_rate\":\"120000/1001\"",
             ),
             good.replace(",\"avg_frame_rate\":\"30000/1001\"", ""),
             good.replace(",\"r_frame_rate\":\"30000/1001\"", ""),
@@ -4101,6 +4313,93 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
     }
 
     #[tokio::test]
+    #[ignore = "requires configured real FFmpeg/ffprobe libx264; no network"]
+    async fn real_hdr10_file_is_delivered_as_original_to_a_webcodecs_client() {
+        // End-to-end proof of the reported failure: a real, genuinely tagged HDR10
+        // file must reach a client that can demux and decode it. The old policy
+        // refused this source before original delivery was ever considered.
+        let ffmpeg = std::env::var("VIPTV_TEST_FFMPEG").unwrap();
+        let ffprobe = std::env::var("VIPTV_TEST_FFPROBE").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("hdr10.mp4");
+        let mut command = Command::new(&ffmpeg);
+        command
+            .args([
+                "-v", "error", "-nostdin", "-filter_threads", "2", "-threads", "2",
+                "-f", "lavfi", "-i", "testsrc2=size=192x108:rate=24",
+                "-frames:v", "4",
+                "-vf", "format=yuv420p10le,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc",
+                "-c:v", "libx264", "-preset", "ultrafast", "-profile:v", "high10",
+                "-pix_fmt", "yuv420p10le",
+                "-color_trc", "smpte2084", "-color_primaries", "bt2020", "-colorspace", "bt2020nc",
+            ])
+            .arg(&path);
+        hdr_test_command(&mut command).await;
+
+        // Inspect it exactly as the server does.
+        let mut command = Command::new(&ffprobe);
+        command
+            .args([
+                "-v",
+                "error",
+                "-show_streams",
+                "-show_format",
+                "-of",
+                "json",
+            ])
+            .arg(&path);
+        let output = hdr_test_command(&mut command).await;
+        let data: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let video = &data["streams"][0];
+        assert_eq!(
+            video["color_transfer"], "smpte2084",
+            "fixture must be real HDR10"
+        );
+        assert_eq!(video["color_primaries"], "bt2020");
+
+        let probe: Probe = serde_json::from_value(data.clone()).unwrap();
+        // A fully tagged HDR10 file already satisfies the managed envelope, which
+        // may still tonemap it. The reported failure is the partially tagged case
+        // below: ffprobe frequently reports the transfer function without the
+        // primaries and matrix, and that produced
+        // "HDR color metadata is incomplete or unsupported".
+        assert!(
+            probe.ensure_supported().is_ok(),
+            "a completely tagged HDR source is inside the managed envelope"
+        );
+        let mut untagged = data.clone();
+        let fields = untagged["streams"][0].as_object_mut().unwrap();
+        fields.remove("color_primaries");
+        fields.remove("color_space");
+        let partial: Probe = serde_json::from_value(untagged).unwrap();
+        assert!(
+            partial.ensure_supported().is_err(),
+            "a partially tagged HDR source is what the managed envelope refuses"
+        );
+        // A WebCodecs client that declares HDR-capable decoders receives the
+        // original file for both shapes instead of an error.
+        let declared: Capabilities = serde_json::from_value(serde_json::json!({
+            "direct_play": true, "h264": true, "aac": true,
+            "max_width": 3840, "max_height": 2160, "hevc": true,
+            "direct_files": true,
+            "direct_video_codecs": ["avc", "hevc", "av1"],
+            "direct_audio_codecs": ["aac", "ac3", "eac3", "dts"]
+        }))
+        .unwrap();
+        for (label, source) in [("fully tagged", &probe), ("partially tagged", &partial)] {
+            let audio = source
+                .streams
+                .iter()
+                .find(|stream| stream.codec_type.as_deref() == Some("audio"));
+            assert_eq!(
+                direct_format(source, &declared, audio, &TrackSelection::default()),
+                Some("mp4"),
+                "{label} HDR10 must be delivered as the original container"
+            );
+        }
+    }
+
+    #[tokio::test]
     #[ignore = "bounded synthetic 4K benchmark with configured FFmpeg; no network"]
     async fn real_hdr_resize_benchmark() {
         let ffmpeg = std::env::var("VIPTV_TEST_FFMPEG").unwrap();
@@ -4489,6 +4788,160 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
             .await
             .unwrap()
             .is_none());
+        server.abort();
+        let _ = server.await;
+    }
+
+    /// A real 720p60 H.264/AAC source must be stream-copied into HLS.
+    ///
+    /// This is the reported live stutter: the old policy capped 720p at level 4.0
+    /// and silently capped frame rate at 30, so an ordinary 720p60 channel was
+    /// fully re-encoded in realtime. Encoding could not keep up, the managed HLS
+    /// window underran, and FFmpeg exited and restarted in a loop.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires real FFmpeg/ffprobe binaries"]
+    async fn a_720p60_source_is_stream_copied_into_hls() {
+        use std::os::unix::fs::PermissionsExt;
+        let ffmpeg = PathBuf::from(std::env::var("VIPTV_TEST_FFMPEG").expect("VIPTV_TEST_FFMPEG"));
+        let ffprobe =
+            PathBuf::from(std::env::var("VIPTV_TEST_FFPROBE").expect("VIPTV_TEST_FFPROBE"));
+        let root = tempfile::tempdir().unwrap();
+        let fixture = root.path().join("live720p60.mkv");
+        // Level 4.1 at 59.94fps, exactly like the production live channels.
+        let status = Command::new(&ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=1280x720:rate=60000/1001",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000",
+                "-t",
+                "4",
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+                "-profile:v",
+                "high",
+                "-level:v",
+                "4.1",
+                "-g",
+                "120",
+                "-keyint_min",
+                "120",
+                "-sc_threshold",
+                "0",
+                "-force_key_frames",
+                "0,2",
+                "-c:a",
+                "aac",
+                "-ac",
+                "2",
+                "-shortest",
+            ])
+            .arg(&fixture)
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success());
+
+        let probe = Command::new(&ffprobe)
+            .args(["-v", "error", "-show_streams", "-of", "json"])
+            .arg(&fixture)
+            .output()
+            .await
+            .unwrap();
+        let probed: Probe = serde_json::from_slice(&probe.stdout).unwrap();
+        let video = probed
+            .streams
+            .iter()
+            .find(|s| s.codec_type.as_deref() == Some("video"))
+            .unwrap();
+        assert_eq!(video.level, Some(41), "fixture must be level 4.1");
+        assert_eq!(video.avg_frame_rate.as_deref(), Some("60000/1001"));
+        assert!(
+            video.width == Some(1280) && video.height == Some(720),
+            "fixture must be 720p"
+        );
+
+        let bytes = tokio::fs::read(&fixture).await.unwrap();
+        let router = axum::Router::new().route(
+            "/live.mkv",
+            axum::routing::get(move || {
+                let bytes = bytes.clone();
+                async move { bytes }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/live.mkv", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        let arguments = root.path().join("ffmpeg-arguments.txt");
+        let wrapper = root.path().join("ffmpeg-wrapper.sh");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{}\"\nexec \"{}\" \"$@\"\n",
+                arguments.display(),
+                ffmpeg.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let manager = PlaybackManager::new(Config {
+            ffmpeg: wrapper,
+            ffprobe,
+            root: root.path().join("media"),
+            max_sessions: 1,
+            ttl: Duration::from_secs(60),
+        });
+        let response = manager
+            .start_with_permit(url, HashMap::new(), 0.0, None, false, true, None)
+            .await
+            .unwrap();
+        let args = tokio::fs::read_to_string(&arguments).await.unwrap();
+        let args: Vec<_> = args.lines().collect();
+        let value_after = |name: &str| {
+            args.iter()
+                .position(|arg| *arg == name)
+                .map(|index| args[index + 1])
+        };
+        // The whole point: no video encoder runs for this source.
+        assert_eq!(
+            value_after("-c:v"),
+            Some("copy"),
+            "720p60 video must be copied"
+        );
+        assert_eq!(
+            value_after("-c:a"),
+            Some("copy"),
+            "AAC-LC audio must be copied"
+        );
+        assert_eq!(
+            response.video_mode, "copy",
+            "a 720p60 channel must not be re-encoded"
+        );
+        assert!(
+            !args.contains(&"libx264") && !args.contains(&"scale") && !args.contains(&"-vf"),
+            "no encoder or filter may run for a directly compatible source: {args:?}"
+        );
+        assert!(manager.stop(&response.id).await);
+        manager.shutdown().await;
         server.abort();
         let _ = server.await;
     }
