@@ -2481,7 +2481,7 @@ impl Probe {
             {
                 return Ok(transfer);
             }
-            return Err("HDR color metadata is incomplete or unsupported; select a tagged BT2020 HDR10/HLG source or SDR".into());
+            return Err("HDR color metadata is incomplete or unsupported; this source cannot be tone-mapped to SDR. Select a tagged HDR10/HLG source or an SDR source".into());
         }
         if hdr_metadata
             || video.color_primaries.as_deref() == Some("bt2020")
@@ -4376,6 +4376,10 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
             partial.ensure_supported().is_err(),
             "a partially tagged HDR source is what the managed envelope refuses"
         );
+        // Verified empirically against FFmpeg: a PQ stream with no primaries
+        // fails in zscale with "no path between colorspaces" even when the
+        // chain is told to assume bt2020, so refusing here is the correct
+        // outcome rather than a missing conversion. The message says so.
         // A WebCodecs client that declares HDR-capable decoders receives the
         // original file for both shapes instead of an error.
         let declared: Capabilities = serde_json::from_value(serde_json::json!({
