@@ -41,6 +41,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::Notify;
+use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -800,6 +801,20 @@ pub fn router_with_tv(
             auth::authenticate,
         ))
         .layer(middleware::from_fn(json_errors));
+    // Read-only CORS for session media only. An instrument or debugger running on
+    // another origin (for example an external player or inspection tool) needs to
+    // fetch a session's bytes directly; the session capability is the credential,
+    // so this grants no access that the capability did not already grant.
+    //
+    // Deliberately scoped to this one route rather than the whole router: the
+    // API's origin policy exists to stop cross-site account requests, and a
+    // wildcard response header there would undermine that. No credentials are
+    // allowed and the methods are read-only, so a cookie-authenticated mutation
+    // can never succeed from a foreign origin.
+    let media_route = match media_cors() {
+        Some(cors) => get(media).layer(cors),
+        None => get(media),
+    };
     let mut r = Router::new()
         .nest("/api", api)
         .route(
@@ -808,7 +823,7 @@ pub fn router_with_tv(
                 axum::Json(json!({"status":"ok","version":env!("CARGO_PKG_VERSION")}))
             }),
         )
-        .route("/media/:id/:cap/:file", get(media))
+        .route("/media/:id/:cap/:file", media_route)
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         .with_state(app);
     r = r
@@ -842,6 +857,124 @@ pub fn router_with_tv(
     }
     r
 }
+/// Origins allowed to read session media cross-origin, from
+/// `VIPTV_MEDIA_CORS_ORIGINS` (comma-separated, exact `scheme://host[:port]`).
+///
+/// Defaults to the Mediabunny instrument, which reads a session's bytes directly
+/// to inspect and debug them. Set the variable to an empty string to disable
+/// cross-origin media reads entirely (the native client is same-origin and does
+/// not need them).
+fn media_cors() -> Option<CorsLayer> {
+    let configured = std::env::var("VIPTV_MEDIA_CORS_ORIGINS")
+        .unwrap_or_else(|_| "https://mediabunny.dev".into());
+    let mut origins = Vec::new();
+    for value in configured
+        .split(',')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        // Validate as a real HTTPS origin, matching how the request Origin header
+        // is parsed. A HeaderValue only rejects control characters, so without
+        // this a typo like "mediabunny.dev" would silently enter the allow list
+        // as an origin no browser ever sends.
+        let valid = crate::util::validate_url(value)
+            .ok()
+            .filter(|u| {
+                u.scheme() == "https"
+                    && u.path() == "/"
+                    && u.query().is_none()
+                    && u.host_str().is_some()
+            })
+            .map(|u| u.origin().ascii_serialization());
+        match valid.and_then(|origin| origin.parse::<axum::http::HeaderValue>().ok()) {
+            Some(origin) => origins.push(origin),
+            // A malformed entry must not silently become a wildcard, and must not
+            // be ignored either: ignoring it would leave an operator believing a
+            // tool is allowed when it is not.
+            None => {
+                tracing::warn!("Ignoring malformed VIPTV_MEDIA_CORS_ORIGINS entry");
+                return None;
+            }
+        }
+    }
+    if origins.is_empty() {
+        return None;
+    }
+    Some(
+        CorsLayer::new()
+            // Read-only: a session capability is a bearer secret, so no cookie
+            // may accompany a cross-origin media request.
+            .allow_credentials(false)
+            .allow_methods([axum::http::Method::GET, axum::http::Method::HEAD])
+            // Range is required for byte-range media reads; the browser may also
+            // preflight these.
+            .allow_headers([
+                header::RANGE,
+                header::IF_RANGE,
+                header::ACCEPT,
+                header::ACCEPT_ENCODING,
+            ])
+            .expose_headers([
+                header::CONTENT_LENGTH,
+                header::CONTENT_RANGE,
+                header::ACCEPT_RANGES,
+                header::ETAG,
+            ])
+            .allow_origin(origins),
+    )
+}
+#[cfg(test)]
+mod media_cors_tests {
+    use super::media_cors;
+
+    /// The layer must exist for the default origin, must refuse a malformed
+    /// entry rather than degrade to a wildcard, and must disappear when the
+    /// operator opts out.
+    ///
+    /// This guards the rule that CORS never reaches `/api`: the layer is applied
+    /// to the `/media` route alone, and a `CorsLayer` that cannot be constructed
+    /// is `None` rather than permissive.
+    #[test]
+    fn media_cors_is_explicit_and_never_a_wildcard() {
+        // The default is the Mediabunny instrument, not `*`.
+        std::env::remove_var("VIPTV_MEDIA_CORS_ORIGINS");
+        assert!(
+            media_cors().is_some(),
+            "default origin must produce a layer"
+        );
+
+        // An empty setting disables cross-origin media reads entirely.
+        std::env::set_var("VIPTV_MEDIA_CORS_ORIGINS", "");
+        assert!(media_cors().is_none(), "empty must disable, not widen");
+
+        // Whitespace and multiple entries are tolerated.
+        std::env::set_var(
+            "VIPTV_MEDIA_CORS_ORIGINS",
+            " https://mediabunny.dev , https://other.example ",
+        );
+        assert!(media_cors().is_some());
+
+        // Entries that are not a bare HTTPS origin are refused, never widened:
+        // a bare host, a non-HTTPS scheme and a value carrying a path.
+        for bad in [
+            "not a valid origin",
+            "mediabunny.dev",
+            "http://mediabunny.dev",
+            "https://mediabunny.dev/path",
+            "https://mediabunny.dev/?q=1",
+            "*",
+        ] {
+            std::env::set_var("VIPTV_MEDIA_CORS_ORIGINS", bad);
+            assert!(
+                media_cors().is_none(),
+                "{bad} must disable the layer, never widen it"
+            );
+        }
+
+        std::env::remove_var("VIPTV_MEDIA_CORS_ORIGINS");
+    }
+}
+
 // Static HTML responses share one non-cacheable envelope.
 fn html_page(body: impl IntoResponse) -> Response {
     (

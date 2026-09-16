@@ -15,8 +15,11 @@ Rust/Axum, SQLite, Xtream and Stremio-compatible addons, managed FFmpeg HLS. Req
 | `VIPTV_FFMPEG`, `VIPTV_FFPROBE` | Executable paths, default `ffmpeg`, `ffprobe` |
 | `VIPTV_MAX_SESSIONS` | `3`, range 1–32 |
 | `VIPTV_SESSION_TTL` | `120` seconds, range 30–3600 |
+| `VIPTV_MEDIA_CORS_ORIGINS` | `https://mediabunny.dev`; comma-separated exact origins allowed to read `/media` cross-origin. Empty disables it entirely |
 
 Bind behind a TLS reverse proxy for use beyond a trusted network. Health, registration/login/recovery and credential-exchange endpoints, device pairing initiation/polling, and expiring media-capability URLs are public entry points; application and account administration require authentication. No permissive CORS is enabled: serve dashboard assets on the API origin or proxy `/api` and `/media` through its origin. `VIPTV_TV_DIST` keeps the TV app on that same HTTPS origin at `/tv`; it does not replace the account dashboard at `/`. Vizio should load that hosted URL. A Tizen installation should be a thin signed launcher for that hosted `/tv/?platform=tizen` URL, rather than a packaged local-origin copy of the React bundle. Proxy SSE without buffering. Secrets are never included in playback responses or process error messages; SQLite necessarily stores provider credentials, so protect database/backup permissions. Do not expose process listings or FFmpeg command lines to untrusted local users. Addon manifests may themselves contain installation credentials, and the owner-only addon API displays their configured URL.
+
+`VIPTV_MEDIA_CORS_ORIGINS` is the one exception, and it is scoped to `/media` only, never `/api`. A session capability is itself the credential, so letting an external tool read a session's bytes grants nothing beyond what the capability already grants. It is read-only (`GET`, `HEAD`), sends no credentials, and exposes no cookie, so a cross-origin page cannot make an authenticated API mutation with it. Leave it empty unless a specific cross-origin player or instrument must read session media.
 
 ## Browser playback capabilities
 
