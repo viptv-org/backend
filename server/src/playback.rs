@@ -47,6 +47,10 @@ pub struct Capabilities {
     pub direct_files: Option<bool>,
     pub direct_video_codecs: Option<Vec<String>>,
     pub direct_audio_codecs: Option<Vec<String>>,
+    /// A native client (the Tauri engine) fetches sources itself. When set, the
+    /// original URL is delivered with the server's upstream authorization
+    /// instead of a proxy: no transcoding and no server-side media path.
+    pub direct_urls: Option<bool>,
     pub hevc_sdr: bool,
 }
 impl Default for Capabilities {
@@ -63,6 +67,7 @@ impl Default for Capabilities {
             direct_files: None,
             direct_video_codecs: None,
             direct_audio_codecs: None,
+            direct_urls: None,
             hevc_sdr: false,
         }
     }
@@ -150,6 +155,14 @@ pub struct SelectedSubtitle {
     pub disposition: Option<TrackDisposition>,
 }
 
+/// Upstream authorization for a delivered original URL. The client applies it
+/// to its own engine's requests; browser deliveries never carry one.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlaybackAuthorization {
+    pub cookie: Option<String>,
+    pub user_agent: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlaybackResponse {
     pub id: String,
@@ -170,6 +183,10 @@ pub struct PlaybackResponse {
     pub selected_audio: Option<SelectedAudio>,
     pub subtitles_supported: bool,
     pub selected_subtitle: Option<SelectedSubtitle>,
+    /// Present only when the original URL is delivered for a client that
+    /// fetches it itself: the headers that client must present upstream.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<PlaybackAuthorization>,
 }
 
 type CleanupTasks = Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>;
@@ -710,6 +727,70 @@ impl PlaybackManager {
         {
             return Err("Playback position is past the end of this source".into());
         }
+        // A native client that fetches sources itself receives the original URL
+        // with the server's upstream authorization. Its own decoders decide
+        // playability: this server never proxies, transcodes, or applies codec
+        // policy for such a client.
+        if !force && caps.direct_urls == Some(true) {
+            let format = if live {
+                "hls"
+            } else {
+                probe
+                    .format
+                    .get("format_name")
+                    .and_then(|name| name.as_str())
+                    .and_then(direct_file_extension)
+                    .unwrap_or("file")
+            };
+            let authorization = source_authorization(&headers);
+            let id = Uuid::new_v4().to_string();
+            let capability =
+                format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+            let response = PlaybackResponse {
+                id: id.clone(),
+                url: validated.as_str().to_owned(),
+                format: format.into(),
+                mode: "direct".into(),
+                video_mode: "copy".into(),
+                audio_mode: "copy".into(),
+                position,
+                live,
+                duration: if live {
+                    0.0
+                } else {
+                    probe.duration().unwrap_or(0.0)
+                },
+                audio_tracks,
+                subtitles_supported: subtitle_tracks.iter().any(|track| track.supported),
+                subtitle_tracks,
+                selected_audio,
+                selected_subtitle,
+                authorization,
+            };
+            self.sessions.lock().await.insert(
+                id,
+                Session {
+                    _source_probe: (!live).then(|| probe.clone()),
+                    direct: None,
+                    capability,
+                    dir: PathBuf::new(),
+                    child: None,
+                    touched: Instant::now(),
+                    stable_target_duration: false,
+                    supervised_live: false,
+                    permits,
+                    cleanup_tasks: self.cleanup_tasks.clone(),
+                },
+            );
+            tracing::info!(
+                mode = "direct",
+                format,
+                probe_ms,
+                "Playback preparation completed"
+            );
+            return Ok(response);
+        }
+
         // Original delivery is opt-in, uses inspected tracks, and keeps the
         // provider reservation owned by this session and in-flight reads.
         if !force && caps.direct_play && std::env::var("VIPTV_DIRECT_PLAY").as_deref() != Ok("0") {
@@ -754,6 +835,7 @@ impl PlaybackManager {
                         subtitle_tracks,
                         selected_audio,
                         selected_subtitle: None,
+                        authorization: None,
                     };
                     self.sessions.lock().await.insert(
                         id,
@@ -1166,6 +1248,7 @@ impl PlaybackManager {
             subtitle_tracks,
             selected_audio,
             selected_subtitle,
+            authorization: None,
         })
     }
 
@@ -1942,6 +2025,22 @@ fn direct_file_format(
         return None;
     }
     Some(extension)
+}
+
+/// The upstream headers a direct-url client must present to fetch the source
+/// itself: the provider's cookie and user agent, if the server holds any.
+fn source_authorization(headers: &HashMap<String, String>) -> Option<PlaybackAuthorization> {
+    let header = |name: &str| {
+        headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.clone())
+    };
+    let authorization = PlaybackAuthorization {
+        cookie: header("Cookie"),
+        user_agent: header("User-Agent"),
+    };
+    (authorization.cookie.is_some() || authorization.user_agent.is_some()).then_some(authorization)
 }
 
 fn direct_format(
@@ -2905,6 +3004,56 @@ printf '#EXTM3U\n#EXTINF:1,\nsegment-000000000.ts\n' > "$last"
         assert!(attempts.iter().all(|a| a.contains("-c:a copy")));
         assert!(manager.stop(&result.id).await);
         assert_eq!(provider.available_permits(), 1);
+        manager.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_url_clients_receive_the_original_source_instead_of_a_session() {
+        let root = tempfile::tempdir().unwrap();
+        // HDR HEVC with Dolby audio in Matroska: the declared envelope refuses
+        // to hand this over, so anything but direct-url delivery would
+        // transcode it. A native client fetches the source itself instead.
+        let manager = scripted_probe(
+            root.path(),
+            r#"printf '%s' '{"streams":[
+                {"index":0,"codec_type":"video","codec_name":"hevc","width":3840,"height":1608,
+                 "pix_fmt":"yuv420p10le","profile":"Main 10","level":153,
+                 "color_transfer":"smpte2084","avg_frame_rate":"24/1","r_frame_rate":"24/1"},
+                {"index":1,"codec_type":"audio","codec_name":"eac3","channels":6}
+            ],"format":{"format_name":"matroska,webm","duration":"123.5"}}'"#,
+        );
+        let caps: Capabilities = serde_json::from_value(serde_json::json!({
+            "h264": true, "aac": true, "max_width": 3840, "max_height": 2160,
+            "direct_play": false, "direct_urls": true
+        }))
+        .unwrap();
+        let mut headers = HashMap::new();
+        headers.insert("Cookie".to_owned(), "session=opaque".to_owned());
+        headers.insert("user-agent".to_owned(), "viptv-native/1".to_owned());
+        let response = manager
+            .start(
+                "http://example.com/video".to_owned(),
+                headers,
+                0.0,
+                Some(caps),
+                false,
+            )
+            .await
+            .unwrap();
+        // The client's own engine fetches the original URL: no proxy session,
+        // no transcode, and no codec-policy refusal.
+        assert_eq!(response.url, "http://example.com/video");
+        assert_eq!(response.mode, "direct");
+        assert_eq!(response.video_mode, "copy");
+        assert_eq!(response.audio_mode, "copy");
+        assert_eq!(response.format, "mkv");
+        assert!((response.duration - 123.5).abs() < 0.01);
+        let authorization = response.authorization.expect("upstream authorization");
+        assert_eq!(authorization.cookie.as_deref(), Some("session=opaque"));
+        assert_eq!(authorization.user_agent.as_deref(), Some("viptv-native/1"));
+        // The transport-less session still answers heartbeats.
+        assert!(manager.heartbeat(&response.id).await);
         manager.shutdown().await;
     }
 
