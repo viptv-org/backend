@@ -161,6 +161,11 @@ pub struct SelectedSubtitle {
 pub struct PlaybackAuthorization {
     pub cookie: Option<String>,
     pub user_agent: Option<String>,
+    /// Every other upstream header the client's engine may need to fetch the
+    /// source itself (Referer and friends); cookie and user agent are excluded
+    /// because they ride in the dedicated fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2036,11 +2041,24 @@ fn source_authorization(headers: &HashMap<String, String>) -> Option<PlaybackAut
             .find(|(key, _)| key.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.clone())
     };
+    // Every upstream header the engine may need (Referer and friends) rides
+    // along; cookie and user agent keep their dedicated fields.
+    let rest: HashMap<String, String> = headers
+        .iter()
+        .filter(|(key, _)| {
+            !key.eq_ignore_ascii_case("Cookie") && !key.eq_ignore_ascii_case("User-Agent")
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
     let authorization = PlaybackAuthorization {
         cookie: header("Cookie"),
         user_agent: header("User-Agent"),
+        headers: (!rest.is_empty()).then_some(rest),
     };
-    (authorization.cookie.is_some() || authorization.user_agent.is_some()).then_some(authorization)
+    (authorization.cookie.is_some()
+        || authorization.user_agent.is_some()
+        || authorization.headers.is_some())
+    .then_some(authorization)
 }
 
 fn direct_format(
@@ -3031,6 +3049,7 @@ printf '#EXTM3U\n#EXTINF:1,\nsegment-000000000.ts\n' > "$last"
         let mut headers = HashMap::new();
         headers.insert("Cookie".to_owned(), "session=opaque".to_owned());
         headers.insert("user-agent".to_owned(), "viptv-native/1".to_owned());
+        headers.insert("Referer".to_owned(), "https://provider.example/watch".to_owned());
         let response = manager
             .start(
                 "http://example.com/video".to_owned(),
@@ -3052,6 +3071,13 @@ printf '#EXTM3U\n#EXTINF:1,\nsegment-000000000.ts\n' > "$last"
         let authorization = response.authorization.expect("upstream authorization");
         assert_eq!(authorization.cookie.as_deref(), Some("session=opaque"));
         assert_eq!(authorization.user_agent.as_deref(), Some("viptv-native/1"));
+        let forwarded = authorization.headers.expect("upstream header set");
+        assert_eq!(
+            forwarded.get("Referer").map(String::as_str),
+            Some("https://provider.example/watch")
+        );
+        assert!(!forwarded.contains_key("Cookie"));
+        assert!(!forwarded.contains_key("user-agent"));
         // The transport-less session still answers heartbeats.
         assert!(manager.heartbeat(&response.id).await);
         manager.shutdown().await;
