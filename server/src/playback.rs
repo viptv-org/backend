@@ -1681,7 +1681,7 @@ impl PlaybackManager {
         let entries = if reduced {
             "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,channels,avg_frame_rate,color_transfer"
         } else {
-            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,profile,level,channels,avg_frame_rate,r_frame_rate,color_transfer,field_order:stream_tags=language,title:stream_disposition=default,comment,hearing_impaired,visual_impaired,forced:stream_side_data"
+            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,profile,level,channels,avg_frame_rate,r_frame_rate,color_transfer,field_order:stream_tags=language,title:stream_disposition=default,comment,hearing_impaired,visual_impaired,forced"
         };
         cmd.args([
             "-analyzeduration",
@@ -2248,8 +2248,6 @@ struct ProbeStream {
     r_frame_rate: Option<String>,
     color_transfer: Option<String>,
     field_order: Option<String>,
-    #[serde(default)]
-    side_data_list: Vec<serde_json::Value>,
 }
 /// The highest H.264 level this engine passes through. Modern browser H.264
 /// decoders cover level 5.1, and the envelope's dimension, frame-rate, profile,
@@ -2457,27 +2455,15 @@ impl Probe {
     /// Mislabeled encodes are common (bt2020 primaries or mastering-display
     /// side data on an SDR transfer), so partial HDR/wide-gamut evidence
     /// without PQ/HLG reads as SDR instead of refusing a playable source.
-    /// Dolby Vision and other dynamic-HDR side data still cannot be tone-mapped
-    /// and remains the one hard refusal.
+    /// Dolby Vision and other dynamic-HDR metadata decode as their base layer:
+    /// FFmpeg drops the RPU and the transfer characteristics alone decide, so
+    /// no metadata refuses playback.
     fn hdr_transfer(&self) -> Result<Option<&str>, String> {
-        let video = self.video()?;
-        for data in &video.side_data_list {
-            let kind = data["side_data_type"]
-                .as_str()
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if ["dovi", "dolby vision", "dynamic", "2094"]
-                .iter()
-                .any(|tag| kind.contains(tag))
-            {
-                return Err("Dolby Vision/dynamic HDR conversion is not supported; select HDR10, HLG or SDR".into());
-            }
-        }
-        let transfer = video.color_transfer.as_deref();
-        if matches!(transfer, Some("smpte2084" | "arib-std-b67")) {
-            return Ok(transfer);
-        }
-        Ok(None)
+        Ok(self
+            .video()?
+            .color_transfer
+            .as_deref()
+            .filter(|transfer| matches!(*transfer, "smpte2084" | "arib-std-b67")))
     }
     fn duration(&self) -> Option<f64> {
         let v = &self.format["duration"];
@@ -3216,7 +3202,7 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
         // must still describe the source instead of failing playback.
         let manager = scripted_probe(
             root.path(),
-            r#"for arg in "$@"; do case "$arg" in *stream_side_data*) printf '%s' 'not json'; exit 0; esac; done; printf '%s' '{"format":{"format_name":"matroska,webm","duration":"120"},"streams":[{"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"pix_fmt":"yuv420p"},{"index":1,"codec_type":"audio","codec_name":"aac","channels":2}]}'"#,
+            r#"for arg in "$@"; do case "$arg" in *stream_disposition*) printf '%s' 'not json'; exit 0; esac; done; printf '%s' '{"format":{"format_name":"matroska,webm","duration":"120"},"streams":[{"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080,"pix_fmt":"yuv420p"},{"index":1,"codec_type":"audio","codec_name":"aac","channels":2}]}'"#,
         );
         let probe = manager
             .probe("http://example.com/video", "", None)
@@ -3287,7 +3273,7 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
     }
 
     #[test]
-    fn dynamic_hdr_refuses_but_mislabeled_wide_gamut_reads_as_sdr() {
+    fn dynamic_hdr_metadata_reads_as_its_transfer() {
         // PQ/HLG transfer characteristics are HDR with or without complete
         // colour tags; tone-mapping does not need the primaries to be present.
         for transfer in ["smpte2084", "arib-std-b67"] {
@@ -3307,12 +3293,22 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
         }]}))
         .unwrap();
         assert_eq!(mislabeled.hdr_transfer().unwrap(), None);
-        // Dynamic HDR still cannot be tone-mapped and keeps the one refusal.
-        let dynamic: Probe = serde_json::from_value(serde_json::json!({"streams":[{
-            "codec_type":"video", "side_data_list":[{"side_data_type":"DOVI configuration record"}]
+        // Dolby Vision and other dynamic-HDR side data no longer refuse
+        // playback: the decoder drops the RPU and the base layer's transfer
+        // decides, so a DoVi wrap around PQ tone-maps and DoVi SDR plays.
+        let dynamic_pq: Probe = serde_json::from_value(serde_json::json!({"streams":[{
+            "codec_type":"video", "color_transfer":"smpte2084",
+            "side_data_list":[{"side_data_type":"DOVI configuration record"}]
         }]}))
         .unwrap();
-        assert!(dynamic.ensure_supported().unwrap_err().contains("HDR"));
+        assert_eq!(dynamic_pq.hdr_transfer().unwrap(), Some("smpte2084"));
+        let dynamic_sdr: Probe = serde_json::from_value(serde_json::json!({"streams":[{
+            "codec_type":"video",
+            "side_data_list":[{"side_data_type":"DOVI configuration record"}]
+        }]}))
+        .unwrap();
+        assert_eq!(dynamic_sdr.hdr_transfer().unwrap(), None);
+        assert!(dynamic_sdr.ensure_supported().is_ok());
     }
     #[tokio::test]
     async fn open_segment_growth_and_stalled_leased_process_are_reaped() {
