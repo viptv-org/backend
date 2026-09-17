@@ -7,11 +7,22 @@ use axum::{
     response::Response,
 };
 use futures::StreamExt;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Semaphore;
 use url::Url;
 
 const CHUNK: u64 = 1024 * 1024;
+// A failed or stalled chunk read is retried before the body fails. Measured
+// providers answer sustained range fetching with intermittent 502s and
+// throttling pages, so the backoff doubles per attempt to wait the patch out
+// instead of failing every in-flight body.
+const CHUNK_ATTEMPTS: usize = 6;
+const CHUNK_BACKOFF: Duration = Duration::from_millis(400);
+const CHUNK_BACKOFF_MAX: Duration = Duration::from_millis(3200);
+// Chunks fetched beyond the one being sent: upstream latency overlaps client
+// consumption, and the bound caps buffered bytes per response.
+const CHUNK_LOOKAHEAD: usize = 2;
 const RESOURCE_LIMIT: usize = 4096;
 const CACHE_LIMIT: usize = 8 * 1024 * 1024;
 // Players poll live playlists near every second; a matching TTL absorbs the
@@ -24,8 +35,9 @@ pub(super) struct Direct {
     headers: HeaderMap,
     root: Url,
     resources: Mutex<HashMap<String, Url>>,
-    // Four upstream reservations so playlist polls and segment bodies
-    // overlap instead of serializing; a stalled viewer pins at most one.
+    // Six upstream reservations so playlist polls, segment bodies, and file
+    // chunk lookahead overlap instead of serializing; a stalled viewer pins
+    // at most its chunk lookahead, never a permit.
     fetch: Arc<Semaphore>,
     proxy: Option<String>,
     destinations: Mutex<HashMap<String, reqwest::Client>>,
@@ -85,7 +97,7 @@ impl Direct {
             headers: public,
             root: url,
             resources: Mutex::new(HashMap::new()),
-            fetch: Arc::new(Semaphore::new(4)),
+            fetch: Arc::new(Semaphore::new(6)),
             proxy: headers.get(crate::provider::egress::HEADER).cloned(),
             destinations: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
@@ -300,6 +312,27 @@ impl Direct {
         self.cache_insert(key, bytes.clone()).await;
         Ok(bytes)
     }
+    // One range read with bounded retries: transient upstream errors or
+    // stalls must not fail an in-flight body.
+    async fn retrying_range(&self, start: u64, end: u64) -> Result<Bytes, String> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match self.cached_range(self.root.clone(), start, end).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) => {
+                    if attempt >= CHUNK_ATTEMPTS || self.closed.load(Ordering::Acquire) {
+                        return Err(error);
+                    }
+                    let backoff = CHUNK_BACKOFF
+                        .saturating_mul(1u32 << (attempt - 1).min(3) as u32)
+                        .min(CHUNK_BACKOFF_MAX);
+                    tokio::time::sleep(backoff).await;
+                }
+            }
+        }
+    }
+
     async fn cache_insert(&self, key: String, bytes: Bytes) {
         let mut cache = self.cache.lock().await;
         cache.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(15));
@@ -342,7 +375,6 @@ impl Direct {
                 .status(if range.is_some() { 206 } else { 200 })
                 .header(header::CONTENT_TYPE, "video/mp4")
                 .header(header::ACCEPT_RANGES, "bytes")
-                .header(header::CONTENT_LENGTH, (end - start + 1).to_string())
                 .header(header::CACHE_CONTROL, "public, max-age=3600");
             if range.is_some() {
                 builder =
@@ -352,26 +384,91 @@ impl Direct {
                 builder = builder.header(header::ETAG, value);
             }
             if method == Method::HEAD {
+                // HEAD carries no body, so the exact length stays safe to
+                // promise.
                 return builder
+                    .header(header::CONTENT_LENGTH, (end - start + 1).to_string())
                     .body(Body::empty())
                     .map_err(|_| "Invalid media response".into());
             }
-            let stream = async_stream::try_stream! {
-                let _permits=self.permits.clone();
-                let mut offset=start;
-                while offset<=end {
-                    if self.closed.load(Ordering::Acquire) {Err(std::io::Error::other("Media expired"))?;}
-                    let last=end.min(offset.saturating_add(CHUNK-1));
-                    let bytes=self.cached_range(self.root.clone(),offset,last).await.map_err(|_|std::io::Error::other("Media range failed"))?;
-                    offset=last+1;
-                    yield bytes;
+            // GET streams without CONTENT_LENGTH on purpose: chunked transfer
+            // means a mid-stream termination ends the response cleanly
+            // instead of promising bytes the framing can never deliver. While
+            // the client consumes chunk N, chunks N+1..N+LOOKAHEAD are already
+            // in flight upstream, so one response sustains well above one
+            // chunk per round trip. Permits are held only during upstream I/O,
+            // never while waiting on the client.
+            let (send, mut receive) =
+                tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(CHUNK_LOOKAHEAD);
+            let streaming = self.clone();
+            tokio::spawn(async move {
+                let _permits = streaming.permits.clone();
+                let mut offset = start;
+                let mut in_flight: VecDeque<tokio::task::JoinHandle<Result<Bytes, String>>> =
+                    VecDeque::new();
+                while offset <= end || !in_flight.is_empty() {
+                    // Keep the pipeline ahead of the client; teardown or the
+                    // end of the range stops new fetches.
+                    while offset <= end
+                        && in_flight.len() < CHUNK_LOOKAHEAD
+                        && !streaming.closed.load(Ordering::Acquire)
+                    {
+                        let last = end.min(offset.saturating_add(CHUNK - 1));
+                        let direct = streaming.clone();
+                        in_flight.push_back(tokio::spawn(async move {
+                            direct.retrying_range(offset, last).await
+                        }));
+                        offset = last + 1;
+                    }
+                    if streaming.closed.load(Ordering::Acquire) {
+                        // The session was replaced or stopped: no new fetches,
+                        // pending ones abort, completed chunks still stream
+                        // out, and the body ends cleanly so the client retries
+                        // against the new session instead of a protocol error.
+                        for task in in_flight.drain(..) {
+                            task.abort();
+                            if let Ok(Ok(bytes)) = task.await {
+                                let _ =
+                                    timeout(Duration::from_secs(1), send.send(Ok(bytes))).await;
+                            }
+                        }
+                        break;
+                    }
+                    let Some(task) = in_flight.pop_front() else {
+                        break;
+                    };
+                    match task.await {
+                        Ok(Ok(bytes)) => {
+                            // Backpressure without a permit: a paused viewer
+                            // parks the producer holding nothing upstream.
+                            if send.send(Ok(bytes)).await.is_err() {
+                                break;
+                            }
+                        }
+                        // Retries were exhausted inside retrying_range, or a
+                        // fetch task aborted; a teardown racing the failure
+                        // ends the body cleanly instead.
+                        _ => {
+                            if !streaming.closed.load(Ordering::Acquire) {
+                                let _ = send
+                                    .send(Err(std::io::Error::other("Media range failed")))
+                                    .await;
+                            }
+                            break;
+                        }
+                    }
+                }
+                for task in in_flight.drain(..) {
+                    task.abort();
+                }
+            });
+            let stream = async_stream::stream! {
+                while let Some(chunk) = receive.recv().await {
+                    yield chunk;
                 }
             };
             return builder
-                .body(Body::from_stream(futures::StreamExt::map(
-                    stream,
-                    |item: Result<axum::body::Bytes, std::io::Error>| item,
-                )))
+                .body(Body::from_stream(stream))
                 .map_err(|_| "Invalid media response".into());
         }
         let url = if file == "index.m3u8" {
@@ -842,6 +939,9 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), 206);
         assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 4-9/16");
+        // GET must stream chunked: promising a byte count would turn any
+        // mid-stream termination into an HTTP/2 framing violation.
+        assert!(!response.headers().contains_key(header::CONTENT_LENGTH));
         assert_eq!(bytes(response).await, "456789");
         assert_eq!(
             bytes(
@@ -884,6 +984,212 @@ mod tests {
             .is_err());
         task.abort();
     }
+
+    #[tokio::test]
+    async fn failed_chunk_fetches_retry_and_the_body_completes() {
+        let data = Arc::new(vec![b'x'; 2 * CHUNK as usize + 64]);
+        let failed = Arc::new(AtomicBool::new(false));
+        let state = (data.clone(), failed.clone());
+        async fn origin(
+            State((data, failed)): State<(Arc<Vec<u8>>, Arc<AtomicBool>)>,
+            headers: HeaderMap,
+        ) -> Response {
+            let (start, end) = range_bounds(
+                headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
+                data.len() as u64,
+            )
+            .unwrap();
+            // The second chunk fails exactly once before recovering.
+            if start >= CHUNK && !failed.swap(true, Ordering::SeqCst) {
+                return Response::builder()
+                    .status(500)
+                    .body(Body::empty())
+                    .unwrap();
+            }
+            Response::builder()
+                .status(206)
+                .header(
+                    header::CONTENT_RANGE,
+                    format!("bytes {start}-{end}/{}", data.len()),
+                )
+                .header(header::ETAG, "\"flaky-etag\"")
+                .body(Body::from(data[start as usize..=end as usize].to_vec()))
+                .unwrap()
+        }
+        let app = Router::new()
+            .route("/flaky.mp4", get(origin))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let direct = Direct::prepare(
+            url.join("/flaky.mp4").unwrap(),
+            &HashMap::new(),
+            "mp4",
+            permits(),
+        )
+        .await
+        .unwrap();
+        let response = direct
+            .clone()
+            .serve("source.mp4", Method::GET, HeaderMap::new())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!response.headers().contains_key(header::CONTENT_LENGTH));
+        let received = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(received.len(), data.len());
+        assert!(received.iter().all(|byte| *byte == b'x'));
+        assert!(failed.load(Ordering::SeqCst), "the chunk failed once");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn file_chunks_prefetch_concurrently_with_client_consumption() {
+        let data = Arc::new(vec![7u8; 3 * CHUNK as usize]);
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let state = (data.clone(), live.clone(), peak.clone());
+        async fn origin(
+            State((data, live, peak)): State<(
+                Arc<Vec<u8>>,
+                Arc<AtomicUsize>,
+                Arc<AtomicUsize>,
+            )>,
+            headers: HeaderMap,
+        ) -> Response {
+            // A slow origin makes overlapping fetches observable.
+            let current = live.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(current, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            live.fetch_sub(1, Ordering::SeqCst);
+            let (start, end) = range_bounds(
+                headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
+                data.len() as u64,
+            )
+            .unwrap();
+            Response::builder()
+                .status(206)
+                .header(
+                    header::CONTENT_RANGE,
+                    format!("bytes {start}-{end}/{}", data.len()),
+                )
+                .header(header::ETAG, "\"slow-etag\"")
+                .body(Body::from(data[start as usize..=end as usize].to_vec()))
+                .unwrap()
+        }
+        let app = Router::new()
+            .route("/slow.mp4", get(origin))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let direct = Direct::prepare(
+            url.join("/slow.mp4").unwrap(),
+            &HashMap::new(),
+            "mp4",
+            permits(),
+        )
+        .await
+        .unwrap();
+        let response = direct
+            .clone()
+            .serve("source.mp4", Method::GET, HeaderMap::new())
+            .await
+            .unwrap();
+        let received = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(received.len(), data.len());
+        assert!(received.iter().all(|byte| *byte == 7));
+        assert!(
+            peak.load(Ordering::SeqCst) >= 2,
+            "chunk fetches must overlap client consumption, not serialize"
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn closed_mid_stream_ends_the_body_cleanly_after_fetched_chunks() {
+        let data = Arc::new(vec![7u8; 4 * CHUNK as usize]);
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let unfetched = Arc::new(AtomicUsize::new(0));
+        let state = (data.clone(), gate.clone(), unfetched.clone());
+        async fn origin(
+            State((data, gate, unfetched)): State<(
+                Arc<Vec<u8>>,
+                Arc<tokio::sync::Notify>,
+                Arc<AtomicUsize>,
+            )>,
+            headers: HeaderMap,
+        ) -> Response {
+            let (start, end) = range_bounds(
+                headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
+                data.len() as u64,
+            )
+            .unwrap();
+            if start >= 3 * CHUNK {
+                unfetched.fetch_add(1, Ordering::SeqCst);
+            }
+            // Every chunk but the first waits for the test to open the gate.
+            if start >= CHUNK {
+                gate.notified().await;
+            }
+            Response::builder()
+                .status(206)
+                .header(
+                    header::CONTENT_RANGE,
+                    format!("bytes {start}-{end}/{}", data.len()),
+                )
+                .header(header::ETAG, "\"gated-etag\"")
+                .body(Body::from(data[start as usize..=end as usize].to_vec()))
+                .unwrap()
+        }
+        let app = Router::new()
+            .route("/gated.mp4", get(origin))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let direct = Direct::prepare(
+            url.join("/gated.mp4").unwrap(),
+            &HashMap::new(),
+            "mp4",
+            permits(),
+        )
+        .await
+        .unwrap();
+        let response = direct
+            .clone()
+            .serve("source.mp4", Method::GET, HeaderMap::new())
+            .await
+            .unwrap();
+        let mut stream = response.into_body().into_data_stream();
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first.len(), CHUNK as usize);
+        // Teardown begins mid-stream; pending chunks are released after it.
+        direct.closed.store(true, Ordering::Release);
+        gate.notify_waiters();
+        let mut received = first.len();
+        while let Some(frame) = stream.next().await {
+            // A short but clean stream: no error may surface.
+            received += frame.unwrap().len();
+        }
+        assert!(
+            received >= 2 * CHUNK as usize,
+            "already-fetched chunks still drain"
+        );
+        assert!(received < data.len(), "unfetched chunks are abandoned");
+        assert_eq!(
+            unfetched.load(Ordering::SeqCst),
+            0,
+            "no new fetches start after teardown"
+        );
+        task.abort();
+    }
+
     #[tokio::test]
     async fn original_hls_never_returns_origin_urls_and_preserves_segment_bytes() {
         let (base, _, task) = fixture().await;
