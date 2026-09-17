@@ -8,23 +8,29 @@ use axum::{
 };
 use futures::StreamExt;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::Semaphore;
 use url::Url;
 
 const CHUNK: u64 = 1024 * 1024;
 const RESOURCE_LIMIT: usize = 4096;
 const CACHE_LIMIT: usize = 8 * 1024 * 1024;
+// Players poll live playlists near every second; a matching TTL absorbs the
+// cadence without freezing the live window.
+const PLAYLIST_TTL: Duration = Duration::from_secs(1);
+const PLAYLIST_CACHE_LIMIT: usize = 4 * 1024 * 1024;
 
 pub(super) struct Direct {
     client: reqwest::Client,
     headers: HeaderMap,
     root: Url,
     resources: Mutex<HashMap<String, Url>>,
-    // One input reservation means one upstream request at a time. File reads
-    // yield between bounded ranges so independent viewers cannot monopolize it.
-    fetch: Arc<Mutex<()>>,
+    // Four upstream reservations so playlist polls and segment bodies
+    // overlap instead of serializing; a stalled viewer pins at most one.
+    fetch: Arc<Semaphore>,
     proxy: Option<String>,
     destinations: Mutex<HashMap<String, reqwest::Client>>,
     cache: Mutex<HashMap<String, (Instant, Bytes)>>,
+    playlists: Mutex<HashMap<String, (Instant, Bytes)>>,
     pub closed: AtomicBool,
     pub failed: AtomicBool,
     progress: Mutex<Option<String>>,
@@ -79,10 +85,11 @@ impl Direct {
             headers: public,
             root: url,
             resources: Mutex::new(HashMap::new()),
-            fetch: Arc::new(Mutex::new(())),
+            fetch: Arc::new(Semaphore::new(4)),
             proxy: headers.get(crate::provider::egress::HEADER).cloned(),
             destinations: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
+            playlists: Mutex::new(HashMap::new()),
             closed: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             progress: Mutex::new(None),
@@ -214,10 +221,24 @@ impl Direct {
         Err("Too many media redirects".into())
     }
     async fn playlist(&self, url: Url) -> Result<Bytes, String> {
-        let _guard = self.fetch.lock().await;
+        let key = url.as_str().to_owned();
+        // A one-second TTL absorbs poll storms; the live window still advances.
+        if let Some((at, bytes)) = self.playlists.lock().await.get(&key) {
+            if at.elapsed() < PLAYLIST_TTL {
+                return Ok(bytes.clone());
+            }
+        }
+        let permit = self
+            .fetch
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "Media expired")?;
         let response = self.request(url, None).await?;
         let base = response.url().clone();
         let bytes = bounded(response, 256 * 1024).await?;
+        // Admission covers origin I/O only; rewriting and map updates are local.
+        drop(permit);
         let text = std::str::from_utf8(&bytes).map_err(|_| "Invalid HLS playlist")?;
         let (output, resources) = rewrite(text, &base)?;
         let mut origins = HashSet::new();
@@ -237,16 +258,32 @@ impl Direct {
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
-        Ok(Bytes::from(output))
+        let output = Bytes::from(output);
+        let mut playlists = self.playlists.lock().await;
+        playlists.retain(|_, (at, _)| at.elapsed() < PLAYLIST_TTL);
+        if playlists.values().map(|(_, b)| b.len()).sum::<usize>() + output.len()
+            > PLAYLIST_CACHE_LIMIT
+        {
+            playlists.clear();
+        }
+        playlists.insert(key, (Instant::now(), output.clone()));
+        Ok(output)
     }
     async fn cached_range(&self, url: Url, start: u64, end: u64) -> Result<Bytes, String> {
         let key = format!("{}:{start}:{end}", url.as_str());
-        let _guard = self.fetch.lock().await;
         if let Some((at, data)) = self.cache.lock().await.get(&key) {
             if at.elapsed() < Duration::from_secs(15) {
                 return Ok(data.clone());
             }
         }
+        // One reservation per chunk: parallel range reads interleave instead
+        // of queueing behind whichever viewer arrived first.
+        let _permit = self
+            .fetch
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "Media expired")?;
         let response = self
             .request(url, Some(&format!("bytes={start}-{end}")))
             .await?;
@@ -300,12 +337,13 @@ impl Direct {
                     .body(Body::empty())
                     .unwrap());
             };
+            // The validated original file is immutable; ranges may cache.
             let mut builder = Response::builder()
                 .status(if range.is_some() { 206 } else { 200 })
                 .header(header::CONTENT_TYPE, "video/mp4")
                 .header(header::ACCEPT_RANGES, "bytes")
                 .header(header::CONTENT_LENGTH, (end - start + 1).to_string())
-                .header(header::CACHE_CONTROL, "no-store");
+                .header(header::CACHE_CONTROL, "public, max-age=3600");
             if range.is_some() {
                 builder =
                     builder.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{size}"));
@@ -351,9 +389,16 @@ impl Direct {
                 .playlist(url)
                 .await
                 .inspect_err(|_| self.failed.store(true, Ordering::Release))?;
+            // An ended playlist is immutable; live playlists must revalidate.
+            let policy =
+                if std::str::from_utf8(&bytes).is_ok_and(|t| t.contains("#EXT-X-ENDLIST")) {
+                    "public, max-age=3600"
+                } else {
+                    "no-store"
+                };
             return Ok(Response::builder()
                 .header(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")
-                .header(header::CACHE_CONTROL, "no-store")
+                .header(header::CACHE_CONTROL, policy)
                 .body(if method == Method::HEAD {
                     Body::empty()
                 } else {
@@ -361,21 +406,20 @@ impl Direct {
                 })
                 .unwrap());
         }
-        // HLS resources are bounded and serialized; cached segments are shared
-        // between viewers without sharing their capability URLs.
+        // Cached segments are shared between viewers without sharing their
+        // capability URLs, and answer before any upstream admission.
         let range = headers
             .get(header::RANGE)
             .and_then(|v| v.to_str().ok())
             .filter(|v| v.len() < 128 && v.starts_with("bytes=") && !v.contains(','));
         let key = format!("{}:{}", url, range.unwrap_or(""));
-        let guard = self.fetch.clone().lock_owned().await;
         // Ranges carry upstream status and lengths; do not use a status-less cache.
         if range.is_none() {
             if let Some((at, bytes)) = self.cache.lock().await.get(&key) {
                 if at.elapsed() < Duration::from_secs(15) {
                     return Ok(Response::builder()
                         .header(header::CONTENT_TYPE, "application/octet-stream")
-                        .header(header::CACHE_CONTROL, "no-store")
+                        .header(header::CACHE_CONTROL, "public, max-age=3600")
                         .body(if method == Method::HEAD {
                             Body::empty()
                         } else {
@@ -385,6 +429,12 @@ impl Direct {
                 }
             }
         }
+        let permit = self
+            .fetch
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "Media expired".to_owned())?;
         let response = self
             .request(url, range)
             .await
@@ -392,9 +442,11 @@ impl Direct {
         if range.is_some() && response.status() != StatusCode::PARTIAL_CONTENT {
             return Err("Invalid HLS resource range".into());
         }
+        // Segments, keys, and init sections are immutable upstream and the
+        // opaque key never changes identity; clients may cache by it.
         let mut builder = Response::builder()
             .status(response.status())
-            .header(header::CACHE_CONTROL, "no-store");
+            .header(header::CACHE_CONTROL, "public, max-age=3600");
         for name in [
             header::CONTENT_TYPE,
             header::CONTENT_RANGE,
@@ -413,9 +465,10 @@ impl Direct {
                 .map_err(|_| "Invalid media response".into());
         }
         let cacheable = range.is_none();
-        let (send, mut receive) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(2);
+        // Sixteen chunks of slack absorb player jitter without pinning a permit.
+        let (send, mut receive) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(16);
         tokio::spawn(async move {
-            let _guard = guard;
+            let _permit = permit;
             let _permits = self.permits.clone();
             let result = async {
                 let mut chunks = response.bytes_stream();
@@ -566,52 +619,67 @@ fn resource(
     map.insert(key.clone(), url);
     Ok(key)
 }
+// URI-bearing tags the proxy can follow. Rendition playlists recurse through
+// serve() as .m3u8 keys; every other kind is a bounded immutable resource.
+fn uri_kind(line: &str) -> Option<bool> {
+    [
+        ("#EXT-X-MEDIA:", true),
+        ("#EXT-X-I-FRAME-STREAM-INF:", true),
+        ("#EXT-X-RENDITION-REPORT:", true),
+        ("#EXT-X-KEY:", false),
+        ("#EXT-X-MAP:", false),
+        ("#EXT-X-SESSION-KEY:", false),
+        ("#EXT-X-SESSION-DATA:", false),
+        ("#EXT-X-PART:", false),
+        ("#EXT-X-PRELOAD-HINT:", false),
+    ]
+    .iter()
+    .find_map(|(tag, kind)| line.starts_with(tag).then_some(*kind))
+}
 fn rewrite(text: &str, base: &Url) -> Result<(String, HashMap<String, Url>), String> {
     if !text.trim_start().starts_with("#EXTM3U") {
         return Err("Invalid HLS playlist".into());
     }
     let mut out = String::new();
     let mut map = HashMap::new();
+    // Set between a variant descriptor and the playlist URI line after it.
+    let mut variant = false;
     for line in text.lines() {
         let line = line.trim();
-        // Until every rendition is inspected, adaptive master playlists and
-        // alternate tracks use managed HLS; a probe of one variant is not proof
-        // that the other variants are compatible.
-        if [
-            "#EXT-X-STREAM-INF:",
-            "#EXT-X-MEDIA:",
-            "#EXT-X-I-FRAME-STREAM-INF:",
-            "#EXT-X-DEFINE:",
-            "#EXT-X-PART",
-            "#EXT-X-PRELOAD-HINT",
-            "#EXT-X-RENDITION-REPORT",
-            "#EXT-X-SESSION-",
-        ]
-        .iter()
-        .any(|p| line.starts_with(p))
-        {
-            return Err("HLS rendition requires managed playback".into());
+        // Variable substitution would bypass the opaque key mapping.
+        if line.starts_with("#EXT-X-DEFINE:") {
+            return Err("Unsupported HLS variables".into());
         }
-        if line.starts_with("#EXT-X-KEY:")
+        if (line.starts_with("#EXT-X-KEY:") || line.starts_with("#EXT-X-SESSION-KEY:"))
             && !line.contains("METHOD=AES-128,")
             && !line.contains("METHOD=NONE")
         {
             return Err("Unsupported HLS encryption".into());
         }
         if !line.is_empty() && !line.starts_with('#') {
-            out.push_str(&resource(base, line, false, &mut map)?);
-        } else if let Some(at) = line.find("URI=\"") {
-            if !line.starts_with("#EXT-X-KEY:") && !line.starts_with("#EXT-X-MAP:") {
+            // The URI after a variant descriptor is itself a playlist, so
+            // serve() rewrites it recursively through its .m3u8 key.
+            out.push_str(&resource(base, line, std::mem::take(&mut variant), &mut map)?);
+        } else if line.starts_with("#EXT-X-STREAM-INF") {
+            // Variant descriptors carry no URI attribute; the next bare line
+            // does, so one claiming otherwise must not pass through raw.
+            if line.contains("URI=") {
                 return Err("Unsupported HLS reference".into());
             }
+            variant = true;
+            out.push_str(line);
+        } else if let Some(at) = line.find("URI=\"") {
+            // Unknown URI-bearing tags (content steering, private extensions)
+            // stay on managed playback instead of leaking an origin URL.
+            let playlist = uri_kind(line).ok_or("Unsupported HLS reference")?;
             let start = at + 5;
             let end = start + line[start..].find('"').ok_or("Invalid HLS URI")?;
             out.push_str(&line[..start]);
-            out.push_str(&resource(base, &line[start..end], false, &mut map)?);
+            out.push_str(&resource(base, &line[start..end], playlist, &mut map)?);
             out.push_str(&line[end..]);
         } else {
             if line.contains("URI=") {
-                return Err("Invalid HLS reference".into());
+                return Err("Unsupported HLS reference".into());
             }
             out.push_str(line);
         }
@@ -645,8 +713,42 @@ mod tests {
                 .body(Body::from(bytes[start as usize..=end as usize].to_vec()))
                 .unwrap()
         }
+        async fn live(State(count): State<Arc<AtomicUsize>>) -> &'static str {
+            count.fetch_add(1, Ordering::SeqCst);
+            "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:6,\nsegment.ts?secret=never-public\n"
+        }
         let count = Arc::new(AtomicUsize::new(0));
-        let app=Router::new().route("/movie.mp4",get(origin)).route("/live.m3u8",get(||async{"#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:6,\nsegment.ts?secret=never-public\n"})).route("/segment.ts",get(||async{b"original-segment".to_vec()})).route("/large.m3u8",get(||async{"#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nlarge.ts\n"})).route("/large.ts",get(||async{vec![7u8;9*1024*1024]})).with_state(count.clone());
+        let app = Router::new()
+            .route("/movie.mp4", get(origin))
+            .route("/live.m3u8", get(live))
+            .route("/segment.ts", get(|| async { b"original-segment".to_vec() }))
+            .route(
+                "/vod.m3u8",
+                get(|| async {
+                    "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nsegment.ts?secret=never-public\n#EXT-X-ENDLIST\n"
+                }),
+            )
+            .route(
+                "/master.m3u8",
+                get(|| async {
+                    "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100,RESOLUTION=1280x720\nvariant.m3u8?token=secret\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"English\",URI=\"audio.m3u8?token=secret\"\n"
+                }),
+            )
+            .route(
+                "/variant.m3u8",
+                get(|| async {
+                    "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:6,\nvseg.ts?token=secret\n"
+                }),
+            )
+            .route(
+                "/audio.m3u8",
+                get(|| async { "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\naseg.aac?token=secret\n" }),
+            )
+            .route("/vseg.ts", get(|| async { b"variant-segment".to_vec() }))
+            .route("/aseg.aac", get(|| async { b"audio-segment".to_vec() }))
+            .route("/large.m3u8", get(|| async { "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nlarge.ts\n" }))
+            .route("/large.ts", get(|| async { vec![7u8; 9 * 1024 * 1024] }))
+            .with_state(count.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -824,6 +926,199 @@ mod tests {
             .is_err());
         task.abort();
     }
+
+    #[tokio::test]
+    async fn master_playlists_recurse_into_rewritten_variant_playlists() {
+        let (base, _, task) = fixture().await;
+        let direct = Direct::prepare(
+            base.join("/master.m3u8").unwrap(),
+            &HashMap::new(),
+            "hls",
+            permits(),
+        )
+        .await
+        .unwrap();
+        let master = String::from_utf8(
+            bytes(
+                direct
+                    .clone()
+                    .serve("index.m3u8", Method::GET, HeaderMap::new())
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .to_vec(),
+        )
+        .unwrap();
+        assert!(master.contains("#EXT-X-STREAM-INF:BANDWIDTH=100,RESOLUTION=1280x720"));
+        assert!(!master.contains("secret"));
+        assert!(!master.contains("http"));
+        let variant = master
+            .lines()
+            .find(|l| l.starts_with("d-"))
+            .unwrap()
+            .to_owned();
+        assert!(variant.ends_with(".m3u8"), "{variant}");
+        let media = master
+            .lines()
+            .find(|l| l.starts_with("#EXT-X-MEDIA:"))
+            .unwrap();
+        let audio = media
+            .split("URI=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap()
+            .to_owned();
+        assert!(audio.starts_with("d-") && audio.ends_with(".m3u8"), "{media}");
+        // Fetching each rewritten key refetches and rewrites the nested media
+        // playlist through the resources map, never the origin URL.
+        for (playlist, segment_body) in [(&variant, "variant-segment"), (&audio, "audio-segment")] {
+            let media = String::from_utf8(
+                bytes(
+                    direct
+                        .clone()
+                        .serve(playlist, Method::GET, HeaderMap::new())
+                        .await
+                        .unwrap(),
+                )
+                .await
+                .to_vec(),
+            )
+            .unwrap();
+            assert!(!media.contains("secret"), "{media}");
+            assert!(!media.contains("http"), "{media}");
+            assert!(media.contains("#EXTINF:6,"));
+            let segment = media
+                .lines()
+                .find(|l| l.starts_with("d-"))
+                .unwrap()
+                .to_owned();
+            assert_eq!(
+                bytes(
+                    direct
+                        .clone()
+                        .serve(&segment, Method::GET, HeaderMap::new())
+                        .await
+                        .unwrap()
+                )
+                .await,
+                segment_body
+            );
+        }
+        task.abort();
+    }
+    #[tokio::test]
+    async fn playlist_polls_hit_the_ttl_cache_instead_of_the_origin() {
+        let (base, count, task) = fixture().await;
+        let direct = Direct::prepare(
+            base.join("/live.m3u8").unwrap(),
+            &HashMap::new(),
+            "hls",
+            permits(),
+        )
+        .await
+        .unwrap();
+        let after_prepare = count.load(Ordering::SeqCst);
+        for _ in 0..5 {
+            direct
+                .clone()
+                .serve("index.m3u8", Method::GET, HeaderMap::new())
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            after_prepare,
+            "polls inside the TTL must not touch the origin"
+        );
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        direct
+            .clone()
+            .serve("index.m3u8", Method::GET, HeaderMap::new())
+            .await
+            .unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), after_prepare + 1);
+        direct
+            .clone()
+            .serve("index.m3u8", Method::GET, HeaderMap::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            after_prepare + 1,
+            "the refreshed rewrite is cached again"
+        );
+        task.abort();
+    }
+    #[tokio::test]
+    async fn immutable_resources_cache_while_live_playlists_revalidate() {
+        let (base, _, task) = fixture().await;
+        let live = Direct::prepare(
+            base.join("/live.m3u8").unwrap(),
+            &HashMap::new(),
+            "hls",
+            permits(),
+        )
+        .await
+        .unwrap();
+        let response = live
+            .clone()
+            .serve("index.m3u8", Method::GET, HeaderMap::new())
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let segment = String::from_utf8(bytes(response).await.to_vec())
+            .unwrap()
+            .lines()
+            .find(|l| l.starts_with("d-"))
+            .unwrap()
+            .to_owned();
+        let response = live
+            .clone()
+            .serve(&segment, Method::GET, HeaderMap::new())
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "public, max-age=3600");
+        assert_eq!(bytes(response).await, "original-segment");
+        let response = live
+            .clone()
+            .serve(&segment, Method::GET, HeaderMap::new())
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "public, max-age=3600");
+        let vod = Direct::prepare(
+            base.join("/vod.m3u8").unwrap(),
+            &HashMap::new(),
+            "hls",
+            permits(),
+        )
+        .await
+        .unwrap();
+        let response = vod
+            .clone()
+            .serve("index.m3u8", Method::GET, HeaderMap::new())
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "public, max-age=3600");
+        let original = Direct::prepare(
+            base.join("/movie.mp4").unwrap(),
+            &HashMap::new(),
+            "mp4",
+            permits(),
+        )
+        .await
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, "bytes=0-3".parse().unwrap());
+        let response = original
+            .clone()
+            .serve("source.mp4", Method::GET, headers)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 206);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "public, max-age=3600");
+        task.abort();
+    }
     #[tokio::test]
     async fn large_hls_delivery_and_stalled_viewer_isolation() {
         let (base, _, task) = fixture().await;
@@ -883,12 +1178,52 @@ mod tests {
         assert!(!text.contains("secret"));
         assert!(text.contains("#EXT-X-BYTERANGE:20@0"));
         for text in [
-            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nvariant.m3u8",
             "#EXTM3U\n#EXT-X-MAP:URI=\"file:///etc/passwd\"",
             "#EXTM3U\n#EXT-X-CONTENT-STEERING:SERVER-URI=\"https://other.invalid\"",
             "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"key\"",
+            "#EXTM3U\n#EXT-X-SESSION-KEY:METHOD=SAMPLE-AES,URI=\"key\"",
+            "#EXTM3U\n#EXT-X-DEFINE:NAME=\"mode\",VALUE=\"live\"",
+            "#EXTM3U\n#EXT-X-UNKNOWN:URI=\"thing\"",
         ] {
             assert!(rewrite(text, &base).is_err());
+        }
+    }
+
+    #[test]
+    fn master_playlist_variants_and_renditions_rewrite_to_opaque_keys() {
+        let base = Url::parse("https://origin.invalid/folder/master.m3u8").unwrap();
+        let (text, resources) = rewrite(
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nvariant.m3u8?token=secret\n#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=50,URI=\"iframe.m3u8\"\n#EXT-X-RENDITION-REPORT:URI=\"report.m3u8\"\n#EXT-X-SESSION-KEY:METHOD=AES-128,URI=\"session.key\"\n#EXT-X-SESSION-DATA:DATA-ID=\"meta\",URI=\"meta.json\"\n#EXT-X-PART:DURATION=1,URI=\"part.m4s\"\n#EXT-X-PRELOAD-HINT:TYPE=PART,URI=\"pre.m4s\"\n",
+            &base,
+        )
+        .unwrap();
+        assert_eq!(resources.len(), 7);
+        assert!(text.contains("#EXT-X-STREAM-INF:BANDWIDTH=100"));
+        assert!(!text.contains("secret"));
+        for leaked in [
+            "variant.m3u8",
+            "iframe.m3u8",
+            "report.m3u8",
+            "session.key",
+            "meta.json",
+            "part.m4s",
+            "pre.m4s",
+        ] {
+            assert!(!text.contains(leaked), "{leaked} leaked upstream");
+        }
+        // Variant playlists map to .m3u8 keys so serve() recurses into them.
+        let variant = text.lines().find(|l| l.starts_with("d-")).unwrap();
+        assert!(variant.ends_with(".m3u8"));
+        for (tag, suffix) in [
+            ("#EXT-X-I-FRAME-STREAM-INF:", ".m3u8\""),
+            ("#EXT-X-RENDITION-REPORT:", ".m3u8\""),
+            ("#EXT-X-SESSION-KEY:", ".key\""),
+            ("#EXT-X-SESSION-DATA:", ".ts\""),
+            ("#EXT-X-PART:", ".m4s\""),
+            ("#EXT-X-PRELOAD-HINT:", ".m4s\""),
+        ] {
+            let line = text.lines().find(|l| l.starts_with(tag)).unwrap();
+            assert!(line.contains("URI=\"d-") && line.ends_with(suffix), "{line}");
         }
     }
     #[test]

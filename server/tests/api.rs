@@ -487,12 +487,13 @@ async fn playback_rejects_provider_over_capacity_before_probe() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["max_connections"], 2);
-    // Missing test ffprobe fails, but capacity must still be released on every error.
+    // Missing test ffprobe fails as a delivery refusal (406), but capacity
+    // must still be released on every error.
     assert_eq!(
         request(&a, "POST", "/api/playback", json!({"channel_id":channel}))
             .await
             .0,
-        StatusCode::BAD_REQUEST
+        StatusCode::NOT_ACCEPTABLE
     );
     assert!(state.providers.acquire_playback(p).await.is_ok());
 }

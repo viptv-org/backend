@@ -25,8 +25,18 @@ async fn playback_errors_are_closed_and_leave_expiry_unchanged() {
             None::<&str>,
         ),
         (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::NOT_ACCEPTABLE,
             "Playback engine unavailable",
+            None::<&str>,
+        ),
+        (
+            StatusCode::NOT_ACCEPTABLE,
+            "Playback could not start; try forced transcoding or another stream",
+            None::<&str>,
+        ),
+        (
+            StatusCode::NOT_ACCEPTABLE,
+            "Could not inspect source video safely; try another stream",
             None::<&str>,
         ),
     ] {

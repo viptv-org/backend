@@ -70,6 +70,15 @@ impl From<String> for ApiError {
         // succeed until they stop a session.
         let status = match s.as_str() {
             "Playback capacity reached" => StatusCode::SERVICE_UNAVAILABLE,
+            // Delivery refusals say this client/server pair cannot deliver this
+            // source; the request itself was well formed. A 400 invites the
+            // client to retry with escalating transports (each re-preparing and
+            // re-probing the source), so they are terminal 406s instead.
+            "Playback could not start; try forced transcoding or another stream"
+            | "Playback engine unavailable"
+            | "Could not inspect source video safely; try another stream" => {
+                StatusCode::NOT_ACCEPTABLE
+            }
             _ => StatusCode::BAD_REQUEST,
         };
         Self(status, s)

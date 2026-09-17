@@ -184,6 +184,9 @@ const HLS_SEGMENT_SECONDS: u32 = 2;
 const HLS_WINDOW_SECONDS: u32 = 120;
 const HLS_DELETE_GRACE_SECONDS: u32 = 60;
 const PROBE_CACHE_TTL: Duration = Duration::from_secs(120);
+/// Live sources keep their stream identity while content rolls, so a short
+/// reuse window absorbs channel hopping without serving long-stale metadata.
+const LIVE_PROBE_CACHE_TTL: Duration = Duration::from_secs(30);
 const PROBE_CACHE_CAP: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -394,11 +397,18 @@ impl Drop for Session {
 struct ProbeCacheEntry {
     probe: Arc<Probe>,
     inserted: Instant,
+    /// Live entries expire on the shorter live window; VOD metadata is stable.
+    live: bool,
 }
 // Drop expired entries; anything a caller still holds stays for reuse.
 fn prune_probe_cache(cache: &mut HashMap<[u8; 32], ProbeCacheEntry>, now: Instant) {
     cache.retain(|_, entry| {
-        Arc::strong_count(&entry.probe) > 1 || now.duration_since(entry.inserted) < PROBE_CACHE_TTL
+        let ttl = if entry.live {
+            LIVE_PROBE_CACHE_TTL
+        } else {
+            PROBE_CACHE_TTL
+        };
+        Arc::strong_count(&entry.probe) > 1 || now.duration_since(entry.inserted) < ttl
     });
 }
 
@@ -820,7 +830,7 @@ impl PlaybackManager {
         // conversion. This avoids wasting CPU re-encoding already-compatible pictures.
         let copy_video = !force
             && position == 0.0
-            && probe.compatible_video(width, height, h264_copy_level(width, height));
+            && probe.compatible_video(width, height, H264_COPY_LEVEL);
         // Copy audio independently at zero offset. After input-side seeking,
         // decoded audio is required to keep MPEGTS/WebVTT on the same clock.
         let copy_audio = !force && position == 0.0 && probe.compatible_audio_stream(selected_input);
@@ -1552,6 +1562,11 @@ impl PlaybackManager {
             })
             .await
     }
+    /// One inspection per source identity. Live and VOD entries share this
+    /// bounded cache, told apart by the live discriminator in the digest, so a
+    /// channel hop inside the short live TTL no longer pays a fresh ffprobe
+    /// (with retries, up to ~10s) before playback can start, while VOD keeps
+    /// the longer window its stable metadata allows.
     async fn cached_probe(
         &self,
         url: &str,
@@ -1559,13 +1574,11 @@ impl PlaybackManager {
         live: bool,
         permits: Option<Arc<InputPermits>>,
     ) -> Option<Arc<Probe>> {
-        if live {
-            return self.probe(url, headers, permits).await.map(Arc::new);
-        }
         let mut digest = Sha256::new();
         digest.update(url.as_bytes());
         digest.update([0]);
         digest.update(headers.as_bytes());
+        digest.update([live as u8]);
         let key: [u8; 32] = digest.finalize().into();
         let now = Instant::now();
         {
@@ -1593,6 +1606,7 @@ impl PlaybackManager {
             ProbeCacheEntry {
                 probe: probe.clone(),
                 inserted: Instant::now(),
+                live,
             },
         );
         Some(probe)
@@ -1667,7 +1681,7 @@ impl PlaybackManager {
         let entries = if reduced {
             "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,channels,avg_frame_rate,color_transfer"
         } else {
-            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,profile,level,channels,avg_frame_rate,r_frame_rate,color_transfer,color_primaries,color_space,field_order:stream_tags=language,title:stream_disposition=default,comment,hearing_impaired,visual_impaired,forced:stream_side_data"
+            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,profile,level,channels,avg_frame_rate,r_frame_rate,color_transfer,field_order:stream_tags=language,title:stream_disposition=default,comment,hearing_impaired,visual_impaired,forced:stream_side_data"
         };
         cmd.args([
             "-analyzeduration",
@@ -1844,9 +1858,12 @@ fn header_block(headers: &HashMap<String, String>) -> Result<String, String> {
 }
 /// Formats a WebCodecs client can demux itself, mapped to their file extension.
 fn direct_file_extension(format: &str) -> Option<&'static str> {
-    // Every container FFmpeg can name that a WebCodecs demuxer may also read.
-    // A missing entry here is not a decode failure, only a lost direct path, so
-    // this list is deliberately wider than the native-envelope list below.
+    // Exactly the WebCodecs demuxer's (mediabunny's) format set: ISOBMFF/QTFF,
+    // Matroska/WebM, MPEG-TS, Ogg, ADTS, FLAC, WAVE and MP3. FLV, AVI, ASF and
+    // plain MPEG are deliberately absent: this client cannot demux them, so
+    // serving those files wholesale fails late with a confusing
+    // unsupported-format error after several fallback restarts. A missing entry
+    // is not a decode failure, only a lost direct path to managed delivery.
     for (name, extension) in [
         ("mp4", "mp4"),
         ("mov", "mov"),
@@ -1854,10 +1871,6 @@ fn direct_file_extension(format: &str) -> Option<&'static str> {
         ("matroska", "mkv"),
         ("webm", "webm"),
         ("mpegts", "ts"),
-        ("mpeg", "mpg"),
-        ("avi", "avi"),
-        ("flv", "flv"),
-        ("asf", "wmv"),
         ("ogg", "ogg"),
         ("adts", "aac"),
         ("flac", "flac"),
@@ -1975,7 +1988,7 @@ fn direct_format(
     let video = probe.video().ok()?;
     let width = caps.max_width.min(3840);
     let height = caps.max_height.min(2160);
-    let h264 = probe.compatible_video(width.min(1920), height.min(1080), 41);
+    let h264 = probe.compatible_video(width.min(1920), height.min(1080), H264_COPY_LEVEL);
     let hevc = caps.hevc
         && caps.hevc_sdr
         && video.codec_name.as_deref() == Some("hevc")
@@ -2234,32 +2247,15 @@ struct ProbeStream {
     avg_frame_rate: Option<String>,
     r_frame_rate: Option<String>,
     color_transfer: Option<String>,
-    color_primaries: Option<String>,
-    color_space: Option<String>,
     field_order: Option<String>,
     #[serde(default)]
     side_data_list: Vec<serde_json::Value>,
 }
-/// The H.264 level this engine may pass through for a given output size.
-///
-/// Levels are per pixels-per-second, so a level is a function of both size and
-/// frame rate — not a flat per-resolution cap. Level 4.0 covers 1080p30 but
-/// **not** a 720p60 channel, which is where a flat "720p is level 4.0" rule
-/// silently forced a full re-encode of an ordinary source.
-///
-/// 1920x1080 normally needs level 4.0/4.1; at 60fps it needs 4.2. Since the
-/// frame rate is not passed here, an HD source is allowed up to 4.2 and any
-/// smaller source is additionally allowed 4.1. Anything above this was authored
-/// for hardware beyond a browser's guaranteed baseline and is converted instead.
-fn h264_copy_level(width: u32, height: u32) -> u32 {
-    if width >= 1920 && height >= 1080 {
-        42
-    } else if width >= 1280 && height >= 720 {
-        41
-    } else {
-        40
-    }
-}
+/// The highest H.264 level this engine passes through. Modern browser H.264
+/// decoders cover level 5.1, and the envelope's dimension, frame-rate, profile,
+/// pix-fmt, interlace and SDR gates bound the actual decode load, so a level
+/// tag alone never forces a re-encode of otherwise compatible video.
+const H264_COPY_LEVEL: u32 = 51;
 
 fn conservative_frame_rate(rate: Option<&str>) -> bool {
     let Some((numerator, denominator)) = rate.and_then(|r| r.split_once('/')) else {
@@ -2456,9 +2452,15 @@ impl Probe {
     fn ensure_supported(&self) -> Result<(), String> {
         self.hdr_transfer().map(|_| ())
     }
+    /// PQ or HLG transfer characteristics mean HDR no matter how complete the
+    /// colour tagging is: tone-mapping handles missing primaries or matrix.
+    /// Mislabeled encodes are common (bt2020 primaries or mastering-display
+    /// side data on an SDR transfer), so partial HDR/wide-gamut evidence
+    /// without PQ/HLG reads as SDR instead of refusing a playable source.
+    /// Dolby Vision and other dynamic-HDR side data still cannot be tone-mapped
+    /// and remains the one hard refusal.
     fn hdr_transfer(&self) -> Result<Option<&str>, String> {
         let video = self.video()?;
-        let mut hdr_metadata = false;
         for data in &video.side_data_list {
             let kind = data["side_data_type"]
                 .as_str()
@@ -2470,27 +2472,10 @@ impl Probe {
             {
                 return Err("Dolby Vision/dynamic HDR conversion is not supported; select HDR10, HLG or SDR".into());
             }
-            hdr_metadata |= ["mastering display", "content light", "hdr"]
-                .iter()
-                .any(|tag| kind.contains(tag));
         }
         let transfer = video.color_transfer.as_deref();
         if matches!(transfer, Some("smpte2084" | "arib-std-b67")) {
-            if video.color_primaries.as_deref() == Some("bt2020")
-                && video.color_space.as_deref() == Some("bt2020nc")
-            {
-                return Ok(transfer);
-            }
-            return Err("HDR color metadata is incomplete or unsupported; this source cannot be tone-mapped to SDR. Select a tagged HDR10/HLG source or an SDR source".into());
-        }
-        if hdr_metadata
-            || video.color_primaries.as_deref() == Some("bt2020")
-            || matches!(video.color_space.as_deref(), Some("bt2020nc" | "bt2020c"))
-        {
-            return Err(
-                "Ambiguous HDR/wide-gamut color metadata; select a tagged HDR10/HLG source or SDR"
-                    .into(),
-            );
+            return Ok(transfer);
         }
         Ok(None)
     }
@@ -2512,7 +2497,7 @@ impl Probe {
     }
     #[cfg(test)]
     fn compatible_audio(&self, width: u32, height: u32, audio: Option<&ProbeStream>) -> bool {
-        self.compatible_video(width, height, h264_copy_level(width, height))
+        self.compatible_video(width, height, H264_COPY_LEVEL)
             && self.compatible_audio_stream(audio)
     }
     fn compatible_video(&self, width: u32, height: u32, max_h264_level: u32) -> bool {
@@ -2695,16 +2680,12 @@ mod tests {
 
     #[test]
     fn original_file_containers_cover_the_observed_catalogue() {
-        // Every container format_name the providers actually serve must have a
+        // Every container in the WebCodecs demuxer's format set must have a
         // direct path; a missing entry silently costs the raw-file rung.
         for (format, expected) in [
             ("mov,mp4,m4a,3gp,3g2,mj2", "mp4"),
             ("matroska,webm", "mkv"),
-            ("avi", "avi"),
             ("mpegts", "ts"),
-            ("flv", "flv"),
-            ("asf", "wmv"),
-            ("mpeg", "mpg"),
             ("ogg", "ogg"),
             ("wav", "wav"),
             ("mp3", "mp3"),
@@ -2713,8 +2694,11 @@ mod tests {
         ] {
             assert_eq!(direct_file_extension(format), Some(expected), "{format}");
         }
-        // An unlisted container keeps managed delivery rather than failing.
-        assert_eq!(direct_file_extension("unknown,container"), None);
+        // Containers outside the demuxer's set keep managed delivery rather
+        // than failing in a client that cannot read them.
+        for format in ["avi", "flv", "asf", "mpeg", "unknown,container"] {
+            assert_eq!(direct_file_extension(format), None, "{format}");
+        }
     }
 
     /// A real live 720p60 channel must be stream-copied, not re-encoded.
@@ -2742,13 +2726,30 @@ mod tests {
         );
     }
 
+    /// A level tag alone no longer gates copying: modern browsers decode H.264
+    /// level 5.1, and the envelope's dimension/fps/profile/pix-fmt/interlace/
+    /// SDR gates bound the real decode load. Level-4.2 720p60 and 1080p60
+    /// sources — exactly what a flat per-resolution level cap re-encoded —
+    /// must stream-copy instead.
     #[test]
-    fn copy_level_scales_with_pixels_per_second_not_resolution_alone() {
-        // A flat per-resolution cap is what broke 720p60 sources.
-        assert_eq!(h264_copy_level(1280, 720), 41);
-        assert_eq!(h264_copy_level(1920, 1080), 42);
-        assert_eq!(h264_copy_level(3840, 2160), 42);
-        assert_eq!(h264_copy_level(854, 480), 40);
+    fn level_42_720p60_and_1080p60_sources_copy_without_re_encode() {
+        for (width, height) in [(1280, 720), (1920, 1080)] {
+            let probe: Probe = serde_json::from_value(serde_json::json!({
+                "streams": [
+                    {"codec_type":"video","codec_name":"h264","profile":"High","level":42,
+                     "pix_fmt":"yuv420p","width":width,"height":height,"field_order":"progressive",
+                     "color_transfer":"bt709","color_primaries":"bt709","color_space":"bt709",
+                     "avg_frame_rate":"60000/1001","r_frame_rate":"60000/1001"},
+                    {"codec_type":"audio","codec_name":"aac","profile":"LC","channels":2}
+                ],
+                "format":{"format_name":"mpegts"}
+            }))
+            .unwrap();
+            assert!(
+                probe.compatible_audio(width, height, probe.streams.get(1)),
+                "{width}x{height} level 4.2 at 60fps must take the copy/remux path"
+            );
+        }
         // Frame rate ceiling admits 60fps but still refuses far-out values.
         for rate in ["60000/1001", "60/1", "30/1", "24/1", "25/1", "50/1"] {
             assert!(
@@ -2958,7 +2959,7 @@ printf '#EXTM3U\n#EXTINF:1,\nsegment-000000000.ts\n' > "$last"
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn bounded_probe_cache_reuses_only_identical_non_live_sources() {
+    async fn bounded_probe_cache_reuses_identical_sources_within_their_ttl() {
         let root = tempfile::tempdir().unwrap();
         let manager = scripted_probe(
             root.path(),
@@ -2988,22 +2989,27 @@ printf '#EXTM3U\n#EXTINF:1,\nsegment-000000000.ts\n' > "$last"
             "x",
             "a seek/restart of the same authorized VOD must not repeat ffprobe"
         );
+        // Live sources share the cache now: a channel change inside the short
+        // live TTL must not pay another full ffprobe before playback starts.
         manager
-            .cached_probe(
-                "http://example.com/video",
-                "Authorization: changed",
-                false,
-                None,
-            )
+            .cached_probe("http://example.com/live", "", true, None)
             .await
             .unwrap();
         manager
-            .cached_probe(
-                "http://example.com/video",
-                "Authorization: changed",
-                true,
-                None,
-            )
+            .cached_probe("http://example.com/live", "", true, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("probe.sh.count"))
+                .unwrap()
+                .len(),
+            2,
+            "a live channel change within the TTL must not repeat ffprobe"
+        );
+        // The live discriminator in the digest keeps live and VOD identities
+        // apart even for one URL.
+        manager
+            .cached_probe("http://example.com/video", "Authorization: opaque", true, None)
             .await
             .unwrap();
         assert_eq!(
@@ -3011,7 +3017,36 @@ printf '#EXTM3U\n#EXTINF:1,\nsegment-000000000.ts\n' > "$last"
                 .unwrap()
                 .len(),
             3,
-            "header changes and live playback must bypass the cached identity"
+            "live playback of a VOD-probed URL must not reuse the VOD entry"
+        );
+        // Header changes still bypass the cached identity.
+        manager
+            .cached_probe("http://example.com/video", "Authorization: changed", false, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("probe.sh.count"))
+                .unwrap()
+                .len(),
+            4,
+            "header changes must bypass the cached identity"
+        );
+        // Live entries expire on their own shorter TTL, not the VOD window.
+        for entry in manager.probe_cache.lock().await.values_mut() {
+            if entry.live {
+                entry.inserted = Instant::now() - LIVE_PROBE_CACHE_TTL - Duration::from_secs(1);
+            }
+        }
+        manager
+            .cached_probe("http://example.com/live", "", true, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("probe.sh.count"))
+                .unwrap()
+                .len(),
+            5,
+            "an expired live entry must be inspected again"
         );
         assert!(manager
             .probe_cache
@@ -3252,23 +3287,32 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
     }
 
     #[test]
-    fn ambiguous_and_dynamic_hdr_have_clear_refusals() {
-        for (field, value, expected) in [
-            ("color_transfer", "smpte2084", "HDR"),
-            ("color_transfer", "arib-std-b67", "HDR"),
-            ("color_primaries", "bt2020", "HDR"),
-        ] {
-            let mut video = serde_json::json!({"codec_type":"video", "pix_fmt":"yuv420p"});
-            video[field] = value.into();
-            let probe: Probe =
-                serde_json::from_value(serde_json::json!({"streams":[video]})).unwrap();
-            assert!(probe.ensure_supported().unwrap_err().contains(expected));
+    fn dynamic_hdr_refuses_but_mislabeled_wide_gamut_reads_as_sdr() {
+        // PQ/HLG transfer characteristics are HDR with or without complete
+        // colour tags; tone-mapping does not need the primaries to be present.
+        for transfer in ["smpte2084", "arib-std-b67"] {
+            let probe: Probe = serde_json::from_value(serde_json::json!({"streams":[{
+                "codec_type":"video", "pix_fmt":"yuv420p", "color_transfer": transfer
+            }]}))
+            .unwrap();
+            assert_eq!(probe.hdr_transfer().unwrap(), Some(transfer));
         }
-        let probe: Probe = serde_json::from_value(serde_json::json!({"streams":[{
+        // Mislabeled encodes carry bt2020 primaries or mastering-display side
+        // data on an SDR transfer; treating those as HDR refused playable
+        // sources outright.
+        let mislabeled: Probe = serde_json::from_value(serde_json::json!({"streams":[{
+            "codec_type":"video", "pix_fmt":"yuv420p",
+            "color_transfer":"bt709", "color_primaries":"bt2020", "color_space":"bt2020nc",
+            "side_data_list":[{"side_data_type":"Mastering display metadata"}]
+        }]}))
+        .unwrap();
+        assert_eq!(mislabeled.hdr_transfer().unwrap(), None);
+        // Dynamic HDR still cannot be tone-mapped and keeps the one refusal.
+        let dynamic: Probe = serde_json::from_value(serde_json::json!({"streams":[{
             "codec_type":"video", "side_data_list":[{"side_data_type":"DOVI configuration record"}]
         }]}))
         .unwrap();
-        assert!(probe.ensure_supported().unwrap_err().contains("HDR"));
+        assert!(dynamic.ensure_supported().unwrap_err().contains("HDR"));
     }
     #[tokio::test]
     async fn open_segment_growth_and_stalled_leased_process_are_reaped() {
@@ -3550,16 +3594,21 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
         // A 720p source at level 4.1 is the common live case and must be copied.
         assert!(level_41.compatible(1280, 720));
         assert!(level_41.compatible(1920, 1080));
-        // Level 5.1 is authored for hardware beyond the browser baseline.
+        // Level 5.1 is the modern browser ceiling and now copies as-is; only
+        // levels beyond it were authored for hardware beyond that baseline.
         let level_51: Probe =
             serde_json::from_str(&good.replace("\"level\":40", "\"level\":51")).unwrap();
-        assert!(!level_51.compatible(1280, 720));
-        assert!(!level_51.compatible(1920, 1080));
+        assert!(level_51.compatible(1280, 720));
+        assert!(level_51.compatible(1920, 1080));
+        let level_52: Probe =
+            serde_json::from_str(&good.replace("\"level\":40", "\"level\":52")).unwrap();
+        assert!(!level_52.compatible(1280, 720));
+        assert!(!level_52.compatible(1920, 1080));
         for bad in [
             good.replace("h264", "hevc"),
             good.replace("yuv420p", "yuv420p10le"),
             good.replace("\"channels\":2", "\"channels\":6"),
-            good.replace("\"level\":40", "\"level\":51"),
+            good.replace("\"level\":40", "\"level\":52"),
             // Above the copyable rate, not merely above 30fps: a 720p60 channel
             // is now copied, so 120fps is the case that must still convert.
             good.replace(
@@ -4358,11 +4407,11 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
         assert_eq!(video["color_primaries"], "bt2020");
 
         let probe: Probe = serde_json::from_value(data.clone()).unwrap();
-        // A fully tagged HDR10 file already satisfies the managed envelope, which
-        // may still tonemap it. The reported failure is the partially tagged case
-        // below: ffprobe frequently reports the transfer function without the
-        // primaries and matrix, and that produced
-        // "HDR color metadata is incomplete or unsupported".
+        // The transfer function alone decides HDR. A fully tagged HDR10 file is
+        // inside the managed envelope (it gets tone-mapped), and so is the
+        // partially tagged shape: ffprobe frequently reports the transfer
+        // without primaries and matrix, and that shape used to be refused
+        // outright before original delivery was ever considered.
         assert!(
             probe.ensure_supported().is_ok(),
             "a completely tagged HDR source is inside the managed envelope"
@@ -4373,13 +4422,9 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
         fields.remove("color_space");
         let partial: Probe = serde_json::from_value(untagged).unwrap();
         assert!(
-            partial.ensure_supported().is_err(),
-            "a partially tagged HDR source is what the managed envelope refuses"
+            partial.ensure_supported().is_ok(),
+            "a partially tagged HDR source must not be refused outright"
         );
-        // Verified empirically against FFmpeg: a PQ stream with no primaries
-        // fails in zscale with "no path between colorspaces" even when the
-        // chain is told to assume bt2020, so refusing here is the correct
-        // outcome rather than a missing conversion. The message says so.
         // A WebCodecs client that declares HDR-capable decoders receives the
         // original file for both shapes instead of an error.
         let declared: Capabilities = serde_json::from_value(serde_json::json!({
@@ -4874,7 +4919,20 @@ printf '%s' '{"streams":[{"codec_type":"video","codec_name":"h264","width":960,"
             .find(|s| s.codec_type.as_deref() == Some("video"))
             .unwrap();
         assert_eq!(video.level, Some(41), "fixture must be level 4.1");
-        assert_eq!(video.avg_frame_rate.as_deref(), Some("60000/1001"));
+        // FFmpeg builds spell the same NTSC rate differently (60000/1001 vs
+        // 19001/317); assert the parsed rate, not ffprobe's rational form.
+        let frame_rate = video.avg_frame_rate.as_deref().and_then(|rate| {
+            let (numerator, denominator) = rate.split_once('/')?;
+            match (numerator.parse::<f64>(), denominator.parse::<f64>()) {
+                (Ok(numerator), Ok(denominator)) => Some(numerator / denominator),
+                _ => None,
+            }
+        });
+        assert!(
+            frame_rate.is_some_and(|rate| (59.9..=60.1).contains(&rate)),
+            "fixture must be ~59.94fps: {:?}",
+            video.avg_frame_rate
+        );
         assert!(
             video.width == Some(1280) && video.height == Some(720),
             "fixture must be 720p"
