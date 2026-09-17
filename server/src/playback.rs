@@ -1597,6 +1597,10 @@ impl PlaybackManager {
                 if session.touched.elapsed() >= self.config.ttl
                     || failed
                     || (session.direct.is_none()
+                        // A transport-less direct-URL session has no directory
+                        // and no encoder: only its TTL retires it, and every
+                        // heartbeat renews that TTL.
+                        && !session.dir.as_os_str().is_empty()
                         && !cache_safe(&session.dir, running && !session.supervised_live).await)
                 {
                     ids.push(id.clone());
@@ -3080,6 +3084,12 @@ printf '#EXTM3U\n#EXTINF:1,\nsegment-000000000.ts\n' > "$last"
         assert!(!forwarded.contains_key("user-agent"));
         // The transport-less session still answers heartbeats.
         assert!(manager.heartbeat(&response.id).await);
+        // The reaper must not retire a transport-less direct-URL session: it
+        // owns no directory and no encoder, so only its TTL ends it, and
+        // every heartbeat renews that TTL.
+        manager.reap().await;
+        assert!(manager.heartbeat(&response.id).await);
+        assert_eq!(manager.active_count().await, 1);
         manager.shutdown().await;
     }
 

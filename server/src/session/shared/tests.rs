@@ -100,6 +100,88 @@ async fn vod_reuses_available_timeline_and_keeps_seeking_and_revocation_independ
         a.playback.shutdown().await;
     }
 }
+
+#[tokio::test]
+async fn direct_url_clients_receive_the_original_source_without_shared_wrappers() {
+    let (a, b, _dir) = fixture();
+    let mut native = request("one", 0.0);
+    native.capabilities = Some(playback::Capabilities {
+        direct_urls: Some(true),
+        ..Default::default()
+    });
+    let first = start(a.clone(), native.clone()).await.unwrap().0;
+    assert_eq!(first["mode"], "direct");
+    assert_eq!(first["url"], "http://fixture.invalid/movie.mp4");
+    let first_id = first["id"].as_str().unwrap().to_owned();
+    let mut second = native;
+    second.stream_id = Some("two".into());
+    let second_response = start(b.clone(), second).await.unwrap().0;
+    let second_id = second_response["id"].as_str().unwrap().to_owned();
+    // No shared wrapper: each native client owns its own transport-less
+    // session, and both answer heartbeats straight through the manager.
+    assert_eq!(a.playback.active_count().await, 2);
+    assert_ne!(first_id, second_id);
+    assert!(a.playback.heartbeat(&first_id).await);
+    assert!(b.playback.heartbeat(&second_id).await);
+    a.playback.stop(&first_id).await;
+    b.playback.stop(&second_id).await;
+    assert_eq!(a.playback.active_count().await, 0);
+    a.playback.shutdown().await;
+}
+
+#[tokio::test]
+async fn direct_url_sessions_answer_heartbeats_through_the_authenticated_route() {
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use sha2::{Digest, Sha256};
+    use tower::ServiceExt;
+
+    let (a, _b, _dir) = fixture();
+    let hash = format!("{:x}", Sha256::digest(b"native"));
+    a.db.lock().unwrap().execute(
+        "UPDATE auth_sessions SET access_hash=?1 WHERE id='one'",
+        [&hash],
+    )
+    .unwrap();
+    async fn request(app: &App, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
+        let response = crate::router(app.clone(), None)
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("authorization", "Bearer native")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    let (status, started) = request(
+        &a,
+        "POST",
+        "/api/playback",
+        json!({"stream_id":"one","position":0.0,"capabilities":{"h264":true,"aac":true,"max_width":3840,"max_height":2160,"direct_play":false,"direct_urls":true}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    assert_eq!(started["url"], "http://fixture.invalid/movie.mp4", "{started}");
+    let id = started["id"].as_str().unwrap().to_owned();
+    let (status, body) = request(
+        &a,
+        "POST",
+        &format!("/api/playback/{id}/heartbeat"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "heartbeat: {body}");
+    let (status, body) = request(&a, "DELETE", &format!("/api/playback/{id}"), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "stop: {body}");
+    a.playback.shutdown().await;
+}
 #[tokio::test]
 async fn cancelled_creator_during_probe_does_not_cancel_the_other_viewer() {
     let (a, b, dir) = fixture();

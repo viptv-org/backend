@@ -197,6 +197,16 @@ async fn identity(a: &App, v: &PlaybackRequest) -> Result<(String, Option<String
     ))
 }
 pub(super) async fn start(a: App, v: PlaybackRequest) -> ApiResult {
+    // A direct-URL client fetches the source itself, so no proxy transport
+    // would ever exist behind a shared wrapper: it never enters the shared
+    // layer and the manager hands back the original URL untouched.
+    if v
+        .capabilities
+        .as_ref()
+        .is_some_and(|caps| caps.direct_urls == Some(true))
+    {
+        return start_playback_inner(a, v).await;
+    }
     let (key, revision) = identity(&a, &v).await?;
     let registry = a.shared_playback.clone();
     let prior = registry.groups.lock().unwrap().get(&key).cloned();
