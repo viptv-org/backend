@@ -138,11 +138,13 @@ async fn direct_url_sessions_answer_heartbeats_through_the_authenticated_route()
 
     let (a, _b, _dir) = fixture();
     let hash = format!("{:x}", Sha256::digest(b"native"));
-    a.db.lock().unwrap().execute(
-        "UPDATE auth_sessions SET access_hash=?1 WHERE id='one'",
-        [&hash],
-    )
-    .unwrap();
+    a.db.lock()
+        .unwrap()
+        .execute(
+            "UPDATE auth_sessions SET access_hash=?1 WHERE id='one'",
+            [&hash],
+        )
+        .unwrap();
     async fn request(app: &App, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
         let response = crate::router(app.clone(), None)
             .oneshot(
@@ -168,7 +170,10 @@ async fn direct_url_sessions_answer_heartbeats_through_the_authenticated_route()
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{started}");
-    assert_eq!(started["url"], "http://fixture.invalid/movie.mp4", "{started}");
+    assert_eq!(
+        started["url"], "http://fixture.invalid/movie.mp4",
+        "{started}"
+    );
     let id = started["id"].as_str().unwrap().to_owned();
     let (status, body) = request(
         &a,
