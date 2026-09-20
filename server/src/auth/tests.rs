@@ -93,18 +93,7 @@ fn owner() -> Principal {
 async fn http_middleware_rejects_unauthenticated_and_cookie_csrf() {
     use axum::body::Body;
     use tower::ServiceExt;
-    let app = App::new(
-        Connection::open_in_memory().unwrap(),
-        reqwest::Client::new(),
-        crate::playback::PlaybackManager::new(crate::playback::Config {
-            ffmpeg: "missing".into(),
-            ffprobe: "missing".into(),
-            root: "unused-auth-test".into(),
-            max_sessions: 1,
-            ttl: std::time::Duration::from_secs(30),
-        }),
-    )
-    .unwrap();
+    let app = crate::test_support::app();
     let (data, cookies) = claim(&app.db.lock().unwrap());
     let access = cookies.unwrap().0;
     let router = router_with_auth(app.clone()).with_state(app.clone());
@@ -251,32 +240,6 @@ async fn http_middleware_rejects_unauthenticated_and_cookie_csrf() {
         .await
         .unwrap();
     assert_eq!(out.status(), StatusCode::UNAUTHORIZED);
-}
-#[test]
-fn additive_schema_preserves_existing_rows_and_assigns_owner() {
-    let db = db();
-    claim(&db);
-    init(&db).unwrap();
-    assert_eq!(
-        db.query_row("SELECT id FROM favorites", [], |r| r.get::<_, String>(0))
-            .unwrap(),
-        "kept"
-    );
-    assert_eq!(
-        db.query_row(
-            "SELECT account_id FROM profile_owners WHERE profile_id=1",
-            [],
-            |r| r.get::<_, i64>(0)
-        )
-        .unwrap(),
-        1
-    );
-    assert_eq!(
-        db.query_row("SELECT max(version) FROM schema_migrations", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
-        4
-    );
 }
 #[test]
 fn offline_owner_bootstrap_is_single_use_and_claims_only_unowned_history() {
@@ -436,141 +399,6 @@ fn recovery_is_single_use_and_revokes_sessions() {
     .is_ok());
 }
 #[test]
-fn member_profile_and_owner_boundaries() {
-    let db = db();
-    claim(&db);
-    let out = dispatch(
-        &db,
-        "/auth/register",
-        None,
-        &headers(),
-        &json!({"username":"member","password":"a-long-member-password"}),
-        SESSION_TOKEN,
-    )
-    .unwrap()
-    .0;
-    let account_id = identifier(&out, "account_id").unwrap();
-    let profile = create_profile(
-        &db,
-        account_id,
-        &json!({"name":"Member","avatar_style":"moods"}),
-    )
-    .unwrap();
-    let p = Principal::Account {
-        account_id,
-        role: "member".into(),
-        profile_id: None,
-        session_id: None,
-    };
-    assert!(p.require_owner().is_err());
-    assert!(p.require_profile(&db, 1).is_err());
-    assert!(p
-        .require_profile(&db, identifier(&profile, "id").unwrap())
-        .is_ok());
-    assert_eq!(
-        db.query_row(
-            "SELECT role FROM auth_accounts WHERE id=?1",
-            [account_id],
-            |row| row.get::<_, String>(0)
-        )
-        .unwrap(),
-        "member"
-    );
-}
-#[test]
-fn device_pending_approval_consumption_and_revocation() {
-    let db = db();
-    claim(&db);
-    let code = dispatch(
-        &db,
-        "/auth/device/code",
-        None,
-        &HeaderMap::new(),
-        &json!({"device_name":"Living Room"}),
-        SESSION_TOKEN,
-    )
-    .unwrap()
-    .0;
-    let payload = json!({"device_code":code["device_code"]});
-    assert!(dispatch(
-        &db,
-        "/auth/device/token",
-        None,
-        &HeaderMap::new(),
-        &payload,
-        SESSION_TOKEN
-    )
-    .is_err());
-    let lookup = dispatch(
-        &db,
-        "/auth/device/lookup",
-        Some(owner()),
-        &headers(),
-        &json!({"user_code":code["user_code"]}),
-        SESSION_TOKEN,
-    )
-    .unwrap()
-    .0;
-    assert_eq!(lookup["device"]["status"], "pending");
-    dispatch(
-        &db,
-        "/auth/device/approve",
-        Some(owner()),
-        &headers(),
-        &json!({"user_code":code["user_code"]}),
-        SESSION_TOKEN,
-    )
-    .unwrap();
-    let token = dispatch(
-        &db,
-        "/auth/device/token",
-        None,
-        &HeaderMap::new(),
-        &payload,
-        SESSION_TOKEN,
-    )
-    .unwrap()
-    .0;
-    assert!(token["access_token"].is_string());
-    assert!(dispatch(
-        &db,
-        "/auth/device/token",
-        None,
-        &HeaderMap::new(),
-        &payload,
-        SESSION_TOKEN
-    )
-    .is_err());
-    let rotated = dispatch(
-        &db,
-        "/auth/device/refresh",
-        None,
-        &HeaderMap::new(),
-        &json!({"refresh_token":token["refresh_token"]}),
-        SESSION_TOKEN,
-    )
-    .unwrap()
-    .0;
-    dispatch(
-        &db,
-        "/auth/device/revoke",
-        Some(owner()),
-        &headers(),
-        &json!({"session_id":rotated["session_id"]}),
-        SESSION_TOKEN,
-    )
-    .unwrap();
-    assert!(dispatch(
-        &db,
-        "/auth/device/refresh",
-        None,
-        &HeaderMap::new(),
-        &json!({"refresh_token":rotated["refresh_token"]}),
-        SESSION_TOKEN
-    )
-    .is_err());
-}
-#[test]
 fn refresh_replay_revokes_only_its_family_and_devices_are_not_admins() {
     let db = db();
     claim(&db);
@@ -700,59 +528,6 @@ fn origins_cookie_flags_and_public_allowlist() {
     assert!(!public("/auth/accounts", &Method::POST));
     assert!(!public("/auth/device/approve", &Method::POST));
     assert!(!public("/auth/login/extra", &Method::POST));
-}
-#[test]
-fn immutable_device_scope_keys_and_persisted_revocation() {
-    let db = db();
-    claim(&db);
-    db.execute("INSERT INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Other','other-seed',1)", [])
-            .unwrap();
-    db.execute("INSERT INTO auth_profiles VALUES(1,2)", [])
-        .unwrap();
-    let first = session(&db, 1, Some(1), "device", "TV").unwrap().0;
-    let second = session(&db, 1, Some(1), "device", "TV2").unwrap().0;
-    let scope = |v: &Value, profile| Principal::Account {
-        account_id: 1,
-        role: "device".into(),
-        profile_id: Some(profile),
-        session_id: Some(v["session_id"].as_str().unwrap().into()),
-    };
-    let p = scope(&first, 1);
-    assert!(p.validate_scope(&db).is_ok());
-    assert_ne!(p.key(), scope(&second, 1).key());
-    assert_ne!(p.key(), scope(&first, 2).key());
-    assert!(scope(&first, 2).validate_scope(&db).is_err());
-    assert!(p.require_profile(&db, 2).is_err());
-    let rotated = dispatch(
-        &db,
-        "/auth/device/refresh",
-        None,
-        &HeaderMap::new(),
-        &json!({"refresh_token":first["refresh_token"]}),
-        SESSION_TOKEN,
-    )
-    .unwrap()
-    .0;
-    assert_eq!(first["session_id"], rotated["session_id"]);
-    assert!(p.validate_scope(&db).is_ok());
-    db.execute(
-        "DELETE FROM profile_owners WHERE account_id=1 AND profile_id=1",
-        [],
-    )
-    .unwrap();
-    assert!(p.validate_scope(&db).is_err());
-    db.execute(
-        "INSERT INTO profile_owners(profile_id,account_id,created_at) VALUES(1,1,0)",
-        [],
-    )
-    .unwrap();
-    db.execute(
-        "DELETE FROM auth_sessions WHERE id=?1",
-        [p.session_id().unwrap()],
-    )
-    .unwrap();
-    assert!(p.validate_scope(&db).is_err());
-    assert!(scope(&second, 1).validate_scope(&db).is_ok());
 }
 #[test]
 fn owner_management_does_not_bypass_profile_grants() {
@@ -904,6 +679,16 @@ fn member_confirmation_binds_device_to_current_account_only() {
     )
     .unwrap()
     .0;
+    let pairing = json!({"device_code":code["device_code"]});
+    assert!(dispatch(
+        &db,
+        "/auth/device/token",
+        None,
+        &HeaderMap::new(),
+        &pairing,
+        SESSION_TOKEN
+    )
+    .is_err());
     let member_principal = Principal::Account {
         account_id: id,
         role: "member".into(),
@@ -940,6 +725,15 @@ fn member_confirmation_binds_device_to_current_account_only() {
     .0;
     assert_eq!(identifier(&issued, "account_id").unwrap(), id);
     assert!(issued["profile_id"].is_null());
+    assert!(dispatch(
+        &db,
+        "/auth/device/token",
+        None,
+        &HeaderMap::new(),
+        &pairing,
+        SESSION_TOKEN
+    )
+    .is_err());
     let principal = Principal::Account {
         account_id: id,
         role: "device".into(),

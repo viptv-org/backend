@@ -1,20 +1,16 @@
 //! Upgrade compatibility: adding household authentication must not rewrite user data.
+mod common;
+
 use rusqlite::Connection;
-use std::time::Duration;
-use viptv_server::{
-    playback::{Config, PlaybackManager},
-    App,
-};
+use viptv_server::App;
 
 fn initialize(db: Connection, root: &std::path::Path) -> App {
-    let playback = PlaybackManager::new(Config {
-        ffmpeg: "missing-test-ffmpeg".into(),
-        ffprobe: "missing-test-ffprobe".into(),
-        root: root.join("hls"),
-        max_sessions: 2,
-        ttl: Duration::from_secs(30),
-    });
-    App::new(db, reqwest::Client::new(), playback).unwrap()
+    App::new(
+        db,
+        reqwest::Client::new(),
+        common::playback(root, "missing-test-ffmpeg", "missing-test-ffprobe", 2),
+    )
+    .unwrap()
 }
 
 #[tokio::test]

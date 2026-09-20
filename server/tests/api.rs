@@ -1,3 +1,5 @@
+mod common;
+
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -8,10 +10,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use tower::ServiceExt;
-use viptv_server::{
-    playback::{Config, PlaybackManager},
-    router, App,
-};
+use viptv_server::{router, App};
 const ACCOUNT_TOKEN: &str = "test-owner-account-session-token";
 fn app() -> (Router, tempfile::TempDir) {
     let (state, dir) = app_state();
@@ -32,13 +31,7 @@ fn app_state_with_tools_and_timeout(
     request_timeout: Duration,
 ) -> (App, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let pm = PlaybackManager::new(Config {
-        ffmpeg,
-        ffprobe,
-        root: dir.path().join("hls"),
-        max_sessions: 2,
-        ttl: Duration::from_secs(30),
-    });
+    let pm = common::playback(dir.path(), ffmpeg, ffprobe, 2);
     let client = reqwest::Client::builder()
         .timeout(request_timeout)
         .build()
@@ -67,22 +60,7 @@ async fn request_as(
     body: Value,
     token: &str,
 ) -> (StatusCode, Value) {
-    let r = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(path)
-                .header("authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = r.status();
-    let b = to_bytes(r.into_body(), 1024 * 1024).await.unwrap();
-    (status, serde_json::from_slice(&b).unwrap_or(Value::Null))
+    common::bearer_request(app, token, method, path, body).await
 }
 
 // One loopback upstream: base URL plus the task that must be aborted by the caller.
@@ -91,6 +69,28 @@ async fn serve_upstream(mock: Router) -> (String, tokio::task::JoinHandle<()>) {
     let address = listener.local_addr().unwrap();
     let upstream = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
     (format!("http://{address}"), upstream)
+}
+
+// Mock Xtream `/player_api.php` login upstream; `authorize` picks the accepted
+// password and `max_connections` is only emitted when present.
+fn xtream_login(authorize: fn(&str) -> bool, max_connections: Option<&'static str>) -> Router {
+    Router::new().route(
+        "/player_api.php",
+        get(
+            move |axum::extract::Query(q): axum::extract::Query<
+                std::collections::HashMap<String, String>,
+            >| async move {
+                let mut user_info = json!({
+                    "auth": if q.get("password").is_some_and(|p| authorize(p)) {1} else {0},
+                    "status": "Active",
+                });
+                if let Some(connections) = max_connections {
+                    user_info["max_connections"] = json!(connections);
+                }
+                axum::Json(json!({"user_info": user_info}))
+            },
+        ),
+    )
 }
 
 // Protocol fixtures for the media-tool seam, not real decoder acceptance. Physical
@@ -518,84 +518,6 @@ async fn addon_patch_lists_disabled_and_filters_catalogs() {
     );
 }
 
-#[tokio::test]
-async fn auth_and_profile_state() {
-    let (a, _dir) = app();
-    let health = a
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/health")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(health.status(), StatusCode::OK);
-    let denied = a
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/api/profiles")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-    let (s, p) = request(&a, "POST", "/api/profiles", json!({"name":"Family"})).await;
-    assert_eq!(s, StatusCode::OK);
-    let id = p["id"].as_str().unwrap();
-    assert_eq!(
-        request(&a, "POST", "/api/auth/profile", json!({"profile_id":id}))
-            .await
-            .0,
-        StatusCode::OK
-    );
-    let path = format!("/api/profiles/{id}/favorites");
-    assert_eq!(
-        request(
-            &a,
-            "PUT",
-            &path,
-            json!({"id":"tt123","type":"movie","name":"Movie"})
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        request(&a, "GET", &path, Value::Null).await.1[0]["id"],
-        "tt123"
-    );
-    let path = format!("/api/profiles/{id}/progress");
-    assert_eq!(
-        request(
-            &a,
-            "PUT",
-            &path,
-            json!({"id":"tt123:1:2","type":"series","name":"Episode","position":44,"duration":100})
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        request(&a, "GET", &path, Value::Null).await.1[0]["position"],
-        44.0
-    );
-    assert_eq!(
-        request(
-            &a,
-            "PUT",
-            &path,
-            json!({"id":"tt123","type":"series","name":"Bad","position":-1,"duration":100})
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-}
 #[tokio::test]
 async fn provider_credentials_redacted_and_url_rejected() {
     let (a, _dir) = app();
@@ -1680,17 +1602,10 @@ async fn recovery_never_retries_an_input_that_failed_during_initial_startup() {
 
 #[tokio::test]
 async fn bulk_xtream_import_validates_twenty_accounts_and_keeps_partial_results_private() {
-    async fn login(
-        axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
-    ) -> axum::Json<Value> {
-        axum::Json(
-            json!({"user_info":{"auth":if q.get("password").is_some_and(|p|p=="bad-secret") {0}else{1},"status":"Active","max_connections":"2"}}),
-        )
-    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let upstream = tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/player_api.php", get(login)))
+        axum::serve(listener, xtream_login(|p| p != "bad-secret", Some("2")))
             .await
             .unwrap()
     });
@@ -1749,17 +1664,10 @@ async fn bulk_xtream_import_validates_twenty_accounts_and_keeps_partial_results_
 
 #[tokio::test]
 async fn credential_renewal_preserves_provider_identity_scopes_and_imported_channels() {
-    async fn login(
-        axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
-    ) -> axum::Json<Value> {
-        axum::Json(
-            json!({"user_info":{"auth":if q.get("password").is_some_and(|p|p=="renewed-secret") {1}else{0},"status":"Active"}}),
-        )
-    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let upstream = tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/player_api.php", get(login)))
+        axum::serve(listener, xtream_login(|p| p == "renewed-secret", None))
             .await
             .unwrap()
     });

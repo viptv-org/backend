@@ -262,25 +262,6 @@ async fn real_hdr10_file_is_delivered_as_original_to_a_webcodecs_client() {
 }
 
 #[tokio::test]
-#[ignore = "bounded synthetic 4K benchmark with configured FFmpeg; no network"]
-async fn real_hdr_resize_benchmark() {
-    let ffmpeg = std::env::var("VIPTV_TEST_FFMPEG").unwrap();
-    let old = format!("zscale=transfer=linear:npl=100,format=gbrpf32le,zscale=primaries=bt709,tonemap=tonemap=mobius:desat=2,zscale=transfer=bt709:matrix=bt709:range=limited,format=yuv420p,sidedata=mode=delete,{}",scale_filter(1280,720));
-    for (label, filter) in [("old-fullres", old), ("new-bounded", hdr_filter(1280, 720))] {
-        let mut command = Command::new(&ffmpeg);
-        command.args(["-v","error","-nostdin","-filter_threads","2","-threads","2","-f","lavfi","-i","testsrc2=size=3840x1598:rate=24","-vf"])
-            .arg(format!("format=yuv420p10le,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc,{filter}"))
-            .args(["-frames:v","24","-threads","2","-f","null","-"]);
-        let started = Instant::now();
-        hdr_test_command(&mut command).await;
-        eprintln!(
-            "HDR_BENCH {label} 3840x1598 ->1280x532 24frames filter_threads=2 wall={:.3}s",
-            started.elapsed().as_secs_f64()
-        );
-    }
-}
-
-#[tokio::test]
 #[ignore = "requires real FFmpeg with libx264, zscale, tonemap and bwdif"]
 async fn real_common_format_conversion() {
     let ffmpeg = PathBuf::from(std::env::var("VIPTV_TEST_FFMPEG").unwrap());

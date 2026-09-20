@@ -58,6 +58,8 @@ pub(crate) use uuid::Uuid;
 mod auth_integration_tests;
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 // The original monolithic lib.rs was split into the modules above without
 // changing any bodies. These re-exports keep the crate root namespace

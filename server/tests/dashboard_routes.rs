@@ -1,31 +1,17 @@
 //! Browser SPA entry routes must return a successful, non-cacheable HTML bootstrap.
+mod common;
+
 use axum::{
     body::{to_bytes, Body},
     http::{header, Request, StatusCode},
     Router,
 };
-use std::time::Duration;
 use tower::ServiceExt;
-use viptv_server::{
-    playback::{Config, PlaybackManager},
-    router, router_with_tv, App,
-};
+use viptv_server::{router, router_with_tv, App};
+
+use common::playback;
 
 // Both fixtures keep one session and unavailable media tools; only the mount differs.
-fn test_playback(
-    root: &std::path::Path,
-    ffmpeg: &str,
-    ffprobe: &str,
-) -> std::sync::Arc<PlaybackManager> {
-    PlaybackManager::new(Config {
-        ffmpeg: ffmpeg.into(),
-        ffprobe: ffprobe.into(),
-        root: root.join("hls"),
-        max_sessions: 1,
-        ttl: Duration::from_secs(30),
-    })
-}
-
 fn application() -> (Router, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -36,7 +22,12 @@ fn application() -> (Router, tempfile::TempDir) {
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),
-        test_playback(root.path(), "missing-test-ffmpeg", "missing-test-ffprobe"),
+        playback(
+            root.path(),
+            "missing-test-ffmpeg",
+            "missing-test-ffprobe",
+            1,
+        ),
     )
     .unwrap();
     (router(app, Some(root.path().to_path_buf())), root)
@@ -55,7 +46,7 @@ fn tv_application() -> (Router, tempfile::TempDir, tempfile::TempDir) {
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),
-        test_playback(dashboard.path(), "missing", "missing"),
+        playback(dashboard.path(), "missing", "missing", 1),
     )
     .unwrap();
     (

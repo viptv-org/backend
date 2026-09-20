@@ -7,19 +7,10 @@ use axum::{
 use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
+use crate::test_support::request;
+
 fn fixture() -> App {
-    let a = App::new(
-        Connection::open_in_memory().unwrap(),
-        reqwest::Client::new(),
-        PlaybackManager::new(playback::Config {
-            ffmpeg: "/nonexistent/ffmpeg".into(),
-            ffprobe: "/nonexistent/ffprobe".into(),
-            root: "unused-auth-test-playback".into(),
-            max_sessions: 1,
-            ttl: Duration::from_secs(30),
-        }),
-    )
-    .unwrap();
+    let a = crate::test_support::app();
     {
         let db = a.db.lock().unwrap();
         db.execute("DELETE FROM addons", []).unwrap();
@@ -44,31 +35,6 @@ fn fixture() -> App {
         .unwrap();
     }
     a
-}
-async fn request(
-    a: &App,
-    token: &str,
-    method: &str,
-    path: &str,
-    body: Value,
-) -> (StatusCode, Value) {
-    let response = router(a.clone(), None)
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(path)
-                .header("authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 8 * 1024 * 1024)
-        .await
-        .unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
 }
 #[tokio::test]
 async fn profile_lists_are_filtered_and_new_profiles_are_granted_atomically() {
@@ -183,6 +149,18 @@ async fn favorites_and_progress_require_the_exact_selected_profile() {
             StatusCode::FORBIDDEN
         );
     }
+    assert_eq!(
+        request(
+            &a,
+            "member-token-1",
+            "PUT",
+            "/api/profiles/1/progress",
+            json!({"id":"tt-invalid","type":"movie","name":"Bad","position":-1.0,"duration":100.0})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
 
     let db = a.db.lock().unwrap();
     let other_favorites: i64 = db

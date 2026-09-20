@@ -1,17 +1,17 @@
 //! Account-only browser/device HTTP acceptance through router middleware.
+mod common;
+
 use axum::{
     body::{to_bytes, Body},
     http::{header, Request, StatusCode},
     Router,
 };
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, time::Duration};
+use std::collections::BTreeMap;
 use tower::ServiceExt;
-use viptv_server::{
-    auth,
-    playback::{Config, PlaybackManager},
-    router, App,
-};
+use viptv_server::{auth, router, App};
+
+use common::{application, bearer_request, playback};
 
 #[derive(Default)]
 struct Browser {
@@ -27,26 +27,6 @@ impl Browser {
             .join("; ")
     }
 }
-// Both fixtures use the same unavailable media tools and session budget.
-fn test_playback(root: &std::path::Path) -> std::sync::Arc<PlaybackManager> {
-    PlaybackManager::new(Config {
-        ffmpeg: "missing-test-ffmpeg".into(),
-        ffprobe: "missing-test-ffprobe".into(),
-        root: root.join("hls"),
-        max_sessions: 2,
-        ttl: Duration::from_secs(30),
-    })
-}
-fn application() -> (Router, tempfile::TempDir) {
-    let root = tempfile::tempdir().unwrap();
-    let app = App::new(
-        rusqlite::Connection::open_in_memory().unwrap(),
-        reqwest::Client::new(),
-        test_playback(root.path()),
-    )
-    .unwrap();
-    (router(app, None), root)
-}
 fn owner_application() -> (Router, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     let mut db = rusqlite::Connection::open_in_memory().unwrap();
@@ -56,7 +36,17 @@ fn owner_application() -> (Router, tempfile::TempDir) {
     .unwrap();
     auth::init(&db).unwrap();
     auth::create_owner_offline(&mut db, "owner", "Owner", "secure-owner-password").unwrap();
-    let app = App::new(db, reqwest::Client::new(), test_playback(root.path())).unwrap();
+    let app = App::new(
+        db,
+        reqwest::Client::new(),
+        playback(
+            root.path(),
+            "missing-test-ffmpeg",
+            "missing-test-ffprobe",
+            2,
+        ),
+    )
+    .unwrap();
     (router(app, None), root)
 }
 async fn browser_request(
@@ -97,33 +87,6 @@ async fn browser_request(
         browser.csrf = csrf.into();
     }
     (status, body)
-}
-async fn bearer_request(
-    app: &Router,
-    token: &str,
-    method: &str,
-    path: &str,
-    value: Value,
-) -> (StatusCode, Value) {
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(path)
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(value.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
 }
 async fn register(app: &Router, username: &str) -> Browser {
     let mut browser = Browser::default();

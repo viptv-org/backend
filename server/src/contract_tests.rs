@@ -1,10 +1,6 @@
 //! Entirely in-process contract tests: no listeners, provider requests or temp files.
 use super::*;
-use axum::{
-    body::{to_bytes, Body},
-    http::Request,
-};
-use tower::ServiceExt;
+use axum::body::to_bytes;
 
 #[tokio::test]
 async fn playback_errors_are_closed_and_leave_expiry_unchanged() {
@@ -54,14 +50,7 @@ async fn playback_errors_are_closed_and_leave_expiry_unchanged() {
 
 const ACCOUNT_TOKEN: &str = "contract-account-token-only";
 fn app(db: Connection) -> App {
-    let playback = PlaybackManager::new(playback::Config {
-        ffmpeg: "/nonexistent-viptv-contract-tools/ffmpeg".into(),
-        ffprobe: "/nonexistent-viptv-contract-tools/ffprobe".into(),
-        root: "unused-contract-playback".into(),
-        max_sessions: 1,
-        ttl: Duration::from_secs(30),
-    });
-    let mut app = App::new(db, reqwest::Client::new(), playback).unwrap();
+    let mut app = crate::test_support::app_with_db(db);
     let session_id = "contract-session".to_owned();
     {
         let db = app.db.lock().unwrap();
@@ -97,21 +86,7 @@ fn app(db: Connection) -> App {
     app
 }
 async fn api(app: &App, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
-    let response = router(app.clone(), None)
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(path)
-                .header("authorization", format!("Bearer {ACCOUNT_TOKEN}"))
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 1_000_000).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
+    crate::test_support::request(app, ACCOUNT_TOKEN, method, path, body).await
 }
 #[tokio::test]
 async fn live_categories_route_returns_paginated_shape() {
