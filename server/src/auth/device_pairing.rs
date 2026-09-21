@@ -32,7 +32,7 @@ pub(crate) async fn device_qr(
                 "Invalid or expired pairing code".into(),
             ));
         }
-        let origin = required_origin()?
+        let origin = canonical_origin()?
             .map(|value| value.to_string().trim_end_matches('/').to_owned())
             .or_else(|| {
                 headers

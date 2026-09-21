@@ -36,7 +36,7 @@ pub(crate) const AVATAR_STYLES: &[&str] = &[
 ];
 
 pub fn init(db: &Connection) -> rusqlite::Result<()> {
-    required_origin().map_err(|_| rusqlite::Error::InvalidParameterName("VIPTV_AUTH_ORIGIN must be an HTTPS origin without credentials, path, query or fragment".into()))?;
+    required_origins().map_err(|_| rusqlite::Error::InvalidParameterName("VIPTV_AUTH_ORIGIN must be HTTPS origins without credentials, path, query or fragment, comma-separated, first entry canonical".into()))?;
     let tx = db.unchecked_transaction()?;
     init_schema(&tx)?;
     tx.execute(

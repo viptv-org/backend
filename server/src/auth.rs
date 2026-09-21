@@ -28,8 +28,8 @@ pub(crate) use device_actions::dispatch_devices;
 pub(crate) use device_pairing::device_qr;
 pub(crate) use handlers::{info, remove, status};
 pub(crate) use middleware::{
-    auth_error, bearer, constant_eq, cookie, csrf_for_session, forbidden, issue_csrf, origin,
-    required_origin, unauthorized,
+    auth_error, bearer, canonical_origin, constant_eq, cookie, csrf_for_session, forbidden,
+    issue_csrf, origin, required_origins, unauthorized,
 };
 pub(crate) use profiles_actions::{
     create_profile, dispatch_profiles, list_profiles, update_profile,

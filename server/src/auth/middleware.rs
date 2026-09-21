@@ -68,20 +68,32 @@ pub(crate) fn parse_origin(value: &str) -> Result<url::Url, ApiError> {
     }
     Ok(u)
 }
-fn configured_origin() -> Result<Option<url::Url>, ApiError> {
+fn configured_origins() -> Result<Vec<url::Url>, ApiError> {
     match std::env::var("VIPTV_AUTH_ORIGIN") {
-        Ok(value) if value.trim().is_empty() => Ok(None),
-        Ok(value) => parse_origin(&value).map(Some),
-        Err(std::env::VarError::NotPresent) => Ok(None),
+        Ok(value) if value.trim().is_empty() => Ok(Vec::new()),
+        Ok(value) => value
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(parse_origin)
+            .collect(),
+        Err(std::env::VarError::NotPresent) => Ok(Vec::new()),
         Err(_) => Err(forbidden()),
     }
 }
-pub(crate) fn required_origin() -> Result<Option<url::Url>, ApiError> {
-    let configured = configured_origin()?;
+/// The canonical origin is the first configured entry: pairing QR codes and
+/// verification URLs always send devices there. Additional entries are extra
+/// accepted browser origins — for example a reverse-proxy hostname that
+/// serves the same bundle behind the same backend.
+pub(crate) fn canonical_origin() -> Result<Option<url::Url>, ApiError> {
+    Ok(required_origins()?.into_iter().next())
+}
+pub(crate) fn required_origins() -> Result<Vec<url::Url>, ApiError> {
+    let configured = configured_origins()?;
     // Production/release builds fail at startup and on QR generation without a
     // pinned HTTPS origin. Debug builds retain Host fallback only for isolated
     // in-memory integration tests and explicit local development.
-    if configured.is_none() && !cfg!(debug_assertions) {
+    if configured.is_empty() && !cfg!(debug_assertions) {
         return Err(ApiError(
             StatusCode::INTERNAL_SERVER_ERROR,
             "VIPTV_AUTH_ORIGIN is required".into(),
@@ -90,9 +102,9 @@ pub(crate) fn required_origin() -> Result<Option<url::Url>, ApiError> {
     Ok(configured)
 }
 pub(crate) fn origin(h: &HeaderMap) -> Result<(), ApiError> {
-    check_origin(h, required_origin()?.as_ref())
+    check_origin(h, &required_origins()?)
 }
-pub(crate) fn check_origin(h: &HeaderMap, configured: Option<&url::Url>) -> Result<(), ApiError> {
+pub(crate) fn check_origin(h: &HeaderMap, configured: &[url::Url]) -> Result<(), ApiError> {
     if h.get("sec-fetch-site")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v == "cross-site")
@@ -101,16 +113,16 @@ pub(crate) fn check_origin(h: &HeaderMap, configured: Option<&url::Url>) -> Resu
     }
     if let Some(o) = h.get(header::ORIGIN) {
         let u = parse_origin(o.to_str().map_err(|_| forbidden())?)?;
-        let expected = if let Some(configured) = configured {
-            configured.clone()
+        let allowed: Vec<url::Origin> = if !configured.is_empty() {
+            configured.iter().map(|c| c.origin()).collect()
         } else {
             let host = h
                 .get(header::HOST)
                 .and_then(|v| v.to_str().ok())
                 .ok_or_else(forbidden)?;
-            parse_origin(&format!("https://{host}"))?
+            vec![parse_origin(&format!("https://{host}"))?.origin()]
         };
-        if u.origin() != expected.origin() {
+        if !allowed.contains(&u.origin()) {
             return Err(forbidden());
         }
     }

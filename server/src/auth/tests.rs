@@ -484,18 +484,28 @@ fn configured_https_origin_is_pinned_without_forwarded_host_trust() {
         header::ORIGIN,
         HeaderValue::from_static("https://tv.example:8443"),
     );
-    assert!(check_origin(&h, Some(&pin)).is_ok());
-    assert!(check_origin(&h, None).is_err());
+    assert!(check_origin(&h, &[pin.clone()]).is_ok());
+    assert!(check_origin(&h, &[]).is_err());
     h.insert(
         "x-forwarded-host",
         HeaderValue::from_static("tv.example:8443"),
     );
-    assert!(check_origin(&h, None).is_err());
+    assert!(check_origin(&h, &[]).is_err());
     h.insert(
         header::ORIGIN,
         HeaderValue::from_static("https://tv.example"),
     );
-    assert!(check_origin(&h, Some(&pin)).is_err());
+    assert!(check_origin(&h, &[pin.clone()]).is_err());
+    // Additional configured origins are accepted: a reverse-proxy hostname
+    // serving the same bundle must not be rejected as cross-site.
+    let mirror = parse_origin("https://watch.example").unwrap();
+    h.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("https://watch.example"),
+    );
+    assert!(check_origin(&h, &[pin.clone(), mirror.clone()]).is_ok());
+    assert!(check_origin(&h, &[mirror]).is_ok());
+    assert!(check_origin(&h, &[pin]).is_err());
 }
 #[test]
 fn origins_cookie_flags_and_public_allowlist() {

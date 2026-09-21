@@ -59,7 +59,7 @@ pub(crate) fn dispatch_devices(
                 return Err("Invalid device name".into());
             }
             db.execute("INSERT INTO auth_pairings(code_hash,device_hash,device_name,expires) VALUES(?1,?2,?3,?4)",params![hash(&user_code),hash(&device_code),name,now()+600]).map_err(crate::db_error)?;
-            let origin = required_origin()?
+            let origin = canonical_origin()?
                 .map(|origin| origin.to_string().trim_end_matches('/').to_owned())
                 .or_else(|| {
                     h.get(header::HOST)
