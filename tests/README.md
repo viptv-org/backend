@@ -4,15 +4,30 @@ Tests use synthetic media and fake provider credentials. They do not contact a r
 
 ## Local disposable server
 
-Generate/serve the fixture:
+Generate/serve the fixture. The smoke suite's audio-selection and caption
+assertions require this exact multi-stream layout: an Italian track declared
+as the default at input index 1, a time-varying English track at index 2
+(880 Hz before 10 s, 1320 Hz after), an English commentary track at index 3,
+and embedded English captions at index 4. A single-audio file cannot satisfy
+them. This matches the fixture built by `compose.validation.yaml`.
 
 ```sh
 mkdir -p artifacts
+printf '1\n00:00:01,000 --> 00:00:04,000\nEarly English caption\n\n2\n00:00:12,000 --> 00:00:16,000\nLater English caption\n' > artifacts/fixture.srt
 ffmpeg -hide_banner -loglevel error \
   -f lavfi -i testsrc2=size=640x360:rate=30 \
   -f lavfi -i sine=frequency=440:sample_rate=48000 \
+  -f lavfi -i "aevalsrc=sin(2*PI*if(lt(t\,10)\,880\,1320)*t):s=48000" \
+  -f lavfi -i sine=frequency=660:sample_rate=48000 \
+  -i artifacts/fixture.srt \
+  -map 0:v:0 -map 1:a:0 -map 2:a:0 -map 3:a:0 -map 4:s:0 \
   -t 20 -c:v libx264 -preset ultrafast -profile:v main \
   -pix_fmt yuv420p -g 120 -c:a aac -ac 2 \
+  -metadata:s:a:0 language=ita -metadata:s:a:0 title=Italian \
+  -metadata:s:a:1 language=eng -metadata:s:a:1 title=English \
+  -metadata:s:a:2 language=eng -metadata:s:a:2 "title=English Commentary" \
+  -c:s mov_text -metadata:s:s:0 language=eng -metadata:s:s:0 "title=English Captions" \
+  -disposition:a:0 default -disposition:a:1 0 -disposition:a:2 comment \
   -movflags +faststart -n artifacts/fixture.mp4
 python3 tests/mock_upstream.py --media artifacts/fixture.mp4
 ```

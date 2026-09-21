@@ -1,12 +1,18 @@
 //! One viewer-owned live identity across bounded input generations. The media
 //! engine retains responsibility for processes and connection reservations.
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::watch;
 
 pub(crate) struct LiveSession {
-    cancelled: AtomicBool,
-    finished: AtomicBool,
     state: Mutex<LiveState>,
+    // Cancellation and completion use watch channels instead of polled
+    // atomics: `stop` wakes the supervisor immediately instead of spinning
+    // at a fixed interval, and the completion signal is retained so a wait
+    // started after shutdown still observes it.
+    cancel_tx: watch::Sender<bool>,
+    cancel_rx: watch::Receiver<bool>,
+    finish_tx: watch::Sender<bool>,
+    finish_rx: watch::Receiver<bool>,
 }
 struct LiveState {
     engine: String,
@@ -28,9 +34,9 @@ pub(super) fn register(
     response["managed_live"] = json!(true);
     response["generation"] = json!(1);
     response["channel_id"] = json!(channel);
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (finish_tx, finish_rx) = watch::channel(false);
     let live = Arc::new(LiveSession {
-        cancelled: AtomicBool::new(false),
-        finished: AtomicBool::new(false),
         state: Mutex::new(LiveState {
             engine: id.clone(),
             generation: 1,
@@ -40,6 +46,10 @@ pub(super) fn register(
             requested: false,
             reason: None,
         }),
+        cancel_tx,
+        cancel_rx,
+        finish_tx,
+        finish_rx,
     });
     a.live_sessions
         .lock()
@@ -70,21 +80,23 @@ pub(super) async fn stop(a: &App, id: &str) -> bool {
     let Some(live) = a.live_sessions.lock().unwrap().get(id).cloned() else {
         return false;
     };
-    live.cancelled.store(true, Ordering::Release);
-    while !live.finished.load(Ordering::Acquire) {
-        tokio::time::sleep(Duration::from_millis(10)).await;
+    let _ = live.cancel_tx.send(true);
+    let mut finished = live.finish_rx.clone();
+    while !*finished.borrow() {
+        let _ = finished.changed().await;
     }
     true
 }
 async fn cancelled(live: &LiveSession) {
-    while !live.cancelled.load(Ordering::Acquire) {
-        tokio::time::sleep(Duration::from_millis(25)).await;
+    let mut rx = live.cancel_rx.clone();
+    while !*rx.borrow() {
+        let _ = rx.changed().await;
     }
 }
 struct Completion(Arc<LiveSession>);
 impl Drop for Completion {
     fn drop(&mut self) {
-        self.0.finished.store(true, Ordering::Release);
+        let _ = self.0.finish_tx.send(true);
     }
 }
 async fn run(
@@ -112,7 +124,7 @@ async fn run(
             )
         };
         if shared::worker_known(&a, &id) {
-            if let Some(owner) = shared::worker_access(&a, &id) {
+            if let Some(owner) = shared::worker_access(&a, &id).await {
                 a = owner;
             } else {
                 break;
@@ -194,7 +206,7 @@ async fn run(
         match result {
             Ok(Ok(mut response)) => {
                 let engine = response["id"].as_str().unwrap().to_owned();
-                if live.cancelled.load(Ordering::Acquire) {
+                if *live.cancel_rx.borrow() {
                     a.playback.stop(&engine).await;
                     break;
                 }

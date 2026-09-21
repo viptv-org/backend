@@ -187,7 +187,7 @@ pub(in crate::session) async fn start(a: App, v: PlaybackRequest) -> ApiResult {
             .get(&key)
             .filter(|g| {
                 let state = g.state.lock().unwrap();
-                !state.finished
+                !*g.finished.borrow()
                     && state.response.as_ref().is_none_or(|response| {
                         response["candidate_id"].as_str().is_none_or(|candidate| {
                             lineup::eligible(
@@ -206,15 +206,17 @@ pub(in crate::session) async fn start(a: App, v: PlaybackRequest) -> ApiResult {
             .cloned();
         let created = existing.is_none();
         let group = existing.unwrap_or_else(|| {
+            let (finish, finished) = watch::channel(false);
             Arc::new(Group {
                 audience: uuid::Uuid::new_v4().to_string(),
                 state: Mutex::new(GroupState {
                     viewers: HashMap::new(),
                     response: None,
                     error: None,
-                    finished: false,
                 }),
                 notify: tokio::sync::Notify::new(),
+                finish,
+                finished,
             })
         });
         group.state.lock().unwrap().viewers.insert(

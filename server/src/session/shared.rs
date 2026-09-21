@@ -1,6 +1,7 @@
 //! Viewer leases are independent of shared input ownership. Only this module
 //! translates a viewer's private capability into the current worker generation.
 use super::*;
+use tokio::sync::watch;
 mod identity;
 #[cfg(test)]
 use identity::identity;
@@ -17,12 +18,16 @@ pub(crate) struct Group {
     audience: String,
     state: Mutex<GroupState>,
     notify: tokio::sync::Notify,
+    // Retained completion signal: a `stop` that starts after the worker loop
+    // already ended still observes the finished state instead of racing a
+    // one-shot notification.
+    finish: watch::Sender<bool>,
+    finished: watch::Receiver<bool>,
 }
 struct GroupState {
     viewers: HashMap<String, Viewer>,
     response: Option<Value>,
     error: Option<(StatusCode, String)>,
-    finished: bool,
 }
 struct Viewer {
     lease: ResourceLease,
@@ -60,20 +65,31 @@ impl Registry {
         self.viewers.lock().unwrap().get(id).cloned()
     }
 }
-fn active_lease(a: &App, g: &Group) -> Option<ResourceLease> {
+async fn active_lease(a: &App, g: &Group) -> Option<ResourceLease> {
+    let ttl = a.playback.session_ttl();
     let leases = {
         let state = g.state.lock().unwrap();
         state
             .viewers
             .values()
-            .filter(|v| v.touched.elapsed() < a.playback.session_ttl())
+            .filter(|v| v.touched.elapsed() < ttl)
             .map(|v| v.lease.clone())
             .collect::<Vec<_>>()
     };
-    let db = a.db.lock().unwrap();
-    leases.into_iter().find(|lease| lease.validate(&db).is_ok())
+    if leases.is_empty() {
+        return None;
+    }
+    // Validation touches SQLite; keep it off the async workers.
+    let worker = a.clone();
+    blocking(move || {
+        let db = worker.db.lock().unwrap();
+        Ok(leases.into_iter().find(|lease| lease.validate(&db).is_ok()))
+    })
+    .await
+    .ok()
+    .flatten()
 }
-pub(super) fn worker_access(a: &App, id: &str) -> Option<App> {
+pub(super) async fn worker_access(a: &App, id: &str) -> Option<App> {
     let group = a
         .shared_playback
         .workers
@@ -81,7 +97,9 @@ pub(super) fn worker_access(a: &App, id: &str) -> Option<App> {
         .unwrap()
         .get(id)
         .and_then(std::sync::Weak::upgrade)?;
-    active_lease(a, &group).map(|lease| a.clone().with_lease(lease))
+    active_lease(a, &group)
+        .await
+        .map(|lease| a.clone().with_lease(lease))
 }
 pub(super) fn worker_known(a: &App, id: &str) -> bool {
     a.shared_playback.workers.lock().unwrap().contains_key(id)
@@ -104,12 +122,17 @@ fn render(group: &Group, id: &str, mut response: Value) -> Result<Value, ApiErro
     response.as_object_mut().unwrap().remove("_source_key");
     Ok(response)
 }
-async fn no_viewers(a: &App, g: &Group) {
+async fn no_viewers(a: &App, g: &Arc<Group>) {
     loop {
-        if active_lease(a, g).is_none() {
+        if active_lease(a, g).await.is_none() {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // A viewer detach signals the group's notify; the fallback tick also
+        // detects leases that expired without an explicit stop.
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(250)) => {},
+            _ = g.notify.notified() => {},
+        }
     }
 }
 async fn run(mut a: App, g: Arc<Group>, key: String, v: PlaybackRequest) {
@@ -123,7 +146,7 @@ async fn run(mut a: App, g: Arc<Group>, key: String, v: PlaybackRequest) {
     // Preparation belongs to the audience, not to its first HTTP request.
     let mut result = None;
     for _ in 0..3 {
-        let Some(lease) = active_lease(&a, &g) else {
+        let Some(lease) = active_lease(&a, &g).await else {
             break;
         };
         let options = {
@@ -151,7 +174,8 @@ async fn run(mut a: App, g: Arc<Group>, key: String, v: PlaybackRequest) {
                 break;
             }
             Ok(Err(error)) => {
-                if lease.validate(&a.db.lock().unwrap()).is_err() && active_lease(&a, &g).is_some()
+                if lease.validate_media(&a).await.is_err()
+                    && active_lease(&a, &g).await.is_some()
                 {
                     continue;
                 }
@@ -197,19 +221,25 @@ async fn run(mut a: App, g: Arc<Group>, key: String, v: PlaybackRequest) {
     g.notify.notify_waiters();
     if let Some(worker) = &worker {
         loop {
-            let expired = {
-                let db = a.db.lock().unwrap();
-                let state = g.state.lock().unwrap();
-                state
+            // Viewer expiry validation touches SQLite; run it on the blocking
+            // pool instead of locking the database from the async worker.
+            let group = g.clone();
+            let worker_app = a.clone();
+            let expired = blocking(move || {
+                let db = worker_app.db.lock().unwrap();
+                let state = group.state.lock().unwrap();
+                Ok(state
                     .viewers
                     .iter()
                     .filter(|(_, v)| {
-                        v.touched.elapsed() >= a.playback.session_ttl()
+                        v.touched.elapsed() >= worker_app.playback.session_ttl()
                             || v.lease.validate(&db).is_err()
                     })
                     .map(|(id, _)| id.clone())
-                    .collect::<Vec<_>>()
-            };
+                    .collect::<Vec<_>>())
+            })
+            .await
+            .unwrap_or_default();
             for id in expired {
                 a.shared_playback.detach(&id);
                 a.resource_owners
@@ -233,10 +263,10 @@ async fn run(mut a: App, g: Arc<Group>, key: String, v: PlaybackRequest) {
         a.shared_playback.workers.lock().unwrap().remove(worker);
     }
     let ids = {
-        let mut state = g.state.lock().unwrap();
-        state.finished = true;
+        let state = g.state.lock().unwrap();
         state.viewers.keys().cloned().collect::<Vec<_>>()
     };
+    let _ = g.finish.send(true);
     for id in ids {
         a.shared_playback.detach(&id);
         a.resource_owners
@@ -262,8 +292,9 @@ pub(super) async fn stop(a: &App, id: &str) -> bool {
     a.shared_playback.detach(id);
     let last = g.state.lock().unwrap().viewers.is_empty();
     if last {
-        while !g.state.lock().unwrap().finished {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+        let mut finished = g.finished.clone();
+        while !*finished.borrow() {
+            let _ = finished.changed().await;
         }
     }
     true

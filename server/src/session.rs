@@ -83,8 +83,7 @@ pub(super) async fn media(
         .resource_lease("playback", &id)
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "Media not found or expired".into()))?;
     {
-        let authorization = lease.validate(&a.db.lock().unwrap());
-        if authorization.is_err() {
+        if lease.validate_media(&a).await.is_err() {
             stop_owned(&a, &id).await;
             a.resource_owners
                 .lock()
@@ -106,15 +105,18 @@ pub(super) async fn media(
     {
         let response = result
             .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "Media origin unavailable".into()))?;
-        lease.validate(&a.db.lock().unwrap())?;
+        lease.validate_media(&a).await?;
         // Progressive bodies can outlive the handler: validate the viewer lease
         // before yielding each bounded chunk, not only at response creation.
+        // The lease cache bounds the database work to one validation per lease
+        // per window; the in-memory owner registry still catches server-side
+        // teardown on every chunk.
         let (parts, body) = response.into_parts();
         let stream = async_stream::try_stream! {
             use futures::StreamExt;
             let mut chunks=body.into_data_stream();
             while let Some(chunk)=chunks.next().await {
-                if lease.validate(&a.db.lock().unwrap()).is_err() || a.resource_lease("playback",&id).is_none() {
+                if lease.validate_media(&a).await.is_err() || a.resource_lease("playback",&id).is_none() {
                     Err(std::io::Error::other("Media access revoked"))?;
                 }
                 yield chunk.map_err(|_|std::io::Error::other("Media delivery failed"))?;
@@ -136,7 +138,7 @@ pub(super) async fn media(
     let (mime, bytes) =
         served.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Media not found or expired".into()))?;
     // Serving may await disk/process I/O; never return buffered bytes after revocation.
-    if lease.validate(&a.db.lock().unwrap()).is_err() {
+    if lease.validate_media(&a).await.is_err() {
         return Err(ApiError(
             StatusCode::NOT_FOUND,
             "Media not found or expired".into(),

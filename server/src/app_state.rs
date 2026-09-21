@@ -97,26 +97,19 @@ pub(crate) struct ResourceOwner {
     pub(crate) lease: ResourceLease,
     pub(crate) created: Instant,
 }
-pub(crate) fn can_access_profile(
-    principal: &auth::Principal,
-    db: &Connection,
-    profile: i64,
-) -> Result<bool, ApiError> {
-    match principal.require_profile(db, profile) {
-        Ok(()) => Ok(true),
-        Err(error) if error.0 == StatusCode::FORBIDDEN => Ok(false),
-        Err(error) => Err(error),
-    }
-}
 impl ResourceLease {
+    /// Full lease validation in one database round trip.
+    ///
+    /// Session and account liveness, the role/kind binding, profile
+    /// ownership and the kids policy revision were previously five separate
+    /// queries behind the process-wide mutex. They are fused here because
+    /// every hot path — request middleware, the shared playback worker
+    /// loop and each media chunk validation — pays for this call. Failure
+    /// precedence matches the previous step order: a scope failure reports
+    /// the auth middleware's `Unauthorized`, a policy revision change
+    /// reports `Profile policy changed`, and an unbound or mismatched
+    /// session reports an expired authorization.
     pub(crate) fn validate(&self, db: &Connection) -> Result<(), ApiError> {
-        self.principal.validate_scope(db)?;
-        if self.policy_revision != kids::revision(db, &self.principal)? {
-            return Err(ApiError(
-                StatusCode::FORBIDDEN,
-                "Profile policy changed".into(),
-            ));
-        }
         let denied = || {
             ApiError(
                 StatusCode::UNAUTHORIZED,
@@ -131,22 +124,44 @@ impl ResourceLease {
         }
         let auth::Principal::Account {
             account_id,
+            role,
             profile_id,
             ..
         } = &self.principal;
-        let active: bool = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id WHERE s.id=?1 AND a.id=?2 AND a.disabled=0 AND s.refresh_expires>?3 AND s.profile_id IS ?4 AND (?4 IS NULL OR EXISTS(SELECT 1 FROM profile_owners g WHERE g.account_id=a.id AND g.profile_id=?4)))",
-            params![session_id,account_id,util::now(),profile_id], |r| r.get(0),
-        ).map_err(db_error)?;
-        if !active {
-            return Err(denied());
+        let outcome: String = db
+            .query_row(
+                "SELECT CASE
+                    WHEN NOT EXISTS(SELECT 1 FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id
+                        WHERE s.id=?1 AND s.account_id=?2 AND s.profile_id IS ?3
+                          AND s.refresh_expires>?4 AND a.disabled=0
+                          AND ((?5='device' AND s.kind='device') OR (?5=a.role AND s.kind='browser')))
+                        THEN 'scope'
+                    WHEN NOT (?3 IS NULL OR EXISTS(SELECT 1 FROM profile_owners o JOIN profiles p ON p.id=o.profile_id
+                        WHERE o.account_id=?2 AND o.profile_id=?3 AND p.presentation_complete=1))
+                        THEN 'profile'
+                    WHEN COALESCE((SELECT revision FROM kids_profiles WHERE profile_id=?3),0) <> ?6
+                        THEN 'policy'
+                    ELSE 'ok' END",
+                params![
+                    session_id,
+                    account_id,
+                    profile_id,
+                    util::now(),
+                    role,
+                    self.policy_revision
+                ],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        match outcome.as_str() {
+            "ok" => Ok(()),
+            "policy" => Err(ApiError(
+                StatusCode::FORBIDDEN,
+                "Profile policy changed".into(),
+            )),
+            "profile" => Err(ApiError(StatusCode::FORBIDDEN, "Forbidden".into())),
+            _ => Err(ApiError(StatusCode::UNAUTHORIZED, "Unauthorized".into())),
         }
-        if let Some(profile_id) = profile_id {
-            if !can_access_profile(&self.principal, db, *profile_id)? {
-                return Err(denied());
-            }
-        }
-        Ok(())
     }
 }
 pub(crate) struct Job {
