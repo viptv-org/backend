@@ -11,7 +11,7 @@ pub(crate) fn forbidden() -> ApiError {
     ApiError(StatusCode::FORBIDDEN, "Forbidden".into())
 }
 pub(crate) fn auth_error(error: ApiError) -> Response {
-    let code = if error.1 == "Parent PIN required" {
+    let code = if error.1 == MSG_PARENT_REQUIRED {
         "parent_required"
     } else if error.1 == "Refresh token reuse detected" {
         "refresh_reuse"

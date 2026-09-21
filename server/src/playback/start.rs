@@ -58,7 +58,7 @@ impl PlaybackManager {
             // Distinct from a provider-connection limit: this is the server's own
             // session budget (VIPTV_MAX_SESSIONS), which needs the viewer to stop
             // something rather than to retry. It is reported as 503, not 429.
-            .map_err(|_| "Playback capacity reached".to_owned())?;
+            .map_err(|_| MSG_PLAYBACK_CAPACITY.to_owned())?;
         let permits = Arc::new(InputPermits {
             _playback: permit,
             _provider: provider_permit,

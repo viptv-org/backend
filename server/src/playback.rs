@@ -32,6 +32,7 @@ use hls::{
     HLS_SEGMENT_SECONDS, HLS_WINDOW_SECONDS,
 };
 use lease::{cleanup_orphans, constant_time_eq, header_block, input_args, InputPermits, Session};
+use crate::MSG_PLAYBACK_CAPACITY;
 #[cfg(test)]
 use probe::{probe_failure, ProbeFailure, LIVE_PROBE_CACHE_TTL, PROBE_CACHE_TTL};
 use probe::{probe_output, ProbeCacheEntry, ProbeChild};

@@ -295,7 +295,7 @@ pub(super) async fn prepare_family(
                 return Ok(response);
             }
             Ok(Err(error)) => {
-                let reason = if error == "Playback capacity reached" {
+                let reason = if error == MSG_PLAYBACK_CAPACITY {
                     busy += 1;
                     "connections_busy"
                 } else {

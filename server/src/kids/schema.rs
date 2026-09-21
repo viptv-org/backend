@@ -24,7 +24,7 @@ pub(super) fn forbidden() -> ApiError {
     )
 }
 pub(super) fn parent_required() -> ApiError {
-    ApiError(StatusCode::FORBIDDEN, "Parent PIN required".into())
+    ApiError(StatusCode::FORBIDDEN, MSG_PARENT_REQUIRED.into())
 }
 // One stored-PIN lookup; callers bind either a known account id or a nullable one.
 pub(super) fn stored_pin(

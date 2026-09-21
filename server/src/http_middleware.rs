@@ -108,7 +108,7 @@ pub(crate) async fn authorize_resources(
         {
             return Err(ApiError(
                 StatusCode::FORBIDDEN,
-                "Profile selection required".into(),
+                MSG_PROFILE_REQUIRED.into(),
             ));
         }
         match segments.as_slice() {

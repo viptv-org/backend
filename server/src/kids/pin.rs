@@ -84,7 +84,7 @@ async fn verify_pin(app: &App, pin: String) -> Result<String, ApiError> {
     if !valid || current.as_deref() != Some(snapshot.as_str()) {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
-            "Incorrect parent PIN".into(),
+            MSG_PARENT_PIN_INVALID.into(),
         ));
     }
     db.execute(

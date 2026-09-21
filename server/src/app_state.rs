@@ -13,6 +13,32 @@ pub(crate) async fn blocking<T: Send + 'static>(
 }
 #[derive(Debug)]
 pub struct ApiError(pub StatusCode, pub String);
+// Messages that control wire behavior. The playback engine reports plain
+// strings, so status codes and client error codes are derived by matching
+// these constants in exactly one place each; never compare a display
+// message inline.
+pub(crate) const MSG_PLAYBACK_CAPACITY: &str = "Playback capacity reached";
+pub(crate) const MSG_DELIVERY_REFUSED: &str =
+    "Playback could not start; try forced transcoding or another stream";
+pub(crate) const MSG_ENGINE_UNAVAILABLE: &str = "Playback engine unavailable";
+pub(crate) const MSG_PROBE_UNSAFE: &str = "Could not inspect source video safely; try another stream";
+pub(crate) const MSG_PROFILE_REQUIRED: &str = "Profile selection required";
+pub(crate) const MSG_PARENT_REQUIRED: &str = "Parent PIN required";
+pub(crate) const MSG_PARENT_PIN_INVALID: &str = "Incorrect parent PIN";
+pub(crate) const MSG_PROFILE_POLICY_CHANGED: &str = "Profile policy changed";
+impl ApiError {
+    /// Client-visible `error_code` for API responses. Only these four
+    /// conditions carry a code; everything else relies on the status.
+    pub(crate) fn api_error_code(&self) -> Option<&'static str> {
+        match self.1.as_str() {
+            MSG_PROFILE_REQUIRED => Some("profile_required"),
+            MSG_PARENT_REQUIRED => Some("parent_required"),
+            MSG_PARENT_PIN_INVALID => Some("parent_pin_invalid"),
+            MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
+            _ => None,
+        }
+    }
+}
 impl From<String> for ApiError {
     fn from(s: String) -> Self {
         // Interruption and capacity conditions are not client mistakes. Reporting
@@ -20,14 +46,12 @@ impl From<String> for ApiError {
         // capacity as 429 tells the viewer to retry something that will never
         // succeed until they stop a session.
         let status = match s.as_str() {
-            "Playback capacity reached" => StatusCode::SERVICE_UNAVAILABLE,
+            MSG_PLAYBACK_CAPACITY => StatusCode::SERVICE_UNAVAILABLE,
             // Delivery refusals say this client/server pair cannot deliver this
             // source; the request itself was well formed. A 400 invites the
             // client to retry with escalating transports (each re-preparing and
             // re-probing the source), so they are terminal 406s instead.
-            "Playback could not start; try forced transcoding or another stream"
-            | "Playback engine unavailable"
-            | "Could not inspect source video safely; try another stream" => {
+            MSG_DELIVERY_REFUSED | MSG_ENGINE_UNAVAILABLE | MSG_PROBE_UNSAFE => {
                 StatusCode::NOT_ACCEPTABLE
             }
             _ => StatusCode::BAD_REQUEST,
@@ -42,15 +66,8 @@ impl From<&str> for ApiError {
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let code = match self.1.as_str() {
-            "Profile selection required" => Some("profile_required"),
-            "Parent PIN required" => Some("parent_required"),
-            "Incorrect parent PIN" => Some("parent_pin_invalid"),
-            "Profile policy changed" => Some("profile_policy_changed"),
-            _ => None,
-        };
         let mut body = json!({"error":self.1});
-        if let Some(code) = code {
+        if let Some(code) = self.api_error_code() {
             body["error_code"] = json!(code);
         }
         (self.0, axum::Json(body)).into_response()
@@ -157,7 +174,7 @@ impl ResourceLease {
             "ok" => Ok(()),
             "policy" => Err(ApiError(
                 StatusCode::FORBIDDEN,
-                "Profile policy changed".into(),
+                MSG_PROFILE_POLICY_CHANGED.into(),
             )),
             "profile" => Err(ApiError(StatusCode::FORBIDDEN, "Forbidden".into())),
             _ => Err(ApiError(StatusCode::UNAUTHORIZED, "Unauthorized".into())),
@@ -248,10 +265,7 @@ impl App {
                 ..
             }
         ) {
-            return Err(ApiError(
-                StatusCode::FORBIDDEN,
-                "Profile selection required".into(),
-            ));
+            return Err(ApiError(StatusCode::FORBIDDEN, MSG_PROFILE_REQUIRED.into()));
         }
         self.request_lease().validate(db)
     }
