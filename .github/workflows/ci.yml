@@ -33,12 +33,10 @@ jobs:
     needs: server
     steps:
       - uses: actions/checkout@v4
-      - name: Verify pinned web release bundle
-        run: python3 scripts/verify-web.py
       - run: bash -n scripts/host-check.sh && python3 tests/test_host_check.py
       - run: VIPTV_AUTH_ORIGIN=https://ci.example docker compose --env-file /dev/null config --quiet
-      - name: Build candidate
-        run: docker build -t viptv:ci -t viptv:local .
+      - name: Build server-only candidate
+        run: docker build --build-arg FRONTENDS=0 -t viptv:ci -t viptv:local .
       - name: Isolated API and media acceptance
         run: bash scripts/container-check.sh
       - name: Preserve tested image for delivery

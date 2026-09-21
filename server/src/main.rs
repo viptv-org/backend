@@ -90,8 +90,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !args.is_empty() {
         return Err("unknown command".into());
     }
-    let dashboard = std::env::var_os("VIPTV_DASHBOARD_DIST").map(PathBuf::from);
-    let tv_dashboard = std::env::var_os("VIPTV_TV_DIST").map(PathBuf::from);
+    // Empty values disable the mounts: server-only images keep booting clean.
+    let dashboard = std::env::var_os("VIPTV_DASHBOARD_DIST")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let tv_dashboard = std::env::var_os("VIPTV_TV_DIST")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
     let bind = std::env::var("VIPTV_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("VIPTV server listening");

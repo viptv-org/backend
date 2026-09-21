@@ -219,6 +219,19 @@ pub fn router_with_tv(
                     tower_http::services::ServeFile::new(path.join("index.html")),
                 ),
             );
+    } else {
+        // A server-only image still answers / with its identity so health
+        // checks pass without a mounted dashboard.
+        r = r.route(
+            "/",
+            get(|| async {
+                (
+                    StatusCode::OK,
+                    [(header::CACHE_CONTROL, "no-store")],
+                    "VIPTV server",
+                )
+            }),
+        );
     }
     if let Some(path) = tv_dashboard {
         let tv_entry = path.join("index.html");

@@ -22,6 +22,7 @@ services:
       VIPTV_DATABASE: /data/viptv.sqlite
       VIPTV_MEDIA_DIR: /cache/hls
       VIPTV_DASHBOARD_DIST: /app/dashboard
+      VIPTV_TV_DIST: /app/tv
       VIPTV_MAX_SESSIONS: "${VIPTV_MAX_SESSIONS:-2}"
       VIPTV_SESSION_TTL: "${VIPTV_SESSION_TTL:-120}"
       VIPTV_DIRECT_PLAY: "${VIPTV_DIRECT_PLAY:-1}"

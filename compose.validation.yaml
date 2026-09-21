@@ -59,7 +59,8 @@ services:
       VIPTV_BIND: 0.0.0.0:8080
       VIPTV_DATABASE: /data/viptv.sqlite
       VIPTV_MEDIA_DIR: /cache/hls
-      VIPTV_DASHBOARD_DIST: /app/dashboard
+      VIPTV_DASHBOARD_DIST: ""
+      VIPTV_TV_DIST: ""
       VIPTV_FFMPEG: /usr/bin/ffmpeg
       VIPTV_FFPROBE: /usr/bin/ffprobe
       VIPTV_AUTH_ORIGIN: https://server:8080
