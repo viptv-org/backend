@@ -397,7 +397,7 @@ pub(super) async fn serve(
     id: &str,
     cap: &str,
     file: &str,
-) -> Option<Result<(String, Vec<u8>), String>> {
+) -> Option<Result<axum::response::Response, String>> {
     let group = a.shared_playback.group(id)?;
     let response = {
         let mut state = group.state.lock().unwrap();

@@ -1,4 +1,26 @@
 use super::*;
+use axum::http::header;
+use axum::response::IntoResponse;
+
+/// Streams a session media file in bounded chunks. Returning the concrete
+/// stream type pins the macro's error type to `std::io::Error`, which
+/// `Body::from_stream` accepts directly.
+fn file_stream(
+    file: tokio::fs::File,
+) -> impl futures::Stream<Item = Result<axum::body::Bytes, std::io::Error>> {
+    async_stream::try_stream! {
+        use tokio::io::AsyncReadExt;
+        let mut file = file;
+        let mut buffer = vec![0u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer).await?;
+            if read == 0 {
+                break;
+            }
+            yield axum::body::Bytes::copy_from_slice(&buffer[..read]);
+        }
+    }
+}
 
 impl PlaybackManager {
     pub async fn heartbeat(&self, id: &str) -> bool {
@@ -286,7 +308,7 @@ impl PlaybackManager {
         id: &str,
         capability: &str,
         file: &str,
-    ) -> Result<(String, Vec<u8>), String> {
+    ) -> Result<axum::response::Response, String> {
         let mime = media_type(file).ok_or_else(|| "Media not found".to_owned())?;
         let (path, stable_target_duration) = {
             let mut sessions = self.sessions.lock().await;
@@ -306,18 +328,40 @@ impl PlaybackManager {
         if !metadata.is_file() || metadata.len() > 32 * 1024 * 1024 {
             return Err("Media not found".into());
         }
-        let mut bytes = tokio::fs::read(path)
+        let length = metadata.len();
+        // Playlists and captions are rewritten (target duration, caption
+        // clock) so they are read fully; they are bounded and small.
+        if mime == "application/vnd.apple.mpegurl" || mime == "text/vtt" {
+            let mut bytes =
+                tokio::fs::read(&path).await.map_err(|_| "Media not found".to_owned())?;
+            if mime == "application/vnd.apple.mpegurl" && stable_target_duration {
+                bytes = stable_hls_target_duration(bytes);
+            }
+            if mime == "text/vtt" && bytes.starts_with(b"WEBVTT\n") {
+                // Caption-enabled MPEGTS uses copyts, so both renditions share clock0.
+                let mut mapped = b"WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0\n\n".to_vec();
+                mapped.extend_from_slice(&bytes[7..]);
+                bytes = mapped;
+            }
+            return Ok((
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                bytes,
+            )
+                .into_response());
+        }
+        // Segments and init data stream straight from disk: no whole-file
+        // buffer per request, while Content-Length stays authoritative.
+        let file = tokio::fs::File::open(&path)
             .await
             .map_err(|_| "Media not found".to_owned())?;
-        if mime == "application/vnd.apple.mpegurl" && stable_target_duration {
-            bytes = stable_hls_target_duration(bytes);
-        }
-        if mime == "text/vtt" && bytes.starts_with(b"WEBVTT\n") {
-            // Caption-enabled MPEGTS uses copyts, so both renditions share clock0.
-            let mut mapped = b"WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0\n\n".to_vec();
-            mapped.extend_from_slice(&bytes[7..]);
-            return Ok((mime.into(), mapped));
-        }
-        Ok((mime.into(), bytes))
+        axum::http::Response::builder()
+            .header(header::CONTENT_TYPE, mime)
+            .header(header::CACHE_CONTROL, "no-store")
+            .header(header::CONTENT_LENGTH, length)
+            .body(axum::body::Body::from_stream(file_stream(file)))
+            .map_err(|_| "Media not found".to_owned())
     }
 }

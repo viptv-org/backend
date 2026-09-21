@@ -135,23 +135,15 @@ pub(super) async fn media(
     } else {
         a.playback.serve(&id, &cap, &file).await
     };
-    let (mime, bytes) =
-        served.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Media not found or expired".into()))?;
-    // Serving may await disk/process I/O; never return buffered bytes after revocation.
+    // Serving may await disk/process I/O; never return media after revocation.
     if lease.validate_media(&a).await.is_err() {
         return Err(ApiError(
             StatusCode::NOT_FOUND,
             "Media not found or expired".into(),
         ));
     }
-    Ok((
-        [
-            (header::CONTENT_TYPE, mime),
-            (header::CACHE_CONTROL, "no-store".into()),
-        ],
-        bytes,
-    )
-        .into_response())
+    served
+        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "Media not found or expired".into()))
 }
 
 struct FamilyInputs {

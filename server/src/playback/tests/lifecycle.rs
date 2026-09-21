@@ -434,12 +434,18 @@ async fn capabilities_expiry_and_cleanup_are_enforced() {
         .serve("id", "capability", "../index.m3u8")
         .await
         .is_err());
-    let (mime, bytes) = manager
+    let served = manager
         .serve("id", "capability", "index.m3u8")
         .await
         .unwrap();
-    assert_eq!(mime, "application/vnd.apple.mpegurl");
-    assert_eq!(bytes, b"#EXTM3U\n");
+    assert_eq!(
+        served.headers().get(axum::http::header::CONTENT_TYPE).unwrap(),
+        "application/vnd.apple.mpegurl"
+    );
+    let bytes = axum::body::to_bytes(served.into_body(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(bytes.as_ref(), b"#EXTM3U\n");
     assert!(manager.heartbeat("id").await);
     manager.sessions.lock().await.get_mut("id").unwrap().touched =
         Instant::now() - Duration::from_secs(61);

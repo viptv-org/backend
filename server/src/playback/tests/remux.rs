@@ -104,20 +104,28 @@ async fn real_ffmpeg_remux_transcode_and_cleanup() {
         assert!(!response.live);
         assert!((5.0..=7.0).contains(&response.duration));
         let capability = response.url.split('/').nth(3).unwrap();
-        let (_, playlist) = manager
-            .serve(&response.id, capability, "index.m3u8")
-            .await
-            .unwrap();
-        let playlist = String::from_utf8(playlist).unwrap();
+        let playlist = axum::body::to_bytes(
+            manager
+                .serve(&response.id, capability, "index.m3u8")
+                .await
+                .unwrap()
+                .into_body(),
+            1024 * 1024,
+        )
+        .await
+        .unwrap();
+        let playlist = String::from_utf8(playlist.to_vec()).unwrap();
         let segment = playlist
             .lines()
             .find(|line| media_type(line) == Some("video/mp2t"))
             .unwrap();
-        assert!(!manager
+        let served_segment = manager
             .serve(&response.id, capability, segment)
             .await
+            .unwrap();
+        assert!(!axum::body::to_bytes(served_segment.into_body(), 64 * 1024 * 1024)
+            .await
             .unwrap()
-            .1
             .is_empty());
         let output = Command::new(&ffprobe)
             .args([
@@ -517,11 +525,17 @@ async fn compatible_video_is_copied_while_incompatible_audio_is_encoded() {
     );
     let capability = response.url.split('/').nth(3).unwrap();
     let served = String::from_utf8(
-        manager
-            .serve(&response.id, capability, "index.m3u8")
-            .await
-            .unwrap()
-            .1,
+        axum::body::to_bytes(
+            manager
+                .serve(&response.id, capability, "index.m3u8")
+                .await
+                .unwrap()
+                .into_body(),
+            1024 * 1024,
+        )
+        .await
+        .unwrap()
+        .to_vec(),
     )
     .unwrap();
     assert!(served.contains("#EXT-X-TARGETDURATION:2"), "{served}");

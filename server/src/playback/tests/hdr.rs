@@ -356,11 +356,14 @@ async fn real_common_format_conversion() {
             .unwrap();
         assert_eq!(response.mode, "transcode");
         let capability = response.url.split('/').nth(3).unwrap();
-        let (_, served_playlist) = manager
+        let served = manager
             .serve(&response.id, capability, "index.m3u8")
             .await
             .unwrap();
-        assert!(String::from_utf8(served_playlist)
+        let served_playlist = axum::body::to_bytes(served.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        assert!(String::from_utf8(served_playlist.to_vec())
             .unwrap()
             .contains("#EXT-X-TARGETDURATION:2"));
         let dir = root.path().join("media").join(&response.id);

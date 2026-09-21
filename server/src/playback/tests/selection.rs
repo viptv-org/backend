@@ -118,11 +118,20 @@ async fn real_audio_selection_accepts_tagged_and_unknown_languages() {
             }
         );
         let capability = response.url.split('/').nth(3).unwrap();
-        let (_, playlist) = manager
-            .serve(&response.id, capability, "index.m3u8")
+        let playlist = String::from_utf8(
+            axum::body::to_bytes(
+                manager
+                    .serve(&response.id, capability, "index.m3u8")
+                    .await
+                    .unwrap()
+                    .into_body(),
+                1024 * 1024,
+            )
             .await
-            .unwrap();
-        let playlist = String::from_utf8(playlist).unwrap();
+            .unwrap()
+            .to_vec(),
+        )
+        .unwrap();
         let segment = playlist
             .lines()
             .find(|line| media_type(line) == Some("video/mp2t"))
@@ -169,9 +178,15 @@ async fn real_text_subtitle_hls_selection_seek_and_sparse_startup() {
         expected_mime: &str,
     ) -> Vec<u8> {
         let file = path.rsplit('/').next().unwrap();
-        let (mime, bytes) = manager.serve(id, capability, file).await.unwrap();
-        assert_eq!(mime, expected_mime);
-        bytes
+        let served = manager.serve(id, capability, file).await.unwrap();
+        assert_eq!(
+            served.headers().get(axum::http::header::CONTENT_TYPE).unwrap(),
+            expected_mime
+        );
+        axum::body::to_bytes(served.into_body(), 64 * 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec()
     }
     let ffmpeg = PathBuf::from(std::env::var("VIPTV_TEST_FFMPEG").unwrap());
     let ffprobe = PathBuf::from(std::env::var("VIPTV_TEST_FFPROBE").unwrap());
