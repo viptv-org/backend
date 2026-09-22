@@ -16,8 +16,8 @@ pub struct ApiError(pub StatusCode, pub String);
 // Messages that control wire behavior. The playback engine reports plain
 // strings, so status codes and client error codes are derived by matching
 // these constants in exactly one place each; never compare a display
-// message inline.
-pub(crate) const MSG_PLAYBACK_CAPACITY: &str = "Playback capacity reached";
+// message inline. The capacity message is single-sourced in the engine.
+pub(crate) use crate::playback::MSG_PLAYBACK_CAPACITY;
 pub(crate) const MSG_DELIVERY_REFUSED: &str =
     "Playback could not start; try forced transcoding or another stream";
 pub(crate) const MSG_ENGINE_UNAVAILABLE: &str = "Playback engine unavailable";

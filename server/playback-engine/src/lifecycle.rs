@@ -84,13 +84,13 @@ impl PlaybackManager {
         )
     }
     /// Hand progress policy to the owned live supervisor; quota/TTL watchdogs remain active.
-    pub(crate) async fn supervise_live(&self, id: &str) {
+    pub async fn supervise_live(&self, id: &str) {
         if let Some(session) = self.sessions.lock().await.get_mut(id) {
             session.supervised_live = true;
         }
     }
     /// Completed media sequence, independent of client playback position or picture content.
-    pub(crate) async fn live_progress(&self, id: &str) -> Option<String> {
+    pub async fn live_progress(&self, id: &str) -> Option<String> {
         let (dir, direct) = {
             let sessions = self.sessions.lock().await;
             let session = sessions.get(id)?;
@@ -117,7 +117,7 @@ impl PlaybackManager {
     }
     /// A late on-demand viewer can reuse this origin only while its initial
     /// segments remain present in the bounded rolling playlist.
-    pub(crate) async fn timeline_origin_available(&self, id: &str) -> bool {
+    pub async fn timeline_origin_available(&self, id: &str) -> bool {
         let dir = match self.sessions.lock().await.get(id) {
             Some(s) => {
                 if s.direct.is_some() {
@@ -172,7 +172,7 @@ impl PlaybackManager {
     }
     /// Decode a bounded sample through ffprobe's frame decoder. The upstream
     /// response is piped once and capped independently of subprocess output.
-    pub(crate) async fn sample_media(
+    pub async fn sample_media(
         &self,
         url: String,
         provider: OwnedSemaphorePermit,
@@ -190,7 +190,7 @@ impl PlaybackManager {
             _playback: slot,
             _provider: Some(provider),
         });
-        let client = crate::provider::egress::builder(
+        let client = crate::egress_proxy_builder(
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(5))
                 .timeout(Duration::from_secs(limits.budget_seconds))
@@ -282,7 +282,7 @@ impl PlaybackManager {
             .stderr(Stdio::null());
         matches!(timeout(Duration::from_secs(3), cmd.status()).await, Ok(Ok(status)) if status.success())
     }
-    pub(crate) async fn serve_original(
+    pub async fn serve_original(
         &self,
         id: &str,
         capability: &str,

@@ -12,7 +12,7 @@ pub struct PlaybackManager {
     pub(super) qsv_ready: OnceCell<bool>,
     pub(super) cleanup_tasks: CleanupTasks,
 }
-pub(crate) struct SampleLimits {
+pub struct SampleLimits {
     pub seconds: u64,
     pub startup_seconds: u64,
     pub budget_seconds: u64,

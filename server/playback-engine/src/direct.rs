@@ -68,7 +68,7 @@ impl Direct {
     ) -> Result<Arc<Self>, String> {
         let mut public = HeaderMap::new();
         for (name, value) in headers {
-            if name.eq_ignore_ascii_case(crate::provider::egress::HEADER) {
+            if name.eq_ignore_ascii_case(crate::EGRESS_PROXY_HEADER) {
                 continue;
             }
             if [
@@ -89,13 +89,13 @@ impl Direct {
                 value.parse().map_err(|_| "Invalid media header")?,
             );
         }
-        let client = crate::provider::egress::builder(
+        let client = crate::egress_proxy_builder(
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(5))
                 .read_timeout(Duration::from_secs(10))
                 .redirect(reqwest::redirect::Policy::none()),
             headers
-                .get(crate::provider::egress::HEADER)
+                .get(crate::EGRESS_PROXY_HEADER)
                 .map(String::as_str),
         )?
         .build()
@@ -106,7 +106,7 @@ impl Direct {
             root: url,
             resources: Mutex::new(HashMap::new()),
             fetch: Arc::new(Semaphore::new(6)),
-            proxy: headers.get(crate::provider::egress::HEADER).cloned(),
+            proxy: headers.get(crate::EGRESS_PROXY_HEADER).cloned(),
             destinations: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
             playlists: Mutex::new(HashMap::new()),

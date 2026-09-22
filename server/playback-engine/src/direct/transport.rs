@@ -55,7 +55,7 @@ impl Direct {
             if self.closed.load(Ordering::Acquire) {
                 return Err("Media expired".into());
             }
-            crate::util::validate_url(url.as_str())?;
+            crate::validate_url(url.as_str())?;
             let client = self.destination_client(&url).await?;
             let mut headers = self.headers.clone();
             if url.origin() != self.root.origin() {

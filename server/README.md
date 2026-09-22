@@ -2,6 +2,8 @@
 
 Rust/Axum, SQLite, Xtream and Stremio-compatible addons, managed FFmpeg HLS. Requires Rust 1.88 or newer. Build with `cargo build --release --locked`; validate with `cargo test --locked`. Native build needs a C compiler for bundled SQLite. Runtime requires FFmpeg (libx264/AAC encoders) and ffprobe on PATH. No torrent engine or debrid credentials are implemented: non-HTTP streams return explicit unsupported-source errors while other sources continue.
 
+The managed playback engine lives in the `viptv-playback-engine` path-dependency crate (`playback-engine/`): an identity-free HLS engine — direct delivery, the managed ladder, probing and session leases — with no database or account dependencies. The server re-exports it as `playback::` so the internal namespace is unchanged, and the capability-capacity wire message is single-sourced in the engine. The egress proxy routing header (`x-viptv-egress-proxy`), URL validation and source display redaction are engine-local seams; a standalone media-gateway binary builds directly on this crate.
+
 ## Configuration
 
 | Variable | Default / purpose |

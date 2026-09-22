@@ -34,7 +34,7 @@ impl PlaybackManager {
         }
         // Never propagate parser/provider/subprocess errors: they may contain credentials.
         let validated =
-            crate::util::validate_url(&url).map_err(|_| "Invalid playback URL".to_owned())?;
+            crate::validate_url(&url).map_err(|_| "Invalid playback URL".to_owned())?;
         if !matches!(validated.scheme(), "http" | "https")
             || !validated.username().is_empty()
             || validated.password().is_some()

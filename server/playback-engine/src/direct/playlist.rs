@@ -89,7 +89,7 @@ fn resource(
         return Err("Unsupported HLS variables".into());
     }
     let url = base.join(raw).map_err(|_| "Invalid HLS resource")?;
-    crate::util::validate_url(url.as_str())?;
+    crate::validate_url(url.as_str())?;
     let hash = Sha256::digest(url.as_str().as_bytes());
     // Some native demuxers validate segment suffixes before inspecting bytes.
     // Preserve only a small safe extension, never the upstream filename/query.

@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.88"
 
 [dependencies]
+viptv-playback-engine = { path = "playback-engine" }
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }

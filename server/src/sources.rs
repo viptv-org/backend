@@ -119,52 +119,7 @@ impl App {
     }
 }
 
-pub(crate) fn source_display_text(
-    text: &str,
-    limit: usize,
-    url: &str,
-    headers: &HashMap<String, String>,
-) -> String {
-    let mut text = text.replace(url, "[link omitted]");
-    // Ordinary negotiation/client-identification values are display text too:
-    // e.g. Accept-Language: en must not erase en/eng or letters inside French.
-    // Origin/Referer links are handled by the URL redaction below.
-    for (_, value) in headers.iter().filter(|(key, value)| {
-        (key.eq_ignore_ascii_case("authorization") || key.eq_ignore_ascii_case("x-csrf-token"))
-            && !value.is_empty()
-    }) {
-        text = text.replace(value, "[private value omitted]");
-        if let Some((scheme, credential)) = value.split_once(' ') {
-            if (scheme.eq_ignore_ascii_case("bearer") || scheme.eq_ignore_ascii_case("basic"))
-                && !credential.is_empty()
-            {
-                text = text.replace(credential, "[private value omitted]");
-            }
-        }
-    }
-    let text = text
-        .lines()
-        .map(|line| {
-            line.split_whitespace()
-                .map(|word| {
-                    if word.contains("://") || word.to_ascii_lowercase().contains("magnet:") {
-                        "[link omitted]".to_owned()
-                    } else {
-                        word.chars().filter(|c| !c.is_control()).collect::<String>()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let text = text.trim();
-    let mut end = text.len().min(limit);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
-}
+use viptv_playback_engine::source_display_text;
 
 fn source_card(
     raw: &Value,
