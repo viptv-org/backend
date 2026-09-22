@@ -1,0 +1,12 @@
+{
+  "source": "viptv-org/core",
+  "revision": "8214882a4914f39eea461857d97eb986de4a2bb0",
+  "files": {
+    "Cargo.toml": "4d47743642d342a95c2548c743e46c01f293361c214d1390cd301c6d206b68d0",
+    "src/candidate.rs": "9df07c8a1c44545b29fb594b2254ed9460ac0fb49cf268fd9fc9dec56fffe883",
+    "src/discover.rs": "646009141d9855d3fce0b7c4ba1856e9030b3b0e7e91d88c8e86b4accef256bd",
+    "src/extras.rs": "29c13b160b2e502ab95bccab21458662cf44ce8b8e94ac188725bcdf81490351",
+    "src/lib.rs": "a1b3eea899a779e5105fa825465e65e80a9ba627575542187f6c880ce2dad88e",
+    "src/normalize.rs": "3f5f727b8864d02ac30c1b857c84ea737fe7b898ee390089fdf5f7fe683b1d2f"
+  }
+}

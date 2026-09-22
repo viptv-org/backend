@@ -22,6 +22,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: ../scripts/sync-provider.sh verify
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked -- --include-ignored --test-threads=2
