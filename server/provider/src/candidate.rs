@@ -7,7 +7,7 @@ use crate::normalize::{
 use serde_json::Value;
 use std::collections::HashSet;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Candidate {
     pub id: String,
     pub provider_id: i64,

@@ -10,7 +10,7 @@ description = "Pure Xtream/addon client logic shared between the VIPTV backend s
 default = ["extras", "candidate"]
 extras = []
 candidate = []
-discovery = []
+discovery = ["extras"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

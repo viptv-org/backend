@@ -18,7 +18,7 @@ pub struct DiscoveryRequest {
     pub extras: HashMap<String, String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DiscoveryPlan {
     pub endpoints: Vec<String>,
     pub pageable: bool,
