@@ -160,12 +160,12 @@ fn credential_path_segments_are_encoded() {
         username: "a/b".into(),
         password: "p?# /".into(),
     };
-    let url = media_url(&p, "movie", "12", "mkv").unwrap();
+    let url = media_url(&p.url, &p.username, &p.password, "movie", "12", "mkv").unwrap();
     assert_eq!(
         url,
         "https://example.com/prefix/movie/a%2Fb/p%3F%23%20%2F/12.mkv"
     );
-    assert!(media_url(&p, "movie", "../evil", "mp4").is_err());
+    assert!(media_url(&p.url, &p.username, &p.password, "movie", "../evil", "mp4").is_err());
     assert_eq!(extension(Some("../../evil")), "mp4");
 }
 #[test]

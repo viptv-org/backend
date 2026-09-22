@@ -21,7 +21,8 @@ pub(crate) use crate::playback::MSG_PLAYBACK_CAPACITY;
 pub(crate) const MSG_DELIVERY_REFUSED: &str =
     "Playback could not start; try forced transcoding or another stream";
 pub(crate) const MSG_ENGINE_UNAVAILABLE: &str = "Playback engine unavailable";
-pub(crate) const MSG_PROBE_UNSAFE: &str = "Could not inspect source video safely; try another stream";
+pub(crate) const MSG_PROBE_UNSAFE: &str =
+    "Could not inspect source video safely; try another stream";
 pub(crate) const MSG_PROFILE_REQUIRED: &str = "Profile selection required";
 pub(crate) const MSG_PARENT_REQUIRED: &str = "Parent PIN required";
 pub(crate) const MSG_PARENT_PIN_INVALID: &str = "Incorrect parent PIN";

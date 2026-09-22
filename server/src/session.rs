@@ -142,8 +142,7 @@ pub(super) async fn media(
             "Media not found or expired".into(),
         ));
     }
-    served
-        .map_err(|_| ApiError(StatusCode::NOT_FOUND, "Media not found or expired".into()))
+    served.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Media not found or expired".into()))
 }
 
 struct FamilyInputs {

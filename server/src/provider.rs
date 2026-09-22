@@ -1,6 +1,5 @@
 //! Xtream indexes are internal stream candidates, never discovery catalogs.
 //! Call `init` during database startup before constructing `ProviderService`.
-use base64::{engine::general_purpose::STANDARD, Engine};
 use futures::{stream, StreamExt};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
@@ -10,7 +9,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::Semaphore;
-use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 use url::Url;
 
 pub(crate) mod accounts;
@@ -35,7 +33,6 @@ use normalize::*;
 use service::*;
 
 const MAX_RESPONSE: usize = 64 * 1024 * 1024;
-const MAX_ITEMS: usize = 300_000;
 // Detail discovery is demand-driven, never a full-library metadata sync.
 const MAX_LAZY_DETAILS: usize = 8;
 

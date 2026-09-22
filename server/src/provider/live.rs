@@ -135,7 +135,17 @@ impl ProviderService {
 
     pub fn channel_source(&self, id: &str) -> Result<(String, i64), String> {
         let (provider, stream) = self.channel(id)?;
-        Ok((media_url(&provider, "live", &stream, "ts")?, provider.id))
+        Ok((
+            media_url(
+                &provider.url,
+                &provider.username,
+                &provider.password,
+                "live",
+                &stream,
+                "ts",
+            )?,
+            provider.id,
+        ))
     }
 
     pub fn family_candidate_source(
@@ -147,17 +157,44 @@ impl ProviderService {
             return Err("Candidate unavailable or requires verification".into());
         }
         let (provider, stream) = self.raw_channel(candidate)?;
-        Ok((media_url(&provider, "live", &stream, "ts")?, provider.id))
+        Ok((
+            media_url(
+                &provider.url,
+                &provider.username,
+                &provider.password,
+                "live",
+                &stream,
+                "ts",
+            )?,
+            provider.id,
+        ))
     }
 
     pub(crate) fn probe_source(&self, id: &str) -> Result<(String, i64), String> {
         let (provider, stream) = self.raw_channel(id)?;
-        Ok((media_url(&provider, "live", &stream, "ts")?, provider.id))
+        Ok((
+            media_url(
+                &provider.url,
+                &provider.username,
+                &provider.password,
+                "live",
+                &stream,
+                "ts",
+            )?,
+            provider.id,
+        ))
     }
 
     pub fn channel_url(&self, id: &str) -> Result<String, String> {
         let (provider, stream) = self.channel(id)?;
-        media_url(&provider, "live", &stream, "ts")
+        media_url(
+            &provider.url,
+            &provider.username,
+            &provider.password,
+            "live",
+            &stream,
+            "ts",
+        )
     }
 
     pub async fn guide(&self, channel_id: String) -> Result<Value, String> {

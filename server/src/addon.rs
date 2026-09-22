@@ -3,7 +3,7 @@ use futures::{stream, StreamExt};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -19,20 +19,12 @@ use discover::{enrich_episode_art, episode_art_url};
 #[cfg(test)]
 use extras::catalog_extra;
 pub use extras::supports;
-use extras::{
-    bounded_exact_text, bounded_text, catalog_extras, extra_name, CatalogExtra, MAX_EXTRA_OPTION,
-};
+#[cfg(test)]
+pub(super) use extras::MAX_EXTRA_OPTION;
+use extras::{bounded_exact_text, bounded_text, catalog_extras, CatalogExtra};
 
 type CachedResponses = Arc<Mutex<HashMap<String, (i64, Value, usize)>>>;
-pub struct DiscoverOptions {
-    pub kind: String,
-    pub catalog: Option<String>,
-    pub addon: Option<i64>,
-    pub skip: usize,
-    pub search: Option<String>,
-    pub genre: Option<String>,
-    pub extras: HashMap<String, String>,
-}
+pub use viptv_provider::discover::{DiscoveryPlan, DiscoveryRequest as DiscoverOptions};
 #[derive(Clone)]
 pub struct Addons {
     db: Arc<Mutex<Connection>>,
@@ -272,28 +264,6 @@ impl Addons {
         Ok(v)
     }
     pub fn endpoint(base: &str, parts: &[&str]) -> Result<String, String> {
-        let mut u = validate_url(base)?;
-        {
-            let mut path = u
-                .path_segments_mut()
-                .map_err(|_| "Invalid addon base URL")?;
-            path.pop();
-            for p in parts {
-                path.push(p);
-            }
-        }
-        Ok(u.to_string())
-    }
-    fn extra_endpoint(
-        base: &str,
-        kind: &str,
-        catalog: &str,
-        encoded_extras: &str,
-    ) -> Result<String, String> {
-        let mut url = validate_url(&Self::endpoint(base, &["catalog", kind, catalog])?)?;
-        // Values were encoded exactly once above. Unlike path_segments_mut.push,
-        // set_path preserves '%' escapes, while the fixed '&'/'=' delimiters remain intact.
-        url.set_path(&format!("{}/{}.json", url.path(), encoded_extras));
-        Ok(url.into())
+        viptv_provider::discover::addon_endpoint(base, parts)
     }
 }

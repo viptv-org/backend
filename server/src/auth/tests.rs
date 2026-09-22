@@ -484,7 +484,7 @@ fn configured_https_origin_is_pinned_without_forwarded_host_trust() {
         header::ORIGIN,
         HeaderValue::from_static("https://tv.example:8443"),
     );
-    assert!(check_origin(&h, &[pin.clone()]).is_ok());
+    assert!(check_origin(&h, std::slice::from_ref(&pin)).is_ok());
     assert!(check_origin(&h, &[]).is_err());
     h.insert(
         "x-forwarded-host",
@@ -495,7 +495,7 @@ fn configured_https_origin_is_pinned_without_forwarded_host_trust() {
         header::ORIGIN,
         HeaderValue::from_static("https://tv.example"),
     );
-    assert!(check_origin(&h, &[pin.clone()]).is_err());
+    assert!(check_origin(&h, std::slice::from_ref(&pin)).is_err());
     // Additional configured origins are accepted: a reverse-proxy hostname
     // serving the same bundle must not be rejected as cross-site.
     let mirror = parse_origin("https://watch.example").unwrap();

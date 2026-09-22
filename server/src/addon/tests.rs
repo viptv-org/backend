@@ -283,8 +283,13 @@ async fn bounded_search_and_raw_count_before_truncation() {
         0,
     );
     for i in 0..32 {
-        let endpoint =
-            Addons::extra_endpoint(base, "movie", &format!("c{i}"), "skip=0&search=x").unwrap();
+        let endpoint = viptv_provider::discover::addon_extra_endpoint(
+            base,
+            "movie",
+            &format!("c{i}"),
+            "skip=0&search=x",
+        )
+        .unwrap();
         let metas: Vec<_> = (0..210)
             .map(|j| json!({"id":format!("{i}-{j}"),"type":"movie"}))
             .collect();
@@ -302,7 +307,8 @@ async fn bounded_search_and_raw_count_before_truncation() {
     assert_eq!(search["metas"][0]["id"], "0-0");
     assert_eq!(search["metas"][199]["id"], "0-199");
     assert_eq!(search["has_more"], false);
-    let endpoint = Addons::extra_endpoint(base, "movie", "c0", "skip=0").unwrap();
+    let endpoint =
+        viptv_provider::discover::addon_extra_endpoint(base, "movie", "c0", "skip=0").unwrap();
     let metas: Vec<_> = (0..250).map(|j| json!({"id":j,"type":"movie"})).collect();
     addons
         .cache
@@ -395,8 +401,13 @@ async fn genre_discover_requires_advertisement_validates_options_and_encodes_pat
         }),
         0,
     );
-    let endpoint =
-        Addons::extra_endpoint(base, "movie", "discover", "skip=0&genre=Family+%26+Kids").unwrap();
+    let endpoint = viptv_provider::discover::addon_extra_endpoint(
+        base,
+        "movie",
+        "discover",
+        "skip=0&genre=Family+%26+Kids",
+    )
+    .unwrap();
     addons.cache.lock().unwrap().insert(
         endpoint,
         (
@@ -564,7 +575,7 @@ async fn custom_catalog_types_options_and_explicit_search_pages_work() {
     let catalogs = addons.catalogs().unwrap();
     assert_eq!(catalogs[2]["genres"].as_array().unwrap().len(), 186);
     assert_eq!(catalogs[2]["extra"][0]["default"], "Language 100");
-    let endpoint = Addons::extra_endpoint(
+    let endpoint = viptv_provider::discover::addon_extra_endpoint(
         base,
         "anime.series",
         "search.anime",
@@ -602,7 +613,7 @@ async fn custom_catalog_types_options_and_explicit_search_pages_work() {
         genre: None,
         extras,
     };
-    let endpoint = Addons::extra_endpoint(
+    let endpoint = viptv_provider::discover::addon_extra_endpoint(
         base,
         "series",
         "calendar",

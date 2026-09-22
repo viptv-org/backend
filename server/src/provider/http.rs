@@ -26,7 +26,7 @@ impl ProviderService {
         let kind = action_kind(action);
         self.blocking(move |s| s.provider_for_kind(id, kind))
             .await?;
-        let mut url = endpoint(provider, "player_api.php")?;
+        let mut url = endpoint(&provider.url, "player_api.php")?;
         url.query_pairs_mut()
             .append_pair("username", &provider.username)
             .append_pair("password", &provider.password)

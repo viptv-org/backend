@@ -106,10 +106,7 @@ pub(crate) async fn authorize_resources(
                 }
             )
         {
-            return Err(ApiError(
-                StatusCode::FORBIDDEN,
-                MSG_PROFILE_REQUIRED.into(),
-            ));
+            return Err(ApiError(StatusCode::FORBIDDEN, MSG_PROFILE_REQUIRED.into()));
         }
         match segments.as_slice() {
             ["providers", ..]

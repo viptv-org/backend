@@ -174,9 +174,7 @@ async fn run(mut a: App, g: Arc<Group>, key: String, v: PlaybackRequest) {
                 break;
             }
             Ok(Err(error)) => {
-                if lease.validate_media(&a).await.is_err()
-                    && active_lease(&a, &g).await.is_some()
-                {
+                if lease.validate_media(&a).await.is_err() && active_lease(&a, &g).await.is_some() {
                     continue;
                 }
                 result = Some(Err(error));

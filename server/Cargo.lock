@@ -1828,6 +1828,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "viptv-provider"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "unicode-normalization",
+ "url",
+]
+
+[[package]]
 name = "viptv-server"
 version = "0.1.0"
 dependencies = [
@@ -1857,6 +1868,7 @@ dependencies = [
  "url",
  "uuid",
  "viptv-playback-engine",
+ "viptv-provider",
 ]
 
 [[package]]

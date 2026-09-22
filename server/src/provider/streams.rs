@@ -37,7 +37,7 @@ impl ProviderService {
             publish(
                 format!("iptv:{}", provider.id),
                 Ok(vec![
-                    json!({"url":media_url(&provider,"live",&stream,"ts")?,"name":provider.name,"source":format!("iptv:{}",provider.id)}),
+                    json!({"url":media_url(&provider.url,&provider.username,&provider.password,"live",&stream,"ts")?,"name":provider.name,"source":format!("iptv:{}",provider.id)}),
                 ]),
             );
             return Ok(());
