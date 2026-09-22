@@ -16,7 +16,7 @@ The host `.env` must be owner-readable only and contain the public origins:
 # are extra accepted browser origins, e.g. a reverse-proxy hostname that
 # serves the same bundle against this backend (no Host/Origin rewriting needed).
 VIPTV_AUTH_ORIGIN=https://viptv.syek.tech
-VIPTV_PUBLISH_IP=192.168.88.180
+VIPTV_PUBLISH_IP=<server-lan-ip>
 VIPTV_PORT=8080
 VIPTV_MAX_SESSIONS=2
 VIPTV_SESSION_TTL=120
