@@ -2,6 +2,7 @@
 name = "viptv-playback-engine"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-2.0-only"
 description = "Managed, capability-addressed HLS playback engine: direct delivery, the managed ladder, probing and session leases. No database, no identity, no accounts."
 
 [dev-dependencies]
