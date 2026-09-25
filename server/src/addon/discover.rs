@@ -4,6 +4,15 @@ use super::*;
 // crate; this module keeps the network fetch, cache, and episode-art merging.
 pub(super) use viptv_provider::discover::{enrich_episode_art, episode_art_url};
 
+fn needs_episode_art(meta: &Value) -> bool {
+    meta["videos"].as_array().is_some_and(|videos| {
+        videos.iter().take(2000).any(|video| {
+            let image = video["thumbnail"].as_str().unwrap_or("");
+            image.is_empty() || image.contains("episodes.metahub.space")
+        })
+    })
+}
+
 impl Addons {
     /// Browse the first applicable enabled catalog in installation order, or
     /// aggregate a single bounded search across at most 32 matching catalogs.
@@ -66,9 +75,12 @@ impl Addons {
                         // Alternate addons may have working stills where the preferred
                         // metadata uses broken generated URLs. Keep playback identities.
                         let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
-                        while let Ok(Some(next)) =
-                            tokio::time::timeout_at(deadline, results.next()).await
-                        {
+                        while needs_episode_art(&primary["meta"]) {
+                            let Ok(Some(next)) =
+                                tokio::time::timeout_at(deadline, results.next()).await
+                            else {
+                                break;
+                            };
                             if let Ok(other) = next {
                                 enrich_episode_art(&mut primary["meta"], &other["meta"]);
                             }

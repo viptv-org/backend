@@ -4,7 +4,7 @@ use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     time::Duration,
 };
 use tokio::sync::Semaphore;
@@ -24,12 +24,14 @@ pub(super) use extras::MAX_EXTRA_OPTION;
 use extras::{bounded_exact_text, bounded_text, catalog_extras, CatalogExtra};
 
 type CachedResponses = Arc<Mutex<HashMap<String, (i64, Value, usize)>>>;
+type FetchFlight = tokio::sync::OnceCell<Result<Value, String>>;
 pub use viptv_provider::discover::{DiscoveryPlan, DiscoveryRequest as DiscoverOptions};
 #[derive(Clone)]
 pub struct Addons {
     db: Arc<Mutex<Connection>>,
     client: reqwest::Client,
     cache: CachedResponses,
+    flights: Arc<Mutex<HashMap<String, Weak<FetchFlight>>>>,
     gate: Arc<Semaphore>,
     account_id: i64,
 }
@@ -88,6 +90,7 @@ impl Addons {
             db,
             client,
             cache: Default::default(),
+            flights: Default::default(),
             gate: Arc::new(Semaphore::new(12)),
             account_id: 0,
         })
@@ -248,17 +251,53 @@ impl Addons {
                 return Ok(v.clone());
             }
         }
+        // Share identical in-flight requests before taking an upstream slot.
+        // Weak entries disappear when all waiters cancel; OnceCell lets another
+        // waiter take over if the initializing request is cancelled.
+        let flight = {
+            let mut flights = self.flights.lock().unwrap();
+            flights.retain(|_, flight| flight.strong_count() > 0);
+            match flights.get(url).and_then(Weak::upgrade) {
+                Some(flight) => flight,
+                None => {
+                    let flight = Arc::new(FetchFlight::new());
+                    flights.insert(url.into(), Arc::downgrade(&flight));
+                    flight
+                }
+            }
+        };
+        flight
+            .get_or_init(|| self.fetch_uncached(url, ttl))
+            .await
+            .clone()
+    }
+    async fn fetch_uncached(&self, url: &str, ttl: i64) -> Result<Value, String> {
         let _permit = self.gate.acquire().await.map_err(|_| "Service stopping")?;
+        // A previous flight may have populated the cache while this request
+        // waited for a slot (or between its initial lookup and flight creation).
+        if let Some((expiry, value, _)) = self.cache.lock().unwrap().get(url) {
+            if *expiry > now() {
+                return Ok(value.clone());
+            }
+        }
         let v = tokio::time::timeout(Duration::from_secs(25), json_get(&self.client, url))
             .await
             .map_err(|_| "Upstream timed out")??;
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|_, (e, _, _)| *e > now());
         let size = v.to_string().len();
-        if cache.len() >= 256
-            || cache.values().map(|(_, _, size)| *size).sum::<usize>() + size > 64 * 1024 * 1024
-        {
-            cache.clear();
+        let mut bytes = cache.values().map(|(_, _, size)| *size).sum::<usize>();
+        while cache.len() >= 256 || bytes + size > 64 * 1024 * 1024 {
+            let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, (expiry, _, _))| *expiry)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some((_, _, removed)) = cache.remove(&oldest) {
+                bytes -= removed;
+            }
         }
         cache.insert(url.into(), (now() + ttl, v.clone(), size));
         Ok(v)

@@ -52,6 +52,107 @@ fn test_addons() -> Addons {
     addons.delete(1).unwrap();
     addons
 }
+
+#[tokio::test]
+async fn concurrent_fetches_share_upstream_and_recover_after_cancellation() {
+    use axum::{routing::get, Router};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = hits.clone();
+    let mock = Router::new().route(
+        "/slow",
+        get(move || {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                axum::Json(json!({"metas": [{"id": "shared"}]}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/slow", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let addons = test_addons();
+    let responses = futures::future::join_all((0..16).map(|_| addons.fetch(&url, 300))).await;
+    assert!(responses
+        .iter()
+        .all(|value| value.as_ref().unwrap()["metas"][0]["id"] == "shared"));
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    addons.cache.lock().unwrap().clear();
+    let owner = addons.clone();
+    let pending_url = url.clone();
+    let pending = tokio::spawn(async move { owner.fetch(&pending_url, 300).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while hits.load(Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    pending.abort();
+    let _ = pending.await;
+    let recovered = tokio::time::timeout(Duration::from_secs(2), addons.fetch(&url, 300))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered["metas"][0]["id"], "shared");
+    assert_eq!(hits.load(Ordering::SeqCst), 3);
+    server.abort();
+}
+
+#[tokio::test]
+async fn complete_episode_art_does_not_wait_for_slow_secondary_metadata() {
+    use axum::{routing::get, Router};
+    let response = json!({"meta": {"id": "tt-series", "type": "series", "name": "Series", "videos": [{"id": "tt-series:1:1", "season": 1, "episode": 1, "thumbnail": "https://image.tmdb.org/t/p/w500/episode.jpg"}]}});
+    let mock = Router::new()
+        .route(
+            "/primary/meta/series/tt-series.json",
+            get(move || {
+                let response = response.clone();
+                async move { axum::Json(response) }
+            }),
+        )
+        .route(
+            "/secondary/meta/series/tt-series.json",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                axum::Json(json!({"meta": {}}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let addons = test_addons();
+    let manifest = json!({"resources": ["meta"], "types": ["series"]});
+    insert(
+        &addons,
+        "Primary",
+        &format!("http://{host}/primary/manifest.json"),
+        manifest.clone(),
+        0,
+    );
+    insert(
+        &addons,
+        "Secondary",
+        &format!("http://{host}/secondary/manifest.json"),
+        manifest,
+        1,
+    );
+    let result = tokio::time::timeout(
+        Duration::from_millis(500),
+        addons.meta("series", "tt-series"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(result["meta"]["id"], "tt-series");
+    assert!(result["meta"]["videos"][0]["thumbnail"]
+        .as_str()
+        .unwrap()
+        .contains("wsrv.nl"));
+    server.abort();
+}
 fn insert(addons: &Addons, name: &str, url: &str, manifest: Value, priority: i64) -> i64 {
     let db = addons.db.lock().unwrap();
     db.execute(
