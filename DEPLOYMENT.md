@@ -42,6 +42,16 @@ For a genuinely new database, create the owner offline with `viptv-server create
 
 Never publish database copies, cookies, passwords, recovery codes, device tokens, provider URLs/credentials, addon installation URLs, or secret-bearing logs.
 
+## Verified native playback rollout — 2026-09-26
+
+Backend `d715195aa16df7f9fd52f50e4f6d045e077449d9` and TV-web `f620993` were built together and promoted as image `sha256:5ab7ca9a28541086fd3a45302c8a2496dedc683a281305b2e73487e8ed29894a`. The running container's exact image and healthy public API were verified. Both `/tv/` and the viewing hostname serve `index-C6qjErCC.js`; all entry script/style requests returned the correct content types. The deployed viewing app reached its native account sign-in screen in a browser.
+
+Acceptance included 208 server tests, strict Clippy, 61 engine unit tests, 14 real-FFmpeg tests, isolated image acceptance and actual server Quick Sync decoding/output checks. A candidate started against an online read-only backup of production; profile, account ownership, favorites, progress, provider, addon and migration rows were identical before/after. A fresh protected online backup and zero-session check preceded replacement; the same data comparisons passed afterwards. The original image, environment and backups remain private rollback material.
+
+The first replacement encountered the host WARP service's existing D-Bus stale-PID restart loop and restored the prior backend image. Giving that service an ephemeral `/run` fixed the loop while retaining its registration volume. The egress sidecar was recovered separately; the successful backend retry preserved that sidecar and the original routing. The viewing bundle was staged from the exact image with its `/tv/` paths, retaining the existing nginx API Host/Origin rewrites.
+
+The native credential-login endpoint is live and validates requests. An authenticated production live-channel launch returned direct mode in 49 ms, followed by successful lease release; this measures API launch, not time to first decoded frame. Native password login, direct decoding/seeking, source headers, loading/cancellation and player lifetime were separately verified on the isolated Android emulator. No new physical Roku, Tizen/Vizio, phone HDR/DRM, or universal provider qualification is claimed.
+
 ## Rollback
 
 Do not run an older binary against a migrated database unless compatibility is proven. If rollback is required:
