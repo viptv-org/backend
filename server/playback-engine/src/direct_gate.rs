@@ -58,12 +58,7 @@ fn direct_file_format(
     audio: Option<&ProbeStream>,
 ) -> Option<&'static str> {
     if caps.direct_files != Some(true)
-        || probe
-            .streams
-            .iter()
-            .filter(|s| s.codec_type.as_deref() == Some("video"))
-            .count()
-            != 1
+        || probe.streams.iter().filter(|s| s.is_video()).count() != 1
         || probe.interlaced()
     {
         return None;
@@ -141,12 +136,7 @@ pub(super) fn direct_format(
         .filter(|s| s.codec_type.as_deref() == Some("audio"))
         .count()
         > 1
-        || probe
-            .streams
-            .iter()
-            .filter(|s| s.codec_type.as_deref() == Some("video"))
-            .count()
-            != 1
+        || probe.streams.iter().filter(|s| s.is_video()).count() != 1
         || !probe.compatible_audio_stream(audio)
     {
         return None;

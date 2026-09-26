@@ -185,6 +185,7 @@ pub(crate) fn public(path: &str, method: &Method) -> bool {
                 path,
                 "/auth/register"
                     | "/auth/login"
+                    | "/auth/device/login"
                     | "/auth/refresh"
                     | "/auth/recover"
                     | "/auth/device/code"
@@ -250,6 +251,7 @@ pub fn router() -> Router<App> {
         "recover",
         "logout",
         "profile",
+        "device/login",
         "device/code",
         "device/lookup",
         "device/approve",

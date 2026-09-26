@@ -10,6 +10,8 @@ pub struct PlaybackManager {
     pub(super) filters: OnceCell<HashSet<String>>,
     pub(super) qsv_device: Option<PathBuf>,
     pub(super) qsv_ready: OnceCell<bool>,
+    pub(super) vaapi_device: Option<PathBuf>,
+    pub(super) vaapi_ready: OnceCell<hardware::Vaapi>,
     pub(super) cleanup_tasks: CleanupTasks,
 }
 pub struct SampleLimits {
@@ -25,6 +27,17 @@ impl PlaybackManager {
     }
 
     pub fn new_with_qsv(config: Config, qsv_device: Option<PathBuf>) -> Arc<Self> {
+        Self::new_with_hardware(config, qsv_device, None)
+    }
+
+    /// `vaapi_device` enables VAAPI transcoding (any vendor). A Quick Sync
+    /// device alone is also checked for VAAPI HDR tone mapping, since it is
+    /// the same render node.
+    pub fn new_with_hardware(
+        config: Config,
+        qsv_device: Option<PathBuf>,
+        vaapi_device: Option<PathBuf>,
+    ) -> Arc<Self> {
         let interval = config
             .ttl
             .min(Duration::from_secs(1))
@@ -39,13 +52,15 @@ impl PlaybackManager {
             filters: OnceCell::new(),
             qsv_device,
             qsv_ready: OnceCell::new(),
+            vaapi_device,
+            vaapi_ready: OnceCell::new(),
             cleanup_tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
         let weak = Arc::downgrade(&manager);
         tokio::spawn(async move {
             if let Some(manager) = weak.upgrade() {
                 let _lifecycle = manager.lifecycle.read().await;
-                let _ = manager.qsv_available().await;
+                let _ = manager.accel().await;
                 if manager.initialize().await.is_err() {
                     tracing::warn!("Playback startup cleanup could not finish");
                 }
@@ -56,7 +71,38 @@ impl PlaybackManager {
                 manager.reap().await;
             }
         });
+        // Separate from the reaper: how far an encoder overshoots its pause
+        // point is bounded by how often it is checked, not by the session TTL.
+        let weak = Arc::downgrade(&manager);
+        tokio::spawn(async move {
+            loop {
+                sleep(HLS_THROTTLE_TICK).await;
+                let Some(manager) = weak.upgrade() else { break };
+                manager.throttle().await;
+            }
+        });
         manager
+    }
+
+    /// Suspend on-demand encoders that ran too far ahead of their viewers and
+    /// resume them as the viewers catch up.
+    pub(super) async fn throttle(&self) {
+        let _lifecycle = self.lifecycle.read().await;
+        let mut sessions = self.sessions.lock().await;
+        for session in sessions.values_mut() {
+            if !session.throttle.enabled {
+                continue;
+            }
+            let Some(child) = session.child.as_mut() else {
+                continue;
+            };
+            if !matches!(child.try_wait(), Ok(None)) {
+                continue;
+            }
+            if let Some(newest) = newest_segment(&session.dir).await {
+                session.throttle.apply(child, newest);
+            }
+        }
     }
 
     pub(super) async fn initialize(&self) -> Result<(), String> {
@@ -79,15 +125,63 @@ impl PlaybackManager {
             })
             .await
     }
+    /// The device the VAAPI pipelines open: the explicit VAAPI device, else the
+    /// Quick Sync render node (checked for VPP tone mapping only).
+    pub(super) fn vaapi_path(&self) -> Option<&PathBuf> {
+        self.vaapi_device.as_ref().or(self.qsv_device.as_ref())
+    }
+
+    pub(super) async fn vaapi_available(&self) -> hardware::Vaapi {
+        *self
+            .vaapi_ready
+            .get_or_init(|| async {
+                let Some(device) = self.vaapi_path() else {
+                    return hardware::Vaapi::default();
+                };
+                let ready =
+                    hardware::vaapi(&self.config.ffmpeg, device, self.vaapi_device.is_some()).await;
+                tracing::info!(
+                    encode = ready.encode,
+                    tonemap = ready.tonemap,
+                    placebo = ready.placebo,
+                    "VAAPI startup check"
+                );
+                ready
+            })
+            .await
+    }
+
+    pub(super) async fn accel(&self) -> hardware::Accel {
+        hardware::Accel {
+            qsv: self.qsv_available().await,
+            vaapi: self.vaapi_available().await,
+        }
+    }
+
     pub fn acceleration_status(&self) -> &'static str {
-        if self.qsv_device.is_none() {
-            "software"
-        } else {
-            match self.qsv_ready.get() {
-                Some(true) => "qsv",
-                Some(false) => "software_fallback",
-                None => "checking",
-            }
+        if self.qsv_device.is_none() && self.vaapi_device.is_none() {
+            return "software";
+        }
+        match (self.qsv_ready.get(), self.vaapi_ready.get()) {
+            (Some(true), _) => "qsv",
+            (_, Some(vaapi)) if vaapi.encode => "vaapi",
+            (None, _) if self.qsv_device.is_some() => "checking",
+            (_, None) if self.vaapi_device.is_some() => "checking",
+            _ => "software_fallback",
+        }
+    }
+
+    /// Where HDR10/HLG sources are tone mapped: the Intel VPP, Vulkan
+    /// (libplacebo), or the CPU.
+    pub fn tone_mapping_status(&self) -> &'static str {
+        if self.vaapi_path().is_none() {
+            return "software";
+        }
+        match self.vaapi_ready.get() {
+            None => "checking",
+            Some(vaapi) if vaapi.tonemap => "vaapi",
+            Some(vaapi) if vaapi.placebo => "libplacebo",
+            Some(_) => "software",
         }
     }
 
@@ -162,6 +256,9 @@ impl PlaybackManager {
                     Some(Err(_)) => (false, true),
                     None => (false, false),
                 };
+                // A suspended encoder is idle by design, not stalled.
+                let require_progress =
+                    running && !session.supervised_live && !session.throttle.holding();
                 if session.touched.elapsed() >= self.config.ttl
                     || failed
                     || (session.direct.is_none()
@@ -169,7 +266,7 @@ impl PlaybackManager {
                         // and no encoder: only its TTL retires it, and every
                         // heartbeat renews that TTL.
                         && !session.dir.as_os_str().is_empty()
-                        && !cache_safe(&session.dir, running && !session.supervised_live).await)
+                        && !cache_safe(&session.dir, require_progress).await)
                 {
                     ids.push(id.clone());
                 }

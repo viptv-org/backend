@@ -7,6 +7,8 @@ mod probe;
 mod recovery;
 mod remux;
 mod selection;
+mod throttle;
+mod vaapi;
 
 #[cfg(unix)]
 fn scripted_probe(root: &std::path::Path, body: &str) -> Arc<PlaybackManager> {

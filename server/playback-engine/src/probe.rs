@@ -283,7 +283,7 @@ impl PlaybackManager {
         let entries = if reduced {
             "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,channels,avg_frame_rate,color_transfer"
         } else {
-            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,profile,level,channels,avg_frame_rate,r_frame_rate,color_transfer,field_order:stream_tags=language,title:stream_disposition=default,comment,hearing_impaired,visual_impaired,forced"
+            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,profile,level,channels,avg_frame_rate,r_frame_rate,color_transfer,field_order:stream_tags=language,title:stream_disposition=default,comment,hearing_impaired,visual_impaired,forced,attached_pic"
         };
         cmd.args([
             "-analyzeduration",

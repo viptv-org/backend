@@ -33,8 +33,7 @@ impl PlaybackManager {
             return Err("Playback is shutting down".into());
         }
         // Never propagate parser/provider/subprocess errors: they may contain credentials.
-        let validated =
-            crate::validate_url(&url).map_err(|_| "Invalid playback URL".to_owned())?;
+        let validated = crate::validate_url(&url).map_err(|_| "Invalid playback URL".to_owned())?;
         if !matches!(validated.scheme(), "http" | "https")
             || !validated.username().is_empty()
             || validated.password().is_some()
@@ -47,6 +46,73 @@ impl PlaybackManager {
         }
         let header_block = header_block(&headers)?;
         let caps = capabilities.unwrap_or_default();
+        // Native players inspect and decode the original source themselves.
+        // Do not reserve an FFmpeg worker or delay them behind a server probe.
+        if caps.direct_urls == Some(true) {
+            if force {
+                return Err("Native direct playback cannot request transcoding".into());
+            }
+            let permit = self
+                .slots
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| MSG_PLAYBACK_CAPACITY.to_owned())?;
+            let permits = Arc::new(InputPermits {
+                _playback: permit,
+                _provider: provider_permit,
+            });
+            let format = match validated
+                .path()
+                .rsplit('.')
+                .next()
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("m3u8") => "hls",
+                Some("mpd") => "dash",
+                _ => "file",
+            };
+            let id = Uuid::new_v4().to_string();
+            let response = PlaybackResponse {
+                id: id.clone(),
+                url: validated.as_str().to_owned(),
+                format: format.into(),
+                mode: "direct".into(),
+                video_mode: "copy".into(),
+                audio_mode: "copy".into(),
+                position,
+                live,
+                duration: 0.0,
+                audio_tracks: Vec::new(),
+                subtitle_tracks: Vec::new(),
+                subtitles_supported: false,
+                selected_audio: None,
+                selected_subtitle: None,
+                authorization: source_authorization(&headers),
+            };
+            self.sessions.lock().await.insert(
+                id,
+                Session {
+                    _source_probe: None,
+                    direct: None,
+                    capability: format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
+                    dir: PathBuf::new(),
+                    child: None,
+                    touched: Instant::now(),
+                    stable_target_duration: false,
+                    supervised_live: false,
+                    throttle: Throttle::default(),
+                    permits,
+                    cleanup_tasks: self.cleanup_tasks.clone(),
+                },
+            );
+            tracing::info!(
+                mode = "direct",
+                format,
+                "Native playback prepared without server processing"
+            );
+            return Ok(response);
+        }
         let (width, height) = dimensions(&caps)?;
         if !caps.h264 || !caps.aac {
             return Err("H264 and AAC playback support is required".into());
@@ -156,69 +222,6 @@ impl PlaybackManager {
         {
             return Err("Playback position is past the end of this source".into());
         }
-        // A native client that fetches sources itself receives the original URL
-        // with the server's upstream authorization. Its own decoders decide
-        // playability: this server never proxies, transcodes, or applies codec
-        // policy for such a client.
-        if !force && caps.direct_urls == Some(true) {
-            let format = if live {
-                "hls"
-            } else {
-                probe
-                    .format
-                    .get("format_name")
-                    .and_then(|name| name.as_str())
-                    .and_then(direct_file_extension)
-                    .unwrap_or("file")
-            };
-            let authorization = source_authorization(&headers);
-            let id = Uuid::new_v4().to_string();
-            let capability = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-            let response = PlaybackResponse {
-                id: id.clone(),
-                url: validated.as_str().to_owned(),
-                format: format.into(),
-                mode: "direct".into(),
-                video_mode: "copy".into(),
-                audio_mode: "copy".into(),
-                position,
-                live,
-                duration: if live {
-                    0.0
-                } else {
-                    probe.duration().unwrap_or(0.0)
-                },
-                audio_tracks,
-                subtitles_supported: subtitle_tracks.iter().any(|track| track.supported),
-                subtitle_tracks,
-                selected_audio,
-                selected_subtitle,
-                authorization,
-            };
-            self.sessions.lock().await.insert(
-                id,
-                Session {
-                    _source_probe: (!live).then(|| probe.clone()),
-                    direct: None,
-                    capability,
-                    dir: PathBuf::new(),
-                    child: None,
-                    touched: Instant::now(),
-                    stable_target_duration: false,
-                    supervised_live: false,
-                    permits,
-                    cleanup_tasks: self.cleanup_tasks.clone(),
-                },
-            );
-            tracing::info!(
-                mode = "direct",
-                format,
-                probe_ms,
-                "Playback preparation completed"
-            );
-            return Ok(response);
-        }
-
         // Original delivery is opt-in, uses inspected tracks, and keeps the
         // provider reservation owned by this session and in-flight reads.
         if !force && caps.direct_play && std::env::var("VIPTV_DIRECT_PLAY").as_deref() != Ok("0") {
@@ -276,6 +279,7 @@ impl PlaybackManager {
                             touched: Instant::now(),
                             stable_target_duration: false,
                             supervised_live: false,
+                            throttle: Throttle::default(),
                             permits,
                             cleanup_tasks: self.cleanup_tasks.clone(),
                         },
@@ -298,9 +302,12 @@ impl PlaybackManager {
         // inspected source must be inside it. Original delivery above is exempt:
         // there the client's own decoders, not this policy, decide.
         probe.ensure_supported()?;
-        let hdr = probe.hdr_transfer()?.is_some();
+        let hdr_transfer = probe.hdr_transfer()?;
+        let hdr = hdr_transfer.is_some();
         let interlaced = probe.interlaced();
         let mut transforms = Vec::new();
+        // A GPU tone mapper replaces only the HDR step; deinterlacing stays on the CPU.
+        let mut deinterlace = None;
         if interlaced || hdr {
             let filters = self.available_filters().await?;
             if interlaced {
@@ -313,9 +320,10 @@ impl PlaybackManager {
                         "Interlaced playback requires the bwdif or yadif FFmpeg filter".into(),
                     );
                 };
-                transforms.push(format!(
-                    "{filter}=mode=send_frame:parity=auto:deint=all,setfield=prog"
-                ));
+                let filter =
+                    format!("{filter}=mode=send_frame:parity=auto:deint=all,setfield=prog");
+                transforms.push(filter.clone());
+                deinterlace = Some(filter);
             }
             if hdr {
                 if !["zscale", "tonemap", "sidedata"]
@@ -363,19 +371,25 @@ impl PlaybackManager {
             touched: Instant::now(),
             stable_target_duration: true,
             supervised_live: false,
+            throttle: if live {
+                Throttle::default()
+            } else {
+                Throttle::on_demand()
+            },
             permits,
             cleanup_tasks: self.cleanup_tasks.clone(),
         };
         tokio::fs::create_dir(&dir)
             .await
             .map_err(|_| "Media storage unavailable".to_owned())?;
-        let mut pipeline = hardware::plan(
-            copy_video,
-            !copy_video && self.qsv_available().await,
-            probe.video()?,
-            hdr,
-            interlaced,
-        );
+        let accel = if copy_video {
+            hardware::Accel::default()
+        } else {
+            self.accel().await
+        };
+        let mut pipeline =
+            hardware::plan(copy_video, accel, probe.video()?, hdr_transfer, interlaced);
+        let tone_map = hardware::tone_map(accel.vaapi, hdr_transfer);
         let engine_started = Instant::now();
         loop {
             let mut cmd = Command::new(&self.config.ffmpeg);
@@ -384,7 +398,13 @@ impl PlaybackManager {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"]);
-            if pipeline.accelerated() {
+            if pipeline.vaapi() {
+                hardware::vaapi_device_args(
+                    &mut cmd,
+                    self.vaapi_path().expect("validated device"),
+                    pipeline == hardware::Pipeline::VaapiDecode,
+                );
+            } else if pipeline.accelerated() {
                 hardware::device_args(
                     &mut cmd,
                     self.qsv_device.as_ref().expect("validated device"),
@@ -401,11 +421,12 @@ impl PlaybackManager {
                 }
             }
             input_args(&mut cmd, &header_block);
-            // Live inputs must stay realtime; VOD can fill the rolling window as fast
-            // as FFmpeg can produce it so browser playback has actual headroom.
-            if live {
-                cmd.arg("-re");
-            }
+            // Input is never paced to realtime. A live input already arrives in
+            // realtime, and `-re` only withheld the upstream's initial burst (an
+            // HLS source starts three segments behind its edge), which pinned
+            // browsers to a one-segment buffer that stuttered on any jitter.
+            // Jellyfin's M3U tuners, Threadfin and ErsatzTV read live input the
+            // same way. On-demand encoding is paced by its viewer (`Throttle`).
             if position > 0.0 {
                 cmd.arg("-ss").arg(format!("{position:.3}"));
             }
@@ -442,6 +463,17 @@ impl PlaybackManager {
                         "{},format=nv12,hwupload=extra_hw_frames=64",
                         transforms.join(",")
                     ),
+                    hardware::Pipeline::VaapiDecode | hardware::Pipeline::VaapiEncode => {
+                        hardware::vaapi_filter(
+                            pipeline,
+                            tone_map,
+                            probe.video()?,
+                            width,
+                            height,
+                            deinterlace.as_deref(),
+                            &transforms.join(","),
+                        )
+                    }
                     _ => transforms.join(","),
                 };
                 cmd.arg("-vf").arg(filter);
@@ -457,7 +489,35 @@ impl PlaybackManager {
                         "tv",
                     ]);
                 }
-                if pipeline.accelerated() {
+                if pipeline.vaapi() {
+                    // Same envelope as Quick Sync. `-level:v 4` is h264_vaapi's
+                    // named constant for level 4.0 (a literal 4.0 parses as 4).
+                    cmd.args([
+                        "-c:v",
+                        "h264_vaapi",
+                        "-profile:v",
+                        "main",
+                        "-level:v",
+                        "4",
+                        "-rc_mode",
+                        "VBR",
+                        "-b:v",
+                        "4000k",
+                        "-maxrate",
+                        "5000k",
+                        "-bufsize",
+                        "10000k",
+                        "-bf",
+                        "0",
+                        "-fpsmax",
+                        "30",
+                        "-g",
+                        &gop,
+                        // VAAPI encodes every forced I-frame as an IDR.
+                        "-force_key_frames",
+                        &force_key_frames,
+                    ]);
+                } else if pipeline.accelerated() {
                     cmd.args([
                         "-c:v",
                         "h264_qsv",
@@ -489,13 +549,16 @@ impl PlaybackManager {
                         &force_key_frames,
                     ]);
                 } else {
+                    // No `-tune zerolatency`: ultrafast already disables B-frames,
+                    // lookahead and mbtree, so the tune mainly swapped frame threads
+                    // for sliced threads. That saves a few frames of encoder delay,
+                    // which segmented HLS never sees, and cost throughput (measured
+                    // 10% on 4 threads with FFmpeg 5.1, 43% on 20) and efficiency.
                     cmd.args([
                         "-c:v",
                         "libx264",
                         "-preset",
                         "ultrafast",
-                        "-tune",
-                        "zerolatency",
                         "-profile:v",
                         "main",
                         "-level:v",
@@ -633,6 +696,11 @@ impl PlaybackManager {
             engine_ready_ms,
             encoder = pipeline.encoder(),
             pipeline = ?pipeline,
+            tone_map = ?if pipeline.vaapi() {
+                tone_map
+            } else {
+                hdr.then_some(hardware::ToneMap::Software)
+            },
             live,
             video_mode = if copy_video { "copy" } else { "encode" },
             audio_mode = if selected_input.is_none() {

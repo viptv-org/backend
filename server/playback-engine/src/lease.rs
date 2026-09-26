@@ -17,6 +17,7 @@ pub(super) struct Session {
     pub(super) touched: Instant,
     pub(super) stable_target_duration: bool,
     pub(super) supervised_live: bool,
+    pub(super) throttle: Throttle,
     pub(super) permits: Arc<InputPermits>,
     pub(super) cleanup_tasks: CleanupTasks,
 }

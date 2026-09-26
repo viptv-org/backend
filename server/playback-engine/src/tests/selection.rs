@@ -180,7 +180,10 @@ async fn real_text_subtitle_hls_selection_seek_and_sparse_startup() {
         let file = path.rsplit('/').next().unwrap();
         let served = manager.serve(id, capability, file).await.unwrap();
         assert_eq!(
-            served.headers().get(axum::http::header::CONTENT_TYPE).unwrap(),
+            served
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
             expected_mime
         );
         axum::body::to_bytes(served.into_body(), 64 * 1024 * 1024)
@@ -423,12 +426,17 @@ async fn real_text_subtitle_hls_selection_seek_and_sparse_startup() {
                 let vtt =
                     served_media(&manager, &response.id, cap, vtt_url.path(), "text/vtt").await;
                 let mut vtt = String::from_utf8(vtt).unwrap();
-                // With2s segments the cue at output2s belongs to the NEXT
-                // rendition segment, not the first ready segment. Observe its
-                // publication without delaying or weakening startup readiness.
-                if !late && position > 0.0 {
+                // A ready sparse rendition may publish an empty first segment.
+                // Wait for the expected cue publication independently of AV readiness,
+                // both at initial playback and after a seek.
+                if !late {
+                    let expected = if position > 0.0 {
+                        "Second caption after seek."
+                    } else {
+                        "English fixture caption."
+                    };
                     for _ in 0..30 {
-                        if vtt.contains("Second caption after seek.") {
+                        if vtt.contains(expected) {
                             break;
                         }
                         sleep(Duration::from_millis(100)).await;
@@ -462,11 +470,14 @@ async fn real_text_subtitle_hls_selection_seek_and_sparse_startup() {
                 assert!(vtt.contains("X-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0"));
                 assert!(manager.serve(&response.id, "wrong", file).await.is_err());
                 if !late {
-                    assert!(vtt.contains(if position > 0.0 {
-                        "Second caption after seek."
-                    } else {
-                        "English fixture caption."
-                    }));
+                    assert!(
+                        vtt.contains(if position > 0.0 {
+                            "Second caption after seek."
+                        } else {
+                            "English fixture caption."
+                        }),
+                        "Missing expected caption at position {position}; received: {vtt}"
+                    );
                     if position > 0.0 {
                         assert!(
                             vtt.contains("00:02."),

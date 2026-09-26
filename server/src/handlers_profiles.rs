@@ -339,6 +339,6 @@ pub(crate) async fn status(
     })
     .await?;
     Ok(axum::Json(
-        json!({"providers":providers,"addons":addons,"profiles":profiles,"active_sessions":a.playback.active_count().await,"shared_playback":session::shared::diagnostics(&a),"ffmpeg_available":a.playback.ffmpeg_available().await,"video_acceleration":a.playback.acceleration_status()}),
+        json!({"providers":providers,"addons":addons,"profiles":profiles,"active_sessions":a.playback.active_count().await,"shared_playback":session::shared::diagnostics(&a),"ffmpeg_available":a.playback.ffmpeg_available().await,"video_acceleration":a.playback.acceleration_status(),"hdr_tone_mapping":a.playback.tone_mapping_status()}),
     ))
 }

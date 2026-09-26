@@ -320,6 +320,8 @@ impl PlaybackManager {
                 })
                 .ok_or_else(|| "Media not found".to_owned())?;
             session.touched = Instant::now();
+            // Every fetched segment moves the throttle's resume point forward.
+            session.throttle.observe(file);
             (session.dir.join(file), session.stable_target_duration)
         };
         let metadata = tokio::fs::symlink_metadata(&path)
@@ -332,14 +334,16 @@ impl PlaybackManager {
         // Playlists and captions are rewritten (target duration, caption
         // clock) so they are read fully; they are bounded and small.
         if mime == "application/vnd.apple.mpegurl" || mime == "text/vtt" {
-            let mut bytes =
-                tokio::fs::read(&path).await.map_err(|_| "Media not found".to_owned())?;
+            let mut bytes = tokio::fs::read(&path)
+                .await
+                .map_err(|_| "Media not found".to_owned())?;
             if mime == "application/vnd.apple.mpegurl" && stable_target_duration {
                 bytes = stable_hls_target_duration(bytes);
             }
             if mime == "text/vtt" && bytes.starts_with(b"WEBVTT\n") {
                 // Caption-enabled MPEGTS uses copyts, so both renditions share clock0.
-                let mut mapped = b"WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0\n\n".to_vec();
+                let mut mapped =
+                    b"WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00:00.000,MPEGTS:0\n\n".to_vec();
                 mapped.extend_from_slice(&bytes[7..]);
                 bytes = mapped;
             }

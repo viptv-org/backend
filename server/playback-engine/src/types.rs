@@ -82,6 +82,9 @@ pub(super) struct ProbeDisposition {
     pub(super) hearing_impaired: u8,
     pub(super) visual_impaired: u8,
     pub(super) forced: u8,
+    /// Embedded cover art: ffprobe lists it as a video stream, but it is a
+    /// still picture, never the programme's video track.
+    pub(super) attached_pic: u8,
 }
 impl ProbeDisposition {
     pub(super) fn public(&self) -> TrackDisposition {

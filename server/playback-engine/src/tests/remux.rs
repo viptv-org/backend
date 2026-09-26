@@ -123,10 +123,12 @@ async fn real_ffmpeg_remux_transcode_and_cleanup() {
             .serve(&response.id, capability, segment)
             .await
             .unwrap();
-        assert!(!axum::body::to_bytes(served_segment.into_body(), 64 * 1024 * 1024)
-            .await
-            .unwrap()
-            .is_empty());
+        assert!(
+            !axum::body::to_bytes(served_segment.into_body(), 64 * 1024 * 1024)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         let output = Command::new(&ffprobe)
             .args([
                 "-v",
@@ -377,6 +379,12 @@ async fn a_720p60_source_is_stream_copied_into_hls() {
     assert!(
         !args.contains(&"libx264") && !args.contains(&"scale") && !args.contains(&"-vf"),
         "no encoder or filter may run for a directly compatible source: {args:?}"
+    );
+    // A live input already arrives in realtime; `-re` only withheld the
+    // upstream's initial burst from the viewer's buffer.
+    assert!(
+        !args.contains(&"-re") && !args.contains(&"-readrate"),
+        "live input must not be paced: {args:?}"
     );
     assert!(manager.stop(&response.id).await);
     manager.shutdown().await;

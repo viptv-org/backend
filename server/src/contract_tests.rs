@@ -477,6 +477,7 @@ async fn pengu_fetch_context_retains_only_explicit_safe_headers_privately() {
         "Referer",
         "Origin",
         "Authorization",
+        "Cookie",
         "aCcEpT",
         "Accept-Language",
         "X-Requested-With",
@@ -488,7 +489,6 @@ async fn pengu_fetch_context_retains_only_explicit_safe_headers_privately() {
         "Content-Length",
         "Transfer-Encoding",
         "Range",
-        "Cookie",
         "Set-Cookie",
         "X-Other",
         "Proxy-Authorization",
@@ -1139,4 +1139,28 @@ async fn continuation_discovery_scopes_skip_unrelated_producers() {
             StatusCode::BAD_REQUEST
         );
     }
+}
+
+#[tokio::test]
+async fn source_cookies_are_kept_for_playback_and_never_published_on_cards() {
+    let app = app(Connection::open_in_memory().unwrap());
+    let (cards, error) = app.register(
+        "addon:7",
+        vec![json!({
+            "url":"https://fixture.invalid/source", "name":"Cookie source",
+            "behaviorHints":{"proxyHeaders":{"request":{"Cookie":"provider-cookie-secret"}}}
+        })],
+        "movie",
+    );
+    assert!(error.is_none());
+    assert_eq!(cards.len(), 1);
+    assert!(!cards[0].to_string().contains("provider-cookie-secret"));
+    let id = cards[0]["id"].as_str().unwrap();
+    assert_eq!(
+        app.streams.lock().unwrap()[id]
+            .headers
+            .get("cookie")
+            .map(String::as_str),
+        Some("provider-cookie-secret")
+    );
 }

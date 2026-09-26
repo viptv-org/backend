@@ -19,6 +19,7 @@ pub(super) struct ProbeStream {
     pub(super) pix_fmt: Option<String>,
     pub(super) sample_aspect_ratio: Option<String>,
     pub(super) profile: Option<String>,
+    #[serde(default, deserialize_with = "probe_level")]
     pub(super) level: Option<u32>,
     pub(super) channels: Option<u32>,
     pub(super) avg_frame_rate: Option<String>,
@@ -26,6 +27,14 @@ pub(super) struct ProbeStream {
     pub(super) color_transfer: Option<String>,
     pub(super) field_order: Option<String>,
 }
+/// ffprobe prints `level` as a signed integer and uses -99 for "unknown", which
+/// every embedded cover picture reports. Reading it as unsigned failed the whole
+/// probe for any file with cover art; the reduced retry then lacked profile and
+/// level, so copyable video was re-encoded after two full source inspections.
+fn probe_level<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<u32>, D::Error> {
+    Ok(Option::<i64>::deserialize(value)?.and_then(|level| u32::try_from(level).ok()))
+}
+
 /// The highest H.264 level this engine passes through. Modern browser H.264
 /// decoders cover level 5.1, and the envelope's dimension, frame-rate, profile,
 /// pix-fmt, interlace and SDR gates bound the actual decode load, so a level
@@ -50,6 +59,15 @@ pub(super) fn conservative_frame_rate(rate: Option<&str>) -> bool {
 }
 
 impl ProbeStream {
+    /// A real video track: ffprobe also lists embedded cover art (MKV
+    /// attachments, MP4 `covr`) as video, flagged as an attached picture.
+    pub(super) fn is_video(&self) -> bool {
+        self.codec_type.as_deref() == Some("video")
+            && !self
+                .disposition
+                .as_ref()
+                .is_some_and(|disposition| disposition.attached_pic == 1)
+    }
     pub(super) fn text_subtitle(&self) -> bool {
         self.codec_type.as_deref() == Some("subtitle")
             && matches!(
@@ -219,7 +237,7 @@ impl Probe {
     pub(super) fn video(&self) -> Result<&ProbeStream, String> {
         self.streams
             .iter()
-            .find(|s| s.codec_type.as_deref() == Some("video"))
+            .find(|s| s.is_video())
             .ok_or_else(|| "Source has no supported video stream".to_owned())
     }
     pub(super) fn interlaced(&self) -> bool {
@@ -277,11 +295,7 @@ impl Probe {
         if self.interlaced() || !matches!(self.hdr_transfer(), Ok(None)) {
             return false;
         }
-        let Some(video) = self
-            .streams
-            .iter()
-            .find(|s| s.codec_type.as_deref() == Some("video"))
-        else {
+        let Ok(video) = self.video() else {
             return false;
         };
         video.codec_name.as_deref() == Some("h264")

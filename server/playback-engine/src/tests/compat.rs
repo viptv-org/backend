@@ -499,3 +499,51 @@ fn audio_selection_honors_explicit_track_then_smart_defaults() {
         .unwrap_err()
         .contains("unsupported bitmap"));
 }
+
+/// Embedded cover art (an MKV attachment or MP4 `covr`) is what ffprobe lists
+/// as a second video stream with `level: -99`. A real release with it failed
+/// the whole probe, paid a second reduced probe (13.7s), lost profile/level,
+/// re-encoded copyable H.264 and was refused original-file delivery.
+#[test]
+fn cover_art_neither_fails_the_probe_nor_blocks_copy_or_direct_delivery() {
+    let probe: Probe = serde_json::from_value(serde_json::json!({
+        "streams": [
+            {"index":0,"codec_type":"video","codec_name":"h264","profile":"High","level":41,
+             "pix_fmt":"yuv420p","width":1920,"height":800,"field_order":"progressive",
+             "avg_frame_rate":"24000/1001","r_frame_rate":"24000/1001",
+             "disposition":{"default":1,"attached_pic":0}},
+            {"index":1,"codec_type":"audio","codec_name":"aac","profile":"HE-AAC","channels":6,
+             "disposition":{"default":1,"attached_pic":0}},
+            {"index":4,"codec_type":"video","codec_name":"png","level":-99,"pix_fmt":"rgba",
+             "width":250,"height":140,"avg_frame_rate":"0/0","r_frame_rate":"90000/1",
+             "disposition":{"default":0,"attached_pic":1}}
+        ],
+        "format":{"format_name":"matroska,webm","duration":"8888.107"}
+    }))
+    .expect("a negative level must not fail the probe");
+    assert_eq!(probe.streams[2].level, None, "-99 means unknown");
+    assert_eq!(probe.video().unwrap().codec_name.as_deref(), Some("h264"));
+    assert!(
+        probe.compatible_video(1920, 1080, H264_COPY_LEVEL),
+        "compatible H.264 beside cover art must be copied"
+    );
+    let caps = Capabilities {
+        max_width: 3840,
+        max_height: 2160,
+        direct_play: true,
+        direct_files: Some(true),
+        direct_video_codecs: Some(vec!["avc".into()]),
+        direct_audio_codecs: Some(vec!["aac".into()]),
+        ..Default::default()
+    };
+    assert_eq!(
+        direct_format(
+            &probe,
+            &caps,
+            probe.streams.get(1),
+            &TrackSelection::default()
+        ),
+        Some("mkv"),
+        "cover art is not a second programme video"
+    );
+}

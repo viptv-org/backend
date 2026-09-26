@@ -20,7 +20,7 @@ pub(crate) async fn action(
     };
     if matches!(
         path.as_str(),
-        "/auth/register" | "/auth/login" | "/auth/recover"
+        "/auth/register" | "/auth/login" | "/auth/device/login" | "/auth/recover"
     ) && !h.contains_key(header::ORIGIN)
     {
         return auth_error(forbidden());
@@ -48,7 +48,7 @@ pub(crate) async fn action(
     }
     let expensive = matches!(
         path.as_str(),
-        "/auth/register" | "/auth/login" | "/auth/recover"
+        "/auth/register" | "/auth/login" | "/auth/device/login" | "/auth/recover"
     );
     let permit =
         match acquire_auth_cpu(expensive, &AUTH_CPU, std::time::Duration::from_secs(2)).await {
@@ -60,7 +60,7 @@ pub(crate) async fn action(
             let db = app.db.lock().map_err(|_| unauthorized())?;
             let subject = if matches!(
                 path.as_str(),
-                "/auth/login" | "/auth/recover" | "/auth/register"
+                "/auth/login" | "/auth/device/login" | "/auth/recover" | "/auth/register"
             ) {
                 username(&v).unwrap_or_else(|_| "invalid-user".into())
             } else if path.contains("device/token") {
@@ -197,7 +197,7 @@ pub(crate) fn dispatch_prepared(
             out["profiles"] = json!([]);
             Ok((out, cookies))
         }
-        "/auth/login" | "/auth/recover" => {
+        "/auth/login" | "/auth/device/login" | "/auth/recover" => {
             let name = username(v)?;
             let row=db.query_row("SELECT id,password_hash,recovery_hash FROM auth_accounts WHERE username=?1 AND disabled=0",[name],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).optional().map_err(crate::db_error)?;
             let recover = path.ends_with("recover");
@@ -239,7 +239,23 @@ pub(crate) fn dispatch_prepared(
                 },
                 Some(id),
             )?;
-            let (mut out, c) = session(db, id, None, "browser", "")?;
+            let native = path == "/auth/device/login";
+            let device_name = if native {
+                let name = v["device_name"].as_str().unwrap_or("VIPTV Android").trim();
+                if name.is_empty() || name.len() > 100 {
+                    return Err("Invalid device name".into());
+                }
+                name
+            } else {
+                ""
+            };
+            let (mut out, c) = session(
+                db,
+                id,
+                None,
+                if native { "device" } else { "browser" },
+                device_name,
+            )?;
             if let Some(rc) = recovery {
                 out["recovery_code"] = json!(rc);
                 out["recovery_codes"] = json!([out["recovery_code"].clone()]);

@@ -455,3 +455,37 @@ async fn former_static_bearer_never_establishes_identity() {
         );
     }
 }
+
+#[tokio::test]
+async fn native_password_login_issues_revocable_device_tokens_without_browser_cookies() {
+    let (app, _root) = owner_application();
+    let mut browser = Browser::default();
+    let (status, invalid) = browser_request(
+        &app,
+        &mut browser,
+        "POST",
+        "/api/auth/device/login",
+        json!({"username":"owner","password":"wrong-password","device_name":"Android phone"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(invalid.get("access_token").is_none());
+    let (status, grant) = browser_request(&app, &mut browser, "POST", "/api/auth/device/login",
+        json!({"username":"owner","password":"secure-owner-password","device_name":"Android phone"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(browser.cookies.is_empty());
+    assert!(grant["access_token"].as_str().is_some());
+    assert!(grant["refresh_token"].as_str().is_some());
+    assert!(grant["profile_id"].is_null());
+    let (status, next) = browser_request(
+        &app,
+        &mut browser,
+        "POST",
+        "/api/auth/device/refresh",
+        json!({"refresh_token":grant["refresh_token"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(grant["access_token"], next["access_token"]);
+    assert!(browser.cookies.is_empty());
+}

@@ -297,7 +297,7 @@ pub(crate) fn login_snapshot(
     path: &str,
     v: &Value,
 ) -> Result<Option<String>, ApiError> {
-    if path != "/auth/login" {
+    if !matches!(path, "/auth/login" | "/auth/device/login") {
         return Ok(None);
     }
     db.query_row(
@@ -315,7 +315,7 @@ pub(crate) fn prepare_auth(
 ) -> Result<PreparedAuth, ApiError> {
     let needs_hash = matches!(path, "/auth/register" | "/auth/recover");
     let new_hash = if needs_hash { Some(password(v)?) } else { None };
-    let login_valid = if path == "/auth/login" {
+    let login_valid = if matches!(path, "/auth/login" | "/auth/device/login") {
         // A syntactically valid fixed Argon2id PHC forces the same expensive verifier
         // path for unknown/disabled accounts without creating a usable credential.
         const DUMMY:&str="$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQxMjM0NTY3OA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -339,7 +339,7 @@ pub(crate) fn prepare_auth(
 pub(crate) fn endpoint_global_limit(path: &str) -> i64 {
     match path {
         "/auth/register" => 100,
-        "/auth/login" => 600,
+        "/auth/login" | "/auth/device/login" => 600,
         "/auth/recover" => 100,
         "/auth/device/code" => 120,
         "/auth/device/token" | "/auth/device/lookup" => 600,

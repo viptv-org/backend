@@ -1,5 +1,7 @@
 # Optional Intel Quick Sync. Apply with compose.yaml and compose.warp.yaml.
 # Get the numeric render-device group with: stat -c %g /dev/dri/renderD128
+# The same render node is also used for VAAPI HDR10 tone mapping (iHD VPP);
+# no extra setting is needed for that.
 services:
   viptv:
     devices:

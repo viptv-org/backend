@@ -8,6 +8,117 @@ pub(super) const HLS_SEGMENT_SECONDS: u32 = 2;
 pub(super) const HLS_WINDOW_SECONDS: u32 = 120;
 pub(super) const HLS_DELETE_GRACE_SECONDS: u32 = 60;
 
+// An on-demand encoder runs far faster than realtime (a remux or a 1080p
+// ultrafast encode measured 10-50x), while the rolling playlist lists only
+// HLS_WINDOW_SECONDS and deletes files HLS_DELETE_GRACE_SECONDS later. Left
+// alone, the window slid past a realtime viewer within seconds and the
+// segments it still needed were deleted before it fetched them: a web player
+// then skipped, stuttered or jumped to the playlist edge. Like Plex's
+// transcoder throttle buffer, suspend the encoder once it is this far past
+// the furthest segment a viewer fetched, and resume it as the viewer catches
+// up. The pause point sits a third into the advertised window: the encoder
+// is only checked every HLS_THROTTLE_TICK, and the remaining two thirds absorb
+// what it produces in between (up to ~390x realtime during the one-second
+// segments) plus what its socket buffered while suspended, so the viewer's
+// next segment stays listed; files also outlive the listing by the grace.
+const HLS_WINDOW_SEGMENTS: u64 = (HLS_WINDOW_SECONDS / HLS_SEGMENT_SECONDS) as u64;
+pub(super) const HLS_THROTTLE_AHEAD_SEGMENTS: u64 = HLS_WINDOW_SEGMENTS / 3;
+pub(super) const HLS_THROTTLE_RESUME_SEGMENTS: u64 = HLS_WINDOW_SEGMENTS / 6;
+pub(super) const HLS_THROTTLE_TICK: Duration = Duration::from_millis(100);
+// A resumed input may first reconnect upstream; the stall watchdog waits this
+// long after a resume before it expects playlist progress again.
+const HLS_THROTTLE_RESUME_GRACE: Duration = Duration::from_secs(20);
+
+/// Consumption-paced on-demand encoding. Live inputs are never suspended:
+/// they arrive in realtime and an upstream socket must keep being read.
+#[derive(Default)]
+pub(super) struct Throttle {
+    pub(super) enabled: bool,
+    /// Furthest AV segment a viewer fetched.
+    requested: u64,
+    paused: bool,
+    resumed: Option<Instant>,
+}
+impl Throttle {
+    pub(super) fn on_demand() -> Self {
+        Self {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+    pub(super) fn observe(&mut self, file: &str) {
+        if let Some(segment) = segment_number(file) {
+            self.requested = self.requested.max(segment);
+        }
+    }
+    /// While suspended, or just resumed, the playlist legitimately stops moving.
+    pub(super) fn holding(&self) -> bool {
+        self.paused
+            || self
+                .resumed
+                .is_some_and(|at| at.elapsed() < HLS_THROTTLE_RESUME_GRACE)
+    }
+    /// Some(true) to suspend, Some(false) to resume, for the newest listed segment.
+    pub(super) fn transition(&self, newest: u64) -> Option<bool> {
+        let ahead = newest.saturating_sub(self.requested);
+        if !self.paused && ahead > HLS_THROTTLE_AHEAD_SEGMENTS {
+            Some(true)
+        } else if self.paused && ahead <= HLS_THROTTLE_RESUME_SEGMENTS {
+            Some(false)
+        } else {
+            None
+        }
+    }
+    /// Suspend or resume the encoder for the newest segment it has listed.
+    pub(super) fn apply(&mut self, child: &Child, newest: u64) {
+        match self.transition(newest) {
+            Some(true) => self.paused = suspend(child, true),
+            Some(false) if suspend(child, false) => {
+                self.paused = false;
+                self.resumed = Some(Instant::now());
+            }
+            _ => {}
+        }
+    }
+}
+
+/// SIGSTOP/SIGCONT the encoder. A stopped process still dies on SIGKILL, so
+/// every existing cleanup path keeps working while it is suspended.
+#[cfg(unix)]
+fn suspend(child: &Child, stop: bool) -> bool {
+    let Some(pid) = child.id().and_then(|pid| libc::pid_t::try_from(pid).ok()) else {
+        return false;
+    };
+    // SAFETY: kill(2) on our own unreaped child's pid; no memory is shared.
+    unsafe { libc::kill(pid, if stop { libc::SIGSTOP } else { libc::SIGCONT }) == 0 }
+}
+#[cfg(not(unix))]
+fn suspend(_: &Child, _: bool) -> bool {
+    false
+}
+
+pub(super) fn segment_number(file: &str) -> Option<u64> {
+    if media_type(file) != Some("video/mp2t") {
+        return None;
+    }
+    file.strip_prefix("segment-")?
+        .strip_suffix(".ts")?
+        .parse()
+        .ok()
+}
+
+/// Newest AV segment the encoder has completed and listed.
+pub(super) async fn newest_segment(dir: &std::path::Path) -> Option<u64> {
+    let bytes = tokio::fs::read(dir.join("index.m3u8")).await.ok()?;
+    if bytes.len() > 128 * 1024 {
+        return None;
+    }
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .rev()
+        .find_map(segment_number)
+}
+
 pub(super) fn dimensions(caps: &Capabilities) -> Result<(u32, u32), String> {
     if caps.max_width < 2 || caps.max_height < 2 {
         return Err("Invalid playback dimensions".into());

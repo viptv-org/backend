@@ -94,9 +94,7 @@ impl Direct {
                 .connect_timeout(Duration::from_secs(5))
                 .read_timeout(Duration::from_secs(10))
                 .redirect(reqwest::redirect::Policy::none()),
-            headers
-                .get(crate::EGRESS_PROXY_HEADER)
-                .map(String::as_str),
+            headers.get(crate::EGRESS_PROXY_HEADER).map(String::as_str),
         )?
         .build()
         .map_err(|_| "Media transport unavailable")?;

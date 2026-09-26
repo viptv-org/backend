@@ -63,6 +63,7 @@ impl App {
                     let key = k.to_ascii_lowercase();
                     if [
                         "user-agent",
+                        "cookie",
                         "referer",
                         "origin",
                         "authorization",

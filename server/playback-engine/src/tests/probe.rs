@@ -38,6 +38,7 @@ printf '#EXTM3U\n#EXTINF:1,\nsegment-000000000.ts\n' > "$last"
         Some("/dev/dri/renderD128".into()),
     );
     manager.qsv_ready.set(true).unwrap();
+    manager.vaapi_ready.set(hardware::Vaapi::default()).unwrap();
     let provider = Arc::new(Semaphore::new(1));
     let result = manager
         .start_with_permit(
@@ -74,17 +75,13 @@ async fn direct_url_clients_receive_the_original_source_instead_of_a_session() {
     // HDR HEVC with Dolby audio in Matroska: the declared envelope refuses
     // to hand this over, so anything but direct-url delivery would
     // transcode it. A native client fetches the source itself instead.
+    let probe_marker = root.path().join("unexpected-probe");
     let manager = scripted_probe(
         root.path(),
-        r#"printf '%s' '{"streams":[
-                {"index":0,"codec_type":"video","codec_name":"hevc","width":3840,"height":1608,
-                 "pix_fmt":"yuv420p10le","profile":"Main 10","level":153,
-                 "color_transfer":"smpte2084","avg_frame_rate":"24/1","r_frame_rate":"24/1"},
-                {"index":1,"codec_type":"audio","codec_name":"eac3","channels":6}
-            ],"format":{"format_name":"matroska,webm","duration":"123.5"}}'"#,
+        &format!("touch '{}'; exit 77", probe_marker.display()),
     );
     let caps: Capabilities = serde_json::from_value(serde_json::json!({
-        "h264": true, "aac": true, "max_width": 3840, "max_height": 2160,
+        "h264": false, "aac": false, "max_width": 0, "max_height": 0,
         "direct_play": false, "direct_urls": true
     }))
     .unwrap();
@@ -111,8 +108,13 @@ async fn direct_url_clients_receive_the_original_source_instead_of_a_session() {
     assert_eq!(response.mode, "direct");
     assert_eq!(response.video_mode, "copy");
     assert_eq!(response.audio_mode, "copy");
-    assert_eq!(response.format, "mkv");
-    assert!((response.duration - 123.5).abs() < 0.01);
+    assert!(
+        !probe_marker.exists(),
+        "Native playback must never start server inspection"
+    );
+    assert_eq!(response.format, "file");
+    assert_eq!(response.duration, 0.0);
+    assert!(response.audio_tracks.is_empty());
     let authorization = response.authorization.expect("upstream authorization");
     assert_eq!(authorization.cookie.as_deref(), Some("session=opaque"));
     assert_eq!(authorization.user_agent.as_deref(), Some("viptv-native/1"));

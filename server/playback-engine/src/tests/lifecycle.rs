@@ -43,6 +43,7 @@ async fn open_segment_growth_and_stalled_leased_process_are_reaped() {
             touched: Instant::now(),
             stable_target_duration: false,
             supervised_live: false,
+            throttle: Throttle::default(),
             permits: Arc::new(InputPermits {
                 _playback: manager.slots.clone().try_acquire_owned().unwrap(),
                 _provider: None,
@@ -419,6 +420,7 @@ async fn capabilities_expiry_and_cleanup_are_enforced() {
             touched: Instant::now(),
             stable_target_duration: false,
             supervised_live: false,
+            throttle: Throttle::default(),
             permits: Arc::new(InputPermits {
                 _playback: permit,
                 _provider: None,
@@ -439,7 +441,10 @@ async fn capabilities_expiry_and_cleanup_are_enforced() {
         .await
         .unwrap();
     assert_eq!(
-        served.headers().get(axum::http::header::CONTENT_TYPE).unwrap(),
+        served
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .unwrap(),
         "application/vnd.apple.mpegurl"
     );
     let bytes = axum::body::to_bytes(served.into_body(), 1024)
@@ -496,6 +501,7 @@ async fn shutdown_reaps_children_and_cancelled_start_artifacts() {
             touched: Instant::now(),
             stable_target_duration: false,
             supervised_live: false,
+            throttle: Throttle::default(),
             permits: Arc::new(InputPermits {
                 _playback: manager.slots.clone().try_acquire_owned().unwrap(),
                 _provider: Some(provider_slots.clone().try_acquire_owned().unwrap()),

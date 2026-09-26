@@ -5,8 +5,12 @@ use viptv_server::{
 };
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The playback engine is its own crate, so its target must be listed too:
+    // without it the per-session probe_ms/engine_ready_ms/encoder lines vanish.
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new("viptv_server=info"))
+        .with_env_filter(tracing_subscriber::EnvFilter::new(
+            "viptv_server=info,viptv_playback_engine=info",
+        ))
         .init();
     let database = std::env::var("VIPTV_DATABASE").unwrap_or_else(|_| "data/viptv.sqlite".into());
     if let Some(parent) = std::path::Path::new(&database).parent() {
@@ -26,7 +30,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(120u64)
         .clamp(30, 3600);
-    let playback = PlaybackManager::new_with_qsv(
+    let device = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+    };
+    let playback = PlaybackManager::new_with_hardware(
         Config {
             ffmpeg: std::env::var("VIPTV_FFMPEG")
                 .unwrap_or_else(|_| "ffmpeg".into())
@@ -38,10 +48,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_sessions,
             ttl: Duration::from_secs(ttl),
         },
-        std::env::var("VIPTV_QSV_DEVICE")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from),
+        device("VIPTV_QSV_DEVICE"),
+        device("VIPTV_VAAPI_DEVICE"),
     );
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(25))

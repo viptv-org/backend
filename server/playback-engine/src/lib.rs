@@ -28,18 +28,20 @@ pub use types::{
 use compat::{
     conservative_frame_rate, normalize_audio_language, Probe, ProbeStream, H264_COPY_LEVEL,
 };
-use direct_gate::{direct_file_extension, direct_format, source_authorization};
 #[cfg(test)]
-use hls::hdr_size;
+use direct_gate::direct_file_extension;
+use direct_gate::{direct_format, source_authorization};
 use hls::{
-    cache_safe, dimensions, hdr_filter, media_type, playback_ready, scale_filter,
-    stable_hls_target_duration, HLS_DELETE_GRACE_SECONDS, HLS_INITIAL_SEGMENT_SECONDS,
-    HLS_SEGMENT_SECONDS, HLS_WINDOW_SECONDS,
+    cache_safe, dimensions, hdr_filter, media_type, newest_segment, playback_ready, scale_filter,
+    stable_hls_target_duration, Throttle, HLS_DELETE_GRACE_SECONDS, HLS_INITIAL_SEGMENT_SECONDS,
+    HLS_SEGMENT_SECONDS, HLS_THROTTLE_TICK, HLS_WINDOW_SECONDS,
 };
+#[cfg(test)]
+use hls::{hdr_size, segment_number, HLS_THROTTLE_AHEAD_SEGMENTS, HLS_THROTTLE_RESUME_SEGMENTS};
 use lease::{cleanup_orphans, constant_time_eq, header_block, input_args, InputPermits, Session};
-use probe::{probe_output, ProbeCacheEntry, ProbeChild};
 #[cfg(test)]
 use probe::{probe_failure, ProbeFailure, LIVE_PROBE_CACHE_TTL, PROBE_CACHE_TTL};
+use probe::{probe_output, ProbeCacheEntry, ProbeChild};
 use types::{CleanupTasks, ProbeDisposition};
 
 use serde::{Deserialize, Serialize};
