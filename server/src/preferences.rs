@@ -119,6 +119,11 @@ impl Preferences {
         let mut caps = caps.unwrap_or_default();
         caps.max_height = caps.max_height.min(height);
         caps.max_width = caps.max_width.min(height * 16 / 9);
+        // An explicit quality ceiling is a media requirement, not a decoder hint.
+        // Keep it on the inspected path until a rendition below the ceiling is known.
+        if let Some(browser) = &mut caps.browser {
+            browser.inspect_original = false;
+        }
         Some(caps)
     }
 }

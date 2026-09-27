@@ -13,6 +13,7 @@ pub struct Config {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Capabilities {
+    pub browser: Option<BrowserCapabilities>,
     pub max_width: u32,
     pub max_height: u32,
     pub h264: bool,
@@ -38,6 +39,7 @@ pub struct Capabilities {
 impl Default for Capabilities {
     fn default() -> Self {
         Self {
+            browser: None,
             max_width: 1280,
             max_height: 720,
             h264: true,
@@ -52,6 +54,61 @@ impl Default for Capabilities {
             direct_urls: None,
             hevc_sdr: false,
         }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BrowserCapabilities {
+    pub version: u8,
+    pub inspect_original: bool,
+    pub local_remux: bool,
+    pub fmp4: bool,
+    pub engines: Vec<EngineEvidence>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EngineEvidence {
+    pub engine: String,
+    pub codec: String,
+    pub evidence: String,
+    pub max_width: Option<u32>,
+    pub max_height: Option<u32>,
+    pub max_frame_rate: Option<u32>,
+    pub bit_depth: Option<u8>,
+    pub hdr: Option<bool>,
+    pub profile: Option<String>,
+    pub max_level: Option<u32>,
+    pub containers: Option<Vec<String>>,
+    pub max_channels: Option<u8>,
+    pub sample_rates: Option<Vec<u32>>,
+}
+impl BrowserCapabilities {
+    pub(super) fn valid(&self) -> bool {
+        self.version == 1
+            && self.engines.len() <= 32
+            && self.engines.iter().all(|entry| {
+                matches!(entry.engine.as_str(), "native" | "mse" | "webcodecs")
+                    && matches!(
+                        entry.evidence.as_str(),
+                        "unknown" | "advertised" | "decoded"
+                    )
+                    && entry.codec.len() <= 64
+                    && entry.codec.is_ascii()
+                    && entry.max_width.is_none_or(|v| v <= 8192)
+                    && entry.max_height.is_none_or(|v| v <= 8192)
+                    && entry.max_frame_rate.is_none_or(|v| v <= 240)
+                    && entry
+                        .profile
+                        .as_ref()
+                        .is_none_or(|v| v.len() <= 64 && v.is_ascii())
+                    && entry.max_level.is_none_or(|v| v <= 255)
+                    && entry.containers.as_ref().is_none_or(|v| {
+                        v.len() <= 16 && v.iter().all(|s| s.len() <= 32 && s.is_ascii())
+                    })
+                    && entry.max_channels.is_none_or(|v| v <= 32)
+                    && entry
+                        .sample_rates
+                        .as_ref()
+                        .is_none_or(|v| v.len() <= 8 && v.iter().all(|rate| *rate <= 384000))
+            })
     }
 }
 /// Absolute INPUT stream indices from ffprobe, never native/output audio indices.

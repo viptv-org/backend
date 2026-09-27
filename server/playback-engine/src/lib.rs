@@ -8,6 +8,7 @@
 mod compat;
 mod direct;
 mod direct_gate;
+mod fmp4;
 mod hardware;
 mod hls;
 mod lease;
@@ -15,6 +16,7 @@ mod lifecycle;
 mod manager;
 mod probe;
 mod start;
+mod subtitles;
 #[cfg(test)]
 mod tests;
 mod types;
@@ -32,12 +34,15 @@ use compat::{
 use direct_gate::direct_file_extension;
 use direct_gate::{direct_format, source_authorization};
 use hls::{
-    cache_safe, dimensions, hdr_filter, media_type, newest_segment, playback_ready, scale_filter,
+    cache_safe, dimensions, hdr_filter, media_type, playback_ready, scale_filter,
     stable_hls_target_duration, Throttle, HLS_DELETE_GRACE_SECONDS, HLS_INITIAL_SEGMENT_SECONDS,
     HLS_SEGMENT_SECONDS, HLS_THROTTLE_TICK, HLS_WINDOW_SECONDS,
 };
 #[cfg(test)]
-use hls::{hdr_size, segment_number, HLS_THROTTLE_AHEAD_SEGMENTS, HLS_THROTTLE_RESUME_SEGMENTS};
+use hls::{
+    hdr_size, newest_segment, segment_number, HLS_THROTTLE_AHEAD_SEGMENTS,
+    HLS_THROTTLE_RESUME_SEGMENTS,
+};
 use lease::{cleanup_orphans, constant_time_eq, header_block, input_args, InputPermits, Session};
 #[cfg(test)]
 use probe::{probe_failure, ProbeFailure, LIVE_PROBE_CACHE_TTL, PROBE_CACHE_TTL};

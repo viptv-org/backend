@@ -144,6 +144,9 @@ async fn run(
             progress = current;
             advanced = Instant::now();
         }
+        if a.playback.input_backpressured(&engine).await {
+            advanced = Instant::now();
+        }
         let stalled = advanced.elapsed() >= Duration::from_secs(inputs.policy.stall_seconds);
         if !requested && running && !stalled {
             continue;

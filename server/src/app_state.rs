@@ -48,6 +48,10 @@ impl From<String> for ApiError {
         // succeed until they stop a session.
         let status = match s.as_str() {
             MSG_PLAYBACK_CAPACITY => StatusCode::SERVICE_UNAVAILABLE,
+            "Media origin HTTP 401" | "Media origin HTTP 403" => StatusCode::FORBIDDEN,
+            "Media origin HTTP 404" | "Media origin HTTP 410" => StatusCode::GONE,
+            "Media origin unavailable" => StatusCode::BAD_GATEWAY,
+            "Cross-origin proxy media requires managed playback" => StatusCode::NOT_ACCEPTABLE,
             // Delivery refusals say this client/server pair cannot deliver this
             // source; the request itself was well formed. A 400 invites the
             // client to retry with escalating transports (each re-preparing and

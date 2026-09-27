@@ -21,8 +21,11 @@ pub(super) const HLS_DELETE_GRACE_SECONDS: u32 = 60;
 // what it produces in between (up to ~390x realtime during the one-second
 // segments) plus what its socket buffered while suspended, so the viewer's
 // next segment stays listed; files also outlive the listing by the grace.
+#[cfg(test)]
 const HLS_WINDOW_SEGMENTS: u64 = (HLS_WINDOW_SECONDS / HLS_SEGMENT_SECONDS) as u64;
+#[cfg(test)]
 pub(super) const HLS_THROTTLE_AHEAD_SEGMENTS: u64 = HLS_WINDOW_SEGMENTS / 3;
+#[cfg(test)]
 pub(super) const HLS_THROTTLE_RESUME_SEGMENTS: u64 = HLS_WINDOW_SEGMENTS / 6;
 pub(super) const HLS_THROTTLE_TICK: Duration = Duration::from_millis(100);
 // A resumed input may first reconnect upstream; the stall watchdog waits this
@@ -38,6 +41,10 @@ pub(super) struct Throttle {
     requested: u64,
     paused: bool,
     resumed: Option<Instant>,
+    timeline: HashMap<u64, f64>,
+    produced_seconds: f64,
+    consumed_seconds: f64,
+    last_segment: Option<u64>,
 }
 impl Throttle {
     pub(super) fn on_demand() -> Self {
@@ -49,6 +56,49 @@ impl Throttle {
     pub(super) fn observe(&mut self, file: &str) {
         if let Some(segment) = segment_number(file) {
             self.requested = self.requested.max(segment);
+            if let Some(end) = self.timeline.get(&segment) {
+                self.consumed_seconds = self.consumed_seconds.max(*end);
+            }
+        }
+    }
+    /// Actual EXTINF durations, including shorter initial and irregular copied GOPs.
+    pub(super) fn apply_playlist(&mut self, child: &Child, playlist: &str) {
+        let mut duration = 0.0;
+        for line in playlist.lines() {
+            if let Some(value) = line.strip_prefix("#EXTINF:") {
+                duration = value
+                    .split(',')
+                    .next()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|v| v.is_finite() && *v > 0.0)
+                    .unwrap_or(0.0);
+            } else if let Some(index) = segment_number(line) {
+                if self.last_segment.is_none_or(|last| index > last) {
+                    self.produced_seconds += duration;
+                    self.timeline.insert(index, self.produced_seconds);
+                    self.last_segment = Some(index);
+                }
+                if index <= self.requested {
+                    if let Some(end) = self.timeline.get(&index) {
+                        self.consumed_seconds = self.consumed_seconds.max(*end);
+                    }
+                }
+                duration = 0.0;
+            }
+        }
+        if let Some(last) = self.last_segment {
+            self.timeline
+                .retain(|index, _| *index >= last.saturating_sub(256));
+        }
+        let ahead = self.produced_seconds - self.consumed_seconds;
+        self.apply_ahead(child, ahead);
+    }
+    pub(super) fn apply_ahead(&mut self, child: &Child, ahead: f64) {
+        if !self.paused && ahead > 40.0 {
+            self.paused = suspend(child, true);
+        } else if self.paused && ahead <= 20.0 && suspend(child, false) {
+            self.paused = false;
+            self.resumed = Some(Instant::now());
         }
     }
     /// While suspended, or just resumed, the playlist legitimately stops moving.
@@ -59,6 +109,7 @@ impl Throttle {
                 .is_some_and(|at| at.elapsed() < HLS_THROTTLE_RESUME_GRACE)
     }
     /// Some(true) to suspend, Some(false) to resume, for the newest listed segment.
+    #[cfg(test)]
     pub(super) fn transition(&self, newest: u64) -> Option<bool> {
         let ahead = newest.saturating_sub(self.requested);
         if !self.paused && ahead > HLS_THROTTLE_AHEAD_SEGMENTS {
@@ -70,6 +121,7 @@ impl Throttle {
         }
     }
     /// Suspend or resume the encoder for the newest segment it has listed.
+    #[cfg(test)]
     pub(super) fn apply(&mut self, child: &Child, newest: u64) {
         match self.transition(newest) {
             Some(true) => self.paused = suspend(child, true),
@@ -108,6 +160,7 @@ pub(super) fn segment_number(file: &str) -> Option<u64> {
 }
 
 /// Newest AV segment the encoder has completed and listed.
+#[cfg(test)]
 pub(super) async fn newest_segment(dir: &std::path::Path) -> Option<u64> {
     let bytes = tokio::fs::read(dir.join("index.m3u8")).await.ok()?;
     if bytes.len() > 128 * 1024 {
@@ -163,6 +216,9 @@ pub(super) fn stable_hls_target_duration(bytes: Vec<u8>) -> Vec<u8> {
 }
 
 pub(super) fn media_type(file: &str) -> Option<&'static str> {
+    if file == "init.mp4" {
+        return Some("video/mp4");
+    }
     if matches!(file, "index.m3u8" | "master.m3u8" | "index_vtt.m3u8") {
         return Some("application/vnd.apple.mpegurl");
     }
@@ -187,9 +243,16 @@ pub(super) fn media_type(file: &str) -> Option<&'static str> {
             && digits.bytes().all(|b| b.is_ascii_digit()))
         .then_some("text/vtt");
     }
-    let digits = file.strip_prefix("segment-")?.strip_suffix(".ts")?;
+    let digits = file
+        .strip_prefix("segment-")?
+        .strip_suffix(".ts")
+        .or_else(|| file.strip_prefix("segment-")?.strip_suffix(".m4s"))?;
     if digits.len() >= 9 && digits.len() <= 16 && digits.bytes().all(|b| b.is_ascii_digit()) {
-        Some("video/mp2t")
+        Some(if file.ends_with(".m4s") {
+            "video/iso.segment"
+        } else {
+            "video/mp2t"
+        })
     } else {
         None
     }
@@ -308,11 +371,18 @@ async fn playlist_ready(dir: &std::path::Path) -> bool {
     let Ok(playlist) = tokio::fs::read_to_string(dir.join("index.m3u8")).await else {
         return false;
     };
+    if playlist.contains("#EXT-X-MAP:")
+        && !tokio::fs::metadata(dir.join("init.mp4"))
+            .await
+            .is_ok_and(|m| m.len() > 0)
+    {
+        return false;
+    }
     for line in playlist
         .lines()
         .filter(|line| !line.starts_with('#') && !line.is_empty())
     {
-        if media_type(line) == Some("video/mp2t")
+        if matches!(media_type(line), Some("video/mp2t" | "video/iso.segment"))
             && tokio::fs::metadata(dir.join(line))
                 .await
                 .is_ok_and(|m| m.len() > 0)

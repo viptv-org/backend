@@ -1,5 +1,6 @@
 use super::*;
 
+mod browser;
 mod compat;
 mod hdr;
 mod lifecycle;

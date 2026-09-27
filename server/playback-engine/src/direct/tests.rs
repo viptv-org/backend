@@ -766,3 +766,46 @@ fn original_range_semantics() {
         assert_eq!(range_bounds(Some(raw), 16), None);
     }
 }
+
+#[tokio::test]
+async fn sequential_live_reports_bytes_backpressure_and_eof() {
+    let app = Router::new().route(
+        "/stream",
+        get(|| async {
+            Body::from_stream(async_stream::stream! {
+                yield Ok::<_, std::io::Error>(Bytes::from(vec![0x47; 1880]));
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                yield Ok::<_, std::io::Error>(Bytes::from(vec![0x47; 1880]));
+            })
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/stream", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let direct = Direct::prepare(
+        Url::parse(&url).unwrap(),
+        &HashMap::new(),
+        "auto",
+        permits(),
+    )
+    .await
+    .unwrap();
+    let response = direct
+        .clone()
+        .serve("source.bin", Method::GET, HeaderMap::new())
+        .await
+        .unwrap();
+    let mut body = response.into_body().into_data_stream();
+    assert!(body.next().await.unwrap().is_ok());
+    assert!(direct.progress().await.is_some());
+    assert_eq!(direct.waiting_consumers.load(Ordering::Acquire), 1);
+    while body.next().await.is_some() {}
+    assert_eq!(direct.waiting_consumers.load(Ordering::Acquire), 0);
+    assert!(
+        direct.failed.load(Ordering::Acquire),
+        "live EOF requires recovery"
+    );
+    task.abort();
+}

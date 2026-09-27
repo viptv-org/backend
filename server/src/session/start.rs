@@ -4,6 +4,17 @@ pub(crate) async fn start_playback(
     State(a): State<App>,
     axum::Json(mut v): axum::Json<PlaybackRequest>,
 ) -> ApiResult {
+    if v.conversion_reason.as_deref().is_some_and(|reason| {
+        !matches!(
+            reason,
+            "container" | "video-codec" | "audio-codec" | "rendering" | "performance"
+        )
+    }) {
+        return Err("Invalid media conversion reason".into());
+    }
+    if let Some(reason) = &v.conversion_reason {
+        tracing::info!(reason, "Client requested media conversion");
+    }
     if v.audio_language.as_ref().is_some_and(|s| {
         s.is_empty() || s.len() > 16 || !s.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
     }) {

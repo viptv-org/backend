@@ -5,6 +5,7 @@ pub struct PlaybackManager {
     pub(super) slots: Arc<Semaphore>,
     pub(super) sessions: Mutex<HashMap<String, Session>>,
     pub(super) probe_cache: Mutex<HashMap<[u8; 32], ProbeCacheEntry>>,
+    pub(super) probe_flights: Mutex<HashMap<[u8; 32], std::sync::Weak<Mutex<()>>>>,
     pub(super) lifecycle: RwLock<()>,
     pub(super) initialized: OnceCell<()>,
     pub(super) filters: OnceCell<HashSet<String>>,
@@ -47,6 +48,7 @@ impl PlaybackManager {
             config,
             sessions: Mutex::new(HashMap::new()),
             probe_cache: Mutex::new(HashMap::new()),
+            probe_flights: Mutex::new(HashMap::new()),
             lifecycle: RwLock::new(()),
             initialized: OnceCell::new(),
             filters: OnceCell::new(),
@@ -99,8 +101,13 @@ impl PlaybackManager {
             if !matches!(child.try_wait(), Ok(None)) {
                 continue;
             }
-            if let Some(newest) = newest_segment(&session.dir).await {
-                session.throttle.apply(child, newest);
+            if let Some(stream) = &session.stream {
+                let (produced, consumed) = stream.times();
+                session.throttle.apply_ahead(child, produced - consumed);
+                continue;
+            }
+            if let Ok(playlist) = tokio::fs::read_to_string(session.dir.join("index.m3u8")).await {
+                session.throttle.apply_playlist(child, &playlist);
             }
         }
     }
@@ -246,6 +253,9 @@ impl PlaybackManager {
             for (id, session) in sessions.iter_mut() {
                 let (running, failed) = match session.child.as_mut().map(Child::try_wait) {
                     Some(Ok(Some(status))) => {
+                        if let Some(stream) = &session.stream {
+                            stream.complete(status.success());
+                        }
                         if !status.success() {
                             // Never log raw stderr, arguments, URLs, or provider headers.
                             tracing::warn!(exit_code = ?status.code(), "Playback engine failed");

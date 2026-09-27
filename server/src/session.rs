@@ -14,6 +14,7 @@ use start::{prepare_family, start_playback_inner};
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PlaybackRequest {
+    conversion_reason: Option<String>,
     stream_id: Option<String>,
     startup_id: Option<String>,
     channel_id: Option<String>,
@@ -48,15 +49,25 @@ pub(super) async fn heartbeat(
     State(a): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<String>,
+    body: Option<axum::Json<Value>>,
 ) -> ApiResult {
     let a = a.with_lease(lease);
+    let position = body
+        .as_ref()
+        .and_then(|body| body.0.get("position"))
+        .and_then(Value::as_f64);
+    if position
+        .is_some_and(|position| !position.is_finite() || !(0.0..=604800.0).contains(&position))
+    {
+        return Err("Invalid playback position".into());
+    }
     if let Some(result) = shared::heartbeat(&a, &id, None).await {
         return result;
     }
     if let Some(result) = live::heartbeat(&a, &id, None).await {
         return result;
     }
-    if !a.playback.heartbeat(&id).await {
+    if !a.playback.heartbeat_at(&id, position).await {
         a.resource_owners
             .lock()
             .unwrap()
@@ -142,7 +153,13 @@ pub(super) async fn media(
             "Media not found or expired".into(),
         ));
     }
-    served.map_err(|_| ApiError(StatusCode::NOT_FOUND, "Media not found or expired".into()))
+    served.map_err(|message| {
+        if message == "Copied HLS GOP requires compatible delivery" {
+            ApiError(StatusCode::NOT_ACCEPTABLE, message)
+        } else {
+            ApiError(StatusCode::NOT_FOUND, "Media not found or expired".into())
+        }
+    })
 }
 
 struct FamilyInputs {

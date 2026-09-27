@@ -42,6 +42,9 @@ fn probe_level<'de, D: serde::Deserializer<'de>>(value: D) -> Result<Option<u32>
 pub(super) const H264_COPY_LEVEL: u32 = 51;
 
 pub(super) fn conservative_frame_rate(rate: Option<&str>) -> bool {
+    frame_rate_within(rate, 60)
+}
+pub(super) fn frame_rate_within(rate: Option<&str>, maximum: u32) -> bool {
     let Some((numerator, denominator)) = rate.and_then(|r| r.split_once('/')) else {
         return false;
     };
@@ -55,7 +58,9 @@ pub(super) fn conservative_frame_rate(rate: Option<&str>) -> bool {
     else {
         return false;
     };
-    numerator > 0 && denominator > 0 && u128::from(numerator) <= u128::from(denominator) * 60
+    numerator > 0
+        && denominator > 0
+        && u128::from(numerator) <= u128::from(denominator) * u128::from(maximum)
 }
 
 impl ProbeStream {

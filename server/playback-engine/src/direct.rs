@@ -53,13 +53,35 @@ pub(super) struct Direct {
     playlists: Mutex<HashMap<String, (Instant, Bytes)>>,
     pub closed: AtomicBool,
     pub failed: AtomicBool,
+    pub waiting_consumers: std::sync::atomic::AtomicUsize,
     progress: Mutex<Option<String>>,
     size: Option<u64>,
+    pub(super) format: String,
     validator: Option<String>,
     permits: Arc<InputPermits>,
 }
 
 impl Direct {
+    pub(super) fn inspection_source(&self) -> (String, String, Arc<InputPermits>) {
+        let mut headers = self
+            .headers
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.as_str().to_owned(), v.to_owned()))
+            })
+            .collect::<HashMap<_, _>>();
+        if let Some(proxy) = &self.proxy {
+            headers.insert(crate::EGRESS_PROXY_HEADER.into(), proxy.clone());
+        }
+        (
+            self.root.as_str().to_owned(),
+            header_block(&headers).unwrap_or_default(),
+            self.permits.clone(),
+        )
+    }
     pub async fn prepare(
         url: Url,
         headers: &HashMap<String, String>,
@@ -110,14 +132,59 @@ impl Direct {
             playlists: Mutex::new(HashMap::new()),
             closed: AtomicBool::new(false),
             failed: AtomicBool::new(false),
+            waiting_consumers: std::sync::atomic::AtomicUsize::new(0),
             progress: Mutex::new(None),
             size: None,
+            format: format.to_owned(),
             validator: None,
             permits,
         };
         // Original files of any container need the same byte-range discovery as
         // MP4; only HLS uses playlist rewriting and per-segment routing.
-        if format != "hls" {
+        if format == "auto" {
+            let response = direct
+                .request(direct.root.clone(), Some("bytes=0-1023"))
+                .await?;
+            let range = content_range(response.headers());
+            let mime = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_owned();
+            direct.validator = response
+                .headers()
+                .get(header::ETAG)
+                .and_then(|v| v.to_str().ok())
+                .filter(|s| !s.starts_with("W/"))
+                .map(str::to_owned);
+            let status = response.status();
+            let mut body = response.bytes_stream();
+            let mut prefix = Vec::new();
+            while prefix.len() < 16 {
+                match body.next().await {
+                    Some(Ok(bytes)) => {
+                        prefix.extend_from_slice(&bytes[..bytes.len().min(1024 - prefix.len())])
+                    }
+                    Some(Err(_)) => return Err("Media origin unavailable".into()),
+                    None => break,
+                }
+            }
+            let hls = prefix.starts_with(b"#EXTM3U")
+                || mime.contains("mpegurl")
+                || mime.contains("mpegURL");
+            if mime.contains("text/html") {
+                return Err("Media origin unavailable".into());
+            }
+            direct.format = if hls { "hls" } else { "bin" }.into();
+            if !hls && status == StatusCode::PARTIAL_CONTENT {
+                let (start, _, size) = range.ok_or("Invalid source range")?;
+                if start != 0 || size == 0 {
+                    return Err("Invalid source range".into());
+                }
+                direct.size = Some(size);
+            }
+        } else if format != "hls" {
             let response = direct
                 .request(direct.root.clone(), Some("bytes=0-0"))
                 .await?;
@@ -143,7 +210,7 @@ impl Direct {
             }
         }
         let direct = Arc::new(direct);
-        if format == "hls" {
+        if direct.format == "hls" {
             direct.playlist(direct.root.clone()).await?;
         }
         Ok(direct)
@@ -183,7 +250,10 @@ impl Direct {
             // The validated original file is immutable; ranges may cache.
             let mut builder = Response::builder()
                 .status(if range.is_some() { 206 } else { 200 })
-                .header(header::CONTENT_TYPE, "video/mp4")
+                .header(
+                    header::CONTENT_TYPE,
+                    media_type(file).unwrap_or("application/octet-stream"),
+                )
                 .header(header::ACCEPT_RANGES, "bytes")
                 .header(header::CACHE_CONTROL, "public, max-age=3600");
             if range.is_some() {
@@ -278,6 +348,54 @@ impl Direct {
             };
             return builder
                 .body(Body::from_stream(stream))
+                .map_err(|_| "Invalid media response".into());
+        }
+        if self.format != "hls" {
+            if file != "source.bin" {
+                return Err("Media not found".into());
+            }
+            let response = self.request(self.root.clone(), None).await?;
+            let mut builder = Response::builder()
+                .status(200)
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(header::CACHE_CONTROL, "no-store");
+            if let Some(length) = response.content_length() {
+                builder = builder.header(header::CONTENT_LENGTH, length);
+            }
+            if method == Method::HEAD {
+                return builder
+                    .body(Body::empty())
+                    .map_err(|_| "Invalid media response".into());
+            }
+            let stream = async_stream::try_stream! {
+                let _permits = self.permits.clone();
+                let mut chunks = response.bytes_stream();
+                let started = Instant::now();
+                let mut received = 0usize;
+                while let Some(chunk) = chunks.next().await {
+                    if self.closed.load(Ordering::Acquire) { Err(std::io::Error::other("Media access revoked"))?; }
+                    let chunk = chunk.map_err(|_| {
+                        self.failed.store(true, Ordering::Release);
+                        std::io::Error::other("Media delivery failed")
+                    })?;
+                    received = received.saturating_add(chunk.len());
+                    *self.progress.lock().await = Some(format!("{started:?}:{received}"));
+                    self.waiting_consumers.fetch_add(1, Ordering::AcqRel);
+                    struct Waiting(Arc<Direct>);
+                    impl Drop for Waiting {
+                        fn drop(&mut self) { self.0.waiting_consumers.fetch_sub(1, Ordering::AcqRel); }
+                    }
+                    let waiting = Waiting(self.clone());
+                    yield chunk;
+                    drop(waiting);
+                }
+                self.failed.store(true, Ordering::Release);
+            };
+            return builder
+                .body(Body::from_stream(futures::StreamExt::map(
+                    stream,
+                    |item: Result<Bytes, std::io::Error>| item,
+                )))
                 .map_err(|_| "Invalid media response".into());
         }
         let url = if file == "index.m3u8" {

@@ -164,6 +164,67 @@ fn prune_probe_cache(cache: &mut HashMap<[u8; 32], ProbeCacheEntry>, now: Instan
 }
 
 impl PlaybackManager {
+    /// Demux only a bounded packet sample at the source's indexed seek point.
+    /// Returning None retains the accurate decode path; no guessed preroll.
+    pub(super) async fn copy_seek_position(
+        &self,
+        url: &str,
+        headers: &str,
+        position: f64,
+        origin: f64,
+        permits: Arc<InputPermits>,
+    ) -> Option<f64> {
+        if position == 0.0 {
+            return Some(0.0);
+        }
+        let mut cmd = Command::new(&self.config.ffprobe);
+        cmd.args(["-v", "error"]);
+        input_args(&mut cmd, headers);
+        cmd.args([
+            "-select_streams",
+            "v:0",
+            "-read_intervals",
+            &format!("{position:.6}%+#16"),
+            "-show_packets",
+            "-show_entries",
+            "packet=pts_time,flags",
+            "-of",
+            "json",
+            "-i",
+            url,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+        let mut child = cmd.spawn().ok()?;
+        let stdout = child.stdout.take()?;
+        let mut owned = ProbeChild {
+            child: Some(child),
+            permits: Some(permits),
+            cleanup_tasks: self.cleanup_tasks.clone(),
+        };
+        let result = timeout(Duration::from_secs(5), async {
+            let bytes = probe_output(stdout, 64 * 1024).await.ok()?;
+            if !owned.child.as_mut()?.wait().await.ok()?.success() {
+                return None;
+            }
+            let parsed: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+            parsed["packets"]
+                .as_array()?
+                .iter()
+                .filter(|p| p["flags"].as_str().is_some_and(|f| f.contains('K')))
+                .filter_map(|p| p["pts_time"].as_str()?.parse::<f64>().ok())
+                .map(|timestamp| timestamp - origin)
+                .filter(|v| v.is_finite() && *v >= 0.0 && *v <= position)
+                .max_by(f64::total_cmp)
+        })
+        .await
+        .ok()
+        .flatten();
+        owned.reap().await;
+        result
+    }
     /// One inspection per source identity. Live and VOD entries share this
     /// bounded cache, told apart by the live discriminator in the digest, so a
     /// channel hop inside the short live TTL no longer pays a fresh ffprobe
@@ -190,6 +251,21 @@ impl PlaybackManager {
                 tracing::debug!("Reused bounded source probe metadata");
                 return Some(entry.probe.clone());
             }
+        }
+        let flight = {
+            let mut flights = self.probe_flights.lock().await;
+            flights.retain(|_, flight| flight.strong_count() > 0);
+            if let Some(flight) = flights.get(&key).and_then(std::sync::Weak::upgrade) {
+                flight
+            } else {
+                let flight = Arc::new(Mutex::new(()));
+                flights.insert(key, Arc::downgrade(&flight));
+                flight
+            }
+        };
+        let _flight = flight.lock().await;
+        if let Some(entry) = self.probe_cache.lock().await.get(&key) {
+            return Some(entry.probe.clone());
         }
         let probe = Arc::new(self.probe(url, headers, permits).await?);
         let mut cache = self.probe_cache.lock().await;
@@ -281,9 +357,9 @@ impl PlaybackManager {
         // The reduced form keeps every field the delivery decision needs, including
         // SDR/HDR transfer evidence, while shrinking a response that failed to parse.
         let entries = if reduced {
-            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,channels,avg_frame_rate,color_transfer"
+            "format=duration,format_name,start_time:stream=index,codec_type,codec_name,width,height,pix_fmt,channels,avg_frame_rate,color_transfer"
         } else {
-            "format=duration,format_name:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,profile,level,channels,avg_frame_rate,r_frame_rate,color_transfer,field_order:stream_tags=language,title:stream_disposition=default,comment,hearing_impaired,visual_impaired,forced,attached_pic"
+            "format=duration,format_name,start_time:stream=index,codec_type,codec_name,width,height,pix_fmt,sample_aspect_ratio,profile,level,channels,avg_frame_rate,r_frame_rate,color_transfer,field_order:stream_tags=language,title:stream_disposition=default,comment,hearing_impaired,visual_impaired,forced,attached_pic"
         };
         cmd.args([
             "-analyzeduration",

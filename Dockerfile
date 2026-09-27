@@ -20,12 +20,14 @@ RUN if [ "$FRONTENDS" = "0" ]; then mkdir -p dist; exit 0; fi \
 
 FROM node:22-bookworm-slim AS tv-build
 ARG FRONTENDS
+ARG BROWSER_PREPARATION=0
+ARG LOCAL_MSE_REMUX=0
 WORKDIR /src/tv
 # tv-web validates its design/core/video pins offline before bundling.
 COPY tv/ ./
 RUN if [ "$FRONTENDS" = "0" ]; then mkdir -p dist; exit 0; fi \
     && npm ci --no-audit --no-fund \
-    && npm run build
+    && VITE_BROWSER_PREPARATION="$BROWSER_PREPARATION" VITE_LOCAL_MSE_REMUX="$LOCAL_MSE_REMUX" npm run build
 
 FROM debian:bookworm-slim AS runtime
 ARG FRONTENDS

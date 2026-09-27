@@ -8,6 +8,7 @@ pub(super) struct InputPermits {
 }
 
 pub(super) struct Session {
+    pub(super) stream: Option<Arc<fmp4::Stream>>,
     // Keep inspected VOD facts alive while this input is in use.
     pub(super) _source_probe: Option<Arc<Probe>>,
     pub(super) direct: Option<Arc<direct::Direct>>,
@@ -16,6 +17,7 @@ pub(super) struct Session {
     pub(super) child: Option<Child>,
     pub(super) touched: Instant,
     pub(super) stable_target_duration: bool,
+    pub(super) target_duration: Option<u32>,
     pub(super) supervised_live: bool,
     pub(super) throttle: Throttle,
     pub(super) permits: Arc<InputPermits>,
@@ -23,6 +25,9 @@ pub(super) struct Session {
 }
 impl Session {
     pub(super) async fn cleanup(mut self) {
+        if let Some(stream) = &self.stream {
+            stream.close();
+        }
         if let Some(direct) = &self.direct {
             direct
                 .closed
@@ -41,6 +46,9 @@ impl Session {
 // Also clean partially-started sessions when an HTTP request is cancelled.
 impl Drop for Session {
     fn drop(&mut self) {
+        if let Some(stream) = &self.stream {
+            stream.close();
+        }
         if let Some(direct) = &self.direct {
             direct
                 .closed
@@ -50,7 +58,7 @@ impl Drop for Session {
         if let Some(child) = child.as_mut() {
             let _ = child.start_kill();
         }
-        if self.dir.as_os_str().is_empty() {
+        if self.dir.as_os_str().is_empty() && child.is_none() {
             return;
         }
         let dir = self.dir.clone();
@@ -60,7 +68,9 @@ impl Drop for Session {
                 if let Some(mut child) = child {
                     let _ = child.wait().await;
                 }
-                let _ = tokio::fs::remove_dir_all(dir).await;
+                if !dir.as_os_str().is_empty() {
+                    let _ = tokio::fs::remove_dir_all(dir).await;
+                }
                 drop(permits);
             });
             let mut tasks = self.cleanup_tasks.lock().unwrap_or_else(|e| e.into_inner());

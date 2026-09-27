@@ -35,6 +35,7 @@ async fn open_segment_growth_and_stalled_leased_process_are_reaped() {
     manager.sessions.lock().await.insert(
         "id".into(),
         Session {
+            stream: None,
             _source_probe: None,
             direct: None,
             capability: "cap".into(),
@@ -42,6 +43,7 @@ async fn open_segment_growth_and_stalled_leased_process_are_reaped() {
             child: Some(child),
             touched: Instant::now(),
             stable_target_duration: false,
+            target_duration: None,
             supervised_live: false,
             throttle: Throttle::default(),
             permits: Arc::new(InputPermits {
@@ -412,6 +414,7 @@ async fn capabilities_expiry_and_cleanup_are_enforced() {
     manager.sessions.lock().await.insert(
         "id".into(),
         Session {
+            stream: None,
             _source_probe: None,
             direct: None,
             capability: "capability".into(),
@@ -419,6 +422,7 @@ async fn capabilities_expiry_and_cleanup_are_enforced() {
             child: None,
             touched: Instant::now(),
             stable_target_duration: false,
+            target_duration: None,
             supervised_live: false,
             throttle: Throttle::default(),
             permits: Arc::new(InputPermits {
@@ -493,6 +497,7 @@ async fn shutdown_reaps_children_and_cancelled_start_artifacts() {
         pids.push(child.id().unwrap());
         dirs.push(dir.clone());
         let session = Session {
+            stream: None,
             _source_probe: None,
             direct: None,
             capability: "capability".into(),
@@ -500,6 +505,7 @@ async fn shutdown_reaps_children_and_cancelled_start_artifacts() {
             child: Some(child),
             touched: Instant::now(),
             stable_target_duration: false,
+            target_duration: None,
             supervised_live: false,
             throttle: Throttle::default(),
             permits: Arc::new(InputPermits {

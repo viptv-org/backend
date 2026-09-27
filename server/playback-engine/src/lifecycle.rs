@@ -24,10 +24,16 @@ fn file_stream(
 
 impl PlaybackManager {
     pub async fn heartbeat(&self, id: &str) -> bool {
+        self.heartbeat_at(id, None).await
+    }
+    pub async fn heartbeat_at(&self, id: &str, position: Option<f64>) -> bool {
         let mut sessions = self.sessions.lock().await;
         if let Some(session) = sessions.get_mut(id) {
             if session.touched.elapsed() < self.config.ttl {
                 session.touched = Instant::now();
+                if let (Some(stream), Some(position)) = (&session.stream, position) {
+                    stream.observe(position);
+                }
                 return true;
             }
         }
@@ -82,6 +88,21 @@ impl PlaybackManager {
             session.child.as_mut().map(|child| child.try_wait()),
             Some(Ok(None))
         )
+    }
+    /// Sequential delivery has handed data to a bounded, paused client body.
+    /// Do not diagnose an upstream stall while no upstream read is requested.
+    pub async fn input_backpressured(&self, id: &str) -> bool {
+        self.sessions
+            .lock()
+            .await
+            .get(id)
+            .and_then(|s| s.direct.as_ref())
+            .is_some_and(|direct| {
+                direct
+                    .waiting_consumers
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    > 0
+            })
     }
     /// Hand progress policy to the owned live supervisor; quota/TTL watchdogs remain active.
     pub async fn supervise_live(&self, id: &str) {
@@ -290,17 +311,25 @@ impl PlaybackManager {
         method: axum::http::Method,
         headers: axum::http::HeaderMap,
     ) -> Option<Result<axum::response::Response, String>> {
-        let direct = {
+        let (direct, stream) = {
             let mut sessions = self.sessions.lock().await;
             let session = sessions.get_mut(id)?;
             if session.capability != capability || session.touched.elapsed() >= self.config.ttl {
                 return Some(Err("Media expired".into()));
             }
-            let direct = session.direct.clone()?;
+            let direct = session.direct.clone();
             session.touched = Instant::now();
-            direct
+            (direct, session.stream.clone())
         };
-        Some(direct.serve(file, method, headers).await)
+        if file == "stream.mp4" {
+            if let Some(stream) = stream {
+                return Some(stream.serve(method).await);
+            }
+        }
+        if file == "tracks.json" || file.starts_with("subtitle-") {
+            return Some(self.serve_tracks(direct?, file, method, headers).await);
+        }
+        Some(direct?.serve(file, method, headers).await)
     }
 
     pub async fn serve(
@@ -339,6 +368,28 @@ impl PlaybackManager {
                 .map_err(|_| "Media not found".to_owned())?;
             if mime == "application/vnd.apple.mpegurl" && stable_target_duration {
                 bytes = stable_hls_target_duration(bytes);
+                let text = std::str::from_utf8(&bytes).map_err(|_| "Invalid HLS output")?;
+                if let Some(advertised) = text.lines().find_map(|line| {
+                    line.strip_prefix("#EXT-X-TARGETDURATION:")?
+                        .parse::<u32>()
+                        .ok()
+                }) {
+                    let target = {
+                        let mut sessions = self.sessions.lock().await;
+                        let session = sessions.get_mut(id).ok_or("Media expired")?;
+                        *session.target_duration.get_or_insert(advertised)
+                    };
+                    if advertised > target {
+                        return Err("Copied HLS GOP requires compatible delivery".into());
+                    }
+                    bytes = text
+                        .replacen(
+                            &format!("#EXT-X-TARGETDURATION:{advertised}"),
+                            &format!("#EXT-X-TARGETDURATION:{target}"),
+                            1,
+                        )
+                        .into_bytes();
+                }
             }
             if mime == "text/vtt" && bytes.starts_with(b"WEBVTT\n") {
                 // Caption-enabled MPEGTS uses copyts, so both renditions share clock0.

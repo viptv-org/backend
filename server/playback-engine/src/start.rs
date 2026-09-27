@@ -46,6 +46,9 @@ impl PlaybackManager {
         }
         let header_block = header_block(&headers)?;
         let caps = capabilities.unwrap_or_default();
+        if caps.browser.as_ref().is_some_and(|b| !b.valid()) {
+            return Err("Invalid browser capability report".into());
+        }
         // Native players inspect and decode the original source themselves.
         // Do not reserve an FFmpeg worker or delay them behind a server probe.
         if caps.direct_urls == Some(true) {
@@ -93,6 +96,7 @@ impl PlaybackManager {
             self.sessions.lock().await.insert(
                 id,
                 Session {
+                    stream: None,
                     _source_probe: None,
                     direct: None,
                     capability: format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
@@ -100,6 +104,7 @@ impl PlaybackManager {
                     child: None,
                     touched: Instant::now(),
                     stable_target_duration: false,
+                    target_duration: None,
                     supervised_live: false,
                     throttle: Throttle::default(),
                     permits,
@@ -110,6 +115,76 @@ impl PlaybackManager {
                 mode = "direct",
                 format,
                 "Native playback prepared without server processing"
+            );
+            return Ok(response);
+        }
+        if !force
+            && caps.direct_play
+            && caps.browser.as_ref().is_some_and(|b| b.inspect_original)
+            && std::env::var("VIPTV_BROWSER_PREPARATION").as_deref() == Ok("1")
+            && selection.audio_track_index.is_none()
+            && selection.subtitle_track_index.is_none()
+        {
+            let permit = self
+                .slots
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| MSG_PLAYBACK_CAPACITY.to_owned())?;
+            let permits = Arc::new(InputPermits {
+                _playback: permit,
+                _provider: provider_permit,
+            });
+            let started = Instant::now();
+            let direct =
+                direct::Direct::prepare(validated.clone(), &headers, "auto", permits.clone())
+                    .await?;
+            let format = direct.format.clone();
+            let id = Uuid::new_v4().to_string();
+            let capability = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+            let filename = if format == "hls" {
+                "index.m3u8"
+            } else {
+                "source.bin"
+            };
+            let response = PlaybackResponse {
+                id: id.clone(),
+                url: format!("/media/{id}/{capability}/{filename}"),
+                format,
+                mode: "direct".into(),
+                video_mode: "copy".into(),
+                audio_mode: "copy".into(),
+                position,
+                live,
+                duration: 0.0,
+                audio_tracks: Vec::new(),
+                subtitle_tracks: Vec::new(),
+                selected_audio: None,
+                selected_subtitle: None,
+                subtitles_supported: false,
+                authorization: None,
+            };
+            self.sessions.lock().await.insert(
+                id,
+                Session {
+                    stream: None,
+                    _source_probe: None,
+                    direct: Some(direct),
+                    capability,
+                    dir: PathBuf::new(),
+                    child: None,
+                    touched: Instant::now(),
+                    stable_target_duration: false,
+                    target_duration: None,
+                    supervised_live: false,
+                    throttle: Throttle::default(),
+                    permits,
+                    cleanup_tasks: self.cleanup_tasks.clone(),
+                },
+            );
+            tracing::info!(
+                connection_ms = started.elapsed().as_millis() as u64,
+                mode = "client-inspection",
+                "Original media prepared without ffprobe"
             );
             return Ok(response);
         }
@@ -271,6 +346,7 @@ impl PlaybackManager {
                     self.sessions.lock().await.insert(
                         id,
                         Session {
+                            stream: None,
                             _source_probe: (!live).then(|| probe.clone()),
                             direct: Some(transport),
                             capability,
@@ -278,6 +354,7 @@ impl PlaybackManager {
                             child: None,
                             touched: Instant::now(),
                             stable_target_duration: false,
+                            target_duration: None,
                             supervised_live: false,
                             throttle: Throttle::default(),
                             permits,
@@ -346,11 +423,63 @@ impl PlaybackManager {
         // discard reference frames. Only decoding provides accurate arbitrary seeks.
         // At offset zero, copy compatible H264 video even when audio alone needs AAC
         // conversion. This avoids wasting CPU re-encoding already-compatible pictures.
-        let copy_video =
-            !force && position == 0.0 && probe.compatible_video(width, height, H264_COPY_LEVEL);
+        let continuous = !live
+            && !caps.direct_play
+            && selected_subtitle.is_none()
+            && caps.browser.as_ref().is_some_and(|b| b.fmp4);
+        let video = probe.video()?;
+        let hevc_copy = continuous
+            && !hdr
+            && !interlaced
+            && video.codec_name.as_deref() == Some("hevc")
+            && matches!(video.profile.as_deref(), Some("Main" | "Main 10"))
+            && matches!(video.pix_fmt.as_deref(), Some("yuv420p" | "yuv420p10le"))
+            && conservative_frame_rate(video.avg_frame_rate.as_deref())
+            && caps.browser.as_ref().is_some_and(|b| {
+                b.engines.iter().any(|e| {
+                    e.codec == "hevc"
+                        && e.evidence != "unknown"
+                        && matches!(e.engine.as_str(), "native" | "mse")
+                        && video
+                            .level
+                            .is_some_and(|level| level > 0 && level <= e.max_level.unwrap_or(150))
+                        && e.bit_depth.unwrap_or(8)
+                            >= if video.pix_fmt.as_deref() == Some("yuv420p10le") {
+                                10
+                            } else {
+                                8
+                            }
+                        && compat::frame_rate_within(
+                            video.avg_frame_rate.as_deref(),
+                            e.max_frame_rate.unwrap_or(30),
+                        )
+                        && video.width.zip(e.max_width).is_some_and(|(v, m)| v <= m)
+                        && video.height.zip(e.max_height).is_some_and(|(v, m)| v <= m)
+                })
+            });
+        let compatible_video = probe.compatible_video(width, height, H264_COPY_LEVEL) || hevc_copy;
+        let seek_origin = if !force && continuous && compatible_video {
+            self.copy_seek_position(
+                validated.as_str(),
+                &header_block,
+                position,
+                probe.format["start_time"]
+                    .as_str()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0),
+                permits.clone(),
+            )
+            .await
+        } else {
+            None
+        };
+        let position = seek_origin.unwrap_or(position);
+        let copy_video = !force && compatible_video && (position == 0.0 || seek_origin.is_some());
         // Copy audio independently at zero offset. After input-side seeking,
         // decoded audio is required to keep MPEGTS/WebVTT on the same clock.
-        let copy_audio = !force && position == 0.0 && probe.compatible_audio_stream(selected_input);
+        let copy_audio = !force
+            && (position == 0.0 || seek_origin.is_some())
+            && probe.compatible_audio_stream(selected_input);
         let remux = copy_video && copy_audio;
         let id = Uuid::new_v4().to_string();
         let capability = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -363,6 +492,7 @@ impl PlaybackManager {
             .map_err(|_| "Media storage unavailable".to_owned())?;
         let dir = root.join(&id);
         let mut session = Session {
+            stream: None,
             _source_probe: (!live).then(|| probe.clone()),
             direct: None,
             capability: capability.clone(),
@@ -370,6 +500,7 @@ impl PlaybackManager {
             child: None,
             touched: Instant::now(),
             stable_target_duration: true,
+            target_duration: None,
             supervised_live: false,
             throttle: if live {
                 Throttle::default()
@@ -428,7 +559,7 @@ impl PlaybackManager {
             // Jellyfin's M3U tuners, Threadfin and ErsatzTV read live input the
             // same way. On-demand encoding is paced by its viewer (`Throttle`).
             if position > 0.0 {
-                cmd.arg("-ss").arg(format!("{position:.3}"));
+                cmd.arg("-ss").arg(format!("{position:.6}"));
             }
             cmd.arg("-i").arg(validated.as_str());
             cmd.args(["-map", "0:v:0"]);
@@ -597,6 +728,66 @@ impl PlaybackManager {
                     cmd.args(["-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000"]);
                 }
             }
+            if continuous && copy_video {
+                cmd.args([
+                    "-f",
+                    "mp4",
+                    "-movflags",
+                    "frag_keyframe+empty_moov+default_base_moof",
+                    "-frag_duration",
+                    "2000000",
+                ]);
+                if hevc_copy {
+                    cmd.args(["-tag:v", "hvc1"]);
+                }
+                cmd.args(["-progress", "pipe:2", "-stats_period", "0.1"])
+                    .arg("pipe:1")
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                let mut child = cmd
+                    .spawn()
+                    .map_err(|_| "Playback engine unavailable".to_owned())?;
+                let output = child.stdout.take().ok_or("Media output unavailable")?;
+                let progress = child.stderr.take().ok_or("Media progress unavailable")?;
+                let stream = fmp4::Stream::new(output, progress, position, session.permits.clone());
+                session.child = Some(child);
+                session.stream = Some(stream.clone());
+                session.throttle = Throttle::on_demand();
+                stream.ready().await?;
+                let _ = tokio::fs::remove_dir(&dir).await;
+                session.dir = PathBuf::new();
+                self.sessions.lock().await.insert(id.clone(), session);
+                tracing::info!(
+                    probe_ms,
+                    engine_ready_ms = engine_started.elapsed().as_millis() as u64,
+                    video_mode = "copy",
+                    "Streaming fragmented MP4 ready"
+                );
+                return Ok(PlaybackResponse {
+                    id: id.clone(),
+                    url: format!("/media/{id}/{capability}/stream.mp4"),
+                    format: "fmp4".into(),
+                    mode: if remux { "remux" } else { "transcode" }.into(),
+                    video_mode: "copy".into(),
+                    audio_mode: if selected_input.is_none() {
+                        "none"
+                    } else if copy_audio {
+                        "copy"
+                    } else {
+                        "encode"
+                    }
+                    .into(),
+                    position,
+                    live,
+                    duration: duration.unwrap_or(0.0),
+                    audio_tracks,
+                    subtitle_tracks,
+                    selected_audio,
+                    selected_subtitle: None,
+                    subtitles_supported: false,
+                    authorization: None,
+                });
+            }
             if let Some(subtitle) = &selected_subtitle {
                 let language = subtitle.language.as_deref().unwrap_or("und");
                 let audio_map = if selected_audio.is_some() { "a:0," } else { "" };
@@ -620,10 +811,25 @@ impl PlaybackManager {
                 &initial_segment_seconds,
             ]);
             let hls_flags = if copy_video {
-                "delete_segments+temp_file+split_by_time"
+                if caps.browser.is_some() {
+                    "delete_segments+temp_file+independent_segments"
+                } else {
+                    "delete_segments+temp_file+split_by_time"
+                } // Preserve the legacy delivery contract during rollout.
             } else {
                 "delete_segments+temp_file"
             };
+            let fmp4_hls = !copy_video
+                && selected_subtitle.is_none()
+                && caps.browser.as_ref().is_some_and(|browser| browser.fmp4);
+            if fmp4_hls {
+                cmd.args([
+                    "-hls_segment_type",
+                    "fmp4",
+                    "-hls_fmp4_init_filename",
+                    "init.mp4",
+                ]);
+            }
             cmd.args([
                 "-hls_time",
                 &segment_seconds,
@@ -635,8 +841,12 @@ impl PlaybackManager {
                 hls_flags,
                 "-hls_segment_filename",
             ]);
-            cmd.arg(dir.join("segment-%09d.ts"))
-                .arg(dir.join("index.m3u8"));
+            cmd.arg(dir.join(if fmp4_hls {
+                "segment-%09d.m4s"
+            } else {
+                "segment-%09d.ts"
+            }))
+            .arg(dir.join("index.m3u8"));
             session.child = Some(
                 cmd.spawn()
                     .map_err(|_| "Playback engine unavailable".to_owned())?,
