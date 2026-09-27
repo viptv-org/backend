@@ -105,6 +105,7 @@ pub(super) async fn identity(
         v.position,
         v.capabilities.clone().unwrap_or_default(),
         v.force_transcode,
+        v.conversion_reason,
         v.audio_track_index,
         v.audio_language,
         v.subtitle_track_index,

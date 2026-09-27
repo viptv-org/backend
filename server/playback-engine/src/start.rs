@@ -13,6 +13,17 @@ impl PlaybackManager {
         provider_permit: Option<OwnedSemaphorePermit>,
         selection: TrackSelection,
     ) -> Result<PlaybackResponse, String> {
+        let reason = selection.conversion_reason.as_deref();
+        if reason.is_some_and(|value| {
+            !matches!(
+                value,
+                "container" | "video-codec" | "audio-codec" | "rendering" | "performance"
+            )
+        }) {
+            return Err("Invalid media conversion reason".into());
+        }
+        let force_video = force && reason != Some("audio-codec");
+        let force_audio = reason == Some("audio-codec") || force && reason.is_none();
         if selection
             .audio_track_index
             .is_some_and(|index| index > 65535)
@@ -419,16 +430,14 @@ impl PlaybackManager {
         if duration.is_some_and(|duration| position >= duration) {
             return Err("Playback position is past the end of this source".into());
         }
-        // Input-side -ss plus stream copy can start on an earlier keyframe or
-        // discard reference frames. Only decoding provides accurate arbitrary seeks.
-        // At offset zero, copy compatible H264 video even when audio alone needs AAC
-        // conversion. This avoids wasting CPU re-encoding already-compatible pictures.
+        // Qualified browser copy delivery reports the preceding keyframe origin;
+        // the client consumes preroll instead of requiring video encoding for seek.
         let continuous = !live
             && !caps.direct_play
             && selected_subtitle.is_none()
             && caps.browser.as_ref().is_some_and(|b| b.fmp4);
         let video = probe.video()?;
-        let hevc_copy = continuous
+        let hevc_copy = (continuous || live && caps.browser.as_ref().is_some_and(|b| b.fmp4))
             && !hdr
             && !interlaced
             && video.codec_name.as_deref() == Some("hevc")
@@ -458,7 +467,7 @@ impl PlaybackManager {
                 })
             });
         let compatible_video = probe.compatible_video(width, height, H264_COPY_LEVEL) || hevc_copy;
-        let seek_origin = if !force && continuous && compatible_video {
+        let seek_origin = if !force_video && continuous && compatible_video {
             self.copy_seek_position(
                 validated.as_str(),
                 &header_block,
@@ -474,10 +483,11 @@ impl PlaybackManager {
             None
         };
         let position = seek_origin.unwrap_or(position);
-        let copy_video = !force && compatible_video && (position == 0.0 || seek_origin.is_some());
+        let copy_video =
+            !force_video && compatible_video && (position == 0.0 || seek_origin.is_some());
         // Copy audio independently at zero offset. After input-side seeking,
         // decoded audio is required to keep MPEGTS/WebVTT on the same clock.
-        let copy_audio = !force
+        let copy_audio = !force_audio
             && (position == 0.0 || seek_origin.is_some())
             && probe.compatible_audio_stream(selected_input);
         let remux = copy_video && copy_audio;
@@ -583,6 +593,9 @@ impl PlaybackManager {
             }
             if copy_video {
                 cmd.args(["-c:v", "copy"]);
+                if hevc_copy {
+                    cmd.args(["-tag:v", "hvc1"]);
+                }
             } else {
                 let gop = (HLS_SEGMENT_SECONDS * 30).to_string();
                 let force_key_frames = format!(
@@ -737,9 +750,6 @@ impl PlaybackManager {
                     "-frag_duration",
                     "2000000",
                 ]);
-                if hevc_copy {
-                    cmd.args(["-tag:v", "hvc1"]);
-                }
                 cmd.args(["-progress", "pipe:2", "-stats_period", "0.1"])
                     .arg("pipe:1")
                     .stdout(Stdio::piped())
@@ -819,7 +829,7 @@ impl PlaybackManager {
             } else {
                 "delete_segments+temp_file"
             };
-            let fmp4_hls = !copy_video
+            let fmp4_hls = (!copy_video || hevc_copy)
                 && selected_subtitle.is_none()
                 && caps.browser.as_ref().is_some_and(|browser| browser.fmp4);
             if fmp4_hls {

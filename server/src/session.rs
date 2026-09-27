@@ -36,6 +36,7 @@ pub(super) struct PlaybackRequest {
 // One track selection for both the direct and family startup paths.
 fn track_selection(v: &PlaybackRequest) -> playback::TrackSelection {
     playback::TrackSelection {
+        conversion_reason: v.conversion_reason.clone(),
         audio_track_index: v.audio_track_index,
         audio_language: v.audio_language.clone(),
         subtitle_track_index: v.subtitle_track_index,

@@ -115,6 +115,8 @@ impl BrowserCapabilities {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrackSelection {
+    /// Scoped browser failure; absent retains legacy forced-conversion behavior.
+    pub conversion_reason: Option<String>,
     pub audio_track_index: Option<u32>,
     pub audio_language: Option<String>,
     pub subtitle_track_index: Option<u32>,

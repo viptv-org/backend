@@ -163,7 +163,13 @@ async fn copied_seek_and_audio_conversion_stream_without_video_encoding() {
         ttl: Duration::from_secs(30),
     });
     let response = manager
-        .start(url, HashMap::new(), 7.0, Some(browser_caps(false)), false)
+        .start(
+            url.clone(),
+            HashMap::new(),
+            7.0,
+            Some(browser_caps(false)),
+            false,
+        )
         .await
         .unwrap();
     assert_eq!(response.format, "fmp4");
@@ -197,13 +203,143 @@ async fn copied_seek_and_audio_conversion_stream_without_video_encoding() {
             "-of",
             "json",
         ])
-        .arg(output)
+        .arg(&output)
         .output()
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
     assert_eq!(json["streams"][0]["codec_name"], "h264");
     assert_eq!(json["streams"][1]["codec_name"], "aac");
+    manager.stop(&response.id).await;
+    let audio_retry = manager
+        .start_with_selection(
+            url,
+            HashMap::new(),
+            7.0,
+            Some(browser_caps(false)),
+            true,
+            false,
+            None,
+            TrackSelection {
+                conversion_reason: Some("audio-codec".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        audio_retry.video_mode, "copy",
+        "an audio refusal must not encode compatible video"
+    );
+    assert_eq!(audio_retry.audio_mode, "encode");
+    manager.stop(&audio_retry.id).await;
+    let (aac_url, aac_task) = fixture(tokio::fs::read(&output).await.unwrap()).await;
+    let video_retry = manager
+        .start_with_selection(
+            aac_url,
+            HashMap::new(),
+            0.0,
+            Some(browser_caps(false)),
+            true,
+            false,
+            None,
+            TrackSelection {
+                conversion_reason: Some("video-codec".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(video_retry.video_mode, "encode");
+    assert_eq!(
+        video_retry.audio_mode, "copy",
+        "a video refusal must preserve compatible AAC"
+    );
+    manager.stop(&video_retry.id).await;
+    aac_task.abort();
+    manager.shutdown().await;
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires real FFmpeg/libx265 and ffprobe binaries"]
+async fn qualified_live_hevc_audio_conversion_keeps_video_and_uses_fmp4_hls() {
+    let ffmpeg = PathBuf::from(std::env::var("VIPTV_TEST_FFMPEG").unwrap());
+    let ffprobe = PathBuf::from(std::env::var("VIPTV_TEST_FFPROBE").unwrap());
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("live.mkv");
+    let result = Command::new(&ffmpeg)
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=24",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=sample_rate=48000",
+            "-t",
+            "6",
+            "-c:v",
+            "libx265",
+            "-preset",
+            "ultrafast",
+            "-x265-params",
+            "log-level=error:pools=1:keyint=24",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "ac3",
+            "-ac",
+            "2",
+        ])
+        .arg(&file)
+        .output()
+        .await
+        .unwrap();
+    assert!(result.status.success());
+    let (url, task) = fixture(tokio::fs::read(file).await.unwrap()).await;
+    let manager = PlaybackManager::new(Config {
+        ffmpeg,
+        ffprobe,
+        root: root.path().join("media"),
+        max_sessions: 1,
+        ttl: Duration::from_secs(30),
+    });
+    let mut caps = browser_caps(false);
+    caps.browser.as_mut().unwrap().engines = serde_json::from_value(serde_json::json!([{
+        "engine":"mse", "codec":"hevc", "evidence":"decoded", "max_width":1920, "max_height":1080, "max_frame_rate":30, "bit_depth":8, "max_level":150, "hdr":false
+    }])).unwrap();
+    let response = manager
+        .start_with_selection(
+            url,
+            HashMap::new(),
+            0.0,
+            Some(caps),
+            false,
+            true,
+            None,
+            TrackSelection {
+                conversion_reason: Some("audio-codec".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.video_mode, "copy");
+    assert_eq!(response.audio_mode, "encode");
+    let playlist = tokio::fs::read_to_string(
+        root.path()
+            .join("media")
+            .join(&response.id)
+            .join("index.m3u8"),
+    )
+    .await
+    .unwrap();
+    assert!(playlist.contains("#EXT-X-MAP:URI=\"init.mp4\""));
+    assert!(playlist.contains(".m4s"));
     manager.stop(&response.id).await;
     manager.shutdown().await;
     task.abort();
