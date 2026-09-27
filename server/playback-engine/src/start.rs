@@ -432,8 +432,7 @@ impl PlaybackManager {
         }
         // Qualified browser copy delivery reports the preceding keyframe origin;
         // the client consumes preroll instead of requiring video encoding for seek.
-        let continuous = !live
-            && !caps.direct_play
+        let continuous = !caps.direct_play
             && selected_subtitle.is_none()
             && caps.browser.as_ref().is_some_and(|b| b.fmp4);
         let video = probe.video()?;
@@ -762,7 +761,11 @@ impl PlaybackManager {
                 let stream = fmp4::Stream::new(output, progress, position, session.permits.clone());
                 session.child = Some(child);
                 session.stream = Some(stream.clone());
-                session.throttle = Throttle::on_demand();
+                session.throttle = if live {
+                    Throttle::default()
+                } else {
+                    Throttle::on_demand()
+                };
                 stream.ready().await?;
                 let _ = tokio::fs::remove_dir(&dir).await;
                 session.dir = PathBuf::new();

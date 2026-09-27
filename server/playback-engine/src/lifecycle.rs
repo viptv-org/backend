@@ -92,17 +92,18 @@ impl PlaybackManager {
     /// Sequential delivery has handed data to a bounded, paused client body.
     /// Do not diagnose an upstream stall while no upstream read is requested.
     pub async fn input_backpressured(&self, id: &str) -> bool {
-        self.sessions
-            .lock()
-            .await
-            .get(id)
-            .and_then(|s| s.direct.as_ref())
-            .is_some_and(|direct| {
-                direct
-                    .waiting_consumers
-                    .load(std::sync::atomic::Ordering::Acquire)
-                    > 0
-            })
+        self.sessions.lock().await.get(id).is_some_and(|session| {
+            session
+                .stream
+                .as_ref()
+                .is_some_and(|stream| stream.backpressured())
+                || session.direct.as_ref().is_some_and(|direct| {
+                    direct
+                        .waiting_consumers
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        > 0
+                })
+        })
     }
     /// Hand progress policy to the owned live supervisor; quota/TTL watchdogs remain active.
     pub async fn supervise_live(&self, id: &str) {
@@ -115,6 +116,9 @@ impl PlaybackManager {
         let (dir, direct) = {
             let sessions = self.sessions.lock().await;
             let session = sessions.get(id)?;
+            if let Some(stream) = &session.stream {
+                return Some(format!("media-time:{:.3}", stream.times().0));
+            }
             (session.dir.clone(), session.direct.clone())
         };
         if let Some(direct) = direct {

@@ -8,7 +8,9 @@ use axum::{
 };
 use serde::Deserialize;
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use viptv_playback_engine::{Capabilities, Config, PlaybackManager, PlaybackResponse};
+use viptv_playback_engine::{
+    Capabilities, Config, PlaybackManager, PlaybackResponse, TrackSelection,
+};
 
 #[derive(Clone)]
 struct Check {
@@ -23,6 +25,8 @@ struct Start {
     capabilities: Capabilities,
     #[serde(default)]
     force: bool,
+    #[serde(default)]
+    live: bool,
 }
 async fn start(
     State(state): State<Check>,
@@ -31,6 +35,7 @@ async fn start(
     if ![
         "h264-aac.mkv",
         "h264-ac3.mkv",
+        "continuous-ac3.ts",
         "h264-avi.avi",
         "mpeg2.mkv",
         "subtitles.mkv",
@@ -42,12 +47,15 @@ async fn start(
     }
     let response = state
         .engine
-        .start(
+        .start_with_selection(
             format!("{}/{}", state.origin, input.fixture),
             HashMap::new(),
             input.position,
             Some(input.capabilities),
             input.force,
+            input.live,
+            None,
+            TrackSelection::default(),
         )
         .await
         .map_err(|error| (StatusCode::NOT_ACCEPTABLE, error))?;

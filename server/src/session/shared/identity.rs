@@ -126,8 +126,7 @@ pub(in crate::session) async fn start(a: App, v: PlaybackRequest) -> ApiResult {
     // layer and the manager hands back the original URL untouched.
     if v.capabilities.as_ref().is_some_and(|caps| {
         caps.direct_urls == Some(true)
-            || (v.channel_id.is_none()
-                && (v.managed_only || v.force_transcode)
+            || ((v.managed_only || v.force_transcode)
                 && caps.browser.as_ref().is_some_and(|b| b.fmp4))
     }) {
         return start_playback_inner(a, v).await;

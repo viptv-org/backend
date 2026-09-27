@@ -27,3 +27,10 @@ in browser track metadata.
 
 See [browser qualification](https://github.com/viptv-org/video/blob/af63620913af8c8cbe3f252a6c64e7dc235df87f/docs/BROWSER_PIPELINE.md) in the
 organization workspace and [transcoder benchmark](../../docs/TRANSCODER_BENCHMARK.md).
+
+Copied live delivery also uses continuous fragmented MP4 for qualified browsers.
+A production source exposed irregular GOPs that raised HLS TARGETDURATION from
+2 to 3 after startup; strict playlist refusal then exhausted the client's buffer.
+Continuous output preserves reference frames without requiring fixed segment
+boundaries. Live sessions remain unthrottled, use output media-time progress for
+supervision, and bypass multi-viewer groups because the body has one consumer.

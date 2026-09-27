@@ -263,7 +263,7 @@ async fn copied_seek_and_audio_conversion_stream_without_video_encoding() {
 
 #[tokio::test]
 #[ignore = "requires real FFmpeg/libx265 and ffprobe binaries"]
-async fn qualified_live_hevc_audio_conversion_keeps_video_and_uses_fmp4_hls() {
+async fn qualified_live_hevc_audio_conversion_keeps_video_and_continuous_progress() {
     let ffmpeg = PathBuf::from(std::env::var("VIPTV_TEST_FFMPEG").unwrap());
     let ffprobe = PathBuf::from(std::env::var("VIPTV_TEST_FFPROBE").unwrap());
     let root = tempfile::tempdir().unwrap();
@@ -330,16 +330,27 @@ async fn qualified_live_hevc_audio_conversion_keeps_video_and_uses_fmp4_hls() {
         .unwrap();
     assert_eq!(response.video_mode, "copy");
     assert_eq!(response.audio_mode, "encode");
-    let playlist = tokio::fs::read_to_string(
-        root.path()
-            .join("media")
-            .join(&response.id)
-            .join("index.m3u8"),
+    assert_eq!(
+        response.format, "fmp4",
+        "copied live GOPs must not depend on an HLS target duration"
+    );
+    assert!(response.live);
+    assert!(manager.live_progress(&response.id).await.is_some());
+    let parts = response.url.split('/').collect::<Vec<_>>();
+    let served = manager
+        .serve_original(parts[2], parts[3], parts[4], Method::GET, HeaderMap::new())
+        .await
+        .unwrap()
+        .unwrap();
+    let bytes = timeout(
+        Duration::from_secs(20),
+        axum::body::to_bytes(served.into_body(), 16 * 1024 * 1024),
     )
     .await
+    .unwrap()
     .unwrap();
-    assert!(playlist.contains("#EXT-X-MAP:URI=\"init.mp4\""));
-    assert!(playlist.contains(".m4s"));
+    assert!(bytes.windows(4).any(|window| window == b"moof"));
+    assert!(bytes.windows(4).any(|window| window == b"hvc1"));
     manager.stop(&response.id).await;
     manager.shutdown().await;
     task.abort();

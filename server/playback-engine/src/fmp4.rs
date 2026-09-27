@@ -6,7 +6,7 @@ use axum::{
     http::Method,
     response::Response,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{mpsc, watch};
 
 pub(super) struct Stream {
@@ -17,6 +17,7 @@ pub(super) struct Stream {
     produced: Arc<AtomicU64>,
     consumed: AtomicU64,
     origin: f64,
+    backpressured: Arc<AtomicBool>,
 }
 impl Stream {
     pub(super) fn new(
@@ -57,6 +58,8 @@ impl Stream {
                 }
             }
         });
+        let backpressured = Arc::new(AtomicBool::new(false));
+        let blocked = backpressured.clone();
         tokio::spawn(async move {
             let _permits = permits;
             let mut bytes = vec![0; 64 * 1024];
@@ -81,7 +84,9 @@ impl Stream {
                     }
                     Ok(n) => {
                         ready.send_replace(true);
+                        blocked.store(send.capacity() == 0, Ordering::Release);
                         tokio::select! { result = send.send(Ok(Bytes::copy_from_slice(&bytes[..n]))) => { if result.is_err() { break; } }, _ = cancelled.changed() => break }
+                        blocked.store(false, Ordering::Release);
                     }
                     Err(_) => {
                         let _ =
@@ -99,6 +104,7 @@ impl Stream {
             produced,
             consumed: AtomicU64::new(0),
             origin,
+            backpressured,
         })
     }
     pub(super) async fn ready(&self) -> Result<(), String> {
@@ -115,6 +121,9 @@ impl Stream {
         .await
         .map_err(|_| "Media output timed out")?
         .map_err(str::to_owned)
+    }
+    pub(super) fn backpressured(&self) -> bool {
+        self.backpressured.load(Ordering::Acquire)
     }
     pub(super) fn close(&self) {
         self.closed.send_replace(true);

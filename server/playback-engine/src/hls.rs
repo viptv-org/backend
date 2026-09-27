@@ -1,8 +1,8 @@
 use super::*;
 
 // A one-second initial segment reduces player startup; steady-state stays at
-// two seconds. Copied video uses split-by-time so variable source GOPs cannot
-// change the advertised target duration during a session.
+// two seconds. Qualified browser copy uses continuous fragmented MP4. Legacy
+// copied HLS retains split-by-time during the independent browser rollout.
 pub(super) const HLS_INITIAL_SEGMENT_SECONDS: u32 = 1;
 pub(super) const HLS_SEGMENT_SECONDS: u32 = 2;
 pub(super) const HLS_WINDOW_SECONDS: u32 = 120;
