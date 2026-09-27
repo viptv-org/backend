@@ -95,3 +95,45 @@ The public route terminates TLS and forwards to the host application port. It mu
 ## Release gate
 
 A release requires all automated checks, isolated Docker/real-FFmpeg acceptance, copied-production migration proof, actual production validation, and physical Roku evidence. Simulator success is not physical-device proof. Release ZIPs include no credential, only the locked origin, and must be distributed privately with complete corresponding GPLv2 Roku source/notices and rebuild instructions.
+
+## Verified browser media rollout — 2026-09-27
+
+Backend `9b0c206f0328ad3583bce7ef4954fe2bd1ff8c1c` and TV-web
+`fdcdbf7298fa6280bf9bff497c5000569e806530` are deployed as image
+`sha256:6f6d34ba54ad45d9dd695e77be2e67db5fe89106c5f0d264a7c68db2586d79eb`.
+Both viewing hosts serve `app-DPY6ZflC.js`; entry, renderer and playback asset
+bytes were compared against the exact image. Cloudflare adds its analytics
+beacon to HTML, so public HTML checksums are not used as bundle identity.
+Public health, unauthorized API rejection, the running image and container
+health were verified. Browser preparation and local MSE copy are enabled;
+FFmpeg 5.1.9 remains selected (see docs/TRANSCODER_BENCHMARK.md).
+
+A production live source exposed irregular copied-HLS GOPs: its target duration
+rose after initial publication, and the client stalled. The corrected release
+uses continuous fragmented MP4 for qualified copied live sessions, keeps live
+production unthrottled, supervises muxer media-time progress, and gives each
+continuous body one viewer. Explicit HLS media refusals are now surfaced before
+retry exhaustion. The same production channel subsequently advanced beyond
+85 seconds with `video=copy`, `audio=aac`, `format=mp4`; Back returned to Home
+and the authenticated dashboard confirmed zero active sessions.
+
+Acceptance included 97 video tests, 217 client tests, 80 engine tests with real
+FFmpeg, 208 server tests plus the affected shared-session regression suite,
+strict Clippy, production builds and isolated container acceptance. Chromium,
+Firefox, Playwright WebKit and the physical Vizio completed 30-minute 720p30
+HTTPS runs. The browser drop ratios were 0.158%, 0.324% and 0.311%; maximum
+sampled AV skew was below 17.1 ms. Vizio reported zero drops over 54,501 frames
+and a maximum sampled MSE buffer of 30.05 seconds. A separate physical-TV
+continuous live audio-conversion check passed 45 seconds with 1,472 reported
+frames and zero drops. See the video repository's BROWSER_PIPELINE.md for
+measurement limits; this is not sustained 4K/HDR or physical Safari evidence.
+
+A copied-production database passed startup and row/hash comparisons before
+replacement. Fresh read-only online backups and authenticated zero-session
+checks preceded each replacement. Account/profile ownership, favorites,
+progress, providers, addons and migration rows remained unchanged by startup.
+The named data volume, GPU/WARP overlays and watch Host/Origin proxy rewrites
+were retained. The watch bundle was published by an atomic nginx root change,
+keeping prior bundles and lazy assets. Private rollback images, configuration,
+backups and evidence remain outside Git. The TV was returned to VIPTV and the
+temporary diagnostic servers were stopped.
