@@ -896,7 +896,8 @@ async fn family_startup_tries_verified_backup_and_reports_sanitized_attempts() {
     assert!(busy["error"]
         .as_str()
         .unwrap()
-        .contains("connections are busy"));
+        .contains("connection limit"));
+    assert_eq!(busy["error_code"], "provider_connection_limit");
     request(
         &app,
         "DELETE",

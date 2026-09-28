@@ -28,14 +28,26 @@ pub(crate) const MSG_PARENT_REQUIRED: &str = "Parent PIN required";
 pub(crate) const MSG_PARENT_PIN_INVALID: &str = "Incorrect parent PIN";
 pub(crate) const MSG_PROFILE_POLICY_CHANGED: &str = "Profile policy changed";
 impl ApiError {
-    /// Client-visible `error_code` for API responses. Only these four
-    /// conditions carry a code; everything else relies on the status.
+    /// Stable recovery reasons shared by all platform clients.
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),
             MSG_PARENT_PIN_INVALID => Some("parent_pin_invalid"),
             MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
+            "Provider connection limit reached"
+            | "All available connections are busy. Try this channel again shortly." => {
+                Some("provider_connection_limit")
+            }
+            MSG_PLAYBACK_CAPACITY => Some("playback_capacity"),
+            "Stream expired; discover again"
+            | "Media origin HTTP 404"
+            | "Media origin HTTP 410" => Some("source_expired"),
+            "Media origin HTTP 401" | "Media origin HTTP 403" => Some("source_access_denied"),
+            "Media origin unavailable" => Some("source_unavailable"),
+            MSG_DELIVERY_REFUSED | MSG_ENGINE_UNAVAILABLE | MSG_PROBE_UNSAFE => {
+                Some("delivery_unsupported")
+            }
             _ => None,
         }
     }
@@ -48,6 +60,7 @@ impl From<String> for ApiError {
         // succeed until they stop a session.
         let status = match s.as_str() {
             MSG_PLAYBACK_CAPACITY => StatusCode::SERVICE_UNAVAILABLE,
+            "Provider connection limit reached" => StatusCode::TOO_MANY_REQUESTS,
             "Media origin HTTP 401" | "Media origin HTTP 403" => StatusCode::FORBIDDEN,
             "Media origin HTTP 404" | "Media origin HTTP 410" => StatusCode::GONE,
             "Media origin unavailable" => StatusCode::BAD_GATEWAY,
@@ -66,16 +79,59 @@ impl From<String> for ApiError {
 }
 impl From<&str> for ApiError {
     fn from(s: &str) -> Self {
-        Self(StatusCode::BAD_REQUEST, s.into())
+        Self::from(s.to_owned())
     }
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let mut body = json!({"error":self.1});
+        let message = match self.api_error_code() {
+            Some("provider_connection_limit") => "This IPTV provider has reached its connection limit. Stop another stream or choose another provider.",
+            Some("playback_capacity") => "The server has reached its playback limit. Stop another stream or try again later.",
+            Some("source_expired") => "This stream has expired. Refresh the sources and choose it again.",
+            Some("source_access_denied") => "The provider rejected access to this stream. Check the provider account or choose another source.",
+            Some("source_unavailable") => "The provider could not be reached. Try again or choose another source.",
+            Some("delivery_unsupported") => "This source cannot be played with the current playback configuration. Choose another source.",
+            _ => &self.1,
+        };
+        let mut body = json!({"error":message});
         if let Some(code) = self.api_error_code() {
             body["error_code"] = json!(code);
         }
         (self.0, axum::Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod display_error_tests {
+    use super::*;
+    #[tokio::test]
+    async fn capacity_errors_explain_recovery_without_conflating_rate_limits() {
+        for (message, code) in [
+            (
+                "Provider connection limit reached",
+                "provider_connection_limit",
+            ),
+            (
+                "All available connections are busy. Try this channel again shortly.",
+                "provider_connection_limit",
+            ),
+            (MSG_PLAYBACK_CAPACITY, "playback_capacity"),
+        ] {
+            let response = ApiError(StatusCode::TOO_MANY_REQUESTS, message.into()).into_response();
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["error_code"], code);
+            assert!(body["error"]
+                .as_str()
+                .unwrap()
+                .contains("Stop another stream"));
+        }
+        assert_eq!(
+            ApiError(StatusCode::TOO_MANY_REQUESTS, "Too many requests".into()).api_error_code(),
+            None
+        );
     }
 }
 pub(crate) fn db_error(_: rusqlite::Error) -> ApiError {
