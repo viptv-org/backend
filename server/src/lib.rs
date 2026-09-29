@@ -19,6 +19,7 @@ mod preferences;
 pub mod provider;
 mod service_health;
 mod service_errors;
+mod source_http;
 #[cfg(test)]
 mod discovery_error_tests;
 mod secret_store;

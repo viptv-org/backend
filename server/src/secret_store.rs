@@ -9,8 +9,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 type Result<T> = std::result::Result<T, &'static str>;
 const MAX_SECRET: usize = 256 * 1024;
-// Legacy addon manifests were bounded at 32 MiB; retain that plus URL/envelope
-// payload overhead without widening the normal gateway/provider secret limit.
+// Addon documents have a separate serialized-payload budget; normal
+// gateway/provider secrets retain their smaller limit.
 const MAX_ADDON: usize = 33 * 1024 * 1024;
 
 pub(crate) struct SecretBytes(Zeroizing<Vec<u8>>);

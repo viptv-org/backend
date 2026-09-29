@@ -135,7 +135,8 @@ async fn iptv_discovery_and_guide_explain_failures_without_losing_healthy_source
 
 #[tokio::test]
 async fn addon_errors_and_invalid_success_bodies_are_not_silent_empty_results() {
-    let app = fixture();
+    let mut app = fixture();
+    app.addons.allow_test_loopback=true;
     let upstream = upstream().await;
     app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Fixture addon',?1,?2,1)",params![format!("{}/private-token/manifest.json",upstream.url),json!({"id":"fixture","name":"Fixture addon","version":"1.0.0","resources":["stream"],"types":["series"],"catalogs":[]}).to_string()]).unwrap();
     for (mode, code) in [
@@ -224,6 +225,7 @@ async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
     let vault=Arc::new(secret_store::Vault::from_json(&json!({"active":"fixture","keys":{"fixture":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string()).unwrap());
     app.secret_vault = Some(vault.clone());
     app.addons.vault = Some(vault);
+    app.addons.allow_test_loopback=true;
     let entered = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let entering = entered.clone();

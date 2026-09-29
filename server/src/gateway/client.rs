@@ -2,40 +2,11 @@
 //! do not follow redirects with integration credentials or inherit host proxies.
 use futures::FutureExt;
 use serde::Deserialize;
-use std::{net::IpAddr, time::Duration};
+use std::time::Duration;
+pub(crate) use crate::source_http::public_ip;
 use url::{Host, Url};
 
 type Result<T> = std::result::Result<T, &'static str>;
-pub(crate) fn public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            let [a, b, c, _] = ip.octets();
-            !ip.is_private()
-                && !ip.is_loopback()
-                && !ip.is_link_local()
-                && !ip.is_multicast()
-                && !ip.is_broadcast()
-                && !ip.is_unspecified()
-                && a != 0
-                && a < 224
-                && !(a == 100 && (64..=127).contains(&b))
-                && !(a == 192 && b == 0 && (c == 0 || c == 2))
-                && !(a == 192 && b == 88 && c == 99)
-                && !(a == 198 && (b == 18 || b == 19))
-                && !(a == 198 && b == 51 && c == 100)
-                && !(a == 203 && b == 0 && c == 113)
-        }
-        IpAddr::V6(ip) => {
-            if let Some(v4) = ip.to_ipv4_mapped() {
-                return public_ip(v4.into());
-            }
-            let words = ip.segments();
-            (words[0] & 0xe000) == 0x2000
-                && words[0] != 0x2002
-                && !(words[0] == 0x2001 && (words[1] < 0x200 || words[1] == 0xdb8))
-        }
-    }
-}
 pub(crate) fn endpoint(raw: &str) -> Result<Url> {
     if raw.len() > 2048 || raw.chars().any(char::is_control) {
         return Err("invalid_gateway_endpoint");

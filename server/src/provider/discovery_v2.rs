@@ -32,6 +32,7 @@ async fn scoped(app: App, lease: ResourceLease) -> Result<App, ApiError> {
         app.providers = app
             .providers
             .for_account(app.identity().account_id().ok_or_else(auth::unauthorized)?);
+        app.addons=app.addons.with_protected_fetch();
         Ok(app)
     })
     .await

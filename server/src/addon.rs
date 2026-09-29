@@ -12,6 +12,9 @@ use tokio::sync::Semaphore;
 pub(crate) mod credentials_v2;
 mod discover;
 mod extras;
+pub(crate) mod http_v2;
+#[cfg(test)]
+mod http_v2_tests;
 #[cfg(test)]
 mod tests;
 
@@ -34,8 +37,12 @@ pub struct Addons {
     cache: CachedResponses,
     flights: Arc<Mutex<HashMap<String, Weak<FetchFlight>>>>,
     gate: Arc<Semaphore>,
+    manifest_gate: Arc<Semaphore>,
     account_id: i64,
     pub(crate) vault: Option<Arc<crate::secret_store::Vault>>,
+    protected_fetch: bool,
+    #[cfg(test)]
+    pub(crate) allow_test_loopback: bool,
 }
 impl Addons {
     pub fn new(db: Arc<Mutex<Connection>>, client: reqwest::Client) -> Result<Self, String> {
@@ -85,13 +92,100 @@ impl Addons {
             cache: Default::default(),
             flights: Default::default(),
             gate: Arc::new(Semaphore::new(12)),
+            manifest_gate: Arc::new(Semaphore::new(2)),
             account_id: 0,
             vault: None,
+            protected_fetch: false,
+            #[cfg(test)]
+            allow_test_loopback: false,
         })
     }
     pub fn for_account(mut self, account_id: i64) -> Self {
         self.account_id = account_id;
         self
+    }
+    pub(crate) fn with_protected_fetch(mut self) -> Self {
+        self.protected_fetch = true;
+        self
+    }
+    fn protected(&self) -> bool {
+        self.protected_fetch || self.vault.is_some()
+    }
+    fn fixture_transport(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.allow_test_loopback
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+    fn cache_key(&self, url: &str) -> String {
+        if self.protected() {
+            format!("secure:{}:{url}", self.account_id)
+        } else {
+            url.to_owned()
+        }
+    }
+    fn checked_url(&self, raw: &str) -> Result<url::Url, String> {
+        if raw.chars().any(char::is_control) {
+            return Err("invalid_addon_endpoint".into());
+        }
+        let url = validate_url(raw).map_err(|_| "invalid_addon_endpoint")?;
+        if self.protected() {
+            crate::source_http::validate(&url, self.fixture_transport())
+                .map_err(|e| e.addon_code())?;
+        }
+        Ok(url)
+    }
+    fn manifest_url(&self, url: &str) -> Result<url::Url, String> {
+        if url.len() > 4096 {
+            return Err("invalid_addon_endpoint".into());
+        }
+        let url = self.checked_url(url)?;
+        if !url.path().ends_with("/manifest.json") || url.fragment().is_some() {
+            return Err("invalid_addon_endpoint".into());
+        }
+        Ok(url)
+    }
+    pub(super) async fn prepare_manifest(&self, url: &str) -> Result<(String, Value), String> {
+        let url = self.manifest_url(url)?;
+        // Management refresh must not share an older manifest flight/cache result.
+        let _permit = self
+            .manifest_gate
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| "addon_checks_busy")?;
+        let manifest = if self.protected() {
+            crate::source_http::json(
+                url.clone(),
+                32 * 1024 * 1024,
+                Duration::from_secs(25),
+                self.fixture_transport(),
+                true,
+            )
+            .await
+            .map_err(|e| e.addon_code().to_owned())?
+        } else {
+            tokio::time::timeout(
+                Duration::from_secs(25),
+                json_get(&self.client, url.as_str()),
+            )
+            .await
+            .map_err(|_| "Upstream timed out")??
+        };
+        if !manifest["name"]
+            .as_str()
+            .is_some_and(|n| !n.trim().is_empty() && n.len() <= 256)
+            || !manifest["id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty() && id.len() <= 256)
+            || !manifest["resources"].is_array()
+        {
+            return Err("Invalid addon manifest".into());
+        }
+        Ok((url.to_string(), manifest))
     }
     pub fn entries(&self) -> Result<Vec<(i64, String, Value)>, String> {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
@@ -189,30 +283,21 @@ impl Addons {
                 return Err("secret_store_not_configured".into());
             }
         }
-        validate_url(url)?;
-        if !url
-            .split('?')
-            .next()
-            .unwrap_or("")
-            .ends_with("/manifest.json")
-        {
-            return Err("Manifest URL must end in /manifest.json".into());
-        }
-        self.cache.lock().unwrap().remove(url);
-        let m = self.fetch(url, 300).await?;
-        if !m["name"].is_string() || !m["id"].is_string() || !m["resources"].is_array() {
-            return Err("Invalid addon manifest".into());
-        }
+        let (url, m) = self.prepare_manifest(url).await?;
+        self.cache.lock().unwrap().remove(&self.cache_key(&url));
         let this = self.clone();
-        let url = url.to_owned();
         tokio::task::spawn_blocking(move || {
             let db = this.db.lock().map_err(|_| "Database unavailable")?;
             if let Some(vault)=&this.vault {
                 let id=credentials_v2::store(&db,vault,this.account_id,&url,&m)?;
                 return db.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE id=?1 AND account_id=?2",params![id,this.account_id],Self::config_row).map_err(|_|"Database query failed".into());
             }
-            db.execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES(?1,?2,?3,?4) ON CONFLICT(account_id,manifest_url) DO UPDATE SET name=excluded.name,manifest=excluded.manifest",params![m["name"].as_str(),url,m.to_string(),this.account_id]).map_err(|_|"Could not save addon")?;
-            db.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE manifest_url=?1 AND account_id=?2", params![url,this.account_id], Self::config_row).map_err(|_| "Database query failed".into())
+            let tx=db.unchecked_transaction().map_err(|_|"Database update failed")?;
+            let protected:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM addon_encryption_accounts_v2 WHERE account_id=?1) OR EXISTS(SELECT 1 FROM addons WHERE account_id=?1 AND credentials_version<>0)",[this.account_id],|r|r.get(0)).map_err(|_|"Database query failed")?;
+            if protected {return Err("secret_store_not_configured".into());}
+            tx.execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES(?1,?2,?3,?4) ON CONFLICT(account_id,manifest_url) DO UPDATE SET name=excluded.name,manifest=excluded.manifest",params![m["name"].as_str(),url,m.to_string(),this.account_id]).map_err(|_|"Could not save addon")?;
+            let saved=tx.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE manifest_url=?1 AND account_id=?2", params![url,this.account_id], Self::config_row).map_err(|_| "Database query failed")?;
+            tx.commit().map_err(|_|"Database update failed")?;Ok(saved)
         }).await.map_err(|_| "Database task failed")?
     }
     pub fn delete(&self, id: i64) -> Result<(), String> {
@@ -274,7 +359,11 @@ impl Addons {
         .unwrap_or(false)
     }
     async fn fetch(&self, url: &str, ttl: i64) -> Result<Value, String> {
-        if let Some((expiry, v, _)) = self.cache.lock().unwrap().get(url) {
+        if self.protected() {
+            self.checked_url(url)?;
+        }
+        let key = self.cache_key(url);
+        if let Some((expiry, v, _)) = self.cache.lock().unwrap().get(&key) {
             if *expiry > now() {
                 return Ok(v.clone());
             }
@@ -285,32 +374,44 @@ impl Addons {
         let flight = {
             let mut flights = self.flights.lock().unwrap();
             flights.retain(|_, flight| flight.strong_count() > 0);
-            match flights.get(url).and_then(Weak::upgrade) {
+            match flights.get(&key).and_then(Weak::upgrade) {
                 Some(flight) => flight,
                 None => {
                     let flight = Arc::new(FetchFlight::new());
-                    flights.insert(url.into(), Arc::downgrade(&flight));
+                    flights.insert(key.clone(), Arc::downgrade(&flight));
                     flight
                 }
             }
         };
         flight
-            .get_or_init(|| self.fetch_uncached(url, ttl))
+            .get_or_init(|| self.fetch_uncached(url, ttl, &key))
             .await
             .clone()
     }
-    async fn fetch_uncached(&self, url: &str, ttl: i64) -> Result<Value, String> {
+    async fn fetch_uncached(&self, url: &str, ttl: i64, key: &str) -> Result<Value, String> {
         let _permit = self.gate.acquire().await.map_err(|_| "Service stopping")?;
         // A previous flight may have populated the cache while this request
         // waited for a slot (or between its initial lookup and flight creation).
-        if let Some((expiry, value, _)) = self.cache.lock().unwrap().get(url) {
+        if let Some((expiry, value, _)) = self.cache.lock().unwrap().get(key) {
             if *expiry > now() {
                 return Ok(value.clone());
             }
         }
-        let v = tokio::time::timeout(Duration::from_secs(25), json_get(&self.client, url))
+        let v = if self.protected() {
+            crate::source_http::json(
+                self.checked_url(url)?,
+                32 * 1024 * 1024,
+                Duration::from_secs(25),
+                self.fixture_transport(),
+                true,
+            )
             .await
-            .map_err(|_| "Upstream timed out")??;
+            .map_err(|e| e.addon_code().to_owned())?
+        } else {
+            tokio::time::timeout(Duration::from_secs(25), json_get(&self.client, url))
+                .await
+                .map_err(|_| "Upstream timed out")??
+        };
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|_, (e, _, _)| *e > now());
         let size = v.to_string().len();
@@ -327,7 +428,7 @@ impl Addons {
                 bytes -= removed;
             }
         }
-        cache.insert(url.into(), (now() + ttl, v.clone(), size));
+        cache.insert(key.into(), (now() + ttl, v.clone(), size));
         Ok(v)
     }
     pub fn endpoint(base: &str, parts: &[&str]) -> Result<String, String> {

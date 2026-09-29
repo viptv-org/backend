@@ -39,6 +39,14 @@ pub(crate) async fn run<T: Send + 'static>(
     lease: ResourceLease,
     action: impl FnOnce(&rusqlite::Connection, i64) -> Result<T, Error> + Send + 'static,
 ) -> Result<T, Error> {
+    authorized(app, lease, false, action).await
+}
+async fn authorized<T: Send + 'static>(
+    app: App,
+    lease: ResourceLease,
+    device_read: bool,
+    action: impl FnOnce(&rusqlite::Connection, i64) -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
     tokio::task::spawn_blocking(move || {
         let db = app
             .db
@@ -46,7 +54,21 @@ pub(crate) async fn run<T: Send + 'static>(
             .map_err(|_| Error::Code("provider_storage_unavailable"))?;
         lease.validate(&db)?;
         if matches!(&lease.principal, auth::Principal::Account { role, .. } if role == "device") {
-            return Err(Error::Code("account_session_required"));
+            if !device_read {
+                return Err(Error::Code("account_session_required"));
+            }
+            if matches!(
+                &lease.principal,
+                auth::Principal::Account {
+                    profile_id: None,
+                    ..
+                }
+            ) {
+                return Err(Error::Auth(ApiError(
+                    StatusCode::FORBIDDEN,
+                    crate::app_state::MSG_PROFILE_REQUIRED.into(),
+                )));
+            }
         }
         kids::require_parent(&db, &lease.principal)?;
         action(
@@ -59,6 +81,16 @@ pub(crate) async fn run<T: Send + 'static>(
     })
     .await
     .map_err(|_| Error::Code("provider_storage_unavailable"))?
+}
+
+/// Read-only settings metadata for viewing devices with a selected profile.
+/// Mutations must use work/run; parent restrictions still apply to this view.
+pub(crate) async fn view(
+    app: App,
+    lease: ResourceLease,
+    action: impl FnOnce(&rusqlite::Connection, i64) -> Result<Value, Error> + Send + 'static,
+) -> Result<Json<Value>, Error> {
+    authorized(app, lease, true, action).await.map(Json)
 }
 
 pub(crate) async fn work(
@@ -74,6 +106,16 @@ pub(crate) fn description(code: &str) -> &'static str {
 }
 fn details(code: &str) -> (StatusCode, &'static str) {
     match code {
+        "secret_too_large" => (StatusCode::PAYLOAD_TOO_LARGE,"This source configuration exceeds the server's storage limit. Use a smaller configuration."),
+        "invalid_addon_endpoint" => (StatusCode::BAD_REQUEST,"Use a valid HTTP or HTTPS addon manifest URL without embedded user credentials or fragments."),
+        "addon_private_destination" => (StatusCode::BAD_REQUEST,"The addon uses a private or reserved network address, which the server's source policy does not allow."),
+        "invalid_addon_configuration" => (StatusCode::BAD_REQUEST,"Use a valid addon manifest and supported settings."),
+        "addon_not_found" => (StatusCode::NOT_FOUND,"This addon is unavailable in your account."),
+        "addon_configuration_changed" => (StatusCode::CONFLICT,"This addon changed while its manifest was loading. Refresh settings and try again."),
+        "addon_checks_busy" => (StatusCode::SERVICE_UNAVAILABLE,"Addon checks are busy. Try again shortly."),
+        "addon_redirect_rejected" => (StatusCode::BAD_GATEWAY,"The addon returned an unsafe or excessive redirect. Check its final manifest address."),
+        "addon_dns_unavailable" => (StatusCode::BAD_GATEWAY,"The addon address could not be resolved. Check its address or try again later."),
+        "addon_response_interrupted" => (StatusCode::BAD_GATEWAY,"The addon's response was interrupted. Try again later."),
         "addon_encryption_required" => (StatusCode::CONFLICT,"This legacy addon needs the operator's reviewed encryption migration before it can be updated."),
         "addon_storage_unavailable" => (StatusCode::SERVICE_UNAVAILABLE,"Addon settings are temporarily unavailable. Try again."),
         "invalid_episode_selection" => (StatusCode::BAD_REQUEST,"Choose a specific season and episode before requesting IPTV sources."),
@@ -132,7 +174,7 @@ fn details(code: &str) -> (StatusCode, &'static str) {
             "gateway_protocol_invalid" => (StatusCode::UNPROCESSABLE_ENTITY, "The gateway returned an incompatible response. Check its service version."),
             "gateway_redirect_rejected" => (StatusCode::UNPROCESSABLE_ENTITY, "Use the gateway's final HTTPS endpoint; control requests cannot follow redirects."),
             "gateway_not_ready" | "gateway_dns_unavailable" | "gateway_unavailable" => (StatusCode::BAD_GATEWAY, "The gateway is not ready or could not be reached securely. Try again or check its address."),
-            "secret_store_not_configured" => (StatusCode::SERVICE_UNAVAILABLE, "The backend needs an encryption keyring before it can save provider or gateway credentials. Ask the server operator."),
+            "secret_store_not_configured" => (StatusCode::SERVICE_UNAVAILABLE, "The server's encryption keyring is not configured. Ask the server operator to configure or restore it."),
             "secret_key_unavailable" | "secret_authentication_failed" | "invalid_secret_envelope" => (StatusCode::SERVICE_UNAVAILABLE, "Saved credentials could not be unlocked. Ask the server operator to restore the correct encryption keys."),
             "gateway_storage_unavailable" => (StatusCode::SERVICE_UNAVAILABLE, "Gateway settings are temporarily unavailable. Try again."),
             "invalid_cursor" => (

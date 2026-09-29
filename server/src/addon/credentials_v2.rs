@@ -153,6 +153,53 @@ pub(super) fn store(
     url: &str,
     manifest: &Value,
 ) -> Result<i64, &'static str> {
+    store_inner(db, vault, account, url, manifest, None)
+}
+pub(super) type Snapshot = Option<(i64, String)>;
+pub(super) fn snapshot(
+    db: &Connection,
+    vault: &Vault,
+    account: i64,
+    url: &str,
+) -> Result<Snapshot, &'static str> {
+    let target = url::Url::parse(url).map_err(|_| "invalid_addon_endpoint")?;
+    let ids = db
+        .prepare("SELECT id FROM addons WHERE account_id=?1 ORDER BY id")
+        .map_err(storage)?
+        .query_map([account], |r| r.get::<_, i64>(0))
+        .map_err(storage)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(storage)?;
+    for id in ids {
+        let (old_url,manifest,version,revision):(String,String,i64,String)=db.query_row("SELECT manifest_url,manifest,credentials_version,credentials_revision FROM addons WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(storage)?;
+        let old_url = read(db, Some(vault), account, id, old_url, manifest, version)?.0;
+        if url::Url::parse(&old_url).ok().as_ref() == Some(&target) {
+            if version == 0 {
+                return Err("addon_encryption_required");
+            }
+            return Ok(Some((id, revision)));
+        }
+    }
+    Ok(None)
+}
+pub(super) fn store_checked(
+    db: &Connection,
+    vault: &Vault,
+    account: i64,
+    url: &str,
+    manifest: &Value,
+    expected: &Snapshot,
+) -> Result<i64, &'static str> {
+    store_inner(db, vault, account, url, manifest, Some(expected))
+}
+fn store_inner(
+    db: &Connection,
+    vault: &Vault,
+    account: i64,
+    url: &str,
+    manifest: &Value,
+    expected: Option<&Snapshot>,
+) -> Result<i64, &'static str> {
     if account <= 0 {
         return Err("account_session_required");
     }
@@ -167,41 +214,11 @@ pub(super) fn store(
     if !active {
         return Err("account_session_required");
     }
-    let mut existing = None;
-    let rows = tx
-        .prepare("SELECT id FROM addons WHERE account_id=?1 ORDER BY id")
-        .map_err(storage)?
-        .query_map([account], |r| r.get::<_, i64>(0))
-        .map_err(storage)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(storage)?;
-    for id in rows {
-        // Inspect one payload at a time, never collect every large manifest.
-        let (old_url, old_manifest, version): (String, String, i64) = tx
-            .query_row(
-                "SELECT manifest_url,manifest,credentials_version FROM addons WHERE id=?1",
-                [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .map_err(storage)?;
-        if read(
-            &tx,
-            Some(vault),
-            account,
-            id,
-            old_url,
-            old_manifest,
-            version,
-        )?
-        .0 == url
-        {
-            if version == 0 {
-                return Err("addon_encryption_required");
-            }
-            existing = Some(id);
-            break;
-        }
+    let current = snapshot(&tx, vault, account, url)?;
+    if expected.is_some_and(|expected| expected != &current) {
+        return Err("addon_configuration_changed");
     }
+    let existing = current.map(|(id, _)| id);
     let id = if let Some(id) = existing {
         id
     } else {
@@ -455,6 +472,7 @@ mod tests {
         let app = crate::auth_integration_tests::fixture();
         let mut addons = app.addons.clone().for_account(1);
         addons.vault = Some(vault());
+        addons.allow_test_loopback = true;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!(
             "http://{}/private-addon-token/manifest.json",
@@ -509,9 +527,11 @@ mod tests {
             .unwrap(),
             7
         );
-        db.execute("DELETE FROM addon_credentials_v2 WHERE addon_id=7",[]).unwrap();
+        db.execute("DELETE FROM addon_credentials_v2 WHERE addon_id=7", [])
+            .unwrap();
         drop(db);
-        let mut addons=app.addons.clone().for_account(1);addons.vault=Some(vault);
-        assert_eq!(addons.entries().unwrap_err(),"invalid_secret_envelope");
+        let mut addons = app.addons.clone().for_account(1);
+        addons.vault = Some(vault);
+        assert_eq!(addons.entries().unwrap_err(), "invalid_secret_envelope");
     }
 }

@@ -50,21 +50,39 @@ pub(crate) fn provider(raw: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
+pub(crate) fn addon(raw: &str) -> Option<&'static str> {
+    Some(match raw {
+        "invalid_addon_endpoint" | "Manifest URL must end in /manifest.json" => {
+            "invalid_addon_endpoint"
+        }
+        "Invalid addon manifest" | "invalid_addon_configuration" => "invalid_addon_configuration",
+        "addon_checks_busy" => "addon_checks_busy",
+        "addon_configuration_changed" => "addon_configuration_changed",
+        "addon_private_destination" => "addon_private_destination",
+        "addon_dns_unavailable" => "addon_dns_unavailable",
+        "addon_redirect_rejected" => "addon_redirect_rejected",
+        "addon_response_interrupted" => "addon_response_interrupted",
+        "addon_timeout" | "Addon timed out" | "Upstream timed out" => "addon_timeout",
+        "addon_access_denied" | "Upstream returned HTTP 401" | "Upstream returned HTTP 403" => {
+            "addon_access_denied"
+        }
+        "addon_rate_limited" | "Upstream returned HTTP 429" => "addon_rate_limited",
+        "addon_protocol_invalid"
+        | "Upstream returned invalid JSON"
+        | "Invalid addon stream response" => "addon_protocol_invalid",
+        "addon_response_too_large" | "Upstream response exceeds size limit" => {
+            "addon_response_too_large"
+        }
+        "addon_unavailable" => "addon_unavailable",
+        _ => return None,
+    })
+}
 pub(crate) fn discovery(source: &str, raw: &str) -> &'static str {
     if raw == "source_not_found" {
         return "source_not_found";
     }
     if source == "addon" || source.starts_with("addon:") {
-        match raw {
-            "Addon timed out" | "Upstream timed out" => "addon_timeout",
-            "Upstream returned HTTP 401" | "Upstream returned HTTP 403" => "addon_access_denied",
-            "Upstream returned HTTP 429" => "addon_rate_limited",
-            "Upstream returned invalid JSON" | "Invalid addon stream response" => {
-                "addon_protocol_invalid"
-            }
-            "Upstream response exceeds size limit" => "addon_response_too_large",
-            _ => "addon_unavailable",
-        }
+        addon(raw).unwrap_or("addon_unavailable")
     } else {
         provider(raw).unwrap_or("provider_discovery_failed")
     }

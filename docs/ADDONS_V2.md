@@ -1,8 +1,48 @@
 # Account-owned addon secrets
 
 This is an implementation checkpoint, not a completed client cutover or approval
-to migrate production. Addon network-policy hardening, guarded v2 management
-adoption, bulk key rotation and removal of legacy paths remain open.
+to migrate production. Protected public-network requests and guarded v2 management
+are implemented; client adoption, operator-managed private-network exceptions,
+bulk key rotation and removal of legacy paths remain open.
+
+## V2 management and protected requests
+
+- GET `/api/v2/addons?limit=50&cursor=…` returns `{items,next_cursor}`, with a
+  maximum of 200 and account-bound cursors. Records redact manifest URLs and
+  include bounded logo metadata when available. A locked/unreadable configuration
+  gets a safe per-record error rather than leaking its URL or blocking the list.
+- POST `/api/v2/addons` accepts only `manifest_url`. It validates and downloads
+  the manifest, rechecks the captured authorization, and encrypts it before save.
+  A concurrent deletion/reconfiguration conflicts rather than resurrecting a
+  deleted source or overwriting a newer manifest.
+- PATCH `/api/v2/addons/:id` accepts `enabled`; DELETE removes that owned addon.
+  Writes require an account session, not a paired viewing-device session.
+
+Paired devices may read redacted metadata/icons with a selected, authorized
+profile. Parent restrictions still apply. Logo metadata belongs to the authorized
+account and may itself contain addon-issued access data; responses remain private
+and non-cacheable. Image rendering, HTTP artwork delivery and platform UI adoption
+are not proved by the metadata fixtures.
+
+V2 discovery and configured-key addon requests use shared protected JSON egress.
+HTTP and HTTPS are supported. Each request/redirect resolves, validates and pins
+all destination addresses. Private/reserved destinations, embedded URL userinfo,
+fragments and HTTPS-to-HTTP downgrades are rejected. Up to ten public redirects
+are supported, without automatically copying the original query credentials,
+cookies, Authorization or Referer. Host proxy environment settings are ignored.
+Xtream callers retain their separate no-redirect policy.
+
+Protected caches/flights are account-scoped and distinct from legacy fetches;
+they cannot reuse a response obtained through the old network policy. Manifest
+installs/checks have two slots separate from twelve viewing-fetch slots, so slow
+installs do not occupy the browsing pool. Downloads retain response-size and
+timeout bounds. Test loopback exceptions are explicit and compiled for fixtures,
+not end-user configuration.
+
+The unkeyed legacy path still exists until cutover. It rechecks encryption state
+inside its save transaction, so a late legacy request cannot create plaintext
+after an account becomes protected. This does not constitute removal or complete
+isolation of every legacy route.
 
 ## Storage and runtime behavior
 
@@ -16,9 +56,10 @@ With a configured keyring, new account-owned installations use encrypted storage
 Reinstalling an already encrypted URL preserves its ID, while replacing the
 manifest advances a small configuration revision. Playback checks use that
 revision rather than loading/hashing a potentially large encrypted manifest.
-New encrypted installations do not reuse deleted addon IDs. A dedicated addon
-payload bound preserves the existing 32 MiB manifest response allowance plus URL
-overhead without increasing the normal 256 KiB gateway/provider-secret limit.
+New encrypted installations do not reuse deleted addon IDs. Addon downloads are
+bounded at 32 MiB; encrypted addon documents have a separate 33 MiB serialized-
+payload limit. Oversized documents fail rather than falling back to plaintext.
+Normal gateway/provider secrets retain their 256 KiB limit.
 
 Settings responses use `credentials_encrypted:true` and `manifest_url:null` for
 encrypted entries. Internal, account-scoped catalog/source readers decrypt only
@@ -97,5 +138,8 @@ non-reuse after deletion, no missing-key downgrade, larger encrypted manifests,
 legacy ownership without implicit grants, complete-map enforcement and rollback,
 private backup/export contents, compaction/search rebuild, HTTP installation,
 late/cached source revocation and executable confirmation/keyring gates.
+Additional fixtures cover v2 management roles/cursors, private-address rejection,
+public and cross-origin redirects, loops and downgrade refusal, stale reinstall
+and revoked-session writes, cache trust separation and independent browsing slots.
 These use synthetic data; no production migration or device/UI acceptance is
-claimed. Protected addon transport and complete client adoption remain required.
+claimed. Complete client adoption and the remaining cutover gates are still open.

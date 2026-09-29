@@ -243,8 +243,8 @@ This encrypts the provider credential tuple, not the entire SQLite database.
 The **backup and export intentionally contain plaintext**. Retired configuration,
 external copies, logs, filesystem snapshots and physical storage remnants are not
 securely erased by SQLite compaction. Keep artifacts private and apply the
-operator's retention policy; never commit or upload them. Protected addon
-transport/management, bulk key rotation and complete cutover are still
+operator's retention policy; never commit or upload them. Client adoption,
+operator-managed private-network exceptions, bulk key rotation and cutover are still
 pending, so this is not a complete encrypted-secrets acceptance claim. Addon
 storage and reviewed ownership/encryption commands are now covered by
-[the addon migration contract](ADDONS_V2.md).
+[the addon management/migration contract](ADDONS_V2.md).
