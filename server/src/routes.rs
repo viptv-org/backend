@@ -161,6 +161,9 @@ pub fn router_with_tv(
             get(continue_watching_authenticated),
         )
         .route("/matches", get(matches).put(override_match))
+        .route("/v2/playback", post(gateway::playback::start))
+        .route("/v2/playback/:id", get(gateway::playback::get).delete(gateway::playback::stop))
+        .route("/v2/playback/:id/heartbeat", post(gateway::playback::renew))
         .route("/v2/gateways", get(gateway::http::list).post(gateway::http::register))
         .route("/v2/gateways/:id", axum::routing::patch(gateway::http::update).put(gateway::http::replace).delete(gateway::http::delete))
         .route("/v2/gateways/:id/check", post(gateway::http::check))

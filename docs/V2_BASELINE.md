@@ -68,3 +68,16 @@ run. Strict all-target Clippy passes. The new opt-in interoperability fixture
 also passed separately against the independent gateway executable, issuing a
 real scoped key and registering/checking it through the backend router. It does
 not prove playback forwarding, public HTTPS deployment or provider-secret migration.
+
+## Playback control checkpoint
+
+The /api/v2/playback lifecycle now supports native direct delivery and independent
+gateway-managed delivery, with scoped source validation, active affinity,
+priority/capacity selection and no backend media-byte relay. A real isolated
+container fixture verifies HLS playback/renewal/release through the independent
+gateway with the backend engine idle. See PLAYBACK_V2.md for exact scope and gaps.
+
+Current default backend suite: 230 passed, four opt-in fixtures skipped. The new
+isolated real-media fixture passed separately; strict all-target Clippy passed.
+No current viewing client has been cut over, and legacy discovery/playback,
+encrypted provider migration and remaining acceptance work are still pending.

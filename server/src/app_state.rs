@@ -148,6 +148,7 @@ pub struct App {
     pub playback: Arc<PlaybackManager>,
     pub(crate) secret_vault: Option<Arc<secret_store::Vault>>,
     pub(crate) gateway_client: gateway::client::Client,
+    pub(crate) gateway_playbacks: Arc<gateway::playback::Registry>,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
     // Request-local identity travels with discovery producers; ownership is never upstream-authored.
@@ -256,6 +257,8 @@ pub(crate) struct JobState {
     pub(crate) pending: usize,
 }
 pub(crate) struct StreamEntry {
+    pub(crate) producer: String,
+    pub(crate) configuration: Option<[u8;32]>,
     pub(crate) provider_id: Option<i64>,
     pub(crate) kind: String,
     pub(crate) live: bool,
@@ -285,6 +288,7 @@ impl App {
         let db = Arc::new(Mutex::new(db));
         let addons = Addons::new(db.clone(), client.clone())?;
         let providers = ProviderService::new(db.clone(), client);
+        let gateway_playbacks = gateway::playback::Registry::new(db.clone());
         Ok(Self {
             db,
             addons,
@@ -292,6 +296,7 @@ impl App {
             playback,
             secret_vault,
             gateway_client: Default::default(),
+            gateway_playbacks,
             jobs: Default::default(),
             streams: Default::default(),
             principal: None,

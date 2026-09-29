@@ -1,5 +1,6 @@
 //! Gateway-only HTTPS control transport. Resolve/validate/pin each destination;
 //! do not follow redirects with integration credentials or inherit host proxies.
+use futures::FutureExt;
 use serde::Deserialize;
 use std::{net::IpAddr, time::Duration};
 use url::{Host, Url};
@@ -74,6 +75,7 @@ pub(crate) fn endpoint(raw: &str) -> Result<Url> {
 #[derive(Clone)]
 pub(crate) struct Client {
     gate: std::sync::Arc<tokio::sync::Semaphore>,
+    starts: std::sync::Arc<tokio::sync::Semaphore>,
     #[cfg(test)]
     fixture: Option<Url>,
 }
@@ -81,6 +83,7 @@ impl Default for Client {
     fn default() -> Self {
         Self {
             gate: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+            starts: std::sync::Arc::new(tokio::sync::Semaphore::new(8)),
             #[cfg(test)]
             fixture: None,
         }
@@ -94,6 +97,13 @@ pub(crate) struct Capabilities {
     pub namespaces: Vec<String>,
     #[serde(default)]
     pub scopes: Vec<String>,
+    pub available: Option<Capacity>,
+}
+#[derive(Clone, Deserialize)]
+pub(crate) struct Capacity {
+    pub inputs: u32,
+    pub outputs: u32,
+    pub viewers: u32,
 }
 impl Client {
     #[cfg(test)]
@@ -103,97 +113,166 @@ impl Client {
             ..Self::default()
         }
     }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn request<'a>(
+        &'a self,
+        base: &'a str,
+        key: &'a [u8],
+        method: reqwest::Method,
+        path: &'a str,
+        body: Option<&'a serde_json::Value>,
+        idempotency: Option<&'a str>,
+        timeout: Duration,
+    ) -> futures::future::BoxFuture<'a, Result<serde_json::Value>> {
+        async move {
+            let gate = if path == "v1/sessions" && method == reqwest::Method::POST {
+                &self.starts
+            } else {
+                &self.gate
+            };
+            let _permit = gate
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| "gateway_checks_busy")?;
+            let target = endpoint(base)?
+                .join(path)
+                .map_err(|_| "invalid_gateway_endpoint")?;
+            #[cfg(test)]
+            let target = if let Some(base) = &self.fixture {
+                base.join(path).map_err(|_| "invalid_gateway_endpoint")?
+            } else {
+                target
+            };
+            let host = match target.host().ok_or("invalid_gateway_endpoint")? {
+                Host::Domain(value) => value.to_owned(),
+                Host::Ipv4(value) => value.to_string(),
+                Host::Ipv6(value) => value.to_string(),
+            };
+            let port = target
+                .port_or_known_default()
+                .ok_or("invalid_gateway_endpoint")?;
+            let addresses = tokio::time::timeout(
+                Duration::from_secs(3),
+                tokio::net::lookup_host((host.as_str(), port)),
+            )
+            .await
+            .map_err(|_| "gateway_dns_unavailable")?
+            .map_err(|_| "gateway_dns_unavailable")?
+            .take(17)
+            .collect::<Vec<_>>();
+            #[cfg(test)]
+            let fixture = self.fixture.is_some();
+            #[cfg(not(test))]
+            let fixture = false;
+            if addresses.is_empty()
+                || addresses.len() > 16
+                || addresses.iter().any(|address| {
+                    !public_ip(address.ip()) && !(fixture && address.ip().is_loopback())
+                })
+            {
+                return Err("gateway_private_destination");
+            }
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .https_only(!fixture)
+                .redirect(reqwest::redirect::Policy::none())
+                .resolve_to_addrs(&host, &addresses)
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(timeout)
+                .build()
+                .map_err(|_| "gateway_unavailable")?;
+            let mut authorization = Vec::from(b"Bearer ".as_slice());
+            authorization.extend_from_slice(key);
+            let mut header = reqwest::header::HeaderValue::from_bytes(&authorization)
+                .map_err(|_| "invalid_gateway_key")?;
+            header.set_sensitive(true);
+            use zeroize::Zeroize;
+            authorization.zeroize();
+            let mut request = client
+                .request(method, target)
+                .header(reqwest::header::AUTHORIZATION, header);
+            if let Some(body) = body {
+                request = request.json(body);
+            }
+            if let Some(idempotency) = idempotency {
+                request = request.header("idempotency-key", idempotency);
+            }
+            let mut response = request.send().await.map_err(|_| "gateway_unavailable")?;
+            let status = response.status().as_u16();
+            if (300..400).contains(&status) {
+                return Err("gateway_redirect_rejected");
+            }
+            if status == 204 {
+                return Ok(serde_json::Value::Null);
+            }
+            if response.content_length().is_some_and(|size| size > 65536) {
+                return Err("gateway_protocol_invalid");
+            }
+            let mut data = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|_| "gateway_unavailable")? {
+                if data.len() + chunk.len() > 65536 {
+                    return Err("gateway_protocol_invalid");
+                }
+                data.extend_from_slice(&chunk);
+            }
+            let value: serde_json::Value = if data.is_empty() && !(200..300).contains(&status) {
+                serde_json::Value::Null
+            } else {
+                serde_json::from_slice(&data).map_err(|_| "gateway_protocol_invalid")?
+            };
+            if !(200..300).contains(&status) {
+                return Err(
+                    match value
+                        .pointer("/error/code")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        Some("unauthorized") => "gateway_key_rejected",
+                        Some("forbidden") => "gateway_scope_missing",
+                        Some(
+                            "viewer_capacity" | "input_capacity" | "output_capacity"
+                            | "session_capacity",
+                        ) => "gateway_capacity",
+                        Some("input_cleanup_pending") => "gateway_cleanup_pending",
+                        Some("processing_failed") => "gateway_processing_failed",
+                        Some("source_connection_limit") => "provider_connection_limit",
+                        Some("source_preparation_failed" | "source_unavailable") => {
+                            "source_unavailable"
+                        }
+                        Some("unsupported_output" | "unsupported_media") => "delivery_unsupported",
+                        Some("startup_timeout") => "gateway_startup_timeout",
+                        Some("session_expired" | "session_not_found" | "media_unauthorized") => {
+                            "playback_expired"
+                        }
+                        Some("idempotency_conflict") => "playback_conflict",
+                        _ if status == 401 => "gateway_key_rejected",
+                        _ if status == 403 => "gateway_scope_missing",
+                        _ => "gateway_unavailable",
+                    },
+                );
+            }
+            Ok(value)
+        }
+        .boxed()
+    }
     pub(crate) async fn capabilities(
         &self,
         base: &str,
         key: &[u8],
         namespace: &str,
     ) -> Result<Capabilities> {
-        let _permit = self
-            .gate
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| "gateway_checks_busy")?;
-        let target = endpoint(base)?
-            .join("v1/capabilities")
-            .map_err(|_| "invalid_gateway_endpoint")?;
-        #[cfg(test)]
-        let target = if let Some(base) = &self.fixture {
-            base.join("v1/capabilities")
-                .map_err(|_| "invalid_gateway_endpoint")?
-        } else {
-            target
-        };
-        let host = match target.host().ok_or("invalid_gateway_endpoint")? {
-            Host::Domain(value) => value.to_owned(),
-            Host::Ipv4(value) => value.to_string(),
-            Host::Ipv6(value) => value.to_string(),
-        };
-        let port = target
-            .port_or_known_default()
-            .ok_or("invalid_gateway_endpoint")?;
-        let addresses = tokio::time::timeout(
-            Duration::from_secs(3),
-            tokio::net::lookup_host((host.as_str(), port)),
-        )
-        .await
-        .map_err(|_| "gateway_dns_unavailable")?
-        .map_err(|_| "gateway_dns_unavailable")?
-        .take(17)
-        .collect::<Vec<_>>();
-        #[cfg(test)]
-        let fixture = self.fixture.is_some();
-        #[cfg(not(test))]
-        let fixture = false;
-        if addresses.is_empty()
-            || addresses.len() > 16
-            || addresses
-                .iter()
-                .any(|address| !public_ip(address.ip()) && !(fixture && address.ip().is_loopback()))
-        {
-            return Err("gateway_private_destination");
-        }
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .https_only(!fixture)
-            .redirect(reqwest::redirect::Policy::none())
-            .resolve_to_addrs(&host, &addresses)
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(5))
-            .build()
-            .map_err(|_| "gateway_unavailable")?;
-        let mut authorization = Vec::from(b"Bearer ".as_slice());
-        authorization.extend_from_slice(key);
-        let mut header = reqwest::header::HeaderValue::from_bytes(&authorization)
-            .map_err(|_| "invalid_gateway_key")?;
-        header.set_sensitive(true);
-        use zeroize::Zeroize;
-        authorization.zeroize();
-        let mut response = client
-            .get(target)
-            .header(reqwest::header::AUTHORIZATION, header)
-            .send()
-            .await
-            .map_err(|_| "gateway_unavailable")?;
-        match response.status().as_u16() {
-            200 => {}
-            401 => return Err("gateway_key_rejected"),
-            403 => return Err("gateway_scope_missing"),
-            300..=399 => return Err("gateway_redirect_rejected"),
-            _ => return Err("gateway_unavailable"),
-        }
-        if response.content_length().is_some_and(|size| size > 65536) {
-            return Err("gateway_protocol_invalid");
-        }
-        let mut data = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| "gateway_unavailable")? {
-            if data.len() + chunk.len() > 65536 {
-                return Err("gateway_protocol_invalid");
-            }
-            data.extend_from_slice(&chunk);
-        }
+        let value = self
+            .request(
+                base,
+                key,
+                reqwest::Method::GET,
+                "v1/capabilities",
+                None,
+                None,
+                Duration::from_secs(5),
+            )
+            .await?;
         let capabilities: Capabilities =
-            serde_json::from_slice(&data).map_err(|_| "gateway_protocol_invalid")?;
+            serde_json::from_value(value).map_err(|_| "gateway_protocol_invalid")?;
         if capabilities.version != 1
             || capabilities.protocols.len() > 16
             || capabilities.namespaces.len() > 32

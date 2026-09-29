@@ -1,8 +1,9 @@
 # Account gateway configuration and encrypted keys
 
 This is development-branch functionality, not a completed playback cutover.
-Gateway registration, validation and grants are implemented; playback selection,
-affinity and media-session forwarding are not connected yet. Legacy embedded
+Gateway registration, validation and grants are implemented. The new v2 playback
+routes select authorized gateways, preserve active affinity and forward viewer
+lifecycle operations; existing clients have not adopted those routes yet. Legacy embedded
 playback remains until the coordinated client/server cutover. Do not deploy this
 checkpoint with production secrets or infer public multi-tenant readiness.
 
@@ -92,7 +93,13 @@ the backend router. Run it with VIPTV_TEST_GATEWAY_BINARY, VIPTV_TEST_FFMPEG and
 VIPTV_TEST_FFPROBE set. This verifies the HTTP credential/capability contract,
 not playback-session forwarding or a public HTTPS deployment.
 
+Playback lifecycle tests additionally cover native direct policy, mandatory
+Roku/Vizio gateway delivery, capacity/priority selection, active affinity,
+cross-account denial, grant/config revocation and late-start cancellation.
+An isolated container fixture also checks real HLS delivery through the separate
+gateway while the backend's embedded engine remains idle. See PLAYBACK_V2.md.
+
 These checks do not establish complete DNS-rebinding/TLS deployment qualification,
-playback selection/affinity, session forwarding, provider/addon encryption,
-live grant revocation of media leases, or process isolation after legacy removal.
+provider/addon encryption, client adoption, all failure/restart scenarios or
+process isolation after legacy removal.
 Those remain acceptance work before production deployment.
