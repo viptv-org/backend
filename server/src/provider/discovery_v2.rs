@@ -27,12 +27,11 @@ async fn scoped(app: App, lease: ResourceLease) -> Result<App, ApiError> {
         {
             let db = app.db.lock().unwrap();
             app.require_media(&db)?;
-            kids::require_parent(&db, &app.identity())?;
         }
         app.providers = app
             .providers
             .for_account(app.identity().account_id().ok_or_else(auth::unauthorized)?);
-        app.addons=app.addons.with_protected_fetch();
+        app.addons = app.addons.with_protected_fetch();
         Ok(app)
     })
     .await
@@ -100,6 +99,10 @@ pub(crate) async fn guide(
     Path(id): Path<String>,
 ) -> Result<axum::Json<Value>, crate::account_api::Error> {
     let app = scoped(app, lease).await?;
+    {
+        let db = app.db.lock().unwrap();
+        kids::require_parent(&db, &app.identity())?;
+    }
     if id.len() > 256 {
         return Err("source_not_found".into());
     }

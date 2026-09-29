@@ -331,7 +331,7 @@ fn sanitize_request(app: &App, path: &str, mut value: Value) -> Result<Value, Ap
     Ok(value)
 }
 pub(crate) async fn before(app: &App, req: &mut Request) -> Result<Option<Value>, ApiError> {
-    let path = req.uri().path().trim_start_matches("/api").to_owned();
+    let path = policy_path(req.uri().path().trim_start_matches("/api")).to_owned();
     let method = req.method().clone();
     let q = query(req);
     let decision_app = app.clone();
@@ -355,6 +355,7 @@ pub(crate) async fn before(app: &App, req: &mut Request) -> Result<Option<Value>
     Ok(None)
 }
 pub(crate) async fn after(app: &App, path: &str, response: Response) -> Response {
+    let path = policy_path(path);
     if !response.status().is_success() || path.contains("/events") {
         return response;
     }
@@ -447,6 +448,22 @@ pub(crate) async fn after(app: &App, path: &str, response: Response) -> Response
         header::HeaderValue::from_static("no-store"),
     );
     Response::from_parts(parts, axum::body::Body::from(value.to_string()))
+}
+
+// V2 source jobs and playback keep the existing title/episode authorization
+// rules. Raw v2 live catalogs/guide and management routes remain separately gated.
+fn policy_path(path: &str) -> &str {
+    match path.strip_prefix("/v2") {
+        Some(rest)
+            if rest == "/streams"
+                || rest.starts_with("/streams/")
+                || rest == "/playback"
+                || rest.starts_with("/playback/") =>
+        {
+            rest
+        }
+        _ => path,
+    }
 }
 fn filter_response_items(
     db: &Connection,

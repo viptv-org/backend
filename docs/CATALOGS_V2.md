@@ -78,8 +78,12 @@ duplicate stream causes an insert failure following deletion.
   an owned raw channel. Foreign, absent, disabled and retired family-channel IDs
   receive the same `source_not_found` response.
 
-These routes require a selected profile and currently a parent unlock for
-restricted profiles, as raw catalog pages do. Source discovery considers all
+These routes require a selected profile. Approved children's VOD titles and
+exact episodes use the existing profile policy without a parent unlock; supplied
+title/provider hints cannot bypass that policy. Policy changes invalidate the
+discovery job. Raw live catalogs and guide still require a parent unlock for
+restricted profiles until the live-policy migration is complete.
+Source discovery considers all
 enabled providers owned by the account, never just its default live catalog.
 `only_provider_id` narrows that set but cannot grant access. Addons use the
 existing account-scoped addon service. Source IDs feed the v2 playback API.

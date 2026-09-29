@@ -2,7 +2,7 @@ use crate::{auth_integration_tests::fixture, test_support::request, *};
 
 fn seeded() -> App {
     let mut app = fixture();
-    app.providers.allow_test_loopback=true;
+    app.providers.allow_test_loopback = true;
     {
         let db = app.db.lock().unwrap();
         for id in 1..=4 {
@@ -779,4 +779,74 @@ async fn v2_guide_uses_owned_raw_channel_and_hides_foreign_or_missing_ids() {
     assert!(denied.iter().all(|v| v == &denied[0]));
     assert_eq!(denied[0].0, StatusCode::NOT_FOUND);
     assert_eq!(denied[0].1["error_code"], "source_not_found");
+}
+#[tokio::test]
+async fn approved_kids_vod_uses_v2_without_unlock_and_cannot_smuggle_other_titles() {
+    let app = seeded();
+    {
+        let db = app.db.lock().unwrap();
+        db.execute(
+            "INSERT INTO kids_profiles(profile_id,enabled,max_age) VALUES(1,1,12)",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO kids_media(account_id,kind,id,parent_id,metadata,age,updated_at) VALUES(1,'movie','tt1234567','tt1234567',?1,5,?2)",params![json!({"id":"tt1234567","type":"movie","name":"Approved","year":2020,"imdb_id":"tt1234567","tmdb_id":"123"}).to_string(),util::now()]).unwrap();
+        db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,imdb_id,extension) VALUES('approved',1,'9','movie','Approved','approved',2020,'tt1234567','mp4'),('adult',1,'10','movie','Adult','adult',2020,'tt9999999','mp4')",[]).unwrap();
+    }
+    let (status,started)=request(&app,"member-token-1","POST","/api/v2/streams",json!({"type":"movie","id":"tt1234567","name":"Adult","imdb_id":"tt9999999","only_provider_id":3})).await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    let path = format!("/api/v2/streams/{}", started["id"].as_str().unwrap());
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let (status, value) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
+            assert_eq!(status, StatusCode::OK, "{value}");
+            if value["done"] == true {
+                break value;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let sources = result["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|e| e["streams"].as_array().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(sources.len(), 1, "{result}");
+    assert!(app
+        .streams
+        .lock()
+        .unwrap()
+        .get(sources[0]["id"].as_str().unwrap())
+        .unwrap()
+        .url
+        .ends_with("/9.mp4"));
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/streams",
+            json!({"type":"movie","id":"tt9999999"})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE kids_profiles SET revision=revision+1 WHERE profile_id=1",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        request(&app, "member-token-1", "GET", &path, Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
 }
