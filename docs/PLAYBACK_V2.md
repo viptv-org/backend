@@ -32,6 +32,17 @@ dimensions describe real decoder limits, not screen layout or a user quality cap
 Codec lists use canonical families, not MIME codec strings. Track indices are
 absolute input indices. Live playback starts at zero.
 
+Optional `conversion` is `auto` (default), `audio`, `video`, or `audio_video`.
+Explicit conversion, track indices, `audio_language` or `subtitles_off` require
+an authorized gateway even on a direct-capable native client. Optional
+`preferred_audio_language` and `preferred_subtitle_language` travel to gateway
+planning or, for native direct delivery, its preferences metadata. Language tags
+are bounded to 35 ASCII alphanumeric/hyphen characters. `subtitles_off` conflicts
+with a subtitle index/preference and is rejected rather than silently ignored.
+The full choice participates in idempotency; changing it requires a new request
+ID. This extension requires a matching updated gateway. Shared-core/client option
+mapping and profile-preference integration remain pending, not silently complete.
+
 The initial 202 response includes the backend playback id, status, expires_at
 and renewal interval. Poll GET /api/v2/playback/:id until ready or terminal.
 When ready, delivery.kind is direct or gateway. Direct delivery includes the

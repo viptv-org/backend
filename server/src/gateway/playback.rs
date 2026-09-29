@@ -30,6 +30,15 @@ use std::{
 };
 
 const LEASE: Duration = Duration::from_secs(60);
+#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Conversion {
+    #[default]
+    Auto,
+    Audio,
+    Video,
+    AudioVideo,
+}
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Platform {
@@ -56,6 +65,8 @@ pub(crate) struct Facts {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Start {
+    #[serde(default)]
+    conversion: Conversion,
     request_id: String,
     stream_id: String,
     client: Facts,
@@ -65,6 +76,11 @@ pub(crate) struct Start {
     force_gateway: bool,
     audio_track: Option<u32>,
     subtitle_track: Option<u32>,
+    audio_language: Option<String>,
+    preferred_audio_language: Option<String>,
+    preferred_subtitle_language: Option<String>,
+    #[serde(default)]
+    subtitles_off: bool,
 }
 #[derive(Clone)]
 struct Proof {
@@ -488,6 +504,22 @@ fn validate(request: &Start) -> Result<(), Error> {
         || !(2..=16384).contains(&request.client.max_height)
         || request.audio_track.is_some_and(|index| index > 65535)
         || request.subtitle_track.is_some_and(|index| index > 65535)
+        || (request.subtitles_off
+            && (request.subtitle_track.is_some() || request.preferred_subtitle_language.is_some()))
+        || [
+            &request.audio_language,
+            &request.preferred_audio_language,
+            &request.preferred_subtitle_language,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|language| {
+            language.is_empty()
+                || language.len() > 35
+                || !language
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
         || [&request.client.video_codecs, &request.client.audio_codecs]
             .iter()
             .any(|values| {
@@ -541,7 +573,13 @@ pub(crate) async fn start(
         && !matches!(request.client.platform, Platform::Roku | Platform::Vizio)
         && (!matches!(request.client.platform, Platform::Web)
             || (input.url.starts_with("https://") && input.headers.is_empty()));
-    let direct = native && !request.force_gateway;
+    let direct = native
+        && !request.force_gateway
+        && request.conversion == Conversion::Auto
+        && request.audio_track.is_none()
+        && request.subtitle_track.is_none()
+        && request.audio_language.is_none()
+        && !request.subtitles_off;
     if !direct {
         let db = app.db.lock().unwrap();
         lease.validate(&db)?;
@@ -665,7 +703,7 @@ async fn prepare(
                 .map_err(ApiError::from)?;
             *entry.permit.lock().unwrap() = Some(permit);
         }
-        json!({"kind":"direct","url":source.url,"headers":source.headers,"position":request.position,"live":source.live,"format":"original"})
+        json!({"kind":"direct","url":source.url,"headers":source.headers,"position":request.position,"live":source.live,"format":"original","preferences":{"audio_language":request.preferred_audio_language,"subtitle_language":request.preferred_subtitle_language,"subtitles_enabled":request.preferred_subtitle_language.is_some()}})
     } else {
         if !request
             .client
@@ -682,7 +720,7 @@ async fn prepare(
         }
         let target = choose(app.clone(), entry.lease.clone(), source.identity).await?;
         validate_entry(&app, &entry).await?;
-        let body = json!({"namespace":target.gateway.namespace,"input":{"url":source.url,"headers":source.headers,"live":source.live},"output":{"protocol":"hls","video_codecs":request.client.video_codecs,"audio_codecs":request.client.audio_codecs,"max_width":request.client.max_width,"max_height":request.client.max_height,"audio_track":request.audio_track,"subtitle_track":request.subtitle_track},"position_seconds":request.position});
+        let body = json!({"namespace":target.gateway.namespace,"input":{"url":source.url,"headers":source.headers,"live":source.live},"output":{"protocol":"hls","video_codecs":request.client.video_codecs,"audio_codecs":request.client.audio_codecs,"max_width":request.client.max_width,"max_height":request.client.max_height,"audio_track":request.audio_track,"subtitle_track":request.subtitle_track,"conversion":request.conversion,"audio_language":request.audio_language,"preferred_audio_language":request.preferred_audio_language,"preferred_subtitle_language":request.preferred_subtitle_language,"subtitles_off":request.subtitles_off},"position_seconds":request.position});
         let value = app
             .gateway_client
             .request(

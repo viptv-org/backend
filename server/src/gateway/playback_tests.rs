@@ -14,6 +14,7 @@ use std::{
 };
 
 struct Peer {
+    outputs: Arc<Mutex<Vec<Value>>>,
     task: tokio::task::JoinHandle<()>,
     starts: Arc<Mutex<Vec<String>>>,
     stops: Arc<AtomicUsize>,
@@ -68,6 +69,8 @@ async fn setup() -> (App, Peer) {
             .unwrap(),
     );
     let starts = Arc::new(Mutex::new(Vec::new()));
+    let outputs = Arc::new(Mutex::new(Vec::new()));
+    let received_outputs = outputs.clone();
     let stops = Arc::new(AtomicUsize::new(0));
     let mode = Arc::new(AtomicUsize::new(0));
     let hold = Arc::new(tokio::sync::Notify::new());
@@ -81,7 +84,8 @@ async fn setup() -> (App, Peer) {
         let capacity=if mode.load(Ordering::SeqCst)==4 && first{0}else{2};
         Json(json!({"version":1,"ready":true,"protocols":["hls"],"namespaces":["first","second"],"scopes":["capabilities","create","read","renew","release"],"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
     }}))
-        .route("/v1/sessions",axum::routing::post(move|Json(value):Json<Value>|{let created=created.clone();let state=state.clone();let waiting=waiting.clone();async move{
+        .route("/v1/sessions",axum::routing::post(move|Json(value):Json<Value>|{let created=created.clone();let state=state.clone();let waiting=waiting.clone();let outputs=received_outputs.clone();async move{
+            outputs.lock().unwrap().push(value["output"].clone());
             let id={let mut created=created.lock().unwrap();created.push(value["namespace"].as_str().unwrap().into());format!("viewer_{}",created.len())};
             if state.load(Ordering::SeqCst)==2 {return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":{"code":"source_connection_limit","message":"never expose provider-private-credential"}})));}
             if state.load(Ordering::SeqCst)==3 {waiting.notified().await;}
@@ -96,6 +100,7 @@ async fn setup() -> (App, Peer) {
     (
         app,
         Peer {
+            outputs,
             task,
             starts,
             stops,
@@ -272,6 +277,63 @@ async fn native_direct_and_mandatory_gateway_policy_do_not_invoke_embedded_playb
         .await
         .0,
         StatusCode::GONE
+    );
+}
+
+#[tokio::test]
+async fn conversion_and_track_choices_require_and_reach_the_authorized_gateway() {
+    let (app, peer) = setup().await;
+    let source = source(&app);
+    let mut input = body(&source, "selected_tracks", "android");
+    input["conversion"] = json!("audio");
+    input["audio_track"] = json!(2);
+    input["preferred_audio_language"] = json!("pt-BR");
+    input["subtitles_off"] = json!(true);
+    let (status, refused) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        input.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(refused["error_code"], "gateway_required");
+    gateway(&app, "first", 0);
+    let (status, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        input.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let ready = settled(&app, start["id"].as_str().unwrap()).await;
+    assert_eq!(ready["delivery"]["kind"], "gateway");
+    assert_eq!(peer.outputs.lock().unwrap()[0]["conversion"], "audio");
+    assert_eq!(peer.outputs.lock().unwrap()[0]["audio_track"], 2);
+    assert_eq!(
+        peer.outputs.lock().unwrap()[0]["preferred_audio_language"],
+        "pt-BR"
+    );
+    assert_eq!(peer.outputs.lock().unwrap()[0]["subtitles_off"], true);
+    assert_eq!(peer.outputs.lock().unwrap()[0]["max_height"], 2160);
+    input["conversion"] = json!("video");
+    assert_eq!(
+        request(&app, "member-token-1", "POST", "/api/v2/playback", input)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let mut bad = body(&source, "bad_tracks", "android");
+    bad["subtitles_off"] = json!(true);
+    bad["subtitle_track"] = json!(3);
+    assert_eq!(
+        request(&app, "member-token-1", "POST", "/api/v2/playback", bad)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
     );
 }
 #[tokio::test]
