@@ -161,6 +161,10 @@ pub fn router_with_tv(
             get(continue_watching_authenticated),
         )
         .route("/matches", get(matches).put(override_match))
+        .route("/v2/gateways", get(gateway::http::list).post(gateway::http::register))
+        .route("/v2/gateways/:id", axum::routing::patch(gateway::http::update).put(gateway::http::replace).delete(gateway::http::delete))
+        .route("/v2/gateways/:id/check", post(gateway::http::check))
+        .route("/v2/gateways/:id/grants", axum::routing::put(gateway::http::grant))
         .route("/v2/iptv/matches", get(provider::v2_http::matches).put(provider::v2_http::override_match))
         .route("/v2/iptv/live-default", get(provider::v2_http::live_default).put(provider::v2_http::set_live_default))
         .route("/playback", post(start_playback_authenticated))
@@ -178,7 +182,8 @@ pub fn router_with_tv(
             app.clone(),
             auth::authenticate,
         ))
-        .layer(middleware::from_fn(json_errors));
+        .layer(middleware::from_fn(json_errors))
+        .layer(middleware::map_response(private_api_response));
     // Read-only CORS for session media only. An instrument or debugger running on
     // another origin (for example an external player or inspection tool) needs to
     // fetch a session's bytes directly; the session capability is the credential,

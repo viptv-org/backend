@@ -1,9 +1,11 @@
 mod activity;
+mod account_api;
 pub mod addon;
 pub mod auth;
 mod automation;
 mod continuation;
 mod guides;
+mod gateway;
 mod health;
 mod kids;
 mod library;
@@ -16,6 +18,7 @@ pub mod playback;
 mod preferences;
 pub mod provider;
 mod service_health;
+mod secret_store;
 mod session;
 pub mod util;
 

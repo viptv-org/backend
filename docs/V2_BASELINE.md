@@ -54,3 +54,17 @@ Not complete: admin/viewing-client adoption, account-scoped source CRUD/discover
 encrypted credentials, catalog/index lifecycle, retirement of legacy modules,
 full cutover/rollback qualification and backend gateway integration. See
 [V2_OPERATIONS.md](V2_OPERATIONS.md) before using the migration executable.
+
+## Gateway configuration checkpoint
+
+Account-owned gateway registration/check/update/grant APIs now validate scoped
+keys over a bounded, address-pinned HTTPS control client. Gateway integration
+keys are encrypted with an operator-supplied, versioned AES-GCM keyring; there
+is no plaintext fallback or implicit public/family grant. See
+[GATEWAYS_V2.md](GATEWAYS_V2.md) for setup and the exact remaining boundaries.
+
+Current backend suite: 224 passed, three opt-in fixtures skipped by the default
+run. Strict all-target Clippy passes. The new opt-in interoperability fixture
+also passed separately against the independent gateway executable, issuing a
+real scoped key and registering/checking it through the backend router. It does
+not prove playback forwarding, public HTTPS deployment or provider-secret migration.

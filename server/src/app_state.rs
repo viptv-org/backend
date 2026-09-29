@@ -146,6 +146,8 @@ pub struct App {
     pub addons: Addons,
     pub providers: ProviderService,
     pub playback: Arc<PlaybackManager>,
+    pub(crate) secret_vault: Option<Arc<secret_store::Vault>>,
+    pub(crate) gateway_client: gateway::client::Client,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
     // Request-local identity travels with discovery producers; ownership is never upstream-authored.
@@ -267,6 +269,7 @@ impl App {
         client: reqwest::Client,
         playback: Arc<PlaybackManager>,
     ) -> Result<Self, String> {
+        let secret_vault = secret_store::Vault::from_environment()?.map(Arc::new);
         db.busy_timeout(Duration::from_secs(5))
             .map_err(|_| "Database setup failed")?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS profiles(id INTEGER PRIMARY KEY,name TEXT NOT NULL); CREATE TABLE IF NOT EXISTS favorites(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,id TEXT NOT NULL,type TEXT NOT NULL,name TEXT NOT NULL,poster TEXT,PRIMARY KEY(profile_id,type,id)); CREATE TABLE IF NOT EXISTS progress(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,id TEXT NOT NULL,type TEXT NOT NULL,name TEXT NOT NULL,poster TEXT,position REAL NOT NULL,duration REAL NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(profile_id,type,id));").map_err(|_|"Database initialization failed")?;
@@ -277,6 +280,7 @@ impl App {
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
         provider::v2::init(&db).map_err(|_| "Account IPTV schema initialization failed")?;
+        gateway::registry::init(&db).map_err(|_| "Gateway schema initialization failed")?;
         automation::init(&db).map_err(|_| "Automation database initialization failed")?;
         let db = Arc::new(Mutex::new(db));
         let addons = Addons::new(db.clone(), client.clone())?;
@@ -286,6 +290,8 @@ impl App {
             addons,
             providers,
             playback,
+            secret_vault,
+            gateway_client: Default::default(),
             jobs: Default::default(),
             streams: Default::default(),
             principal: None,

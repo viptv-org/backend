@@ -2,101 +2,19 @@
 //! Unassigned legacy sources are never inferred to belong to the caller.
 use super::v2;
 use crate::{
+    account_api::{work, Error},
     app_state::{App, ResourceLease},
-    auth, kids, ApiError,
 };
 use axum::{
     extract::{
         rejection::{JsonRejection, QueryRejection},
         Query, State,
     },
-    http::StatusCode,
-    response::{IntoResponse, Response},
     Extension, Json,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-pub(crate) enum Error {
-    Auth(ApiError),
-    Code(&'static str),
-}
-impl From<&'static str> for Error {
-    fn from(code: &'static str) -> Self {
-        Self::Code(code)
-    }
-}
-impl From<ApiError> for Error {
-    fn from(error: ApiError) -> Self {
-        Self::Auth(error)
-    }
-}
-impl IntoResponse for Error {
-    fn into_response(self) -> Response {
-        let code = match self {
-            Self::Auth(error) => return error.into_response(),
-            Self::Code(code) => code,
-        };
-        let (status, message) = match code {
-            "invalid_cursor" => (
-                StatusCode::BAD_REQUEST,
-                "This page token is no longer valid. Reload the list.",
-            ),
-            "invalid_matches_query" => (
-                StatusCode::BAD_REQUEST,
-                "Check the IPTV filters and choose a page size from 1 to 200.",
-            ),
-            "invalid_match_request" => (
-                StatusCode::BAD_REQUEST,
-                "Choose a valid movie or series match.",
-            ),
-            "catalog_unavailable" => (
-                StatusCode::NOT_FOUND,
-                "This live playlist is unavailable in your account.",
-            ),
-            "stream_candidate_not_found" => (
-                StatusCode::NOT_FOUND,
-                "This stream is unavailable in your IPTV accounts.",
-            ),
-            "account_session_required" => (
-                StatusCode::FORBIDDEN,
-                "Manage IPTV settings from an account session, not a paired TV.",
-            ),
-            _ => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "IPTV data is temporarily unavailable. Try again.",
-            ),
-        };
-        (status, Json(json!({"error":message,"error_code":code}))).into_response()
-    }
-}
-async fn work(
-    app: App,
-    lease: ResourceLease,
-    action: impl FnOnce(&rusqlite::Connection, i64) -> Result<Value, Error> + Send + 'static,
-) -> Result<Json<Value>, Error> {
-    tokio::task::spawn_blocking(move || {
-        let db = app
-            .db
-            .lock()
-            .map_err(|_| Error::Code("provider_storage_unavailable"))?;
-        lease.validate(&db)?;
-        if matches!(&lease.principal, auth::Principal::Account { role, .. } if role == "device") {
-            return Err(Error::Code("account_session_required"));
-        }
-        kids::require_parent(&db, &lease.principal)?;
-        action(
-            &db,
-            lease
-                .principal
-                .account_id()
-                .ok_or_else(auth::unauthorized)?,
-        )
-    })
-    .await
-    .map_err(|_| Error::Code("provider_storage_unavailable"))?
-    .map(Json)
-}
 fn page_size() -> usize {
     50
 }

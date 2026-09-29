@@ -1,5 +1,10 @@
 use super::*;
 
+pub(crate) async fn private_api_response(mut response: Response) -> Response {
+    response.headers_mut().insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    response
+}
+
 pub(crate) async fn json_errors(req: Request, next: Next) -> Response {
     let response = next.run(req).await;
     if response.status().is_client_error()
