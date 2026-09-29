@@ -74,6 +74,19 @@ pub(crate) fn description(code: &str) -> &'static str {
 }
 fn details(code: &str) -> (StatusCode, &'static str) {
     match code {
+        "invalid_episode_selection" => (StatusCode::BAD_REQUEST,"Choose a specific season and episode before requesting IPTV sources."),
+        "invalid_discovery_request" => (StatusCode::BAD_REQUEST,"Choose a movie, exact episode or live channel and valid source filters."),
+        "invalid_discovery_cursor" => (StatusCode::BAD_REQUEST,"Use a valid non-negative discovery event position or restart source discovery."),
+        "discovery_capacity" => (StatusCode::TOO_MANY_REQUESTS,"Too many source searches are active. Wait briefly before trying again."),
+        "discovery_not_found" => (StatusCode::NOT_FOUND,"This source search expired or is unavailable in this session. Search for sources again."),
+        "provider_discovery_failed" => (StatusCode::BAD_GATEWAY,"This IPTV provider could not return sources. Try again or choose another provider."),
+        "source_format_unsupported" => (StatusCode::NOT_ACCEPTABLE,"Only HTTP(S) streams are supported here. Choose another source or configure a resolver."),
+        "addon_timeout" => (StatusCode::GATEWAY_TIMEOUT,"The addon took too long to respond. Try again or choose another addon."),
+        "addon_access_denied" => (StatusCode::BAD_GATEWAY,"The addon rejected access. Check its configuration or subscription."),
+        "addon_rate_limited" => (StatusCode::TOO_MANY_REQUESTS,"The addon is limiting requests. Wait before trying again."),
+        "addon_protocol_invalid" | "addon_response_too_large" => (StatusCode::BAD_GATEWAY,"The addon returned an invalid or oversized response. Try another addon."),
+        "addon_unavailable" => (StatusCode::BAD_GATEWAY,"The addon could not return sources. Try again or choose another addon."),
+        "provider_response_interrupted" => (StatusCode::BAD_GATEWAY,"The IPTV provider's response was interrupted. Try again later."),
         "provider_refresh_failed" => (StatusCode::BAD_GATEWAY,"The provider catalog could not be refreshed. The previous catalog is still available. Try again later."),
         "provider_refresh_timeout" => (StatusCode::GATEWAY_TIMEOUT,"The provider catalog refresh timed out. The previous catalog was kept."),
         "provider_refresh_cancelled" | "provider_refresh_interrupted" => (StatusCode::CONFLICT,"The catalog refresh was interrupted or cancelled. Request another refresh when ready."),
@@ -84,7 +97,7 @@ fn details(code: &str) -> (StatusCode, &'static str) {
         "provider_already_configured" => (StatusCode::CONFLICT,"This IPTV login is already configured in your account."),
         "too_many_providers" => (StatusCode::CONFLICT,"This account has reached its limit of 64 IPTV connections."),
         "provider_checks_busy" => (StatusCode::SERVICE_UNAVAILABLE,"IPTV checks are busy. Try again shortly."),
-        "provider_credentials_rejected" => (StatusCode::UNPROCESSABLE_ENTITY,"The IPTV provider rejected these credentials or the subscription is inactive or expired."),
+        "provider_credentials_rejected" => (StatusCode::UNPROCESSABLE_ENTITY,"The IPTV provider rejected access. Check your credentials, subscription status or provider access restrictions."),
         "provider_redirect_rejected" => (StatusCode::UNPROCESSABLE_ENTITY,"The IPTV provider redirected this request. Use its final server address; credentials are not forwarded to redirects."),
         "provider_rate_limited" => (StatusCode::TOO_MANY_REQUESTS,"The IPTV provider is limiting API requests. Wait before trying again."),
         "provider_response_too_large" | "provider_protocol_invalid" => (StatusCode::BAD_GATEWAY,"The IPTV provider returned an oversized or invalid response."),

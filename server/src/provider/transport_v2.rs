@@ -3,6 +3,16 @@ use super::*;
 use crate::gateway::client::public_ip;
 use url::Host;
 
+fn request_error(error: &reqwest::Error, body: bool) -> &'static str {
+    if error.is_timeout() {
+        "provider_timeout"
+    } else if body {
+        "provider_response_interrupted"
+    } else {
+        "provider_unavailable"
+    }
+}
+
 pub(super) fn base(raw: &str, fixture: bool) -> Result<Url, &'static str> {
     if raw.len() > 4096 || raw.chars().any(char::is_control) {
         return Err("invalid_provider_endpoint");
@@ -63,7 +73,16 @@ impl ProviderService {
         }
     }
     pub(super) async fn protected_json(&self, target: Url, limit: usize) -> Result<Value, String> {
-        tokio::time::timeout(Duration::from_secs(30), async {
+        self.protected_json_with_timeout(target, limit, Duration::from_secs(25))
+            .await
+    }
+    async fn protected_json_with_timeout(
+        &self,
+        target: Url,
+        limit: usize,
+        request_timeout: Duration,
+    ) -> Result<Value, String> {
+        tokio::time::timeout(request_timeout + Duration::from_secs(5), async {
             let host = match target.host().ok_or("invalid_provider_endpoint")? {
                 Host::Domain(v) => v.to_owned(),
                 Host::Ipv4(v) => v.to_string(),
@@ -94,14 +113,14 @@ impl ProviderService {
                 .redirect(reqwest::redirect::Policy::none())
                 .resolve_to_addrs(&host, &addresses)
                 .connect_timeout(Duration::from_secs(3))
-                .timeout(Duration::from_secs(25))
+                .timeout(request_timeout)
                 .build()
-                .map_err(|_| "provider_unavailable")?;
+                .map_err(|error| request_error(&error, false))?;
             let mut response = client
                 .get(target)
                 .send()
                 .await
-                .map_err(|_| "provider_unavailable")?;
+                .map_err(|error| request_error(&error, false))?;
             match response.status().as_u16() {
                 200..=299 => {}
                 300..=399 => return Err("provider_redirect_rejected".into()),
@@ -113,7 +132,11 @@ impl ProviderService {
                 return Err("provider_response_too_large".into());
             }
             let mut bytes = zeroize::Zeroizing::new(Vec::new());
-            while let Some(chunk) = response.chunk().await.map_err(|_| "provider_unavailable")? {
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|error| request_error(&error, true))?
+            {
                 if bytes.len().saturating_add(chunk.len()) > limit {
                     return Err("provider_response_too_large".into());
                 }
@@ -127,5 +150,57 @@ impl ProviderService {
         })
         .await
         .map_err(|_| "provider_timeout".to_string())?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[tokio::test]
+    async fn request_and_body_deadlines_are_distinct_from_interrupted_bodies() {
+        let mut service = ProviderService::new(
+            Arc::new(Mutex::new(Connection::open_in_memory().unwrap())),
+            reqwest::Client::new(),
+        );
+        service.allow_test_loopback = true;
+        for mode in 0..3 {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = Url::parse(&format!(
+                "http://{}/player_api.php?username=private-user&password=private-password",
+                listener.local_addr().unwrap()
+            ))
+            .unwrap();
+            let fixture = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut data = Vec::new();
+                let mut buffer = [0u8; 1024];
+                while !data.windows(4).any(|v| v == b"\r\n\r\n") && data.len() < 8192 {
+                    let n = stream.read(&mut buffer).await.unwrap();
+                    if n == 0 {
+                        return;
+                    }
+                    data.extend_from_slice(&buffer[..n]);
+                }
+                if mode != 0 {
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: close\r\n\r\n").await.unwrap();
+                    if mode == 1 {
+                        stream.write_all(b"{}").await.unwrap();
+                        return;
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            });
+            let result = service
+                .protected_json_with_timeout(url, 1024, Duration::from_millis(500))
+                .await;
+            fixture.abort();
+            let expected = if mode == 1 {
+                "provider_response_interrupted"
+            } else {
+                "provider_timeout"
+            };
+            assert_eq!(result.unwrap_err(), expected);
+        }
     }
 }

@@ -38,15 +38,28 @@ pub(crate) fn emit_batch(
             return;
         }
     }
-    let (streams, error) = match result {
-        Ok(r) => a.register(source, r, &j.kind),
-        Err(e) => (vec![], Some(e)),
+    let (streams, error, registration_error) = match result {
+        Ok(r) => {
+            let (streams, error) = a.register(source, r, &j.kind);
+            (streams, error, true)
+        }
+        Err(e) => (vec![], Some(e), false),
     };
     let mut state = j.state.lock().unwrap();
     let seq = state.events.len() + 1;
     let mut e = json!({"seq":seq,"source":source,"streams":streams});
     if let Some(error) = error {
-        e["error"] = json!(error);
+        if a.providers.account.is_some() {
+            let code = if registration_error {
+                service_errors::provider(&error).unwrap_or("source_format_unsupported")
+            } else {
+                service_errors::discovery(source, &error)
+            };
+            e["error"] = json!(account_api::description(code));
+            e["error_code"] = json!(code);
+        } else {
+            e["error"] = json!(error);
+        }
     }
     state.events.push(e);
     if complete {

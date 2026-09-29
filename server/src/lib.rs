@@ -18,6 +18,9 @@ pub mod playback;
 mod preferences;
 pub mod provider;
 mod service_health;
+mod service_errors;
+#[cfg(test)]
+mod discovery_error_tests;
 mod secret_store;
 mod session;
 pub mod util;

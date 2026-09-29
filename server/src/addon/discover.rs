@@ -104,10 +104,10 @@ impl Addons {
         let v = self.fetch(&endpoint, 60).await?;
         Ok(v["streams"]
             .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
+            .ok_or("Invalid addon stream response")?
+            .iter()
             .take(100)
+            .cloned()
             .collect())
     }
 }

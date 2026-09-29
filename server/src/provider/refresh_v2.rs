@@ -130,29 +130,7 @@ fn claim(db: &Connection) -> Result<Option<Guard>, &'static str> {
     }))
 }
 fn safe_error(raw: &str) -> &'static str {
-    match raw {
-        "provider_refresh_cancelled" => "provider_refresh_cancelled",
-        "provider_refresh_timeout" => "provider_refresh_timeout",
-        "source_configuration_changed" => "source_configuration_changed",
-        "provider_private_destination" => "provider_private_destination",
-        "source_route_migration_required" => "source_route_migration_required",
-        "provider_credentials_rejected" => "provider_credentials_rejected",
-        "provider_rate_limited" => "provider_rate_limited",
-        "provider_response_too_large" => "provider_response_too_large",
-        "provider_redirect_rejected" => "provider_redirect_rejected",
-        "provider_timeout" => "provider_timeout",
-        "provider_dns_unavailable" => "provider_dns_unavailable",
-        "provider_unavailable" => "provider_unavailable",
-        "secret_store_not_configured" => "secret_store_not_configured",
-        "secret_key_unavailable" => "secret_key_unavailable",
-        "secret_authentication_failed" => "secret_authentication_failed",
-        "invalid_secret_envelope" => "invalid_secret_envelope",
-        "provider_protocol_invalid" | "Provider index contains invalid entries" => {
-            "provider_protocol_invalid"
-        }
-        "invalid_provider_endpoint" => "invalid_provider_endpoint",
-        _ => "provider_refresh_failed",
-    }
+    crate::service_errors::provider(raw).unwrap_or("provider_refresh_failed")
 }
 async fn run(service: ProviderService, guard: Guard) {
     struct CancelOnDrop(Arc<AtomicBool>);

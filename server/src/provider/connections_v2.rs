@@ -128,17 +128,7 @@ pub(super) async fn login(service: &ProviderService, credentials: &Credentials) 
     Ok(limit as usize)
 }
 fn provider_error(code: &str) -> Error {
-    Error::Code(match code {
-        "provider_private_destination" => "provider_private_destination",
-        "provider_dns_unavailable" => "provider_dns_unavailable",
-        "provider_redirect_rejected" => "provider_redirect_rejected",
-        "provider_credentials_rejected" => "provider_credentials_rejected",
-        "provider_rate_limited" => "provider_rate_limited",
-        "provider_response_too_large" => "provider_response_too_large",
-        "provider_protocol_invalid" => "provider_protocol_invalid",
-        "provider_timeout" => "provider_timeout",
-        _ => "provider_unavailable",
-    })
+    Error::Code(crate::service_errors::provider(code).unwrap_or("provider_unavailable"))
 }
 pub(crate) async fn create(
     State(app): State<App>,

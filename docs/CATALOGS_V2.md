@@ -70,6 +70,8 @@ duplicate stream causes an insert failure following deletion.
   Stremio-style movie/series/live request and returns `{id}`.
 - `GET /api/v2/streams/:id?after=N` returns `{events,done}`. Events retain their
   monotonic `seq`, producer and sanitized stream cards with backend-issued IDs.
+  Producer failures include readable `error` and stable `error_code`; successful
+  HTTP polling does not imply every producer succeeded. See [v2 errors](ERRORS_V2.md).
   The same exact account/profile/session owns the job. V2 currently uses polling;
   no new SSE endpoint is claimed.
 - `GET /api/v2/iptv/guide/:channel_id` returns bounded Xtream-native programs for
