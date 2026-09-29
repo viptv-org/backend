@@ -162,14 +162,42 @@ pub fn router_with_tv(
         )
         .route("/matches", get(matches).put(override_match))
         .route("/v2/playback", post(gateway::playback::start))
-        .route("/v2/playback/:id", get(gateway::playback::get).delete(gateway::playback::stop))
+        .route(
+            "/v2/playback/:id",
+            get(gateway::playback::get).delete(gateway::playback::stop),
+        )
         .route("/v2/playback/:id/heartbeat", post(gateway::playback::renew))
-        .route("/v2/gateways", get(gateway::http::list).post(gateway::http::register))
-        .route("/v2/gateways/:id", axum::routing::patch(gateway::http::update).put(gateway::http::replace).delete(gateway::http::delete))
+        .route(
+            "/v2/gateways",
+            get(gateway::http::list).post(gateway::http::register),
+        )
+        .route(
+            "/v2/gateways/:id",
+            axum::routing::patch(gateway::http::update)
+                .put(gateway::http::replace)
+                .delete(gateway::http::delete),
+        )
         .route("/v2/gateways/:id/check", post(gateway::http::check))
-        .route("/v2/gateways/:id/grants", axum::routing::put(gateway::http::grant))
-        .route("/v2/iptv/matches", get(provider::v2_http::matches).put(provider::v2_http::override_match))
-        .route("/v2/iptv/live-default", get(provider::v2_http::live_default).put(provider::v2_http::set_live_default))
+        .route(
+            "/v2/gateways/:id/grants",
+            axum::routing::put(gateway::http::grant),
+        )
+        .route(
+            "/v2/iptv/matches",
+            get(provider::v2_http::matches).put(provider::v2_http::override_match),
+        )
+        .route(
+            "/v2/iptv/live-default",
+            get(provider::v2_http::live_default).put(provider::v2_http::set_live_default),
+        )
+        .route(
+            "/v2/iptv/live/channels",
+            get(provider::v2_http::live_channels),
+        )
+        .route(
+            "/v2/iptv/live/categories",
+            get(provider::v2_http::live_categories),
+        )
         .route("/playback", post(start_playback_authenticated))
         .route("/playback/:id", delete(stop_playback))
         .route("/playback/:id/heartbeat", post(heartbeat))

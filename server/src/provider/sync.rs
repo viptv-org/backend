@@ -194,8 +194,8 @@ impl ProviderService {
         if active[0] {
             tx.execute("DELETE FROM provider_live WHERE provider_id=?1", [id])
                 .map_err(db_error)?;
-            let mut stmt = tx.prepare("INSERT INTO provider_live(id,provider_id,stream_id,name,logo,category,category_id,epg_channel_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").map_err(db_error)?;
-            for value in live {
+            let mut stmt = tx.prepare("INSERT INTO provider_live(id,provider_id,stream_id,name,logo,category,category_id,epg_channel_id,ordinal) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)").map_err(db_error)?;
+            for (ordinal, value) in live.iter().enumerate() {
                 let stream = stream_id(value, "stream_id").ok_or("Invalid live stream ID")?;
                 let category_id = value.get("category_id").and_then(scalar);
                 let category = category_id
@@ -211,10 +211,13 @@ impl ProviderService {
                     text(value, "stream_icon"),
                     category,
                     category_id,
-                    text(value, "epg_channel_id")
+                    text(value, "epg_channel_id"),
+                    ordinal as i64
                 ])
                 .map_err(db_error)?;
             }
+            catalog_v2::replace_categories(&tx, id, categories).map_err(db_error)?;
+            tx.execute("INSERT INTO provider_live_generations(provider_id,generation) VALUES(?1,1) ON CONFLICT(provider_id) DO UPDATE SET generation=generation+1", [id]).map_err(db_error)?;
         }
         // UPSERT instead of REPLACE preserves manual overrides for stable candidate IDs.
         let mut current = HashSet::new();

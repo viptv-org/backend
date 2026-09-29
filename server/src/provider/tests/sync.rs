@@ -499,3 +499,63 @@ fn sqlite_lookup_filters_types_and_honors_metadata_and_overrides() {
         1
     );
 }
+#[test]
+fn live_snapshot_retains_provider_order_categories_and_atomic_generation() {
+    let s = service();
+    let id = add_provider(&s);
+    let categories = json!([{"category_id":"z","category_name":"Zulu"},{"category_id":"a","category_name":"Alpha"}]);
+    let live = json!([{"stream_id":99,"name":"Z first","stream_icon":"http://example.com/logo.png","category_id":"z"},{"stream_id":1,"name":"A second","category_id":"a"}]);
+    s.store_index(id, categories.clone(), live.clone(), json!([]), json!([]))
+        .unwrap();
+    let snapshot = || {
+        let db = s.lock().unwrap();
+        let generation: i64 = db
+            .query_row(
+                "SELECT generation FROM provider_live_generations WHERE provider_id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let rows = db
+            .prepare(
+                "SELECT stream_id,logo FROM provider_live WHERE provider_id=?1 ORDER BY ordinal,id",
+            )
+            .unwrap()
+            .query_map([id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let cats = db.prepare("SELECT id FROM provider_live_categories_v2 WHERE provider_id=?1 ORDER BY ordinal,id").unwrap().query_map([id],|r|r.get::<_,String>(0)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        (generation, rows, cats)
+    };
+    let before = snapshot();
+    assert_eq!(before.0, 1);
+    assert_eq!(
+        before.1[0],
+        ("99".into(), Some("http://example.com/logo.png".into()))
+    );
+    assert_eq!(before.1[1].0, "1");
+    assert_eq!(before.2, vec!["z", "a"]);
+    // Duplicate IDs fail after deletion/first insert; transaction must restore all.
+    assert!(s
+        .store_index(
+            id,
+            json!([]),
+            json!([{"stream_id":2,"name":"One"},{"stream_id":2,"name":"Duplicate"}]),
+            json!([]),
+            json!([])
+        )
+        .is_err());
+    assert_eq!(snapshot(), before);
+    s.store_index(id, Value::Null, Value::Null, json!([]), json!([]))
+        .unwrap();
+    assert_eq!(snapshot(), before);
+    s.store_index(id, categories, live, json!([]), json!([]))
+        .unwrap();
+    assert_eq!(snapshot().0, 2);
+    s.store_index(id, json!([]), json!([]), json!([]), json!([]))
+        .unwrap();
+    assert_eq!(snapshot(), (3, vec![], vec![]));
+}

@@ -1,5 +1,6 @@
-//! Account settings endpoints, independent of a selected viewing profile.
+//! Account settings and selected-profile viewing endpoints with separate guards.
 //! Unassigned legacy sources are never inferred to belong to the caller.
+use super::catalog_v2::{self, Filter, Kind};
 use super::v2;
 use crate::{
     account_api::{work, Error},
@@ -96,4 +97,68 @@ pub(crate) async fn set_live_default(
         Ok(json!({"catalog_id":value.catalog_id}))
     })
     .await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CatalogQuery {
+    catalog_id: Option<i64>,
+    category_id: Option<String>,
+    #[serde(default)]
+    search: String,
+    cursor: Option<String>,
+    #[serde(default = "page_size")]
+    limit: usize,
+}
+async fn catalog_page(
+    app: App,
+    lease: ResourceLease,
+    query: Result<Query<CatalogQuery>, QueryRejection>,
+    kind: Kind,
+) -> Result<Json<Value>, Error> {
+    let Query(q) = query.map_err(|_| Error::Code("invalid_catalog_query"))?;
+    let app = app.with_lease(lease);
+    tokio::task::spawn_blocking(move || {
+        let db = app
+            .db
+            .lock()
+            .map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        app.require_media(&db)?;
+        // Raw provider categories are not evidence of child suitability. Keep
+        // existing restricted-profile protection until its v2 policy is migrated.
+        crate::kids::require_parent(&db, &app.identity())?;
+        let account = app
+            .identity()
+            .account_id()
+            .ok_or_else(crate::auth::unauthorized)?;
+        let page = catalog_v2::page(
+            &db,
+            account,
+            kind,
+            Filter {
+                catalog_id: q.catalog_id,
+                category_id: q.category_id,
+                search: q.search,
+            },
+            q.cursor.as_deref(),
+            q.limit,
+        )?;
+        Ok(Json(json!(page)))
+    })
+    .await
+    .map_err(|_| Error::Code("provider_storage_unavailable"))?
+}
+pub(crate) async fn live_channels(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    query: Result<Query<CatalogQuery>, QueryRejection>,
+) -> Result<Json<Value>, Error> {
+    catalog_page(app, lease, query, Kind::Channels).await
+}
+pub(crate) async fn live_categories(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    query: Result<Query<CatalogQuery>, QueryRejection>,
+) -> Result<Json<Value>, Error> {
+    catalog_page(app, lease, query, Kind::Categories).await
 }

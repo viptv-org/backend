@@ -108,7 +108,8 @@ fn details(code: &str) -> (StatusCode, &'static str) {
                 StatusCode::BAD_REQUEST,
                 "This page token is no longer valid. Reload the list.",
             ),
-            "invalid_matches_query" => (
+            "catalog_changed" => (StatusCode::CONFLICT, "This playlist changed while you were browsing. Reload it to see the current channels."),
+            "invalid_catalog_query" | "invalid_matches_query" => (
                 StatusCode::BAD_REQUEST,
                 "Check the IPTV filters and choose a page size from 1 to 200.",
             ),
