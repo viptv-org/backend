@@ -61,6 +61,9 @@ pub(crate) struct Filter {
     pub category_id: Option<String>,
     #[serde(default)]
     pub search: String,
+    pub collection: Option<String>,
+    /// Selected server-authenticated profile, never a public query override.
+    pub profile_id: Option<i64>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -103,6 +106,13 @@ pub(crate) fn page(
         || filter.search.len() > 128
         || filter.category_id.as_ref().is_some_and(|id| id.len() > 256)
         || (kind == Kind::Categories && filter.category_id.is_some())
+        || (kind == Kind::Categories && filter.collection.is_some())
+        || filter
+            .collection
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "favorites" | "recent"))
+        || (filter.collection.is_some() != filter.profile_id.is_some())
+        || filter.profile_id.is_some_and(|id| id <= 0)
     {
         return Err("invalid_catalog_query");
     }
@@ -163,19 +173,36 @@ pub(crate) fn page(
     let id = previous.as_ref().map_or("", |c| c.id.as_str());
     // instr treats user '%'/'_' literally. Filtering happens before the bound;
     // no full catalog collection or synchronous count is performed.
-    let sql = match kind {
-        Kind::Channels => {
-            "SELECT ordinal,id,name,logo,category_id,category,epg_channel_id FROM provider_live
-            WHERE provider_id=?1 AND (ordinal,id)>(?2,?3) AND (?4 IS NULL OR category_id=?4)
-            AND (?5='' OR instr(lower(name),lower(?5))>0) ORDER BY ordinal,id LIMIT ?6"
+    // Personal subsets start at the profile's saved-row index. CROSS JOIN keeps
+    // a sparse list from becoming a full-provider scan just to satisfy ordering.
+    let sql = match (kind,filter.collection.as_deref()) {
+        (Kind::Channels,None) => {
+            "SELECT l.ordinal,l.id,l.name,l.logo,l.category_id,l.category,l.epg_channel_id FROM provider_live l
+            WHERE l.provider_id=?1 AND (l.ordinal,l.id)>(?2,?3) AND (?4 IS NULL OR l.category_id=?4)
+            AND (?5='' OR instr(lower(l.name),lower(?5))>0) AND ?7 IS NULL ORDER BY l.ordinal,l.id LIMIT ?6"
         }
-        Kind::Categories => {
+        (Kind::Channels,Some("favorites")) => {
+            "SELECT l.ordinal,l.id,l.name,l.logo,l.category_id,l.category,l.epg_channel_id
+            FROM favorites saved CROSS JOIN provider_live l ON l.id=saved.id
+            WHERE saved.profile_id=?7 AND saved.type='live' AND l.provider_id=?1
+            AND (l.ordinal,l.id)>(?2,?3) AND (?4 IS NULL OR l.category_id=?4)
+            AND (?5='' OR instr(lower(l.name),lower(?5))>0) ORDER BY l.ordinal,l.id LIMIT ?6"
+        }
+        (Kind::Channels,Some("recent")) => {
+            "SELECT l.ordinal,l.id,l.name,l.logo,l.category_id,l.category,l.epg_channel_id
+            FROM progress saved CROSS JOIN provider_live l ON l.id=saved.id
+            WHERE saved.profile_id=?7 AND saved.type='live' AND l.provider_id=?1
+            AND (l.ordinal,l.id)>(?2,?3) AND (?4 IS NULL OR l.category_id=?4)
+            AND (?5='' OR instr(lower(l.name),lower(?5))>0) ORDER BY l.ordinal,l.id LIMIT ?6"
+        }
+        (Kind::Categories,None) => {
             "SELECT ordinal,id,name,NULL,id,name,NULL FROM provider_live_categories_v2
             WHERE provider_id=?1 AND (ordinal,id)>(?2,?3) AND ?4 IS NULL
-            AND (?5='' OR instr(lower(name),lower(?5))>0) ORDER BY ordinal,id LIMIT ?6"
+            AND (?5='' OR instr(lower(name),lower(?5))>0) AND ?7 IS NULL ORDER BY ordinal,id LIMIT ?6"
         }
+        _=>return Err("invalid_catalog_query"),
     };
-    let mut rows = tx.prepare(sql).map_err(storage)?.query_map(params![catalog,ordinal,id,filter.category_id,filter.search,limit+1], |row| {
+    let mut rows = tx.prepare(sql).map_err(storage)?.query_map(params![catalog,ordinal,id,filter.category_id,filter.search,limit+1,filter.profile_id], |row| {
         let item = match kind {
             Kind::Channels => json!({"id":row.get::<_,String>(1)?,"name":row.get::<_,String>(2)?,"logo":row.get::<_,Option<String>>(3)?,"category_id":row.get::<_,Option<String>>(4)?,"category":row.get::<_,Option<String>>(5)?,"epg_channel_id":row.get::<_,Option<String>>(6)?}),
             Kind::Categories => json!({"id":row.get::<_,String>(1)?,"name":row.get::<_,String>(2)?}),

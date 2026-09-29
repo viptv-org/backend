@@ -4,6 +4,36 @@ This is a development-branch contract, not authorization to migrate production.
 Production deployment and migration require separate approval. No viewing UI or
 playlist swap control is introduced by these endpoints.
 
+## Exact live playback and personal guide subsets
+
+Viewing clients use POST `/api/v2/iptv/live/:id/source` for one selected raw
+channel. It returns `{source}` with an opaque playback handle, provider identity
+and safe presentation metadata, never a source URL or credentials. It does not
+query addons or allocate a discovery job. The handle then goes through ordinary
+`/api/v2/playback`; native HTTP delivery remains eligible, while Roku/Vizio still
+require authorized gateway delivery. No gateway means an actionable refusal.
+
+Ownership, enabled live scope, selected profile/parent policy and credential proof
+are checked before publication and again at playback admission. A resolved URL
+cannot acquire a newer credential proof after a concurrent edit. Missing,
+unassigned, foreign, disabled and retired composite IDs do not guess a replacement.
+
+Channel pages also accept `collection=favorites|recent`. These are selected-
+profile saved subsets of the chosen/default raw playlist, retaining provider
+order—not US classification, family-lineup filtering or an all-provider index.
+Personal cursors bind the server-authenticated profile; there is no `profile_id`
+query override. Categories reject personal collection filters. Saved references
+outside the current playlist (including retired composites) remain in history/
+favorites; they are not silently remapped. No synchronous total is introduced.
+
+Checkpoint: full backend suite 281 passed/four opt-in fixtures ignored, strict
+all-target Clippy passed. The 13 catalog/ownership fixtures also passed after
+extending exact live selection through native direct v2 admission and release.
+Synthetic tests cover profile-bound saved subsets, default/override isolation,
+hidden foreign/unassigned/composite IDs, parent gates, private source cards and
+credential-proof changes. No real provider, hardware or production state was used.
+Ordinary client guide/catalog cutover and retired-path removal remain pending.
+
 ## Account management API
 
 Authenticated account sessions use:

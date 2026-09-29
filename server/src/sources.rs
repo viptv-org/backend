@@ -7,6 +7,23 @@ impl App {
         raw: Vec<Value>,
         kind: &str,
     ) -> (Vec<Value>, Option<String>) {
+        self.register_with_configuration(source, raw, kind, None)
+    }
+
+    /// A previously resolved URL must not acquire a newer credential proof.
+    pub(crate) fn register_with_configuration(
+        &self,
+        source: &str,
+        raw: Vec<Value>,
+        kind: &str,
+        expected: Option<[u8; 32]>,
+    ) -> (Vec<Value>, Option<String>) {
+        let configuration = source_configuration(&self.db.lock().unwrap(), source)
+            .ok()
+            .flatten();
+        if expected.is_some() && configuration != expected {
+            return (vec![], Some("source_configuration_changed".into()));
+        }
         // This label comes from the configured producer, never upstream release metadata.
         let source_name = source
             .split_once(':')
@@ -39,7 +56,6 @@ impl App {
             None => HashMap::new(),
         };
         let mut out = vec![];
-        let configuration = source_configuration(&self.db.lock().unwrap(),source).ok().flatten();
         let mut unsupported = 0;
         let mut entries = self.streams.lock().unwrap();
         for r in raw.into_iter().take(100) {
@@ -125,15 +141,22 @@ impl App {
 
 /// A private fingerprint, never a wire credential. Changes to ownership, source
 /// credentials, enabled scopes or routing invalidate a cached source at use time.
-pub(crate) fn source_configuration(db:&Connection,producer:&str)->Result<Option<[u8;32]>,ApiError>{
-    let Some((kind,id))=producer.split_once(':') else{return Ok(None);};
-    let Ok(id)=id.parse::<i64>() else{return Ok(None);};
+pub(crate) fn source_configuration(
+    db: &Connection,
+    producer: &str,
+) -> Result<Option<[u8; 32]>, ApiError> {
+    let Some((kind, id)) = producer.split_once(':') else {
+        return Ok(None);
+    };
+    let Ok(id) = id.parse::<i64>() else {
+        return Ok(None);
+    };
     let value:Option<String>=match kind {
         "iptv"=>db.query_row("SELECT json_array(p.url,p.username,p.password,p.enabled,p.enable_live,p.enable_movies,p.enable_series,COALESCE(r.warp,0),o.account_id,p.credentials_version,c.account_id,c.secret) FROM providers p LEFT JOIN provider_routes r ON r.provider_id=p.id LEFT JOIN provider_ownership o ON o.provider_id=p.id LEFT JOIN provider_credentials_v2 c ON c.provider_id=p.id WHERE p.id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
         "addon"=>db.query_row("SELECT json_array(manifest_url,enabled,account_id,credentials_version,credentials_revision) FROM addons WHERE id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
         _=>None,
     };
-    Ok(value.map(|value|Sha256::digest(value.as_bytes()).into()))
+    Ok(value.map(|value| Sha256::digest(value.as_bytes()).into()))
 }
 
 use viptv_playback_engine::source_display_text;

@@ -105,14 +105,39 @@ pub fn router_with_tv(
         .route("/streams/:id", get(poll_streams_authenticated))
         .route("/streams/:id/events", get(stream_events_authenticated))
         .route("/v2/streams", post(provider::discovery_v2::start))
-        .route("/v2/addons", get(addon::http_v2::list).post(addon::http_v2::create))
-        .route("/v2/addons/:id", axum::routing::patch(addon::http_v2::update).delete(addon::http_v2::delete))
-        .route("/v2/iptv/connections", get(provider::connections_v2::list).post(provider::connections_v2::create))
-        .route("/v2/iptv/connections/:id", axum::routing::patch(provider::connections_v2::update).delete(provider::connections_v2::delete))
-        .route("/v2/iptv/connections/:id/credentials", axum::routing::put(provider::connections_v2::renew))
-        .route("/v2/iptv/connections/:id/refresh", get(provider::refresh_v2::get).post(provider::refresh_v2::request).delete(provider::refresh_v2::cancel))
+        .route(
+            "/v2/addons",
+            get(addon::http_v2::list).post(addon::http_v2::create),
+        )
+        .route(
+            "/v2/addons/:id",
+            axum::routing::patch(addon::http_v2::update).delete(addon::http_v2::delete),
+        )
+        .route(
+            "/v2/iptv/connections",
+            get(provider::connections_v2::list).post(provider::connections_v2::create),
+        )
+        .route(
+            "/v2/iptv/connections/:id",
+            axum::routing::patch(provider::connections_v2::update)
+                .delete(provider::connections_v2::delete),
+        )
+        .route(
+            "/v2/iptv/connections/:id/credentials",
+            axum::routing::put(provider::connections_v2::renew),
+        )
+        .route(
+            "/v2/iptv/connections/:id/refresh",
+            get(provider::refresh_v2::get)
+                .post(provider::refresh_v2::request)
+                .delete(provider::refresh_v2::cancel),
+        )
         .route("/v2/streams/:id", get(provider::discovery_v2::poll))
         .route("/v2/iptv/guide/:id", get(provider::discovery_v2::guide))
+        .route(
+            "/v2/iptv/live/:id/source",
+            post(provider::discovery_v2::live_source),
+        )
         .route("/live", get(live))
         .route("/live/categories", get(live_categories))
         .route("/guide/:id", get(guide))

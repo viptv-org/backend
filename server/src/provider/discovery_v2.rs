@@ -123,3 +123,92 @@ pub(crate) async fn guide(
     blocking(move || app.require_media(&app.db.lock().unwrap())).await?;
     Ok(axum::Json(value))
 }
+
+/// Guide playback selects exactly this owned raw channel, never an addon result.
+pub(crate) async fn live_source(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(id): Path<String>,
+) -> Result<axum::Json<Value>, Error> {
+    if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+        return Err(Error::Code("source_not_found"));
+    }
+    let app = app.with_lease(lease);
+    tokio::task::spawn_blocking(move || {
+        app.prune();
+        let (producer, configuration, raw) = {
+            let db = app
+                .db
+                .lock()
+                .map_err(|_| Error::Code("provider_storage_unavailable"))?;
+            app.require_media(&db)?;
+            kids::require_parent(&db, &app.identity())?;
+            let account = app.identity().account_id().ok_or_else(auth::unauthorized)?;
+            let (provider_id, stream, name): (i64, String, String) = db
+                .query_row(
+                    "SELECT l.provider_id,l.stream_id,l.name FROM provider_live l
+                     JOIN providers p ON p.id=l.provider_id
+                     JOIN provider_ownership o ON o.provider_id=p.id
+                     WHERE l.id=?1 AND o.account_id=?2 AND p.enabled=1 AND p.enable_live=1",
+                    params![id, account],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .map_err(|_| Error::Code("provider_storage_unavailable"))?
+                .ok_or(Error::Code("source_not_found"))?;
+            let provider =
+                super::service::provider_row(&db, provider_id, app.providers.vault.as_deref())
+                    .map_err(|error| {
+                        Error::Code(
+                            service_errors::provider(&error).unwrap_or("source_unavailable"),
+                        )
+                    })?;
+            let producer = format!("iptv:{provider_id}");
+            let configuration = crate::sources::source_configuration(&db, &producer)?
+                .ok_or(Error::Code("source_not_found"))?;
+            let routing = super::egress::headers(&db, provider_id)
+                .map_err(|_| Error::Code("source_route_migration_required"))?;
+            if !routing.is_empty() {
+                return Err(Error::Code("source_route_migration_required"));
+            }
+            let url = super::media_url(
+                &provider.url,
+                &provider.username,
+                &provider.password,
+                "live",
+                &stream,
+                "ts",
+            )
+            .map_err(|_| Error::Code("source_format_unsupported"))?;
+            (
+                producer,
+                configuration,
+                json!({"url":url,"name":provider.name,"title":name}),
+            )
+        };
+        let (mut cards, error) =
+            app.register_with_configuration(&producer, vec![raw], "live", Some(configuration));
+        if let Some(error) = error {
+            return Err(Error::Code(if error == "source_configuration_changed" {
+                "source_configuration_changed"
+            } else {
+                "source_unavailable"
+            }));
+        }
+        {
+            let db = app
+                .db
+                .lock()
+                .map_err(|_| Error::Code("provider_storage_unavailable"))?;
+            app.require_media(&db)?;
+            kids::require_parent(&db, &app.identity())?;
+            if crate::sources::source_configuration(&db, &producer)? != Some(configuration) {
+                return Err(Error::Code("source_configuration_changed"));
+            }
+        }
+        let source = cards.pop().ok_or(Error::Code("discovery_capacity"))?;
+        Ok(axum::Json(json!({"source":source})))
+    })
+    .await
+    .map_err(|_| Error::Code("provider_storage_unavailable"))?
+}

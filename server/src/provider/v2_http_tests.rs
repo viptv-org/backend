@@ -484,6 +484,103 @@ async fn raw_live_browsing_allows_paired_devices_but_not_locked_kids() {
 }
 
 #[tokio::test]
+async fn live_personal_subsets_bind_selected_profile_and_default_catalog_without_counts() {
+    let app = seeded();
+    {
+        let db = app.db.lock().unwrap();
+        for provider in [1, 2, 3] {
+            for index in 0..4 {
+                db.execute("INSERT INTO provider_live(id,provider_id,stream_id,name,ordinal) VALUES(?1,?2,?3,?4,?5)",params![format!("iptv:{provider}:{index}"),provider,index.to_string(),format!("Channel {index}"),index]).unwrap();
+            }
+        }
+        for channel in [
+            "iptv:1:1",
+            "iptv:1:3",
+            "iptv:2:0",
+            "iptv:3:0",
+            "family:removed",
+        ] {
+            db.execute(
+                "INSERT INTO favorites(profile_id,id,type,name) VALUES(1,?1,'live','Saved')",
+                [channel],
+            )
+            .unwrap();
+        }
+        db.execute("INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at) VALUES(1,'iptv:1:2','live','Recent',0,0,1)",[]).unwrap();
+        db.execute(
+            "INSERT INTO profiles(id,name,presentation_complete) VALUES(20,'Second',1)",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO profile_owners(account_id,profile_id,created_at) VALUES(1,20,0)",
+            [],
+        )
+        .unwrap();
+        db.execute("INSERT INTO favorites(profile_id,id,type,name) VALUES(20,'iptv:1:0','live','Other profile')",[]).unwrap();
+    }
+    let root = "/api/v2/iptv/live/channels?collection=favorites&limit=1";
+    let (status, first) = request(&app, "member-token-1", "GET", root, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["items"][0]["id"], "iptv:1:1");
+    assert!(first.get("total").is_none());
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let path = format!("{root}&cursor={cursor}");
+    let (_, second) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
+    assert_eq!(second["items"][0]["id"], "iptv:1:3");
+    assert!(second["next_cursor"].is_null());
+    let (_, recent) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/iptv/live/channels?collection=recent",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(recent["items"][0]["id"], "iptv:1:2");
+    let (_, overridden) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/iptv/live/channels?collection=favorites&catalog_id=2",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(overridden["items"][0]["id"], "iptv:2:0");
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE auth_sessions SET profile_id=20 WHERE account_id=1",
+            [],
+        )
+        .unwrap();
+    let (status, error) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(error["error_code"], "invalid_cursor");
+    let (_, own) = request(&app, "member-token-1", "GET", root, Value::Null).await;
+    assert_eq!(own["items"][0]["id"], "iptv:1:0");
+    for suffix in [
+        "collection=us",
+        "collection=family",
+        "collection=favorites&profile_id=1",
+    ] {
+        assert_eq!(
+            request(
+                &app,
+                "member-token-1",
+                "GET",
+                &format!("/api/v2/iptv/live/channels?{suffix}"),
+                Value::Null
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+}
+
+#[tokio::test]
 async fn empty_account_live_catalog_has_no_implicit_global_fallback() {
     let app = seeded();
     app.db
@@ -779,6 +876,163 @@ async fn v2_guide_uses_owned_raw_channel_and_hides_foreign_or_missing_ids() {
     assert!(denied.iter().all(|v| v == &denied[0]));
     assert_eq!(denied[0].0, StatusCode::NOT_FOUND);
     assert_eq!(denied[0].1["error_code"], "source_not_found");
+}
+
+#[tokio::test]
+async fn exact_live_source_is_owned_private_and_independent_of_addon_discovery() {
+    let app = seeded();
+    {
+        let db = app.db.lock().unwrap();
+        for provider in 1..=4 {
+            db.execute("INSERT INTO provider_live(id,provider_id,stream_id,name) VALUES(?1,?2,'7','Selected channel')",params![format!("iptv:{provider}:7"),provider]).unwrap();
+        }
+        db.execute(
+            "UPDATE auth_sessions SET kind='device' WHERE account_id=1",
+            [],
+        )
+        .unwrap();
+    }
+    let (status, response) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/iptv/live/iptv:1:7/source",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let id = response["source"]["id"].as_str().unwrap();
+    assert_eq!(response["source"]["source_addon_id"], "iptv:1");
+    assert!(!response.to_string().contains("private-password"));
+    assert!(!response.to_string().contains("private-user"));
+    assert!(response["source"]["url"].is_null());
+    assert!(
+        app.jobs.lock().unwrap().is_empty(),
+        "Exact live selection must not fan out discovery jobs"
+    );
+    {
+        let streams = app.streams.lock().unwrap();
+        let entry = streams.get(id).unwrap();
+        assert!(entry.live);
+        assert_eq!(entry.provider_id, Some(1));
+        assert_eq!(entry.kind, "live");
+        assert!(entry.url.ends_with("/7.ts"));
+        assert!(entry.url.starts_with("http://"));
+    }
+    let playback = json!({"request_id":"exact_live","stream_id":id,"client":{"platform":"android","can_play_direct":true,"max_width":3840,"max_height":2160,"video_codecs":["h264"],"audio_codecs":["aac"]}});
+    let (status, started) =
+        request(&app, "member-token-1", "POST", "/api/v2/playback", playback).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let playback_id = started["id"].as_str().unwrap();
+    let (status, ready) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let result = request(
+                &app,
+                "member-token-1",
+                "GET",
+                &format!("/api/v2/playback/{playback_id}"),
+                Value::Null,
+            )
+            .await;
+            if result.1["status"] != "starting" {
+                break result;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(status, StatusCode::OK, "{ready}");
+    assert_eq!(ready["delivery"]["kind"], "direct");
+    assert_eq!(ready["delivery"]["live"], true);
+    assert!(ready["delivery"]["url"]
+        .as_str()
+        .unwrap()
+        .ends_with("/7.ts"));
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "DELETE",
+        &format!("/api/v2/playback/{playback_id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let mut denied = vec![];
+    for channel in ["iptv:3:7", "iptv:4:7", "iptv:999:7", "family:7"] {
+        denied.push(
+            request(
+                &app,
+                "member-token-1",
+                "POST",
+                &format!("/api/v2/iptv/live/{channel}/source"),
+                Value::Null,
+            )
+            .await,
+        );
+    }
+    assert!(denied.iter().all(|value| value == &denied[0]));
+    assert_eq!(denied[0].0, StatusCode::NOT_FOUND);
+    assert_eq!(denied[0].1["error_code"], "source_not_found");
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE providers SET enable_live=0 WHERE id=1", [])
+        .unwrap();
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/iptv/live/iptv:1:7/source",
+            Value::Null
+        )
+        .await,
+        denied[0]
+    );
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO kids_profiles(profile_id,enabled) VALUES(1,1)",
+            [],
+        )
+        .unwrap();
+    let (status, error) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/iptv/live/iptv:2:7/source",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "parent_required");
+}
+
+#[tokio::test]
+async fn live_registration_does_not_stamp_old_urls_with_updated_credentials() {
+    let app = seeded();
+    let original = crate::sources::source_configuration(&app.db.lock().unwrap(), "iptv:1")
+        .unwrap()
+        .unwrap();
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE providers SET password='replaced-private' WHERE id=1",
+            [],
+        )
+        .unwrap();
+    let (sources, error) = app.register_with_configuration(
+        "iptv:1",
+        vec![json!({"url":"http://fixture.invalid/live/private-user/private-password/7.ts"})],
+        "live",
+        Some(original),
+    );
+    assert!(sources.is_empty());
+    assert_eq!(error.as_deref(), Some("source_configuration_changed"));
+    assert!(app.streams.lock().unwrap().is_empty());
 }
 #[tokio::test]
 async fn approved_kids_vod_uses_v2_without_unlock_and_cannot_smuggle_other_titles() {

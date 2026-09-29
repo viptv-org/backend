@@ -109,6 +109,7 @@ pub(crate) struct CatalogQuery {
     cursor: Option<String>,
     #[serde(default = "page_size")]
     limit: usize,
+    collection: Option<String>,
 }
 async fn catalog_page(
     app: App,
@@ -139,6 +140,14 @@ async fn catalog_page(
                 catalog_id: q.catalog_id,
                 category_id: q.category_id,
                 search: q.search,
+                profile_id: if q.collection.is_some() {
+                    match app.identity() {
+                        crate::auth::Principal::Account { profile_id, .. } => profile_id,
+                    }
+                } else {
+                    None
+                },
+                collection: q.collection,
             },
             q.cursor.as_deref(),
             q.limit,
