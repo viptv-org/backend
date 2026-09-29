@@ -74,6 +74,9 @@ pub(crate) fn description(code: &str) -> &'static str {
 }
 fn details(code: &str) -> (StatusCode, &'static str) {
     match code {
+        "provider_refresh_failed" => (StatusCode::BAD_GATEWAY,"The provider catalog could not be refreshed. The previous catalog is still available. Try again later."),
+        "provider_refresh_timeout" => (StatusCode::GATEWAY_TIMEOUT,"The provider catalog refresh timed out. The previous catalog was kept."),
+        "provider_refresh_cancelled" | "provider_refresh_interrupted" => (StatusCode::CONFLICT,"The catalog refresh was interrupted or cancelled. Request another refresh when ready."),
         "invalid_provider_configuration" => (StatusCode::BAD_REQUEST,"Check the connection name, credentials and enabled content types."),
         "invalid_provider_endpoint" | "provider_private_destination" => (StatusCode::BAD_REQUEST,"Use a public HTTP or HTTPS Xtream server URL without embedded credentials or query parameters."),
         "provider_not_found" => (StatusCode::NOT_FOUND,"This IPTV connection is unavailable in your account."),

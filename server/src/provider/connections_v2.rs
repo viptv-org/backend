@@ -57,9 +57,11 @@ fn own(db: &Connection, account: i64, id: i64) -> Result<(), Error> {
 }
 fn record(db: &Connection, account: i64, id: i64) -> Result<Value, Error> {
     own(db, account, id)?;
-    db.query_row("SELECT id,name,enabled,enable_live,enable_movies,enable_series,credentials_version FROM providers WHERE id=?1",[id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"enabled":r.get::<_,bool>(2)?,"enable_live":r.get::<_,bool>(3)?,"enable_movies":r.get::<_,bool>(4)?,"enable_series":r.get::<_,bool>(5)?,"credentials_encrypted":r.get::<_,i64>(6)?==1}))).map_err(storage)
+    let mut result=db.query_row("SELECT id,name,enabled,enable_live,enable_movies,enable_series,credentials_version FROM providers WHERE id=?1",[id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"enabled":r.get::<_,bool>(2)?,"enable_live":r.get::<_,bool>(3)?,"enable_movies":r.get::<_,bool>(4)?,"enable_series":r.get::<_,bool>(5)?,"credentials_encrypted":r.get::<_,i64>(6)?==1}))).map_err(storage)?;
+    result["refresh"]=refresh_v2::status(db,id)?;
+    Ok(result)
 }
-fn managed(db: &Connection, account: i64, id: i64) -> Result<(), Error> {
+pub(super) fn managed(db: &Connection, account: i64, id: i64) -> Result<(), Error> {
     own(db, account, id)?;
     let version: i64 = db
         .query_row(
@@ -84,7 +86,7 @@ fn seal(
     );
     Ok(vault.seal(account, "xtream", &id.to_string(), &bytes)?)
 }
-async fn login(service: &ProviderService, credentials: &Credentials) -> Result<usize, Error> {
+pub(super) async fn login(service: &ProviderService, credentials: &Credentials) -> Result<usize, Error> {
     let _permit = service
         .semaphore
         .clone()
@@ -178,6 +180,7 @@ pub(crate) async fn create(
         tx.execute("INSERT INTO provider_ownership VALUES(?1,?2)",params![id,account]).map_err(storage)?;
         tx.execute("INSERT INTO provider_credentials_v2 VALUES(?1,?2,?3)",params![id,account,seal(&vault,account,id,&credentials)?]).map_err(storage)?;
         v2::live_catalog(&tx,account,None)?;
+        refresh_v2::enqueue(&tx,account,id,false)?;
         let result=record(&tx,account,id)?;
         tx.commit().map_err(storage)?;
         Ok(result)
@@ -272,6 +275,7 @@ pub(crate) async fn update(
         managed(&tx,account,id)?;
         tx.execute("UPDATE providers SET name=COALESCE(?2,name),enabled=COALESCE(?3,enabled),enable_live=COALESCE(?4,enable_live),enable_movies=COALESCE(?5,enable_movies),enable_series=COALESCE(?6,enable_series) WHERE id=?1",params![id,p.name,p.enabled,p.enable_live,p.enable_movies,p.enable_series]).map_err(storage)?;
         v2::live_catalog(&tx,account,None)?;
+        if p.enabled.is_some() || p.enable_live.is_some() || p.enable_movies.is_some() || p.enable_series.is_some() {refresh_v2::enqueue(&tx,account,id,true)?;}
         let result=record(&tx,account,id)?;tx.commit().map_err(storage)?;Ok(result)
     }).await
 }
@@ -348,6 +352,7 @@ pub(crate) async fn renew(
         if changed!=1 {return Err(Error::Code("source_configuration_changed"));}
         tx.execute("UPDATE providers SET max_connections=?2 WHERE id=?1",params![id,limit]).map_err(storage)?;
         tx.execute("DELETE FROM provider_cache WHERE provider_id=?1",[id]).map_err(storage)?;
+        refresh_v2::enqueue(&tx,account,id,true)?;
         let result=record(&tx,account,id)?;tx.commit().map_err(storage)?;Ok(result)
     }).await
 }

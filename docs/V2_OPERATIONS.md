@@ -55,9 +55,51 @@ is stable while reports change, so outstanding permits are never replaced.
 Encrypted connections also encrypt cached Xtream detail/EPG payloads with
 account/provider/cache-key binding because those responses can contain secrets.
 
-These endpoints do not yet supply account-scoped background refresh job controls
-or automatically index a newly added provider. That orchestration, admin/client
-adoption and removal of legacy routes remain required before public cutover.
+## Background catalog indexing
+
+Enabled new connections enqueue their first import in the same transaction as
+credential storage. Scope/enabled changes and password renewal enqueue a fresh
+run; name-only changes do not restart a refresh. Migrated encrypted connections
+without refresh state are queued on backend startup. The backend runtime starts
+the worker when the operator keyring is configured.
+
+- GET `/api/v2/iptv/connections/:id/refresh`: state, timestamps, safe error,
+  next refresh time and last successful item counts.
+- POST the same route: enqueue/retry (202); an already queued/running request is
+  idempotent.
+- DELETE the same route: cancel pending/running work and automatic refresh until
+  an explicit retry or content/credential change.
+
+Connection list/create/update responses also include `refresh`. States are idle,
+queued, running, succeeded, failed and cancelled. Success schedules the next run
+after six hours; failure retries after five minutes. The last successful counts
+may remain present while queued/running/failed, just as the previous catalog does.
+
+Refresh is owned by the persisted account/connection configuration, **not by a
+browser session**: closing the app or signing out does not cancel indexing.
+Control requests require current account authorization. Workers recheck account
+enabled state, source ownership, enabled scopes, ciphertext/configuration and
+their run token before fetching and publication. Account/source revocation,
+explicit cancellation or a configuration change prevents late results from
+committing. No session token or provider credentials are saved in job records.
+
+At most two worker catalogs run concurrently, and the shared HTTP gate bounds
+requests. Claim ordering favors another waiting account over one already running.
+Each run has a 120-second deadline; dropped/timed-out workers invalidate their
+publication guard. Expired running claims can recover after 125 seconds with a
+new token, preventing an old worker from publishing into its replacement run.
+HTTP requests remain individually bounded; cancellation prevents publication
+immediately after its state change, while an in-flight fetch may take up to its
+request timeout to settle. Missing keyrings report a failure rather than leaving
+the queue indefinitely pending.
+
+Protected login validation precedes sequential live/category/movie/series fetches.
+Each v2 response is bounded at 64 MiB. This is server-side indexing, not client
+playlist synchronization. Catalog replacement, generation and succeeded status
+commit atomically. Failure keeps the entire prior snapshot; an authenticated,
+valid empty array is a legitimate replacement, not a custom filtering rule.
+Legacy refresh paths reject encrypted sources instead of invoking their old
+pool/lineup logic. Admin/client adoption and legacy removal are still pending.
 
 Each handler revalidates the captured account session before querying or writing.
 Selected kids profiles require parent authorization; paired TV/device sessions
@@ -154,7 +196,7 @@ Full coordinated rollback remains acceptance work before production cutover.
 ## Offline provider credential encryption
 
 This command is implemented and fixture-tested, **not approved for production
-use yet**. Background refresh orchestration, client cutover and retired-feature
+use yet**. Client cutover and retired-feature
 removal remain incomplete. Migrated connections cannot be managed by legacy
 renew/update/delete/pool operations; those paths reject them with
 `client_update_required`. Legacy family matching and external provider XMLTV
@@ -202,5 +244,5 @@ The **backup and export intentionally contain plaintext**. Retired configuration
 external copies, logs, filesystem snapshots and physical storage remnants are not
 securely erased by SQLite compaction. Keep artifacts private and apply the
 operator's retention policy; never commit or upload them. Addon credential
-migration, bulk key rotation, background refresh and complete cutover are still
+migration, bulk key rotation and complete cutover are still
 pending, so this is not a complete encrypted-secrets acceptance claim.

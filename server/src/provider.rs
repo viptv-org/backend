@@ -27,6 +27,7 @@ mod normalize;
 mod service;
 mod streams;
 mod sync;
+pub(crate) mod refresh_v2;
 mod transport_v2;
 pub(crate) mod v2;
 pub(crate) mod v2_http;
@@ -110,6 +111,7 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
     }
     catalog_v2::init(db)?;
     credentials_v2::init(db)?;
+    refresh_v2::init(db)?;
     egress::init(db)?;
     crate::live_policy::init(db)?;
     pools::init(db)?;

@@ -97,8 +97,8 @@ redaction after revocation. A controlled in-flight revocation fixture verifies
 that late series results neither publish streams nor enter the detail cache.
 Additional fixtures cover sparse limits and owned raw guide reads.
 
-This does not finish account-owned Xtream: account-scoped background refresh,
-child-policy migration, detailed upstream error parity, client adoption and
+This does not finish account-owned Xtream: child-policy migration, detailed
+upstream error parity, client adoption and
 removal of legacy routes remain pending. Legacy global routes still exist until
 coordinated cutover; these v2 checks are not a claim that old clients are isolated.
 No production database or live IPTV subscription was used for these fixtures.
@@ -106,4 +106,5 @@ No production database or live IPTV subscription was used for these fixtures.
 An offline provider-tuple encryption migration and reader are now implemented;
 see [V2 operations](V2_OPERATIONS.md). The migration is not approved for
 production use yet. Account-owned connection CRUD is implemented as documented
-there, but addon encryption, background refresh and client adoption remain open.
+there. Durable account-owned initial/periodic refresh is also implemented;
+addon encryption and client adoption remain open.

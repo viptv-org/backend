@@ -1,5 +1,19 @@
 use super::*;
 
+#[derive(Clone)]
+enum SyncGuard {
+    Legacy(crate::automation::CatalogLease),
+    Account(refresh_v2::Guard),
+}
+impl SyncGuard {
+    fn validate(&self, db: &Connection) -> Result<(), String> {
+        match self {
+            Self::Legacy(g) => g.validate(db),
+            Self::Account(g) => g.validate(db),
+        }
+    }
+}
+
 impl ProviderService {
     /// Fetch everything before starting a transaction: failed syncs preserve the old index.
     pub async fn sync(&self, id: i64) -> Result<Value, String> {
@@ -10,13 +24,18 @@ impl ProviderService {
         id: i64,
         guard: crate::automation::CatalogLease,
     ) -> Result<Value, String> {
-        self.sync_with_guard(id, Some(guard)).await
+        self.sync_with_guard(id, Some(SyncGuard::Legacy(guard)))
+            .await
     }
-    async fn sync_with_guard(
+    pub(super) async fn sync_account(
         &self,
         id: i64,
-        guard: Option<crate::automation::CatalogLease>,
+        guard: refresh_v2::Guard,
     ) -> Result<Value, String> {
+        self.sync_with_guard(id, Some(SyncGuard::Account(guard)))
+            .await
+    }
+    async fn sync_with_guard(&self, id: i64, guard: Option<SyncGuard>) -> Result<Value, String> {
         let access = guard.clone();
         let provider = self
             .blocking(move |s| {
@@ -26,8 +45,24 @@ impl ProviderService {
                 s.provider(id)
             })
             .await?;
-        if guard.is_some() {
+        if provider.sealed.is_some() && !matches!(guard.as_ref(), Some(SyncGuard::Account(_))) {
+            return Err("client_update_required".into());
+        }
+        if matches!(guard, Some(SyncGuard::Legacy(_))) {
             accounts::login_report(self,&json!({"url":provider.url,"username":provider.username,"password":provider.password})).await?;
+        }
+        if matches!(guard.as_ref(), Some(SyncGuard::Account(_))) {
+            let credentials = credentials_v2::Credentials {
+                url: provider.url.clone(),
+                username: provider.username.clone(),
+                password: provider.password.clone(),
+            };
+            connections_v2::login(self, &credentials)
+                .await
+                .map_err(|error| match error {
+                    crate::account_api::Error::Code(code) => code.to_owned(),
+                    crate::account_api::Error::Auth(_) => "provider_refresh_cancelled".to_owned(),
+                })?;
         }
         let scopes = self.blocking(move |s| s.scopes(id)).await?;
         let actions = [
@@ -38,18 +73,27 @@ impl ProviderService {
         ];
         let enabled = [scopes[0], scopes[0], scopes[1], scopes[2]];
         let automated = guard.is_some();
+        let legacy = matches!(guard.as_ref(), Some(SyncGuard::Legacy(_)));
         let fetch = |i: usize| {
             let provider = &provider;
+            let access = guard.clone();
             async move {
                 if !enabled[i] {
                     return Ok(Value::Null);
                 }
+                self.blocking(move |s| {
+                    if let Some(guard) = access {
+                        guard.validate(&*s.lock()?)?;
+                    }
+                    Ok(())
+                })
+                .await?;
                 let value = self
                     .api_bounded(
                         provider,
                         actions[i],
                         &[],
-                        if automated {
+                        if legacy {
                             16 * 1024 * 1024
                         } else {
                             MAX_RESPONSE
@@ -92,7 +136,7 @@ impl ProviderService {
         id: i64,
         index: [Value; 4],
         expected: Option<&Provider>,
-        guard: Option<&crate::automation::CatalogLease>,
+        guard: Option<&SyncGuard>,
     ) -> Result<Value, String> {
         let [categories, live, movies, series] = index;
         // Null means deliberately not fetched, not an empty index. Preserve that scope.
@@ -110,7 +154,7 @@ impl ProviderService {
             .iter()
             .filter_map(|v| Some((scalar(v.get("category_id")?)?, text(v, "category_name")?)))
             .collect();
-        if guard.is_some()
+        if matches!(guard, Some(SyncGuard::Legacy(_)))
             && (category_names.len() != categories.len()
                 || live.iter().any(|v| {
                     v.get("category_id")
@@ -143,6 +187,8 @@ impl ProviderService {
         }
         if let Some(guard) = guard {
             guard.validate(&db)?;
+        }
+        if matches!(guard, Some(SyncGuard::Legacy(_))) {
             if fetched[0] && categories.is_empty() {
                 let had_categories:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM provider_live WHERE provider_id=?1 AND category_id IS NOT NULL AND category_id NOT IN ('','0'))",[id],|r|r.get(0)).map_err(db_error)?;
                 if had_categories {
@@ -274,9 +320,11 @@ impl ProviderService {
         if let Some(guard) = guard {
             guard.validate(&tx)?;
         }
+        let counts = json!({"provider_id":id,"live":if active[0] {live.len()} else {0},"vod":if active[1] {movies.len()} else {0},"series":if active[2] {series.len()} else {0}});
+        if let Some(SyncGuard::Account(guard)) = guard {
+            guard.complete(&tx, &counts)?;
+        }
         tx.commit().map_err(db_error)?;
-        Ok(
-            json!({"provider_id":id,"live":if active[0] {live.len()} else {0},"vod":if active[1] {movies.len()} else {0},"series":if active[2] {series.len()} else {0}}),
-        )
+        Ok(counts)
     }
 }

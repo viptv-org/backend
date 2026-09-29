@@ -286,12 +286,14 @@ impl App {
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
         provider::v2::init(&db).map_err(|_| "Account IPTV schema initialization failed")?;
+        provider::refresh_v2::prepare(&db).map_err(|_| "IPTV refresh initialization failed")?;
         gateway::registry::init(&db).map_err(|_| "Gateway schema initialization failed")?;
         automation::init(&db).map_err(|_| "Automation database initialization failed")?;
         let db = Arc::new(Mutex::new(db));
         let addons = Addons::new(db.clone(), client.clone())?;
         let mut providers = ProviderService::new(db.clone(), client);
         providers.vault = secret_vault.clone();
+        provider::refresh_v2::start(&providers);
         let gateway_playbacks = gateway::playback::Registry::new(db.clone());
         Ok(Self {
             db,

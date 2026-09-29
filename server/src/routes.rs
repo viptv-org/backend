@@ -108,6 +108,7 @@ pub fn router_with_tv(
         .route("/v2/iptv/connections", get(provider::connections_v2::list).post(provider::connections_v2::create))
         .route("/v2/iptv/connections/:id", axum::routing::patch(provider::connections_v2::update).delete(provider::connections_v2::delete))
         .route("/v2/iptv/connections/:id/credentials", axum::routing::put(provider::connections_v2::renew))
+        .route("/v2/iptv/connections/:id/refresh", get(provider::refresh_v2::get).post(provider::refresh_v2::request).delete(provider::refresh_v2::cancel))
         .route("/v2/streams/:id", get(provider::discovery_v2::poll))
         .route("/v2/iptv/guide/:id", get(provider::discovery_v2::guide))
         .route("/live", get(live))
