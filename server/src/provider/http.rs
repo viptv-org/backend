@@ -24,8 +24,14 @@ impl ProviderService {
             .map_err(|_| "Provider service is shutting down".to_string())?;
         let id = provider.id;
         let kind = action_kind(action);
-        self.blocking(move |s| s.provider_for_kind(id, kind))
-            .await?;
+        let snapshot = provider.clone();
+        self.blocking(move |s| {
+            s.provider_for_kind(id, kind)?;
+            let db = s.lock()?;
+            s.require_owner(&db, id)?;
+            snapshot.ensure_current(&db)
+        })
+        .await?;
         let mut url = endpoint(&provider.url, "player_api.php")?;
         url.query_pairs_mut()
             .append_pair("username", &provider.username)
@@ -97,6 +103,7 @@ impl ProviderService {
         let cached = self.blocking(move |s| {
             s.provider_for_kind(provider_id, kind)?;
             let db=s.lock()?;
+            s.require_owner(&db, provider_id)?;
             snapshot.ensure_current(&db)?;
             let cached: Option<String> = db.query_row(
                 "SELECT payload FROM provider_cache WHERE provider_id=?1 AND cache_key=?2 AND expires_at>?3",
@@ -132,6 +139,7 @@ impl ProviderService {
             s.provider_for_kind(provider_id, kind)?;
             let payload = value.to_string();
             let db=s.lock()?;
+            s.require_owner(&db, provider_id)?;
             snapshot.ensure_current(&db)?;
             {
                 let _ = db.execute("DELETE FROM provider_cache WHERE expires_at<=?1", [now]);

@@ -499,3 +499,283 @@ async fn empty_account_live_catalog_has_no_implicit_global_fallback() {
         );
     }
 }
+#[tokio::test]
+async fn v2_discovery_uses_three_owned_providers_not_live_default_or_foreign_sources() {
+    use axum::{routing::get, Router};
+    let app = seeded();
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let observed = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/player_api.php",get(move |axum::extract::Query(q):axum::extract::Query<std::collections::HashMap<String,String>>| {
+            observed.lock().unwrap().push(q["username"].clone());
+            assert_eq!(q["action"],"get_series_info");
+            async {axum::Json(json!({"episodes":{"1":[{"id":9,"season":1,"episode_num":9},{"id":2,"season":1,"episode_num":2,"container_extension":"mp4"}]}}))}
+        }))).await.unwrap();
+    });
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("INSERT INTO providers(id,name,url,username,password) VALUES(5,'Third owned',?1,'u5','synthetic-secret')",[&base]).unwrap();
+        db.execute("INSERT INTO provider_ownership VALUES(5,1)", [])
+            .unwrap();
+        for provider in 1..=5 {
+            db.execute(
+                "UPDATE providers SET url=?1,username=?2,password='synthetic-secret' WHERE id=?3",
+                params![base, format!("u{provider}"), provider],
+            )
+            .unwrap();
+            for kind in ["movie", "series"] {
+                db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,imdb_id,extension) VALUES(?1,?2,'10',?3,'Exact Title','exact title',2020,'tt1234567','mp4')",params![format!("iptv:{provider}:{kind}:10"),provider,kind]).unwrap();
+            }
+        }
+        super::v2::set_live_default(&db, 1, 2).unwrap();
+    }
+    async fn finish(app: &App, value: Value) -> (String, Value) {
+        let (status, start) =
+            request(app, "member-token-1", "POST", "/api/v2/streams", value).await;
+        assert_eq!(status, StatusCode::OK, "{start}");
+        let path = format!("/api/v2/streams/{}", start["id"].as_str().unwrap());
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let (status, result) =
+                    request(app, "member-token-1", "GET", &path, Value::Null).await;
+                assert_eq!(status, StatusCode::OK, "{result}");
+                if result["done"] == true {
+                    break result;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        (path, result)
+    }
+    for kind in ["movie", "series"] {
+        let (path,result)=finish(&app,json!({"type":kind,"id":if kind=="series" {"tt1234567:1:2"} else {"tt1234567"},"name":"Exact Title","year":2020,"imdb_id":"tt1234567","tmdb_id":"123"})).await;
+        {
+            let db = app.db.lock().unwrap();
+            db.execute_batch("INSERT OR IGNORE INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Second','second',1);
+                INSERT OR IGNORE INTO profile_owners(profile_id,account_id,created_at) VALUES(2,2,0);
+                INSERT OR IGNORE INTO auth_profiles VALUES(2,2);
+                UPDATE auth_sessions SET profile_id=2 WHERE account_id=2;").unwrap();
+        }
+        assert_eq!(
+            request(&app, "member-token-2", "GET", &path, Value::Null)
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        let mut sources = result["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|e| e["streams"].as_array().unwrap())
+            .map(|s| s["source_addon_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        sources.sort();
+        assert_eq!(sources, vec!["iptv:1", "iptv:2", "iptv:5"], "{result}");
+        assert!(!result.to_string().contains("synthetic-secret"));
+        assert!(!result.to_string().contains(&base));
+        if kind == "series" {
+            let streams = app.streams.lock().unwrap();
+            for event in result["events"].as_array().unwrap() {
+                for public in event["streams"].as_array().unwrap() {
+                    let entry = streams.get(public["id"].as_str().unwrap()).unwrap();
+                    assert!(entry.url.ends_with("/2.mp4"));
+                }
+            }
+        }
+        // Revocation after publication strips cached metadata while preserving seq.
+        app.db
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM provider_ownership WHERE provider_id=5", [])
+            .unwrap();
+        let (_, revoked) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
+        assert!(!revoked.to_string().contains("iptv:5"));
+        assert!(revoked.to_string().contains("source_not_found"));
+        app.db
+            .lock()
+            .unwrap()
+            .execute("INSERT INTO provider_ownership VALUES(5,1)", [])
+            .unwrap();
+    }
+    let mut actual = calls.lock().unwrap().clone();
+    actual.sort();
+    assert_eq!(actual, vec!["u1", "u2", "u5"]);
+    // Explicit provider narrowing cannot turn into an ownership grant.
+    let (_, foreign) = finish(
+        &app,
+        json!({"type":"movie","id":"tt1234567","only_provider_id":3}),
+    )
+    .await;
+    assert!(foreign["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["streams"].as_array().unwrap().is_empty()));
+    server.abort();
+}
+#[tokio::test]
+async fn v2_discovery_revocation_during_series_fetch_does_not_publish_or_cache() {
+    use axum::{routing::get, Router};
+    let app = seeded();
+    let entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let entering = entered.clone();
+    let releasing = release.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/player_api.php",
+                get(move || {
+                    let entered = entering.clone();
+                    let release = releasing.clone();
+                    async move {
+                        entered.notify_one();
+                        release.notified().await;
+                        axum::Json(json!({"episodes":{"1":[{"id":2,"season":1,"episode_num":2}]}}))
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("UPDATE providers SET url=?1 WHERE id=1", [base])
+            .unwrap();
+        db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,imdb_id,extension) VALUES('series1',1,'1','series','Exact Title','exact title',2020,'tt1234567','mp4')",[]).unwrap();
+    }
+    let (status, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/streams",
+        json!({"type":"series","id":"tt1234567:1:2","only_provider_id":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(3), entered.notified())
+        .await
+        .unwrap();
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE provider_ownership SET account_id=2 WHERE provider_id=1",
+            [],
+        )
+        .unwrap();
+    release.notify_one();
+    let path = format!("/api/v2/streams/{}", start["id"].as_str().unwrap());
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let (status, value) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
+            assert_eq!(status, StatusCode::OK);
+            if value["done"] == true {
+                break value;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!result.to_string().contains("iptv:1"));
+    assert!(result["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["streams"].as_array().unwrap().is_empty()));
+    assert!(app.streams.lock().unwrap().is_empty());
+    assert_eq!(
+        app.db
+            .lock()
+            .unwrap()
+            .query_row("SELECT count(*) FROM provider_cache", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn v2_guide_uses_owned_raw_channel_and_hides_foreign_or_missing_ids() {
+    let app = seeded();
+    {
+        let db = app.db.lock().unwrap();
+        for provider in 1..=4 {
+            db.execute("INSERT INTO provider_live(id,provider_id,stream_id,name) VALUES(?1,?2,'1','Raw channel')",params![format!("iptv:{provider}:1"),provider]).unwrap();
+            db.execute("INSERT INTO provider_cache VALUES(?1,'get_short_epg:1',?2,?3)",params![provider,util::now()+60,json!({"epg_listings":[{"title":"VGVzdA==","start_timestamp":"1700000000","stop_timestamp":"1700003600"}]}).to_string()]).unwrap();
+        }
+    }
+    let (status, guide) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/iptv/guide/iptv:1:1",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{guide}");
+    assert_eq!(guide["programs"][0]["title"], "Test");
+    let (status, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/streams",
+        json!({"type":"live","id":"iptv:1:1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{start}");
+    let path = format!("/api/v2/streams/{}", start["id"].as_str().unwrap());
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let (_, result) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
+            if result["done"] == true {
+                break result;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let cards = result["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|e| e["streams"].as_array().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(cards.len(), 1, "{result}");
+    let source = cards[0]["id"].as_str().unwrap();
+    {
+        let streams = app.streams.lock().unwrap();
+        let entry = streams.get(source).unwrap();
+        assert_eq!(entry.provider_id, Some(1));
+        assert!(entry.live);
+        assert!(entry.url.starts_with("http://"));
+        assert!(entry.url.ends_with("/1.ts"));
+    }
+    let mut denied = vec![];
+    for id in ["iptv:3:1", "iptv:4:1", "iptv:999:1", "family:1"] {
+        denied.push(
+            request(
+                &app,
+                "member-token-1",
+                "GET",
+                &format!("/api/v2/iptv/guide/{id}"),
+                Value::Null,
+            )
+            .await,
+        );
+    }
+    assert!(denied.iter().all(|v| v == &denied[0]));
+    assert_eq!(denied[0].0, StatusCode::NOT_FOUND);
+    assert_eq!(denied[0].1["error_code"], "source_not_found");
+}

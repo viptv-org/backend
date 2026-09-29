@@ -18,6 +18,26 @@ pub(crate) fn emit_batch(
         j.notify.notify_waiters();
         return;
     }
+    if let Some(id) = source
+        .strip_prefix("iptv:")
+        .and_then(|id| id.parse::<i64>().ok())
+    {
+        if a.providers
+            .require_owner(&a.db.lock().unwrap(), id)
+            .is_err()
+        {
+            // An ownership change during a queued lookup must not publish even
+            // the previous provider name or source identifier.
+            emit_batch(
+                a,
+                j,
+                "iptv",
+                Err("This IPTV source is no longer available in your account.".into()),
+                complete,
+            );
+            return;
+        }
+    }
     let (streams, error) = match result {
         Ok(r) => a.register(source, r, &j.kind),
         Err(e) => (vec![], Some(e)),
@@ -38,7 +58,7 @@ pub(crate) fn emit_batch(
 #[derive(Deserialize, Default)]
 pub(crate) struct Cursor {
     #[serde(default)]
-    after: usize,
+    pub(crate) after: usize,
 }
 pub(crate) fn job(a: &App, id: &str) -> Result<Arc<Job>, ApiError> {
     a.prune();

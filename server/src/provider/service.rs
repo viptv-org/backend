@@ -5,6 +5,7 @@ pub struct ProviderService {
     pub db: Arc<Mutex<Connection>>,
     pub client: reqwest::Client,
     pub semaphore: Arc<Semaphore>,
+    pub(crate) account: Option<i64>,
     pub(super) playback_gates: Arc<Mutex<HashMap<i64, PlaybackGate>>>,
 }
 pub(super) struct PlaybackGate {
@@ -59,8 +60,30 @@ impl ProviderService {
             db,
             client,
             semaphore: Arc::new(Semaphore::new(4)),
+            account: None,
             playback_gates: Default::default(),
         }
+    }
+
+    pub(crate) fn for_account(&self, account: i64) -> Self {
+        let mut service = self.clone();
+        service.account = Some(account);
+        service
+    }
+
+    pub(crate) fn require_owner(&self, db: &Connection, provider: i64) -> Result<(), String> {
+        if let Some(account) = self.account {
+            let allowed: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM provider_ownership WHERE provider_id=?1 AND account_id=?2)",params![provider,account],|r|r.get(0)).map_err(db_error)?;
+            if !allowed {
+                return Err("Provider unavailable in this account".into());
+            }
+        }
+        Ok(())
+    }
+
+    // Only an internal integer principal is interpolated, never request SQL/text.
+    pub(super) fn ownership_predicate(&self) -> String {
+        self.account.map_or_else(String::new, |account|format!(" AND EXISTS(SELECT 1 FROM provider_ownership own WHERE own.provider_id=p.id AND own.account_id={account}) "))
     }
 
     pub async fn blocking<T: Send + 'static>(
@@ -81,6 +104,7 @@ impl ProviderService {
 
     pub(super) fn provider(&self, id: i64) -> Result<Provider, String> {
         let db = self.lock()?;
+        self.require_owner(&db, id)?;
         provider_row(&db, id)
     }
 
@@ -89,7 +113,9 @@ impl ProviderService {
     }
 
     pub(super) fn provider_for_kind(&self, id: i64, kind: &str) -> Result<Provider, String> {
-        self.lock()?.query_row("SELECT id,name,url,username,password FROM providers WHERE id=?1 AND enabled=1 AND CASE ?2 WHEN 'live' THEN enable_live WHEN 'movie' THEN enable_movies WHEN 'series' THEN enable_series ELSE 0 END=1", params![id,kind], |r| Ok(Provider {
+        let db = self.lock()?;
+        self.require_owner(&db, id)?;
+        db.query_row("SELECT id,name,url,username,password FROM providers WHERE id=?1 AND enabled=1 AND CASE ?2 WHEN 'live' THEN enable_live WHEN 'movie' THEN enable_movies WHEN 'series' THEN enable_series ELSE 0 END=1", params![id,kind], |r| Ok(Provider {
             id:r.get(0)?,name:r.get(1)?,url:r.get(2)?,username:r.get(3)?,password:r.get(4)?,
         })).map_err(|_| "Provider not found or content scope disabled".into())
     }

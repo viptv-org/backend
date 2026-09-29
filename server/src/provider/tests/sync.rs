@@ -559,3 +559,44 @@ fn live_snapshot_retains_provider_order_categories_and_atomic_generation() {
         .unwrap();
     assert_eq!(snapshot(), (3, vec![], vec![]));
 }
+#[test]
+fn owned_sparse_candidates_are_filtered_before_the_lazy_detail_limit() {
+    let s = service();
+    let first = add_provider(&s);
+    let second = s
+        .add(json!({"name":"Owned","url":"http://second.invalid","username":"u","password":"p"}))
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    {
+        let db = s.lock().unwrap();
+        db.execute_batch("CREATE TABLE provider_ownership(provider_id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL)").unwrap();
+        db.execute(
+            "INSERT INTO provider_ownership VALUES(?1,1),(?2,2)",
+            params![first, second],
+        )
+        .unwrap();
+        for (provider, count) in [(first, 20), (second, 1)] {
+            for i in 0..count {
+                db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,extension) VALUES(?1,?2,?3,'movie','Sparse Title','sparse title','mp4')",params![format!("{provider}:{i}"),provider,i.to_string()]).unwrap();
+            }
+        }
+    }
+    let query = request(json!({"type":"movie","id":"tt1234567","name":"Sparse Title","year":2020}));
+    let owned = s
+        .for_account(2)
+        .sparse_candidates("movie", &query, None)
+        .unwrap();
+    assert_eq!(owned.len(), 1);
+    assert_eq!(owned[0].provider_id, second);
+    assert!(s
+        .for_account(3)
+        .sparse_candidates("movie", &query, None)
+        .unwrap()
+        .is_empty());
+    assert!(s
+        .for_account(2)
+        .sparse_candidates("movie", &query, Some(first))
+        .unwrap()
+        .is_empty());
+}

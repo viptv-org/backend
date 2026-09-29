@@ -18,6 +18,7 @@ pub(crate) mod selection;
 
 mod candidates;
 pub(crate) mod catalog_v2;
+pub(crate) mod discovery_v2;
 mod http;
 mod live;
 mod normalize;

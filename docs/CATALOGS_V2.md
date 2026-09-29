@@ -64,7 +64,41 @@ restricted-profile protection. Storage fixtures cover repeatable additive schema
 provider ordering, successful/empty refresh generations, and rollback after a
 duplicate stream causes an insert failure following deletion.
 
+## Source discovery and native Xtream guide
+
+- `POST /api/v2/streams` starts an incremental discovery job using the existing
+  Stremio-style movie/series/live request and returns `{id}`.
+- `GET /api/v2/streams/:id?after=N` returns `{events,done}`. Events retain their
+  monotonic `seq`, producer and sanitized stream cards with backend-issued IDs.
+  The same exact account/profile/session owns the job. V2 currently uses polling;
+  no new SSE endpoint is claimed.
+- `GET /api/v2/iptv/guide/:channel_id` returns bounded Xtream-native programs for
+  an owned raw channel. Foreign, absent, disabled and retired family-channel IDs
+  receive the same `source_not_found` response.
+
+These routes require a selected profile and currently a parent unlock for
+restricted profiles, as raw catalog pages do. Source discovery considers all
+enabled providers owned by the account, never just its default live catalog.
+`only_provider_id` narrows that set but cannot grant access. Addons use the
+existing account-scoped addon service. Source IDs feed the v2 playback API.
+
+Candidate and sparse-detail SQL apply ownership before materialization; sparse
+detail limits cannot be consumed by other tenants. Queued detail requests check
+ownership, scope and credential freshness before fetching. Cached reads/writes
+and late publication recheck ownership. Polling redacts a revoked provider's
+previously published event while retaining its sequence position. Scoped live
+lookup bypasses family-lineup mapping and uses the provider-qualified channel.
+
+An in-process HTTP fixture verifies movies and exact episodes from three owned
+providers with a different live default, while a foreign and an unassigned
+provider receive no detail requests. It checks opaque source cards and original
+HTTP episode URLs internally, cross-account job denial, and cached-result
+redaction after revocation. A controlled in-flight revocation fixture verifies
+that late series results neither publish streams nor enter the detail cache.
+Additional fixtures cover sparse limits and owned raw guide reads.
+
 This does not finish account-owned Xtream: connection CRUD/encrypted credentials,
-owned multi-provider VOD discovery, v2 channel source/guide integration, child
-policy migration, client adoption and removal of legacy routes remain pending.
+child-policy migration, detailed upstream error parity, client adoption and
+removal of legacy routes remain pending. Legacy global routes still exist until
+coordinated cutover; these v2 checks are not a claim that old clients are isolated.
 No production database or live IPTV subscription was used for these fixtures.

@@ -76,6 +76,13 @@ impl ProviderService {
     }
 
     pub(super) fn channel(&self, id: &str) -> Result<(Provider, String), String> {
+        if let Some(account) = self.account {
+            let allowed:bool = self.lock()?.query_row("SELECT EXISTS(SELECT 1 FROM provider_live l JOIN providers p ON p.id=l.provider_id JOIN provider_ownership o ON o.provider_id=p.id WHERE l.id=?1 AND o.account_id=?2 AND p.enabled=1 AND p.enable_live=1)",params![id,account],|r|r.get(0)).map_err(db_error)?;
+            if !allowed {
+                return Err("Live channel not found".into());
+            }
+            return self.raw_channel(id);
+        }
         let id = crate::lineup::source(&*self.lock()?, id)?;
         self.raw_channel(&id)
     }
@@ -198,7 +205,7 @@ impl ProviderService {
     }
 
     pub async fn guide(&self, channel_id: String) -> Result<Value, String> {
-        {
+        if self.account.is_none() {
             let db = self.lock()?;
             if let Some(id) = crate::lineup::family_id(&db, &channel_id)? {
                 return crate::guides::read(&db, &id).map_err(|e| e.1);
