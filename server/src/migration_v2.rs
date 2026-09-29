@@ -57,6 +57,8 @@ pub fn parse_owner_map(data: &[u8]) -> Result<BTreeMap<i64, i64>> {
     Ok(result)
 }
 const ADVANCED_TABLES: &[&str] = &[
+    "addons",
+    "addon_credentials_v2",
     "providers",
     "provider_credentials_v2",
     "provider_live",
@@ -106,6 +108,23 @@ fn open(path: &Path, writable: bool) -> Result<Connection> {
 pub fn inspect(database: &Path) -> Result<Value> {
     let db = open(database, false)?;
     serde_json::to_value(v2::inspect_ownership(&db)?).map_err(|_| "report_unavailable")
+}
+pub fn inspect_addons(database: &Path) -> Result<Value> {
+    crate::addon::credentials_v2::ownership(&open(database, false)?)
+}
+pub fn apply_addon_owners(
+    database: &Path,
+    owners: &BTreeMap<i64, i64>,
+    backup_path: &Path,
+    export_path: &Path,
+    source_revision: &str,
+) -> Result<Value> {
+    migrate(database, backup_path, export_path, source_revision, |tx| {
+        crate::addon::credentials_v2::assign_legacy(tx, owners)?;
+        Ok(
+            json!({"assigned_addon_count":owners.len(),"ownership":crate::addon::credentials_v2::ownership(tx)?}),
+        )
+    })
 }
 fn private_file(path: &Path) -> Result<File> {
     #[cfg(unix)]
@@ -293,6 +312,33 @@ fn encrypt_with_vault(
             Ok(json!({"encrypted_count":count}))
         },
     )?;
+    compact_encrypted(database)?;
+    Ok(report)
+}
+pub fn encrypt_addons(
+    database: &Path,
+    backup_path: &Path,
+    export_path: &Path,
+    source_revision: &str,
+) -> Result<Value> {
+    let vault =
+        crate::secret_store::Vault::from_environment()?.ok_or("secret_store_not_configured")?;
+    encrypt_addons_with_vault(database, backup_path, export_path, source_revision, &vault)
+}
+fn encrypt_addons_with_vault(
+    database: &Path,
+    backup_path: &Path,
+    export_path: &Path,
+    source_revision: &str,
+    vault: &crate::secret_store::Vault,
+) -> Result<Value> {
+    let report = migrate(database, backup_path, export_path, source_revision, |tx| {
+        Ok(json!({"encrypted_addon_count":crate::addon::credentials_v2::encrypt_legacy(tx,vault)?}))
+    })?;
+    compact_encrypted(database)?;
+    Ok(report)
+}
+fn compact_encrypted(database: &Path) -> Result<()> {
     // Logical updates alone leave old credentials in SQLite pages/WAL. Require
     // offline checkpoint and compaction before reporting encryption success.
     let db = open(database, true).map_err(|_| "encryption_committed_cleanup_required")?;
@@ -306,9 +352,19 @@ fn encrypt_with_vault(
         if vacuum {
             db.execute_batch("PRAGMA secure_delete=ON; VACUUM;")
                 .map_err(|_| "encryption_committed_cleanup_required")?;
+            // VACUUM may renumber implicit rowids. FTS uses provider_vod.rowid,
+            // not its stable public TEXT id, so regenerate the derived index.
+            let indexed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='provider_vod_search_v2')",[],|r|r.get(0)).map_err(|_|"encryption_committed_cleanup_required")?;
+            if indexed {
+                db.execute(
+                    "INSERT INTO provider_vod_search_v2(provider_vod_search_v2) VALUES('rebuild')",
+                    [],
+                )
+                .map_err(|_| "encryption_committed_cleanup_required")?;
+            }
         }
     }
-    Ok(report)
+    Ok(())
 }
 
 fn migrate(
@@ -376,6 +432,117 @@ fn migrate(
 mod tests {
     use super::*;
     const REVISION: &str = "1111111111111111111111111111111111111111";
+    #[test]
+    fn addon_ownership_and_encryption_preserve_ids_and_require_explicit_mapping() {
+        let root = tempfile::tempdir().unwrap();
+        let source = fixture(root.path());
+        let database = root.path().join("source.sqlite");
+        source.execute_batch("CREATE TABLE addons(id INTEGER PRIMARY KEY,name TEXT NOT NULL,manifest_url TEXT UNIQUE NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,manifest TEXT NOT NULL);").unwrap();
+        let manifest=json!({"id":"fixture","name":"Fixture","resources":[],"logo":"https://art.invalid/addon-private-token"}).to_string();
+        source.execute("INSERT INTO addons VALUES(7,'Fixture','https://fixture.invalid/addon-private-token/manifest.json',1,?1)",[manifest.clone()]).unwrap();
+        assert_eq!(inspect_addons(&database).unwrap()["unassigned"], json!([7]));
+        assert!(apply_addon_owners(
+            &database,
+            &BTreeMap::new(),
+            &root.path().join("rejected.sqlite"),
+            &root.path().join("rejected.json"),
+            REVISION
+        )
+        .is_err());
+        assert!(!source
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('addons') WHERE name='account_id')",
+                [],
+                |r| r.get::<_, bool>(0)
+            )
+            .unwrap());
+        let mapped = apply_addon_owners(
+            &database,
+            &BTreeMap::from([(7, 11)]),
+            &root.path().join("owners.sqlite"),
+            &root.path().join("owners.json"),
+            REVISION,
+        )
+        .unwrap();
+        assert_eq!(mapped["ownership"]["assignments"], json!([[7, 11]]));
+        let vault = crate::secret_store::Vault::from_json(
+            &json!({"active":"fixture","keys":{"fixture":STANDARD.encode([7u8;32])}}).to_string(),
+        )
+        .unwrap();
+        v2::init(&source).unwrap();
+        // Model a stale derived index; cleanup must rebuild from authoritative IDs.
+        source
+            .execute(
+                "INSERT INTO provider_vod_search_v2(provider_vod_search_v2) VALUES('delete-all')",
+                [],
+            )
+            .unwrap();
+        let report = encrypt_addons_with_vault(
+            &database,
+            &root.path().join("before.sqlite"),
+            &root.path().join("before.json"),
+            REVISION,
+            &vault,
+        )
+        .unwrap();
+        assert_eq!(report["encrypted_addon_count"], 1);
+        assert_eq!(source.query_row("SELECT count(*) FROM provider_vod_search_v2 WHERE provider_vod_search_v2 MATCH 'Fixture'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert!(!report.to_string().contains("addon-private-token"));
+        let before = open(&root.path().join("before.sqlite"), false).unwrap();
+        assert_eq!(
+            before
+                .query_row("SELECT manifest FROM addons WHERE id=7", [], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            manifest
+        );
+        assert!(std::fs::read_to_string(root.path().join("before.json"))
+            .unwrap()
+            .contains("addon-private-token"));
+        assert_eq!(
+            source
+                .query_row("SELECT account_id FROM addons WHERE id=7", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            11
+        );
+        assert_eq!(
+            source
+                .query_row("SELECT manifest_url FROM addons WHERE id=7", [], |r| r
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+            "sealed:addon:7"
+        );
+        assert_eq!(
+            source
+                .query_row(
+                    "SELECT position FROM progress WHERE profile_id=71",
+                    [],
+                    |r| r.get::<_, f64>(0)
+                )
+                .unwrap(),
+            123.5
+        );
+        for path in [&database, &root.path().join("source.sqlite-wal")] {
+            assert!(!std::fs::read(path)
+                .unwrap_or_default()
+                .windows(b"addon-private-token".len())
+                .any(|v| v == b"addon-private-token"));
+        }
+        assert_eq!(
+            encrypt_addons_with_vault(
+                &database,
+                &root.path().join("again.sqlite"),
+                &root.path().join("again.json"),
+                REVISION,
+                &vault
+            )
+            .unwrap()["encrypted_addon_count"],
+            0
+        );
+    }
     #[test]
     fn encryption_rolls_back_every_provider_when_later_credentials_are_invalid() {
         let root = tempfile::tempdir().unwrap();

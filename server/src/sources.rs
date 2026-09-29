@@ -130,7 +130,7 @@ pub(crate) fn source_configuration(db:&Connection,producer:&str)->Result<Option<
     let Ok(id)=id.parse::<i64>() else{return Ok(None);};
     let value:Option<String>=match kind {
         "iptv"=>db.query_row("SELECT json_array(p.url,p.username,p.password,p.enabled,p.enable_live,p.enable_movies,p.enable_series,COALESCE(r.warp,0),o.account_id,p.credentials_version,c.account_id,c.secret) FROM providers p LEFT JOIN provider_routes r ON r.provider_id=p.id LEFT JOIN provider_ownership o ON o.provider_id=p.id LEFT JOIN provider_credentials_v2 c ON c.provider_id=p.id WHERE p.id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
-        "addon"=>db.query_row("SELECT json_array(manifest_url,enabled,account_id) FROM addons WHERE id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
+        "addon"=>db.query_row("SELECT json_array(manifest_url,enabled,account_id,credentials_version,credentials_revision) FROM addons WHERE id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
         _=>None,
     };
     Ok(value.map(|value|Sha256::digest(value.as_bytes()).into()))

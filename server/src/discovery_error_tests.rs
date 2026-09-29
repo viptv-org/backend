@@ -216,3 +216,75 @@ async fn discovery_rejections_are_structured_and_do_not_echo_request_details() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(error["error_code"], "discovery_not_found");
 }
+
+#[tokio::test]
+async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
+    use base64::Engine;
+    let mut app = fixture();
+    let vault=Arc::new(secret_store::Vault::from_json(&json!({"active":"fixture","keys":{"fixture":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string()).unwrap());
+    app.secret_vault = Some(vault.clone());
+    app.addons.vault = Some(vault);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let entering = entered.clone();
+    let releasing = release.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/private-token/manifest.json",
+        listener.local_addr().unwrap()
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener,Router::new().route("/private-token/manifest.json",get(||async {axum::Json(json!({"id":"fixture","name":"Fixture","resources":["stream"],"types":["movie"]}))}))
+            .route("/private-token/stream/movie/:id",get(move || {let entered=entering.clone();let release=releasing.clone();async move {entered.notify_one();release.notified().await;axum::Json(json!({"streams":[{"url":"http://media.invalid/private-stream-token.mp4","name":"Fixture source"}]}))}}))).await.unwrap();
+    });
+    let owned = app.addons.clone().for_account(1);
+    let addon = owned.add(&url).await.unwrap()["id"].as_i64().unwrap();
+    let (_, started) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/streams",
+        json!({"type":"movie","id":"tt1234567","only_addons":true}),
+    )
+    .await;
+    let path = format!("/api/v2/streams/{}", started["id"].as_str().unwrap());
+    tokio::time::timeout(Duration::from_secs(3), entered.notified())
+        .await
+        .unwrap();
+    owned.update(addon, json!({"enabled":false})).unwrap();
+    release.notify_one();
+    async fn poll(app: &App, path: &str) -> Value {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let (_, value) = request(app, "member-token-1", "GET", path, Value::Null).await;
+                if value["done"] == true {
+                    break value;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    let late = poll(&app, &path).await;
+    assert_eq!(late["events"][0]["error_code"], "source_not_found");
+    assert!(app.streams.lock().unwrap().is_empty());
+    owned.update(addon, json!({"enabled":true})).unwrap();
+    let (_, started) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/streams",
+        json!({"type":"movie","id":"tt1234567","only_addons":true}),
+    )
+    .await;
+    let path = format!("/api/v2/streams/{}", started["id"].as_str().unwrap());
+    let before = poll(&app, &path).await;
+    assert_eq!(before["events"][0]["streams"].as_array().unwrap().len(), 1);
+    owned.update(addon, json!({"enabled":false})).unwrap();
+    let after = poll(&app, &path).await;
+    assert_eq!(before["events"][0]["seq"], after["events"][0]["seq"]);
+    assert_eq!(after["events"][0]["error_code"], "source_not_found");
+    assert!(after["events"][0]["streams"].as_array().unwrap().is_empty());
+    server.abort();
+}

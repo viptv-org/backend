@@ -38,6 +38,22 @@ pub(crate) fn emit_batch(
             return;
         }
     }
+    if a.providers.account.is_some() {
+        if let Some(id) = source
+            .strip_prefix("addon:")
+            .and_then(|id| id.parse::<i64>().ok())
+        {
+            let allowed = addon::Addons::available(
+                &a.db.lock().unwrap(),
+                a.identity().account_id().unwrap_or(0),
+                id,
+            );
+            if !allowed {
+                emit_batch(a, j, "addon", Err("source_not_found".into()), complete);
+                return;
+            }
+        }
+    }
     let (streams, error, registration_error) = match result {
         Ok(r) => {
             let (streams, error) = a.register(source, r, &j.kind);

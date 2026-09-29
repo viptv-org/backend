@@ -73,6 +73,11 @@ pub(crate) async fn poll(
     let mut response = axum::Json(json!({"events":state.events.iter().skip(query.after).cloned().collect::<Vec<_>>(),"done":state.pending==0}));
     if let Some(events) = response.0["events"].as_array_mut() {
         for event in events {
+            if let Some(id)=event["source"].as_str().and_then(|s|s.strip_prefix("addon:")).and_then(|id|id.parse::<i64>().ok()) {
+                if !addon::Addons::available(&db,app.identity().account_id().unwrap_or(0),id) {
+                    *event=json!({"seq":event["seq"],"source":"addon","streams":[],"error":account_api::description("source_not_found"),"error_code":"source_not_found"});
+                }
+            }
             if let Some(id) = event["source"]
                 .as_str()
                 .and_then(|s| s.strip_prefix("iptv:"))

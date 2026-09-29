@@ -51,7 +51,10 @@ pub(crate) fn provider(raw: &str) -> Option<&'static str> {
     })
 }
 pub(crate) fn discovery(source: &str, raw: &str) -> &'static str {
-    if source.starts_with("addon:") {
+    if raw == "source_not_found" {
+        return "source_not_found";
+    }
+    if source == "addon" || source.starts_with("addon:") {
         match raw {
             "Addon timed out" | "Upstream timed out" => "addon_timeout",
             "Upstream returned HTTP 401" | "Upstream returned HTTP 403" => "addon_access_denied",

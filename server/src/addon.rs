@@ -9,6 +9,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
+pub(crate) mod credentials_v2;
 mod discover;
 mod extras;
 #[cfg(test)]
@@ -34,6 +35,7 @@ pub struct Addons {
     flights: Arc<Mutex<HashMap<String, Weak<FetchFlight>>>>,
     gate: Arc<Semaphore>,
     account_id: i64,
+    pub(crate) vault: Option<Arc<crate::secret_store::Vault>>,
 }
 impl Addons {
     pub fn new(db: Arc<Mutex<Connection>>, client: reqwest::Client) -> Result<Self, String> {
@@ -69,21 +71,12 @@ impl Addons {
                 let manifest = json!({"id":"com.linvo.cinemeta","name":"Cinemeta","resources":["catalog","meta"],"types":["movie","series"],"catalogs":[{"type":"movie","id":"top","name":"Popular movies","extra":[{"name":"search"},{"name":"skip"}]},{"type":"series","id":"top","name":"Popular series","extra":[{"name":"search"},{"name":"skip"}]}]});
                 tx.execute("INSERT INTO addons(name,manifest_url,manifest) VALUES('Cinemeta','https://v3-cinemeta.strem.io/manifest.json',?1)", [manifest.to_string()]).map_err(|_| "Database initialization failed")?;
             }
-            // Preserve legacy addon IDs/configuration for the owner, once only.
+            // Preserve legacy IDs/configuration without inferring an owner.
             let scoped: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('addons') WHERE name='account_id')", [], |r| r.get(0)).map_err(|_| "Database initialization failed")?;
             if !scoped {
-                tx.execute_batch("ALTER TABLE addons RENAME TO addons_legacy; CREATE TABLE addons(id INTEGER PRIMARY KEY,name TEXT NOT NULL,manifest_url TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,manifest TEXT NOT NULL,priority INTEGER NOT NULL DEFAULT 0,account_id INTEGER NOT NULL DEFAULT 0,UNIQUE(account_id,manifest_url)); INSERT INTO addons(id,name,manifest_url,enabled,manifest,priority) SELECT id,name,manifest_url,enabled,manifest,priority FROM addons_legacy; DROP TABLE addons_legacy;").map_err(|_| "Addon account migration failed")?;
-                let auth_exists: bool = tx
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='auth_accounts')",
-                        [],
-                        |r| r.get(0),
-                    )
-                    .map_err(|_| "Database initialization failed")?;
-                if auth_exists {
-                    tx.execute("UPDATE addons SET account_id=COALESCE((SELECT id FROM auth_accounts WHERE role='owner' ORDER BY id LIMIT 1),0)", []).map_err(|_| "Addon ownership migration failed")?;
-                }
+                credentials_v2::scope_legacy(&tx)?;
             }
+            credentials_v2::init(&tx)?;
             tx.commit().map_err(|_| "Database initialization failed")?;
         }
         Ok(Self {
@@ -93,6 +86,7 @@ impl Addons {
             flights: Default::default(),
             gate: Arc::new(Semaphore::new(12)),
             account_id: 0,
+            vault: None,
         })
     }
     pub fn for_account(mut self, account_id: i64) -> Self {
@@ -103,21 +97,31 @@ impl Addons {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
         let mut q = db
             .prepare(
-                "SELECT id,manifest_url,manifest FROM addons WHERE enabled=1 AND account_id=?1 ORDER BY id",
+                "SELECT id,manifest_url,manifest,credentials_version FROM addons WHERE enabled=1 AND account_id=?1 ORDER BY id",
             )
             .map_err(|_| "Database query failed")?;
         let rows = q
             .query_map([self.account_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
             })
             .map_err(|_| "Database query failed")?;
         rows.map(|r| {
-            let (i, u, m) = r.map_err(|_| "Database query failed")?;
-            Ok((
+            let (i, u, m, version) = r.map_err(|_| "Database query failed")?;
+            let (u, m) = credentials_v2::read(
+                &db,
+                self.vault.as_deref(),
+                self.account_id,
                 i,
                 u,
-                serde_json::from_str(&m).map_err(|_| "Invalid stored manifest")?,
-            ))
+                m,
+                version,
+            )?;
+            Ok((i, u, m))
         })
         .collect()
     }
@@ -125,7 +129,7 @@ impl Addons {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
         let mut stmt = db
             .prepare(
-                "SELECT id,name,manifest_url,enabled,priority FROM addons WHERE account_id=?1 ORDER BY id",
+                "SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE account_id=?1 ORDER BY id",
             )
             .map_err(|_| "Database query failed")?;
         let rows = stmt
@@ -138,7 +142,7 @@ impl Addons {
     }
     fn config_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         Ok(
-            json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"manifest_url":r.get::<_,String>(2)?,"enabled":r.get::<_,bool>(3)?}),
+            json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"manifest_url":if r.get::<_,i64>(5)?==0 {Some(r.get::<_,String>(2)?)} else {None},"enabled":r.get::<_,bool>(3)?,"credentials_encrypted":r.get::<_,i64>(5)?==1}),
         )
     }
     /// Patch only enabled, preserving omitted fields. The complete saved
@@ -163,7 +167,7 @@ impl Addons {
             return Err("Addon not found".into());
         }
         db.query_row(
-            "SELECT id,name,manifest_url,enabled,priority FROM addons WHERE id=?1 AND account_id=?2",
+            "SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE id=?1 AND account_id=?2",
             [id,self.account_id],
             Self::config_row,
         )
@@ -176,6 +180,15 @@ impl Addons {
             .map_err(|_| "Database task failed")?
     }
     pub async fn add(&self, url: &str) -> Result<Value, String> {
+        if self.vault.is_none() {
+            let checking = self.clone();
+            let protected=tokio::task::spawn_blocking(move || {
+                checking.db.lock().map_err(|_|"Database unavailable")?.query_row("SELECT EXISTS(SELECT 1 FROM addon_encryption_accounts_v2 WHERE account_id=?1)",[checking.account_id],|r|r.get::<_,bool>(0)).map_err(|_|"Database query failed")
+            }).await.map_err(|_|"Database task failed")??;
+            if protected {
+                return Err("secret_store_not_configured".into());
+            }
+        }
         validate_url(url)?;
         if !url
             .split('?')
@@ -194,19 +207,26 @@ impl Addons {
         let url = url.to_owned();
         tokio::task::spawn_blocking(move || {
             let db = this.db.lock().map_err(|_| "Database unavailable")?;
+            if let Some(vault)=&this.vault {
+                let id=credentials_v2::store(&db,vault,this.account_id,&url,&m)?;
+                return db.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE id=?1 AND account_id=?2",params![id,this.account_id],Self::config_row).map_err(|_|"Database query failed".into());
+            }
             db.execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES(?1,?2,?3,?4) ON CONFLICT(account_id,manifest_url) DO UPDATE SET name=excluded.name,manifest=excluded.manifest",params![m["name"].as_str(),url,m.to_string(),this.account_id]).map_err(|_|"Could not save addon")?;
-            db.query_row("SELECT id,name,manifest_url,enabled,priority FROM addons WHERE manifest_url=?1 AND account_id=?2", params![url,this.account_id], Self::config_row).map_err(|_| "Database query failed".into())
+            db.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE manifest_url=?1 AND account_id=?2", params![url,this.account_id], Self::config_row).map_err(|_| "Database query failed".into())
         }).await.map_err(|_| "Database task failed")?
     }
     pub fn delete(&self, id: i64) -> Result<(), String> {
-        self.db
-            .lock()
-            .map_err(|_| "Database unavailable")?
-            .execute(
-                "DELETE FROM addons WHERE id=?1 AND account_id=?2",
-                [id, self.account_id],
-            )
+        let db = self.db.lock().map_err(|_| "Database unavailable")?;
+        let tx = db
+            .unchecked_transaction()
             .map_err(|_| "Database update failed")?;
+        tx.execute("DELETE FROM addon_credentials_v2 WHERE addon_id IN (SELECT id FROM addons WHERE id=?1 AND account_id=?2)",[id,self.account_id]).map_err(|_|"Database update failed")?;
+        tx.execute(
+            "DELETE FROM addons WHERE id=?1 AND account_id=?2",
+            [id, self.account_id],
+        )
+        .map_err(|_| "Database update failed")?;
+        tx.commit().map_err(|_| "Database update failed")?;
         Ok(())
     }
     pub fn catalogs(&self) -> Result<Value, String> {
@@ -244,6 +264,14 @@ impl Addons {
             }
         }
         Ok(Value::Array(out))
+    }
+    pub(crate) fn available(db: &Connection, account: i64, id: i64) -> bool {
+        db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM addons WHERE id=?1 AND account_id=?2 AND enabled=1)",
+            params![id, account],
+            |r| r.get::<_, bool>(0),
+        )
+        .unwrap_or(false)
     }
     async fn fetch(&self, url: &str, ttl: i64) -> Result<Value, String> {
         if let Some((expiry, v, _)) = self.cache.lock().unwrap().get(url) {

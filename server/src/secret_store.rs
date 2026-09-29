@@ -9,6 +9,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 type Result<T> = std::result::Result<T, &'static str>;
 const MAX_SECRET: usize = 256 * 1024;
+// Legacy addon manifests were bounded at 32 MiB; retain that plus URL/envelope
+// payload overhead without widening the normal gateway/provider secret limit.
+const MAX_ADDON: usize = 33 * 1024 * 1024;
 
 pub(crate) struct SecretBytes(Zeroizing<Vec<u8>>);
 impl SecretBytes {
@@ -144,7 +147,25 @@ impl Vault {
         record: &str,
         plaintext: &[u8],
     ) -> Result<String> {
-        if plaintext.len() > MAX_SECRET {
+        self.seal_bounded(account, purpose, record, plaintext, MAX_SECRET)
+    }
+    pub(crate) fn seal_addon(
+        &self,
+        account: i64,
+        record: &str,
+        plaintext: &[u8],
+    ) -> Result<String> {
+        self.seal_bounded(account, "addon", record, plaintext, MAX_ADDON)
+    }
+    fn seal_bounded(
+        &self,
+        account: i64,
+        purpose: &str,
+        record: &str,
+        plaintext: &[u8],
+        limit: usize,
+    ) -> Result<String> {
+        if plaintext.len() > limit {
             return Err("secret_too_large");
         }
         let aad = Self::context(account, purpose, record, &self.active)?;
@@ -177,7 +198,30 @@ impl Vault {
         record: &str,
         envelope: &str,
     ) -> Result<SecretBytes> {
-        if envelope.len() > 400000 {
+        self.open_bounded(account, purpose, record, envelope, MAX_SECRET)
+    }
+    pub(crate) fn open_addon(
+        &self,
+        account: i64,
+        record: &str,
+        envelope: &str,
+    ) -> Result<SecretBytes> {
+        self.open_bounded(account, "addon", record, envelope, MAX_ADDON)
+    }
+    fn open_bounded(
+        &self,
+        account: i64,
+        purpose: &str,
+        record: &str,
+        envelope: &str,
+        limit: usize,
+    ) -> Result<SecretBytes> {
+        let envelope_limit = if limit == MAX_SECRET {
+            400000
+        } else {
+            limit * 2 + 1024
+        };
+        if envelope.len() > envelope_limit {
             return Err("invalid_secret_envelope");
         }
         let sealed: Sealed =
@@ -200,7 +244,7 @@ impl Vault {
                 .decode(&sealed.ciphertext)
                 .map_err(|_| "invalid_secret_envelope")?,
         );
-        if bytes.len() > MAX_SECRET + aead::AES_256_GCM.tag_len() {
+        if bytes.len() > limit + aead::AES_256_GCM.tag_len() {
             return Err("invalid_secret_envelope");
         }
         let length = key
@@ -283,5 +327,22 @@ mod tests {
             r#"{{"active":"a","keys":{{"a":"{encoded}","a":"{encoded}"}}}}"#
         ))
         .is_err());
+    }
+    #[test]
+    fn addon_manifests_do_not_widen_gateway_or_provider_secret_limits() {
+        let vault = keyring("first", 7, None);
+        let payload = vec![b'x'; MAX_SECRET + 1];
+        assert_eq!(
+            vault.seal(1, "gateway", "one", &payload).unwrap_err(),
+            "secret_too_large"
+        );
+        let envelope = vault.seal_addon(1, "one", &payload).unwrap();
+        assert_eq!(
+            vault.open_addon(1, "one", &envelope).unwrap().expose(),
+            payload
+        );
+        assert!(vault.open_addon(2, "one", &envelope).is_err());
+        assert!(vault.open_addon(1, "two", &envelope).is_err());
+        assert!(vault.open(1, "gateway", "one", &envelope).is_err());
     }
 }

@@ -109,4 +109,5 @@ An offline provider-tuple encryption migration and reader are now implemented;
 see [V2 operations](V2_OPERATIONS.md). The migration is not approved for
 production use yet. Account-owned connection CRUD is implemented as documented
 there. Durable account-owned initial/periodic refresh is also implemented;
-addon encryption and client adoption remain open.
+[addon encryption](ADDONS_V2.md) is implemented, while protected addon transport
+and client adoption remain open.
