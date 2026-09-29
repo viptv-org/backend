@@ -40,8 +40,18 @@ planning or, for native direct delivery, its preferences metadata. Language tags
 are bounded to 35 ASCII alphanumeric/hyphen characters. `subtitles_off` conflicts
 with a subtitle index/preference and is rejected rather than silently ignored.
 The full choice participates in idempotency; changing it requires a new request
-ID. This extension requires a matching updated gateway. Shared-core/client option
-mapping and profile-preference integration remain pending, not silently complete.
+ID. This extension requires a matching updated gateway and client contract.
+
+New admissions snapshot the authenticated selected profile's stored audio and
+enabled subtitle languages, unless explicitly overridden. Subtitle-off and an
+explicit subtitle track suppress default subtitle-language injection. Preference
+reads revalidate the resource lease and execute off the async runtime thread.
+The caller's original body determines idempotency: changing saved preferences
+does not alter an admitted session or make its retry conflict. A new request ID
+uses the new defaults. The legacy saved quality field is deliberately ignored;
+no profile cap replaces actual decoder dimensions. Router fixtures verify direct
+metadata, gateway forwarding, overrides, subtitle-off and stable retries. This
+does not complete client activation or actual device track qualification.
 
 The initial 202 response includes the backend playback id, status, expires_at
 and renewal interval. Poll GET /api/v2/playback/:id until ready or terminal.

@@ -336,6 +336,62 @@ async fn conversion_and_track_choices_require_and_reach_the_authorized_gateway()
         StatusCode::BAD_REQUEST
     );
 }
+
+#[tokio::test]
+async fn v2_profile_preferences_are_scoped_snapshots_without_quality_clamping() {
+    let (app, peer) = setup().await;
+    let source = source(&app);
+    let save = |audio: &str, subtitle: &str| {
+        app.db.lock().unwrap().execute("INSERT INTO playback_preferences(profile_id,value) VALUES(1,?1) ON CONFLICT(profile_id) DO UPDATE SET value=excluded.value", [json!({"audio_language":audio,"subtitle_language":subtitle,"subtitles_enabled":true,"quality":"480p"}).to_string()]).unwrap();
+    };
+    save("ja", "fr");
+    let direct = body(&source, "profile_snapshot", "android");
+    let (status, admission) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        direct.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = admission["id"].as_str().unwrap();
+    let ready = settled(&app, id).await;
+    assert_eq!(ready["delivery"]["kind"], "direct");
+    assert_eq!(ready["delivery"]["preferences"]["audio_language"], "ja");
+    assert_eq!(ready["delivery"]["preferences"]["subtitle_language"], "fr");
+    assert!(ready["delivery"]["preferences"].get("quality").is_none());
+    save("de", "es");
+    let (status, repeated) =
+        request(&app, "member-token-1", "POST", "/api/v2/playback", direct).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated["id"], id);
+    assert_eq!(repeated["delivery"]["preferences"]["audio_language"], "ja");
+    gateway(&app, "first", 0);
+    let managed = body(&source, "profile_new", "roku");
+    let (status, admission) =
+        request(&app, "member-token-1", "POST", "/api/v2/playback", managed).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(
+        settled(&app, admission["id"].as_str().unwrap()).await["status"],
+        "ready"
+    );
+    let output = peer.outputs.lock().unwrap()[0].clone();
+    assert_eq!(output["preferred_audio_language"], "de");
+    assert_eq!(output["preferred_subtitle_language"], "es");
+    assert_eq!(output["max_height"], 2160);
+    let mut off = body(&source, "profile_off", "roku");
+    off["subtitles_off"] = json!(true);
+    off["preferred_audio_language"] = json!("it");
+    let (_, admission) = request(&app, "member-token-1", "POST", "/api/v2/playback", off).await;
+    assert_eq!(
+        settled(&app, admission["id"].as_str().unwrap()).await["status"],
+        "ready"
+    );
+    let output = peer.outputs.lock().unwrap()[1].clone();
+    assert_eq!(output["preferred_audio_language"], "it");
+    assert!(output["preferred_subtitle_language"].is_null());
+}
 #[tokio::test]
 async fn gateway_selection_affinity_renewal_and_grant_revocation_are_scoped() {
     let (app, peer) = setup().await;

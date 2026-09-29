@@ -543,7 +543,7 @@ pub(crate) async fn start(
     Extension(lease): Extension<ResourceLease>,
     body: Result<Json<Start>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Value>), Error> {
-    let Json(request) = body.map_err(|_| Error::Code("invalid_playback_request"))?;
+    let Json(mut request) = body.map_err(|_| Error::Code("invalid_playback_request"))?;
     validate(&request)?;
     let hash: [u8; 32] = Sha256::digest(
         serde_json::to_vec(&request).map_err(|_| Error::Code("invalid_playback_request"))?,
@@ -566,6 +566,33 @@ pub(crate) async fn start(
         return Ok((StatusCode::OK, Json(response(&entry))));
     }
     let input = source(&app, &lease, request.stream_id.clone()).await?;
+    // Snapshot profile defaults only for a new admission. The idempotency hash
+    // above is the caller's body, so later preference edits cannot mutate an
+    // existing playback or turn a safe retry into a conflicting request.
+    let database = app.db.clone();
+    let preference_lease = lease.clone();
+    let preferences = tokio::task::spawn_blocking(move || {
+        let db = database.lock().unwrap();
+        preference_lease.validate(&db)?;
+        let crate::auth::Principal::Account { profile_id, .. } = preference_lease.principal;
+        profile_id
+            .map(|id| crate::preferences::load(&db, id))
+            .transpose()
+            .map(Option::unwrap_or_default)
+            .map_err(Error::from)
+    })
+    .await
+    .map_err(|_| Error::Code("provider_storage_unavailable"))??;
+    request
+        .preferred_audio_language
+        .get_or_insert(preferences.audio_language);
+    if !request.subtitles_off && request.subtitle_track.is_none() && preferences.subtitles_enabled {
+        request
+            .preferred_subtitle_language
+            .get_or_insert(preferences.subtitle_language);
+    }
+    // Do not apply Preferences::cap: v2 uses actual decoder limits only.
+    validate(&request)?;
     if input.live && request.position != 0.0 {
         return Err(Error::Code("invalid_playback_request"));
     }
