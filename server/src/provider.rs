@@ -23,6 +23,9 @@ mod normalize;
 mod service;
 mod streams;
 mod sync;
+// The v2 storage contract is exercised before coordinated route/schema cutover.
+#[cfg(test)]
+pub(crate) mod v2;
 
 #[cfg(test)]
 mod tests;
