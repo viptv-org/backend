@@ -1,8 +1,25 @@
 # Rust backend extraction and coordinated delivery
 
+## Current v2 implementation contract
+
+The approved [BE-002 backend/gateway plan](https://github.com/viptv-org/design/blob/25322b50df6511d6f8fd0de67522017b9ae388e1/BACKEND_V2.md)
+and [ADM-002 admin rebuild](https://github.com/viptv-org/design/blob/25322b50df6511d6f8fd0de67522017b9ae388e1/ADMIN_V2.md)
+supersede the extraction-only constraints below for the coordinated v2 cutover.
+Preserve account/profile/history/source identities, require explicit legacy
+provider ownership, and move media execution into the independent gateway.
+HTTP and HTTPS IPTV sources remain supported. Account/admin UI adoption and
+client protocol updates are tracked separately; this branch is not deployed.
+
+DESIGN_REF intentionally remains the baseline visual/asset pin while this
+non-visual backend adoption is in progress. No visual parity or completed
+cross-platform adoption is claimed. See docs/V2_OPERATIONS.md and the design
+implementation ledger for current evidence and incomplete work.
+
+## Historical extraction contract
+
 Move server/, operational scripts, container acceptance and Compose deployment files verbatim from vynxc/viptv@7d6b413. Pin the independently maintained React web repository at dashboard using a git submodule. Keep the HTTP wire contract, SQLite schema/migrations, account/profile IDs, auth origin, provider/addon settings and playback behavior unchanged.
 
-## Delivery
+## Historical delivery (superseded by AGENTS.md)
 Pull-request and main CI run fmt, strict Clippy, backend tests including real FFmpeg, pinned-web bundle integrity, Docker build and isolated container acceptance. Successful version tags publish an immutable GHCR image and release metadata. Production rollout uses the existing guarded deployment procedure with all three Compose overlays; image publication is not a claim of production rollout. The named production volume must be explicitly retained when moving checkout directories.
 
 ## Acceptance

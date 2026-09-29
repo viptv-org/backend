@@ -10,3 +10,4 @@ DEV.local.md
 *.sqlite*
 *.db
 __pycache__/
+.migration-v2/

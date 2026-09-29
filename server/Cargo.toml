@@ -1,5 +1,6 @@
 [package]
 name = "viptv-server"
+default-run = "viptv-server"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-2.0-only"
@@ -11,7 +12,7 @@ viptv-provider = { path = "provider", features = ["discovery"] }
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
@@ -37,3 +38,6 @@ chrono-tz = "0.10"
 rusqlite = { version = "0.32", features = ["functions"] }
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

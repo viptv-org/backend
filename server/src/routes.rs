@@ -161,6 +161,8 @@ pub fn router_with_tv(
             get(continue_watching_authenticated),
         )
         .route("/matches", get(matches).put(override_match))
+        .route("/v2/iptv/matches", get(provider::v2_http::matches).put(provider::v2_http::override_match))
+        .route("/v2/iptv/live-default", get(provider::v2_http::live_default).put(provider::v2_http::set_live_default))
         .route("/playback", post(start_playback_authenticated))
         .route("/playback/:id", delete(stop_playback))
         .route("/playback/:id/heartbeat", post(heartbeat))

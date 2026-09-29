@@ -23,12 +23,13 @@ mod normalize;
 mod service;
 mod streams;
 mod sync;
-// The v2 storage contract is exercised before coordinated route/schema cutover.
-#[cfg(test)]
 pub(crate) mod v2;
+pub(crate) mod v2_http;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod v2_http_tests;
 
 pub use self::service::ProviderService;
 use candidates::*;

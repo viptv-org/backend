@@ -41,6 +41,7 @@ RUN sed -i 's/Components: main$/Components: main non-free/' /etc/apt/sources.lis
     && install -d -o viptv -g viptv -m 0700 /data /cache \
     && install -d -m 0755 /app/dashboard /app/tv
 COPY --from=server-build /src/server/target/release/viptv-server /usr/local/bin/viptv-server
+COPY --from=server-build /src/server/target/release/provider-owners /usr/local/bin/provider-owners
 COPY --from=dashboard-build /src/dashboard/dist/ /app/dashboard/
 COPY --from=tv-build /src/tv/dist/ /app/tv/
 # Build artifacts can inherit a restrictive host/build umask. These are public files.

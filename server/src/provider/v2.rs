@@ -12,14 +12,19 @@ fn db_error(_: rusqlite::Error) -> &'static str {
 }
 
 pub(crate) fn init(db: &Connection) -> Result<()> {
-    let indexed: bool = db
+    let tx = db.unchecked_transaction().map_err(db_error)?;
+    init_in_transaction(&tx)?;
+    tx.commit().map_err(db_error)
+}
+
+pub(crate) fn init_in_transaction(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    let indexed: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='provider_vod_search_v2')",
             [],
             |row| row.get(0),
         )
         .map_err(db_error)?;
-    let tx = db.unchecked_transaction().map_err(db_error)?;
     tx.execute_batch("CREATE TABLE IF NOT EXISTS provider_ownership(provider_id INTEGER PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE);
       CREATE INDEX IF NOT EXISTS provider_ownership_account ON provider_ownership(account_id,provider_id);
       CREATE TABLE IF NOT EXISTS account_media_settings(account_id INTEGER PRIMARY KEY REFERENCES auth_accounts(id) ON DELETE CASCADE,default_live_provider_id INTEGER REFERENCES providers(id) ON DELETE SET NULL);
@@ -35,7 +40,7 @@ pub(crate) fn init(db: &Connection) -> Result<()> {
         )
         .map_err(db_error)?;
     }
-    tx.commit().map_err(db_error)
+    Ok(())
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -44,7 +49,13 @@ pub(crate) struct OwnershipReport {
     pub assignments: Vec<(i64, i64)>,
 }
 pub(crate) fn inspect_ownership(db: &Connection) -> Result<OwnershipReport> {
-    let mut query=db.prepare("SELECT p.id,o.account_id FROM providers p LEFT JOIN provider_ownership o ON o.provider_id=p.id ORDER BY p.id").map_err(db_error)?;
+    let initialized: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='provider_ownership')", [], |row| row.get(0)).map_err(db_error)?;
+    let sql = if initialized {
+        "SELECT p.id,o.account_id FROM providers p LEFT JOIN provider_ownership o ON o.provider_id=p.id ORDER BY p.id"
+    } else {
+        "SELECT id,NULL FROM providers ORDER BY id"
+    };
+    let mut query = db.prepare(sql).map_err(db_error)?;
     let mut report = OwnershipReport {
         unassigned: vec![],
         assignments: vec![],
@@ -67,9 +78,11 @@ pub(crate) fn inspect_ownership(db: &Connection) -> Result<OwnershipReport> {
 
 /// Requires a complete explicit map. Unknown/disabled accounts and partial maps
 /// roll back atomically rather than assigning server-wide subscriptions publicly.
-pub(crate) fn assign_legacy(db: &Connection, owners: &BTreeMap<i64, i64>) -> Result<()> {
-    let tx = db.unchecked_transaction().map_err(db_error)?;
-    let report = inspect_ownership(&tx)?;
+pub(crate) fn assign_legacy(
+    tx: &rusqlite::Transaction<'_>,
+    owners: &BTreeMap<i64, i64>,
+) -> Result<()> {
+    let report = inspect_ownership(tx)?;
     if report.unassigned.len() != owners.len()
         || report.unassigned.iter().any(|id| !owners.contains_key(id))
     {
@@ -92,7 +105,7 @@ pub(crate) fn assign_legacy(db: &Connection, owners: &BTreeMap<i64, i64>) -> Res
         )
         .map_err(db_error)?;
     }
-    tx.commit().map_err(db_error)
+    Ok(())
 }
 
 pub(crate) fn live_catalog(
@@ -218,9 +231,46 @@ pub(crate) fn matches_page(
     Ok(MatchPage { items, next_cursor })
 }
 
+pub(crate) fn override_match(
+    db: &Connection,
+    account: i64,
+    vod_id: &str,
+    metadata_id: &str,
+    kind: &str,
+) -> Result<()> {
+    if vod_id.is_empty()
+        || vod_id.len() > 256
+        || metadata_id.is_empty()
+        || metadata_id.len() > 256
+        || vod_id.chars().any(char::is_control)
+        || metadata_id
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace())
+        || !matches!(kind, "movie" | "series")
+    {
+        return Err("invalid_match_request");
+    }
+    // Authorization is part of the write, not an earlier lookup vulnerable to
+    // a concurrent ownership change. Unknown/foreign IDs share one response.
+    let changed = db.execute("INSERT INTO provider_matches(vod_id,metadata_id,kind)
+        SELECT v.id,?3,v.kind FROM provider_vod v JOIN provider_ownership o ON o.provider_id=v.provider_id
+        WHERE v.id=?2 AND v.kind=?4 AND o.account_id=?1
+        ON CONFLICT(vod_id) DO UPDATE SET metadata_id=excluded.metadata_id,kind=excluded.kind",
+        params![account, vod_id, super::normalize::canonical_id(metadata_id), kind]).map_err(db_error)?;
+    if changed == 0 {
+        return Err("stream_candidate_not_found");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn assign_legacy(db: &Connection, owners: &BTreeMap<i64, i64>) -> Result<()> {
+        let tx = db.unchecked_transaction().map_err(db_error)?;
+        super::assign_legacy(&tx, owners)?;
+        tx.commit().map_err(db_error)
+    }
     fn fixture() -> Connection {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE auth_accounts(id INTEGER PRIMARY KEY,disabled INTEGER NOT NULL); INSERT INTO auth_accounts VALUES(11,0),(22,0),(33,1);

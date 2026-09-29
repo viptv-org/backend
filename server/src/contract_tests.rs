@@ -1,39 +1,47 @@
 //! Entirely in-process contract tests: no listeners, provider requests or temp files.
 use super::*;
 use axum::body::to_bytes;
+const DELIVERY_ERROR_MESSAGE: &str =
+    "This source cannot be played with the current playback configuration. Choose another source.";
 
 #[tokio::test]
 async fn playback_errors_are_closed_and_leave_expiry_unchanged() {
-    for (status, message, code) in [
+    for (status, message, display, code) in [
         (
             StatusCode::BAD_REQUEST,
             "Stream expired; discover again",
-            None::<&str>,
+            "This stream has expired. Refresh the sources and choose it again.",
+            Some("source_expired"),
         ),
         (
             StatusCode::BAD_REQUEST,
+            "Requested input audio track is unavailable",
             "Requested input audio track is unavailable",
             None::<&str>,
         ),
         (
             StatusCode::BAD_REQUEST,
             "Playback failed with an upstream error",
+            "Playback failed with an upstream error",
             None::<&str>,
         ),
         (
             StatusCode::NOT_ACCEPTABLE,
             "Playback engine unavailable",
-            None::<&str>,
+            DELIVERY_ERROR_MESSAGE,
+            Some("delivery_unsupported"),
         ),
         (
             StatusCode::NOT_ACCEPTABLE,
             "Playback could not start; try forced transcoding or another stream",
-            None::<&str>,
+            DELIVERY_ERROR_MESSAGE,
+            Some("delivery_unsupported"),
         ),
         (
             StatusCode::NOT_ACCEPTABLE,
             "Could not inspect source video safely; try another stream",
-            None::<&str>,
+            DELIVERY_ERROR_MESSAGE,
+            Some("delivery_unsupported"),
         ),
     ] {
         let response = ApiError(status, message.into()).into_response();
@@ -41,8 +49,8 @@ async fn playback_errors_are_closed_and_leave_expiry_unchanged() {
         let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
         let value: Value = serde_json::from_slice(&bytes).unwrap();
         let expected = match code {
-            Some(code) => json!({"error":message,"error_code":code}),
-            None => json!({"error":message}),
+            Some(code) => json!({"error":display,"error_code":code}),
+            None => json!({"error":display}),
         };
         assert_eq!(value, expected);
     }
@@ -693,9 +701,10 @@ async fn cached_source_ids_recheck_exact_content_scope_before_probe() {
         // Missing probe executable proves an eligible scope reaches probing without network.
         let (_, allowed) = api(&app, "POST", "/api/playback", json!({"stream_id":other})).await;
         assert_eq!(
-            allowed["error"], "Could not inspect source video safely; try another stream",
+            allowed["error"], DELIVERY_ERROR_MESSAGE,
             "{kind}: {allowed}"
         );
+        assert_eq!(allowed["error_code"], "delivery_unsupported");
         if kind == "live" {
             let (_, direct) = api(
                 &app,
@@ -713,10 +722,8 @@ async fn cached_source_ids_recheck_exact_content_scope_before_probe() {
             StatusCode::OK
         );
         let (_, reenabled) = api(&app, "POST", "/api/playback", json!({"stream_id":source})).await;
-        assert_eq!(
-            reenabled["error"],
-            "Could not inspect source video safely; try another stream"
-        );
+        assert_eq!(reenabled["error"], DELIVERY_ERROR_MESSAGE);
+        assert_eq!(reenabled["error_code"], "delivery_unsupported");
     }
 }
 
@@ -795,10 +802,8 @@ async fn upstream_type_and_source_cannot_override_job_scope_or_addon_ownership()
         json!({"stream_id":sources[0]["id"]}),
     )
     .await;
-    assert_eq!(
-        error["error"],
-        "Could not inspect source video safely; try another stream"
-    );
+    assert_eq!(error["error"], DELIVERY_ERROR_MESSAGE);
+    assert_eq!(error["error_code"], "delivery_unsupported");
 }
 
 #[tokio::test]

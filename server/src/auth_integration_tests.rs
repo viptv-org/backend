@@ -9,7 +9,7 @@ use tower::ServiceExt;
 
 use crate::test_support::request;
 
-fn fixture() -> App {
+pub(crate) fn fixture() -> App {
     let a = crate::test_support::app();
     {
         let db = a.db.lock().unwrap();

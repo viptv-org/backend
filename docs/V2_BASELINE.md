@@ -1,7 +1,9 @@
 # BE-002 foundation checkpoint
 
-Implementation branch: `refactor/backend-v2`. No deployed schema or public route
-has been cut over. The new storage module is deliberately not called by startup.
+Implementation branch: `refactor/backend-v2`. Production remains unchanged.
+Startup now initializes additive ownership/default/index tables without assigning
+any legacy sources. The v2 HTTP routes use the bounded queries; legacy routes and
+their current web consumers remain until the coordinated client cutover.
 
 ## Reproduction
 
@@ -30,5 +32,25 @@ bound cursor pages/search. Tests cover ambiguous/incomplete/disabled ownership,
 cross-account access, default stability/fallback and bounded unmatched results.
 No implicit provider ownership migration or public source-sharing grant occurs.
 
-Not complete: route integration, encrypted credentials, catalog/index lifecycle,
-advanced configuration export, full legacy-history migration and gateway cutover.
+## HTTP and migration checkpoint
+
+- GET/PUT `/api/v2/iptv/matches` lists and edits only account-owned candidates.
+  Pages default to 50 and reject sizes above 200, cross-account cursors and
+  unknown query fields. Editing a foreign ID is indistinguishable from a missing
+  ID. Operator role does not bypass ownership.
+- GET/PUT `/api/v2/iptv/live-default` persists the account default and validates
+  explicit changes. Paired-device sessions and locked kids profiles cannot use
+  these account-management endpoints. No viewing-client swap button was added.
+- `provider-owners` inspects read-only and requires an explicit complete owner
+  map for assignment. It creates a private SQLite online backup and streamed,
+  versioned advanced-configuration export before changing the source. Invalid
+  owner maps roll back; IDs, progress and manual VOD mappings are preserved.
+- Full backend suite: 219 passed, two existing real-media tests ignored. Strict
+  Clippy across all targets passes. Migration library and executable fixtures
+  verify WAL capture, non-overwrite, private permissions, confirmation and no
+  credential output. No production database was read or changed for these tests.
+
+Not complete: admin/viewing-client adoption, account-scoped source CRUD/discovery,
+encrypted credentials, catalog/index lifecycle, retirement of legacy modules,
+full cutover/rollback qualification and backend gateway integration. See
+[V2_OPERATIONS.md](V2_OPERATIONS.md) before using the migration executable.

@@ -11,6 +11,7 @@ mod lineup;
 mod live_catalog;
 mod live_policy;
 mod media_access;
+pub mod migration_v2;
 pub mod playback;
 mod preferences;
 pub mod provider;
