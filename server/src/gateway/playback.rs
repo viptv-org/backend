@@ -598,7 +598,7 @@ pub(crate) async fn start(
     }
     let native = request.client.can_play_direct
         && !matches!(request.client.platform, Platform::Roku | Platform::Vizio)
-        && (!matches!(request.client.platform, Platform::Web)
+        && (!matches!(request.client.platform, Platform::Web | Platform::Webos)
             || (input.url.starts_with("https://") && input.headers.is_empty()));
     let direct = native
         && !request.force_gateway

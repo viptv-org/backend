@@ -214,7 +214,7 @@ async fn playback_never_falls_back_to_another_accounts_gateway_without_a_grant()
 async fn native_direct_and_mandatory_gateway_policy_do_not_invoke_embedded_playback() {
     let app = fixture();
     let source = source(&app);
-    for platform in ["roku", "vizio", "web"] {
+    for platform in ["roku", "vizio", "web", "webos"] {
         let (status, error) = request(
             &app,
             "member-token-1",

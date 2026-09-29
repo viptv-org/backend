@@ -83,7 +83,7 @@ or silently bypassed; migrate the source's routing configuration first.
 
 Roku and Vizio always require an authorized gateway, even if a client falsely
 claims direct capability. Other clients reporting direct capability use direct
-delivery unless force_gateway is set. Browser direct delivery additionally needs
+delivery unless force_gateway is set. Browser and webOS HTML direct delivery additionally need
 HTTPS and no custom upstream headers. HTTP IPTV remains supported for native
 delivery and as gateway input. No gateway means an early gateway_required error
 for a device/source that requires it—not an attempt at embedded transcoding.
