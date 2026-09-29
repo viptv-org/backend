@@ -90,4 +90,52 @@ fn executable_requires_confirmation_preserves_wal_and_does_not_print_secrets() {
             |row| row.get::<_, bool>(0)
         )
         .unwrap());
+    use base64::Engine;
+    let keyring=json!({"active":"test","keys":{"test":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string();
+    let encrypted_backup = root.path().join("before-encryption.sqlite");
+    let encrypted_export = root.path().join("before-encryption.json");
+    let encrypt = |confirm: bool, key: bool| {
+        let mut command = Command::new(binary);
+        command
+            .env_remove("VIPTV_SECRETS_KEYRING")
+            .arg("encrypt")
+            .arg(&database)
+            .arg(&encrypted_backup)
+            .arg(&encrypted_export)
+            .arg("1111111111111111111111111111111111111111");
+        if confirm {
+            command.arg("--confirm-encryption");
+        }
+        if key {
+            command.env("VIPTV_SECRETS_KEYRING", &keyring);
+        }
+        command.output().unwrap()
+    };
+    assert!(!encrypt(false, true).status.success());
+    assert!(!encrypt(true, false).status.success());
+    assert!(!encrypted_backup.exists());
+    let encrypted = encrypt(true, true);
+    assert!(
+        encrypted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&encrypted.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&encrypted.stdout).unwrap()["encrypted_count"],
+        1
+    );
+    for output in [&encrypted.stdout, &encrypted.stderr] {
+        let text = String::from_utf8_lossy(output);
+        assert!(
+            !text.contains("private-source-password")
+                && !text.contains("fixture.invalid")
+                && !text.contains(&keyring)
+        );
+    }
+    assert_eq!(
+        db.query_row("SELECT password FROM providers WHERE id=1", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        ""
+    );
 }

@@ -134,6 +134,16 @@ impl ProviderService {
             let db = s.lock()?;
             let allowed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND enabled=1 AND (?2 IS NULL OR CASE ?2 WHEN 'live' THEN enable_live WHEN 'movie' THEN enable_movies WHEN 'series' THEN enable_series ELSE 0 END=1))",params![provider_id,kind],|r|r.get(0)).map_err(db_error)?;
             if !allowed {return Err("Provider not found or disabled".into());}
+            s.require_owner(&db,provider_id)?;
+            if credentials_v2::sealed(&db,provider_id)? {
+                // Migrated connections have no legacy cross-provider pool policy.
+                // Negative internal gate IDs cannot collide with SQLite pool IDs.
+                let limit:usize=db.query_row("SELECT max_connections FROM providers WHERE id=?1",[provider_id],|r|r.get(0)).map_err(db_error)?;
+                if !(1..=32).contains(&limit) {return Err("Invalid provider connection limit".into());}
+                let mut gates=s.playback_gates.lock().map_err(|_|"Provider limiter unavailable")?;
+                let gate=gates.entry(-provider_id).or_insert_with(||PlaybackGate {issued:0,report_generation:0,semaphore:Arc::new(Semaphore::new(limit))});
+                return gate.semaphore.clone().try_acquire_owned().map_err(|_|"Provider connection limit reached".into());
+            }
             let mut gates=s.playback_gates.lock().map_err(|_|"Provider limiter unavailable")?;
             pools::acquire(&db,&mut gates,provider_id)
         })

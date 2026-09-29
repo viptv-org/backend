@@ -58,6 +58,7 @@ pub fn parse_owner_map(data: &[u8]) -> Result<BTreeMap<i64, i64>> {
 }
 const ADVANCED_TABLES: &[&str] = &[
     "providers",
+    "provider_credentials_v2",
     "provider_live",
     "provider_routes",
     "account_pools",
@@ -245,6 +246,78 @@ pub fn apply(
     export_path: &Path,
     source_revision: &str,
 ) -> Result<Value> {
+    migrate(
+        database,
+        backup_path,
+        export_path,
+        source_revision,
+        |transaction| {
+            v2::init_in_transaction(transaction)?;
+            v2::assign_legacy(transaction, owners)?;
+            for account in owners.values().collect::<std::collections::BTreeSet<_>>() {
+                v2::live_catalog(transaction, *account, None)?;
+            }
+            Ok(
+                json!({"assigned_count":owners.len(),"ownership":v2::inspect_ownership(transaction)?}),
+            )
+        },
+    )
+}
+
+/// Offline only. Artifacts retain old plaintext and must stay private.
+pub fn encrypt(
+    database: &Path,
+    backup_path: &Path,
+    export_path: &Path,
+    source_revision: &str,
+) -> Result<Value> {
+    let vault =
+        crate::secret_store::Vault::from_environment()?.ok_or("secret_store_not_configured")?;
+    encrypt_with_vault(database, backup_path, export_path, source_revision, &vault)
+}
+fn encrypt_with_vault(
+    database: &Path,
+    backup_path: &Path,
+    export_path: &Path,
+    source_revision: &str,
+    vault: &crate::secret_store::Vault,
+) -> Result<Value> {
+    let report = migrate(
+        database,
+        backup_path,
+        export_path,
+        source_revision,
+        |transaction| {
+            v2::init_in_transaction(transaction)?;
+            let count = crate::provider::credentials_v2::encrypt_legacy(transaction, vault)?;
+            Ok(json!({"encrypted_count":count}))
+        },
+    )?;
+    // Logical updates alone leave old credentials in SQLite pages/WAL. Require
+    // offline checkpoint and compaction before reporting encryption success.
+    let db = open(database, true).map_err(|_| "encryption_committed_cleanup_required")?;
+    for vacuum in [true, false] {
+        let busy: i64 = db
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+            .map_err(|_| "encryption_committed_cleanup_required")?;
+        if busy != 0 {
+            return Err("encryption_committed_cleanup_required");
+        }
+        if vacuum {
+            db.execute_batch("PRAGMA secure_delete=ON; VACUUM;")
+                .map_err(|_| "encryption_committed_cleanup_required")?;
+        }
+    }
+    Ok(report)
+}
+
+fn migrate(
+    database: &Path,
+    backup_path: &Path,
+    export_path: &Path,
+    source_revision: &str,
+    action: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<Value>,
+) -> Result<Value> {
     if source_revision.len() != 40 || !source_revision.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("source_revision_required");
@@ -290,24 +363,178 @@ pub fn apply(
     sync_parent(backup_path)?;
     sync_parent(export_path)?;
     // No source mutation occurs until both private artifacts are durable.
-    v2::init_in_transaction(&transaction)?;
-    v2::assign_legacy(&transaction, owners)?;
-    for account in owners.values().collect::<std::collections::BTreeSet<_>>() {
-        v2::live_catalog(&transaction, *account, None)?;
-    }
-    let report = v2::inspect_ownership(&transaction)?;
+    let mut report = action(&transaction)?;
     transaction
         .commit()
         .map_err(|_| "migration_commit_failed")?;
-    Ok(
-        json!({"schema_version":1,"assigned_count":owners.len(),"backup_sha256":backup_hash,"ownership":report}),
-    )
+    report["schema_version"] = json!(1);
+    report["backup_sha256"] = json!(backup_hash);
+    Ok(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     const REVISION: &str = "1111111111111111111111111111111111111111";
+    #[test]
+    fn encryption_rolls_back_every_provider_when_later_credentials_are_invalid() {
+        let root = tempfile::tempdir().unwrap();
+        let source = fixture(root.path());
+        let database = root.path().join("source.sqlite");
+        apply(
+            &database,
+            &BTreeMap::from([(1, 11), (2, 22)]),
+            &root.path().join("owners.sqlite"),
+            &root.path().join("owners.json"),
+            REVISION,
+        )
+        .unwrap();
+        source
+            .execute("UPDATE providers SET username='' WHERE id=2", [])
+            .unwrap();
+        let vault = crate::secret_store::Vault::from_json(
+            &json!({"active":"test","keys":{"test":STANDARD.encode([7u8;32])}}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            encrypt_with_vault(
+                &database,
+                &root.path().join("before.sqlite"),
+                &root.path().join("before.json"),
+                REVISION,
+                &vault
+            )
+            .unwrap_err(),
+            "invalid_legacy_provider_credentials"
+        );
+        assert_eq!(
+            source
+                .query_row("SELECT count(*) FROM provider_credentials_v2", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            source
+                .query_row("SELECT password FROM providers WHERE id=1", [], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            "fixture-password"
+        );
+        assert_eq!(
+            source
+                .query_row(
+                    "SELECT credentials_version FROM providers WHERE id=1",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert!(root.path().join("before.sqlite").exists());
+        assert!(root.path().join("before.json").exists());
+    }
+    #[test]
+    fn encryption_is_backup_first_preserves_identity_and_compacts_old_plaintext() {
+        let root = tempfile::tempdir().unwrap();
+        let source = fixture(root.path());
+        let database = root.path().join("source.sqlite");
+        apply(
+            &database,
+            &BTreeMap::from([(1, 11), (2, 22)]),
+            &root.path().join("owners.sqlite"),
+            &root.path().join("owners.json"),
+            REVISION,
+        )
+        .unwrap();
+        source
+            .execute(
+                "INSERT INTO provider_cache VALUES(1,'old',9999999999,'fixture-password')",
+                [],
+            )
+            .unwrap();
+        let vault = crate::secret_store::Vault::from_json(
+            &json!({"active":"test","keys":{"test":STANDARD.encode([7u8;32])}}).to_string(),
+        )
+        .unwrap();
+        let backup = root.path().join("plaintext.sqlite");
+        let export = root.path().join("plaintext.json");
+        let report = encrypt_with_vault(&database, &backup, &export, REVISION, &vault).unwrap();
+        assert_eq!(report["encrypted_count"], 2);
+        assert!(!report.to_string().contains("fixture-password"));
+        assert!(std::fs::read_to_string(&export)
+            .unwrap()
+            .contains("fixture-password"));
+        let before = open(&backup, false).unwrap();
+        assert_eq!(
+            before
+                .query_row("SELECT password FROM providers WHERE id=1", [], |r| r
+                    .get::<_, String>(0))
+                .unwrap(),
+            "fixture-password"
+        );
+        assert_eq!(source.query_row("SELECT count(*) FROM providers WHERE url='' AND username='' AND password='' AND credentials_version=1",[],|r|r.get::<_,i64>(0)).unwrap(),2);
+        assert_eq!(
+            source
+                .query_row(
+                    "SELECT position FROM progress WHERE profile_id=71",
+                    [],
+                    |r| r.get::<_, f64>(0)
+                )
+                .unwrap(),
+            123.5
+        );
+        assert_eq!(
+            source
+                .query_row(
+                    "SELECT metadata_id FROM provider_matches WHERE vod_id='vod:1:1'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "tt1234567"
+        );
+        assert_eq!(
+            source
+                .query_row("SELECT count(*) FROM provider_cache", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        for path in [&database, &root.path().join("source.sqlite-wal")] {
+            let bytes = std::fs::read(path).unwrap_or_default();
+            assert!(!bytes
+                .windows(b"fixture-password".len())
+                .any(|v| v == b"fixture-password"));
+            assert!(!bytes
+                .windows(b"fixture-user".len())
+                .any(|v| v == b"fixture-user"));
+        }
+        let second = encrypt_with_vault(
+            &database,
+            &root.path().join("again.sqlite"),
+            &root.path().join("again.json"),
+            REVISION,
+            &vault,
+        )
+        .unwrap();
+        assert_eq!(second["encrypted_count"], 0);
+        let wrong = crate::secret_store::Vault::from_json(
+            &json!({"active":"test","keys":{"test":STANDARD.encode([8u8;32])}}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            encrypt_with_vault(
+                &database,
+                &root.path().join("wrong.sqlite"),
+                &root.path().join("wrong.json"),
+                REVISION,
+                &wrong
+            )
+            .unwrap_err(),
+            "secret_authentication_failed"
+        );
+    }
     fn fixture(root: &Path) -> Connection {
         #[cfg(unix)]
         {

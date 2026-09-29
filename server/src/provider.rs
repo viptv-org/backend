@@ -18,6 +18,7 @@ pub(crate) mod selection;
 
 mod candidates;
 pub(crate) mod catalog_v2;
+pub(crate) mod credentials_v2;
 pub(crate) mod discovery_v2;
 mod http;
 mod live;
@@ -104,6 +105,7 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
         }
     }
     catalog_v2::init(db)?;
+    credentials_v2::init(db)?;
     egress::init(db)?;
     crate::live_policy::init(db)?;
     pools::init(db)?;

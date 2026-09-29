@@ -108,5 +108,58 @@ Do not replace a live database with an older backup: that can discard later
 viewing history. Any restore requires stopped writers, separate approval and a
 fresh preservation backup of the current database. Likewise, do not roll a public
 multi-tenant installation back to legacy code that ignores account ownership.
-Full coordinated rollback and encrypted-credential migration remain acceptance
-work before production cutover.
+Full coordinated rollback remains acceptance work before production cutover.
+
+## Offline provider credential encryption
+
+This command is implemented and fixture-tested, **not approved for production
+use yet**. Account-owned connection CRUD, client cutover and retired-feature
+removal remain incomplete. Migrated connections cannot be managed by legacy
+renew/update/delete/pool operations; those paths reject them with
+`client_update_required`. Legacy family matching and external provider XMLTV
+paths must not be used after this step. Raw v2 catalogs, native Xtream guide
+reads and source discovery use the encrypted reader.
+
+After explicit ownership assignment and separately approved downtime, stop all
+backend processes/readers/writers. Supply the same operator-managed
+`VIPTV_SECRETS_KEYRING` used for gateway keys, retain it securely, and use fresh
+private backup/export paths:
+
+```sh
+server/target/debug/provider-owners encrypt /absolute/path/source.sqlite \
+  .migration-v2/reviewed-run/before-encryption.sqlite \
+  .migration-v2/reviewed-run/before-encryption.json \
+  FULL_40_CHARACTER_BACKEND_SOURCE_COMMIT --confirm-encryption
+```
+
+The backup/export durability checks are identical to ownership assignment. No
+encryption writes occur before those artifacts are synced. Every provider must
+already have an explicit owner. URL, username and password are sealed together
+using the existing authenticated vault, bound to account, provider ID and the
+`xtream` purpose. The legacy columns are emptied and an explicit format marker
+prevents missing ciphertext from falling back to plaintext. Cached Xtream
+payloads are invalidated because providers can embed credentials in them.
+Provider IDs, live/VOD rows, manual matches, accounts, profiles and progress stay
+unchanged. Re-running with new artifact paths validates existing ciphertext;
+it does not rotate/re-encrypt already encrypted records.
+
+After commit, the command checkpoints/truncates WAL, vacuums SQLite, and performs
+a second checkpoint. A failure here reports
+`encryption_committed_cleanup_required`: **the encryption transaction already
+committed**. Stop remaining readers/writers and investigate; do not assume a
+rollback or overwrite the database from an old backup. A fresh-path retry with
+the same valid keyring repeats validation and cleanup.
+
+Missing/wrong keys, changed ownership and damaged ciphertext fail closed.
+Running the new backend supplies the vault to the provider reader. Native
+direct admission for migrated providers is independent of legacy cross-provider
+pools and retains the configured connection allowance. HTTP provider URLs are
+not upgraded or rejected merely for using HTTP.
+
+This encrypts the provider credential tuple, not the entire SQLite database.
+The **backup and export intentionally contain plaintext**. Retired configuration,
+external copies, logs, filesystem snapshots and physical storage remnants are not
+securely erased by SQLite compaction. Keep artifacts private and apply the
+operator's retention policy; never commit or upload them. Addon credential
+migration, bulk key rotation, new connection CRUD and complete cutover are still
+pending, so this is not a complete encrypted-secrets acceptance claim.

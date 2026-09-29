@@ -6,6 +6,7 @@ pub struct ProviderService {
     pub client: reqwest::Client,
     pub semaphore: Arc<Semaphore>,
     pub(crate) account: Option<i64>,
+    pub(crate) vault: Option<Arc<crate::secret_store::Vault>>,
     pub(super) playback_gates: Arc<Mutex<HashMap<i64, PlaybackGate>>>,
 }
 pub(super) struct PlaybackGate {
@@ -21,10 +22,22 @@ pub(super) struct Provider {
     pub(super) url: String,
     pub(super) username: String,
     pub(super) password: String,
+    pub(super) sealed: Option<(i64, String)>,
 }
 
 impl Provider {
     pub(super) fn ensure_current(&self, db: &Connection) -> Result<(), String> {
+        if let Some((account, envelope)) = &self.sealed {
+            let current:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM providers p JOIN provider_credentials_v2 c ON c.provider_id=p.id JOIN provider_ownership o ON o.provider_id=p.id WHERE p.id=?1 AND p.enabled=1 AND p.credentials_version=1 AND p.url='' AND p.username='' AND p.password='' AND c.account_id=?2 AND o.account_id=?2 AND c.secret=?3)",params![self.id,account,envelope],|r|r.get(0)).map_err(db_error)?;
+            return if current {
+                Ok(())
+            } else {
+                Err("source_configuration_changed".into())
+            };
+        }
+        if credentials_v2::sealed(db, self.id)? {
+            return Err("source_configuration_changed".into());
+        }
         let current:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND url=?2 AND username=?3 AND password=?4 AND enabled=1)",params![self.id,self.url,self.username,self.password],|r|r.get(0)).map_err(db_error)?;
         if !current {
             return Err(
@@ -37,21 +50,29 @@ impl Provider {
 }
 
 // Single enabled-provider row mapping, shared by locked and already-locked callers.
-pub(super) fn provider_row(db: &Connection, id: i64) -> Result<Provider, String> {
-    db.query_row(
-        "SELECT id,name,url,username,password FROM providers WHERE id=?1 AND enabled=1",
-        [id],
-        |r| {
-            Ok(Provider {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                url: r.get(2)?,
-                username: r.get(3)?,
-                password: r.get(4)?,
-            })
-        },
-    )
-    .map_err(|_| "Provider not found or disabled".into())
+pub(super) fn provider_row(
+    db: &Connection,
+    id: i64,
+    vault: Option<&crate::secret_store::Vault>,
+) -> Result<Provider, String> {
+    let mut provider = db
+        .query_row(
+            "SELECT id,name,url,username,password FROM providers WHERE id=?1 AND enabled=1",
+            [id],
+            |r| {
+                Ok(Provider {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    url: r.get(2)?,
+                    username: r.get(3)?,
+                    password: r.get(4)?,
+                    sealed: None,
+                })
+            },
+        )
+        .map_err(|_| "Provider not found or disabled".to_string())?;
+    credentials_v2::read(db, vault, &mut provider)?;
+    Ok(provider)
 }
 
 impl ProviderService {
@@ -61,6 +82,7 @@ impl ProviderService {
             client,
             semaphore: Arc::new(Semaphore::new(4)),
             account: None,
+            vault: None,
             playback_gates: Default::default(),
         }
     }
@@ -105,7 +127,7 @@ impl ProviderService {
     pub(super) fn provider(&self, id: i64) -> Result<Provider, String> {
         let db = self.lock()?;
         self.require_owner(&db, id)?;
-        provider_row(&db, id)
+        provider_row(&db, id, self.vault.as_deref())
     }
 
     pub(super) fn scopes(&self, id: i64) -> Result<[bool; 3], String> {
@@ -115,9 +137,11 @@ impl ProviderService {
     pub(super) fn provider_for_kind(&self, id: i64, kind: &str) -> Result<Provider, String> {
         let db = self.lock()?;
         self.require_owner(&db, id)?;
-        db.query_row("SELECT id,name,url,username,password FROM providers WHERE id=?1 AND enabled=1 AND CASE ?2 WHEN 'live' THEN enable_live WHEN 'movie' THEN enable_movies WHEN 'series' THEN enable_series ELSE 0 END=1", params![id,kind], |r| Ok(Provider {
-            id:r.get(0)?,name:r.get(1)?,url:r.get(2)?,username:r.get(3)?,password:r.get(4)?,
-        })).map_err(|_| "Provider not found or content scope disabled".into())
+        let allowed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND enabled=1 AND CASE ?2 WHEN 'live' THEN enable_live WHEN 'movie' THEN enable_movies WHEN 'series' THEN enable_series ELSE 0 END=1)",params![id,kind],|r|r.get(0)).map_err(db_error)?;
+        if !allowed {
+            return Err("Provider not found or content scope disabled".into());
+        }
+        provider_row(&db, id, self.vault.as_deref())
     }
 
     pub fn list(&self) -> Result<Value, String> {
@@ -222,6 +246,9 @@ impl ProviderService {
             })
             .transpose()?;
         let mut db = self.lock()?;
+        if credentials_v2::sealed(&db, id)? {
+            return Err("client_update_required".into());
+        }
         let pool = pools::ensure(&db, id)?;
         let old_limit: i64 = db
             .query_row(
@@ -253,6 +280,9 @@ impl ProviderService {
 
     pub fn delete(&self, id: i64) -> Result<(), String> {
         let mut db = self.lock()?;
+        if credentials_v2::sealed(&db, id)? {
+            return Err("client_update_required".into());
+        }
         let pool = pools::ensure(&db, id)?;
         let gates = self
             .playback_gates

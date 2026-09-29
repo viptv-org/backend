@@ -159,6 +159,7 @@ fn credential_path_segments_are_encoded() {
         url: "https://example.com/prefix/player_api.php".into(),
         username: "a/b".into(),
         password: "p?# /".into(),
+        sealed: None,
     };
     let url = media_url(&p.url, &p.username, &p.password, "movie", "12", "mkv").unwrap();
     assert_eq!(

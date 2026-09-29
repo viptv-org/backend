@@ -5,6 +5,7 @@ use super::*;
 // during matching. No snapshot or credentials are written to the filesystem.
 pub(super) const SNAPSHOT_TABLES: &[&str] = &[
     "providers",
+    "provider_credentials_v2",
     "provider_live",
     "live_category_rules",
     "account_pools",

@@ -37,7 +37,7 @@ struct Ranked {
     observation: ObservationKey,
 }
 pub(crate) fn current_source(db: &Connection, candidate: &str) -> Result<String, String> {
-    let (provider, stream, name) = db.query_row("SELECT p.id,p.name,p.url,p.username,p.password,l.stream_id,l.name FROM provider_live l JOIN providers p ON p.id=l.provider_id WHERE l.id=?1", [candidate], |r| Ok((Provider{id:r.get(0)?,name:r.get(1)?,url:r.get(2)?,username:r.get(3)?,password:r.get(4)?},r.get::<_,String>(5)?,r.get::<_,String>(6)?))).map_err(db_error)?;
+    let (provider, stream, name) = db.query_row("SELECT p.id,p.name,p.url,p.username,p.password,l.stream_id,l.name FROM provider_live l JOIN providers p ON p.id=l.provider_id WHERE l.id=?1", [candidate], |r| Ok((Provider{id:r.get(0)?,name:r.get(1)?,url:r.get(2)?,username:r.get(3)?,password:r.get(4)?,sealed:None},r.get::<_,String>(5)?,r.get::<_,String>(6)?))).map_err(db_error)?;
     let url = media_url(
         &provider.url,
         &provider.username,
@@ -73,7 +73,7 @@ impl ProviderService {
                 skipped.push(json!({"candidate_id":candidate,"reason":"unavailable_or_changed"}));
                 continue;
             }
-            let (provider, stream, name) = db.query_row("SELECT p.id,p.name,p.url,p.username,p.password,l.stream_id,l.name FROM provider_live l JOIN providers p ON p.id=l.provider_id WHERE l.id=?1", [&candidate], |r| Ok((Provider{id:r.get(0)?,name:r.get(1)?,url:r.get(2)?,username:r.get(3)?,password:r.get(4)?},r.get::<_,String>(5)?,r.get::<_,String>(6)?))).map_err(db_error)?;
+            let (provider, stream, name) = db.query_row("SELECT p.id,p.name,p.url,p.username,p.password,l.stream_id,l.name FROM provider_live l JOIN providers p ON p.id=l.provider_id WHERE l.id=?1", [&candidate], |r| Ok((Provider{id:r.get(0)?,name:r.get(1)?,url:r.get(2)?,username:r.get(3)?,password:r.get(4)?,sealed:None},r.get::<_,String>(5)?,r.get::<_,String>(6)?))).map_err(db_error)?;
             let url = media_url(
                 &provider.url,
                 &provider.username,

@@ -31,6 +31,7 @@ impl ApiError {
     /// Stable recovery reasons shared by all platform clients.
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
+            "client_update_required" => Some("client_update_required"),
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),
             MSG_PARENT_PIN_INVALID => Some("parent_pin_invalid"),
@@ -59,6 +60,7 @@ impl From<String> for ApiError {
         // capacity as 429 tells the viewer to retry something that will never
         // succeed until they stop a session.
         let status = match s.as_str() {
+            "client_update_required" => StatusCode::CONFLICT,
             MSG_PLAYBACK_CAPACITY => StatusCode::SERVICE_UNAVAILABLE,
             "Provider connection limit reached" => StatusCode::TOO_MANY_REQUESTS,
             "Media origin HTTP 401" | "Media origin HTTP 403" => StatusCode::FORBIDDEN,
@@ -85,6 +87,7 @@ impl From<&str> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let message = match self.api_error_code() {
+            Some("client_update_required") => "This IPTV connection has been migrated. Update the client to manage it with the new account API.",
             Some("provider_connection_limit") => "This IPTV provider has reached its connection limit. Stop another stream or choose another provider.",
             Some("playback_capacity") => "The server has reached its playback limit. Stop another stream or try again later.",
             Some("source_expired") => "This stream has expired. Refresh the sources and choose it again.",
@@ -287,7 +290,8 @@ impl App {
         automation::init(&db).map_err(|_| "Automation database initialization failed")?;
         let db = Arc::new(Mutex::new(db));
         let addons = Addons::new(db.clone(), client.clone())?;
-        let providers = ProviderService::new(db.clone(), client);
+        let mut providers = ProviderService::new(db.clone(), client);
+        providers.vault = secret_vault.clone();
         let gateway_playbacks = gateway::playback::Registry::new(db.clone());
         Ok(Self {
             db,

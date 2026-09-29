@@ -119,7 +119,7 @@ pub(super) fn duplicate(
     except: Option<i64>,
 ) -> Result<Option<i64>, String> {
     let mut q = db
-        .prepare("SELECT id,url,username FROM providers WHERE (?1 IS NULL OR id<>?1) ORDER BY id")
+        .prepare("SELECT id,url,username FROM providers WHERE (?1 IS NULL OR id<>?1) AND NOT EXISTS(SELECT 1 FROM provider_credentials_v2 c WHERE c.provider_id=providers.id) ORDER BY id")
         .map_err(db_error)?;
     let rows = q
         .query_map([except], |r| {
@@ -265,6 +265,7 @@ pub(crate) async fn renew(
     let auth = lease.clone();
     let mut credentials=a.providers.blocking(move |s| {
         let db=s.lock()?;owner(&auth,&db)?;
+        if super::credentials_v2::sealed(&db,id)? {return Err("client_update_required".into());}
         let (url,username):(String,String)=db.query_row("SELECT url,username FROM providers WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|"Provider not found")?;
         parsed(json!({"url":patch.get("url").cloned().unwrap_or(json!(url)),"username":patch.get("username").cloned().unwrap_or(json!(username)),"password":patch["password"]}),1)
     }).await?;
@@ -277,6 +278,7 @@ pub(crate) async fn renew(
         .blocking(move |s| {
             let mut db = s.lock()?;
             owner(&lease, &db)?;
+            if super::credentials_v2::sealed(&db,id)? {return Err("client_update_required".into());}
             if duplicate(&db, &credentials, Some(id))?.is_some() {
                 return Err("Provider login already configured on another entry".into());
             }

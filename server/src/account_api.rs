@@ -101,7 +101,7 @@ fn details(code: &str) -> (StatusCode, &'static str) {
             "gateway_protocol_invalid" => (StatusCode::UNPROCESSABLE_ENTITY, "The gateway returned an incompatible response. Check its service version."),
             "gateway_redirect_rejected" => (StatusCode::UNPROCESSABLE_ENTITY, "Use the gateway's final HTTPS endpoint; control requests cannot follow redirects."),
             "gateway_not_ready" | "gateway_dns_unavailable" | "gateway_unavailable" => (StatusCode::BAD_GATEWAY, "The gateway is not ready or could not be reached securely. Try again or check its address."),
-            "secret_store_not_configured" => (StatusCode::SERVICE_UNAVAILABLE, "The backend needs an encryption keyring before it can save gateway credentials. Ask the server operator."),
+            "secret_store_not_configured" => (StatusCode::SERVICE_UNAVAILABLE, "The backend needs an encryption keyring before it can save provider or gateway credentials. Ask the server operator."),
             "secret_key_unavailable" | "secret_authentication_failed" | "invalid_secret_envelope" => (StatusCode::SERVICE_UNAVAILABLE, "Saved credentials could not be unlocked. Ask the server operator to restore the correct encryption keys."),
             "gateway_storage_unavailable" => (StatusCode::SERVICE_UNAVAILABLE, "Gateway settings are temporarily unavailable. Try again."),
             "invalid_cursor" => (

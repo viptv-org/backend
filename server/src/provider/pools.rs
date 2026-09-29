@@ -16,6 +16,7 @@ pub(super) fn init(db: &Connection) -> rusqlite::Result<()> {
     CREATE TABLE IF NOT EXISTS account_observations(pool_id INTEGER PRIMARY KEY REFERENCES account_pools(id),reported_limit INTEGER,limit_at INTEGER,reported_usage INTEGER,usage_at INTEGER,external_estimate INTEGER);")
 }
 pub(crate) fn ensure(db: &Connection, id: i64) -> Result<i64, String> {
+    if credentials_v2::sealed(db,id)? {return Err("client_update_required".into());}
     if let Some(pool) = db
         .query_row(
             "SELECT pool_id FROM provider_pools WHERE provider_id=?1",
@@ -35,7 +36,7 @@ pub(crate) fn ensure(db: &Connection, id: i64) -> Result<i64, String> {
         )
         .map_err(|_| "Provider not found")?;
     let identity = base_url(&url)?.to_string();
-    let mut q=db.prepare("SELECT p.id,p.url,p.username,p.max_connections,m.pool_id FROM providers p LEFT JOIN provider_pools m ON m.provider_id=p.id ORDER BY p.id").map_err(db_error)?;
+    let mut q=db.prepare("SELECT p.id,p.url,p.username,p.max_connections,m.pool_id FROM providers p LEFT JOIN provider_pools m ON m.provider_id=p.id WHERE NOT EXISTS(SELECT 1 FROM provider_credentials_v2 c WHERE c.provider_id=p.id) ORDER BY p.id").map_err(db_error)?;
     let mut members = Vec::new();
     let mut existing = None;
     let mut limit = GATE_SIZE;
@@ -341,7 +342,7 @@ pub(crate) async fn refresh(
             let db = s.lock()?;
             accounts::owner(&auth, &db)?;
             let pool = ensure(&db, id)?;
-            let provider = provider_row(&db, id)?;
+            let provider = provider_row(&db, id,s.vault.as_deref())?;
             let mut gates = s
                 .playback_gates
                 .lock()
