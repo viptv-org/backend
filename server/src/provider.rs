@@ -19,6 +19,7 @@ pub(crate) mod selection;
 mod candidates;
 pub(crate) mod catalog_v2;
 pub(crate) mod credentials_v2;
+pub(crate) mod connections_v2;
 pub(crate) mod discovery_v2;
 mod http;
 mod live;
@@ -26,6 +27,7 @@ mod normalize;
 mod service;
 mod streams;
 mod sync;
+mod transport_v2;
 pub(crate) mod v2;
 pub(crate) mod v2_http;
 
@@ -33,6 +35,8 @@ pub(crate) mod v2_http;
 mod tests;
 #[cfg(test)]
 mod v2_http_tests;
+#[cfg(test)]
+mod connections_v2_tests;
 
 pub use self::service::ProviderService;
 use candidates::*;

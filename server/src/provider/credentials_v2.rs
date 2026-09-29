@@ -7,10 +7,14 @@ use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Credentials {
-    url: String,
-    username: String,
-    password: String,
+pub(super) struct Credentials {
+    pub(super) url: String,
+    pub(super) username: String,
+    pub(super) password: String,
+}
+pub(super) fn cache_record(provider: i64, key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{provider}:{:x}", Sha256::digest(key.as_bytes()))
 }
 impl Drop for Credentials {
     fn drop(&mut self) {
@@ -126,7 +130,7 @@ pub(crate) fn encrypt_legacy(
         let prior: Option<String> = tx
             .query_row(
                 "SELECT secret FROM provider_credentials_v2 WHERE provider_id=?1 AND account_id=?2",
-                params![id,account],
+                params![id, account],
                 |r| r.get(0),
             )
             .optional()

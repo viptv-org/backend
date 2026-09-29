@@ -7,6 +7,8 @@ pub struct ProviderService {
     pub semaphore: Arc<Semaphore>,
     pub(crate) account: Option<i64>,
     pub(crate) vault: Option<Arc<crate::secret_store::Vault>>,
+    #[cfg(test)]
+    pub(crate) allow_test_loopback: bool,
     pub(super) playback_gates: Arc<Mutex<HashMap<i64, PlaybackGate>>>,
 }
 pub(super) struct PlaybackGate {
@@ -83,6 +85,8 @@ impl ProviderService {
             semaphore: Arc::new(Semaphore::new(4)),
             account: None,
             vault: None,
+            #[cfg(test)]
+            allow_test_loopback: false,
             playback_gates: Default::default(),
         }
     }

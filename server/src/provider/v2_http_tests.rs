@@ -1,7 +1,8 @@
 use crate::{auth_integration_tests::fixture, test_support::request, *};
 
 fn seeded() -> App {
-    let app = fixture();
+    let mut app = fixture();
+    app.providers.allow_test_loopback=true;
     {
         let db = app.db.lock().unwrap();
         for id in 1..=4 {

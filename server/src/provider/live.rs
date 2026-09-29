@@ -139,9 +139,10 @@ impl ProviderService {
                 // Migrated connections have no legacy cross-provider pool policy.
                 // Negative internal gate IDs cannot collide with SQLite pool IDs.
                 let limit:usize=db.query_row("SELECT max_connections FROM providers WHERE id=?1",[provider_id],|r|r.get(0)).map_err(db_error)?;
-                if !(1..=32).contains(&limit) {return Err("Invalid provider connection limit".into());}
+                if limit>1_000_000 {return Err("Invalid provider connection limit".into());}
                 let mut gates=s.playback_gates.lock().map_err(|_|"Provider limiter unavailable")?;
-                let gate=gates.entry(-provider_id).or_insert_with(||PlaybackGate {issued:0,report_generation:0,semaphore:Arc::new(Semaphore::new(limit))});
+                let gate=gates.entry(-provider_id).or_insert_with(||PlaybackGate {issued:0,report_generation:0,semaphore:Arc::new(Semaphore::new(1_000_000))});
+                if limit>0 && 1_000_000-gate.semaphore.available_permits()>=limit {return Err("Provider connection limit reached".into());}
                 return gate.semaphore.clone().try_acquire_owned().map_err(|_|"Provider connection limit reached".into());
             }
             let mut gates=s.playback_gates.lock().map_err(|_|"Provider limiter unavailable")?;

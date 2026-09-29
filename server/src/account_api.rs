@@ -74,6 +74,19 @@ pub(crate) fn description(code: &str) -> &'static str {
 }
 fn details(code: &str) -> (StatusCode, &'static str) {
     match code {
+        "invalid_provider_configuration" => (StatusCode::BAD_REQUEST,"Check the connection name, credentials and enabled content types."),
+        "invalid_provider_endpoint" | "provider_private_destination" => (StatusCode::BAD_REQUEST,"Use a public HTTP or HTTPS Xtream server URL without embedded credentials or query parameters."),
+        "provider_not_found" => (StatusCode::NOT_FOUND,"This IPTV connection is unavailable in your account."),
+        "provider_encryption_required" => (StatusCode::CONFLICT,"This legacy connection needs the operator's reviewed encryption migration before it can be managed here."),
+        "provider_already_configured" => (StatusCode::CONFLICT,"This IPTV login is already configured in your account."),
+        "too_many_providers" => (StatusCode::CONFLICT,"This account has reached its limit of 64 IPTV connections."),
+        "provider_checks_busy" => (StatusCode::SERVICE_UNAVAILABLE,"IPTV checks are busy. Try again shortly."),
+        "provider_credentials_rejected" => (StatusCode::UNPROCESSABLE_ENTITY,"The IPTV provider rejected these credentials or the subscription is inactive or expired."),
+        "provider_redirect_rejected" => (StatusCode::UNPROCESSABLE_ENTITY,"The IPTV provider redirected this request. Use its final server address; credentials are not forwarded to redirects."),
+        "provider_rate_limited" => (StatusCode::TOO_MANY_REQUESTS,"The IPTV provider is limiting API requests. Wait before trying again."),
+        "provider_response_too_large" | "provider_protocol_invalid" => (StatusCode::BAD_GATEWAY,"The IPTV provider returned an oversized or invalid response."),
+        "provider_timeout" => (StatusCode::GATEWAY_TIMEOUT,"The IPTV provider took too long to respond. Try again later."),
+        "provider_dns_unavailable" | "provider_unavailable" => (StatusCode::BAD_GATEWAY,"The IPTV provider could not be reached. Check its address or try again later."),
         "gateway_processing_failed" => (StatusCode::BAD_GATEWAY,"The gateway could not prepare this stream. Choose another source or check the gateway."),
             "gateway_required" => (StatusCode::CONFLICT, "This device or source requires a playback gateway. Configure one in account settings or ask the server operator."),
             "invalid_playback_request" => (StatusCode::BAD_REQUEST, "Check the source, playback position and device capabilities."),

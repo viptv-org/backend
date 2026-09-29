@@ -8,6 +8,9 @@ playlist swap control is introduced by these endpoints.
 
 Authenticated account sessions use:
 
+- GET/POST `/api/v2/iptv/connections`
+- PATCH/DELETE `/api/v2/iptv/connections/:id`
+- PUT `/api/v2/iptv/connections/:id/credentials` with a replacement `password`.
 - GET `/api/v2/iptv/matches?provider_id=…&kind=movie&search=…&limit=50&cursor=…`
 - PUT `/api/v2/iptv/matches` with `vod_id`, `metadata_id`, `type` (movie/series).
 - GET `/api/v2/iptv/live-default`
@@ -17,6 +20,44 @@ The matches response is `{items, next_cursor}`. No full-library count or candida
 array is produced. Limit is 1–200; default 50. Cursors are tied to account and
 filters. Source URL/username/password fields are never returned here. Invalid
 cursors and queries return actionable messages plus stable error_code values.
+
+Connection creation accepts `name`, `url`, `username`, `password` and optional
+`enabled`, `enable_live`, `enable_movies`, `enable_series` (all default true).
+It validates the login before atomically saving an encrypted tuple and ownership.
+No URL/user/password is returned by management reads. A connection list returns
+`{items,next_cursor}`, with default 50/max 200 and account-bound cursors. Creation
+is limited to 64 owned connections; existing larger migrated accounts can still
+be paged. Duplicate detection is account-local, never a global subscription probe.
+The first enabled live connection persists as default; adding more never switches
+it. Disabling/removing a default selects the oldest remaining enabled live source.
+
+PATCH changes the name/enabled scopes only. Password renewal validates the new
+password against the existing server/login, rechecks authorization and compares
+the prior ciphertext before replacement. It clears detail caches but preserves
+catalog IDs and mappings. Changing the server/login identity requires adding a
+separate connection, avoiding silent reuse of unrelated stream IDs. Legacy rows
+must complete reviewed encryption before v2 mutation. Account sessions, not
+paired devices, perform these management operations; parent restrictions remain.
+
+Login checks and scoped/encrypted Xtream API fetches accept public HTTP and HTTPS.
+They validate and pin all DNS answers on each request, reject private/reserved
+destinations, do not inherit proxies, and refuse redirects rather than forwarding
+credentials. Response size, timeout and concurrency are bounded. Redirects,
+rejected credentials, API rate limits and unavailable/oversized responses have
+distinct safe errors. HTTP 429 is not guessed to mean a stream connection limit.
+Operator-managed private-network exceptions remain unimplemented. Loopback
+exceptions exist only in explicitly enabled synthetic test fixtures.
+
+Reported positive provider connection allowances govern migrated/new native
+direct admission; missing/zero reports do not invent a one-stream subscription
+limit. Existing configured allowances are preserved by migration. Gate capacity
+is stable while reports change, so outstanding permits are never replaced.
+Encrypted connections also encrypt cached Xtream detail/EPG payloads with
+account/provider/cache-key binding because those responses can contain secrets.
+
+These endpoints do not yet supply account-scoped background refresh job controls
+or automatically index a newly added provider. That orchestration, admin/client
+adoption and removal of legacy routes remain required before public cutover.
 
 Each handler revalidates the captured account session before querying or writing.
 Selected kids profiles require parent authorization; paired TV/device sessions
@@ -113,7 +154,7 @@ Full coordinated rollback remains acceptance work before production cutover.
 ## Offline provider credential encryption
 
 This command is implemented and fixture-tested, **not approved for production
-use yet**. Account-owned connection CRUD, client cutover and retired-feature
+use yet**. Background refresh orchestration, client cutover and retired-feature
 removal remain incomplete. Migrated connections cannot be managed by legacy
 renew/update/delete/pool operations; those paths reject them with
 `client_update_required`. Legacy family matching and external provider XMLTV
@@ -161,5 +202,5 @@ The **backup and export intentionally contain plaintext**. Retired configuration
 external copies, logs, filesystem snapshots and physical storage remnants are not
 securely erased by SQLite compaction. Keep artifacts private and apply the
 operator's retention policy; never commit or upload them. Addon credential
-migration, bulk key rotation, new connection CRUD and complete cutover are still
+migration, bulk key rotation, background refresh and complete cutover are still
 pending, so this is not a complete encrypted-secrets acceptance claim.
