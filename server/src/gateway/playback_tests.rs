@@ -14,6 +14,7 @@ use std::{
 };
 
 struct Peer {
+    inputs: Arc<Mutex<Vec<Value>>>,
     outputs: Arc<Mutex<Vec<Value>>>,
     task: tokio::task::JoinHandle<()>,
     starts: Arc<Mutex<Vec<String>>>,
@@ -324,6 +325,8 @@ async fn setup() -> (App, Peer) {
     );
     let starts = Arc::new(Mutex::new(Vec::new()));
     let outputs = Arc::new(Mutex::new(Vec::new()));
+    let inputs = Arc::new(Mutex::new(Vec::new()));
+    let received_inputs = inputs.clone();
     let received_outputs = outputs.clone();
     let stops = Arc::new(AtomicUsize::new(0));
     let mode = Arc::new(AtomicUsize::new(0));
@@ -338,7 +341,8 @@ async fn setup() -> (App, Peer) {
         let capacity=if mode.load(Ordering::SeqCst)==4 && first{0}else{2};
         Json(json!({"version":1,"ready":true,"protocols":["hls"],"namespaces":["first","second"],"scopes":["capabilities","create","read","renew","release"],"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
     }}))
-        .route("/v1/sessions",axum::routing::post(move|Json(value):Json<Value>|{let created=created.clone();let state=state.clone();let waiting=waiting.clone();let outputs=received_outputs.clone();async move{
+        .route("/v1/sessions",axum::routing::post(move|Json(value):Json<Value>|{let created=created.clone();let state=state.clone();let waiting=waiting.clone();let outputs=received_outputs.clone();let inputs=received_inputs.clone();async move{
+            inputs.lock().unwrap().push(value["input"].clone());
             outputs.lock().unwrap().push(value["output"].clone());
             let id={let mut created=created.lock().unwrap();created.push(value["namespace"].as_str().unwrap().into());format!("viewer_{}",created.len())};
             if state.load(Ordering::SeqCst)==2 {return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":{"code":"source_connection_limit","message":"never expose provider-private-credential"}})));}
@@ -354,6 +358,7 @@ async fn setup() -> (App, Peer) {
     (
         app,
         Peer {
+            inputs,
             outputs,
             task,
             starts,
@@ -397,6 +402,75 @@ async fn settled_for(app: &App, token: &str, id: &str) -> Value {
     })
     .await
     .unwrap()
+}
+
+#[tokio::test]
+async fn reflected_private_source_headers_are_hidden_in_cards_and_preserved_for_both_lease_deliveries(
+) {
+    for platform in ["android", "roku"] {
+        let (app, peer) = setup().await;
+        source(&app);
+        gateway(&app, "first", 0);
+        let scoped = app.clone().with_lease(lease());
+        let cookie = "session=fixture-private-cookie";
+        let key = "fixture-private-api-key";
+        let (cards,error)=scoped.register("addon:1",vec![json!({
+            "url":"http://source.fixture.invalid/private-input","name":"French Player",
+            "title":format!("French en eng {cookie} fixture-private-cookie {key}"),
+            "behaviorHints":{"proxyHeaders":{"request":{"Cookie":cookie,"X-API-Key":key,"Accept-Language":"en","User-Agent":"Player"}}}
+        })],"movie");
+        assert!(error.is_none());
+        assert_eq!(cards.len(), 1);
+        let public = serde_json::to_string(&cards).unwrap();
+        for secret in [cookie, "fixture-private-cookie", key, "private-input"] {
+            assert!(!public.contains(secret));
+        }
+        let id = cards[0]["id"].as_str().unwrap();
+        let (status, foreign) = request(
+            &app,
+            "member-token-2",
+            "POST",
+            "/api/v2/playback",
+            body(id, "foreign", platform),
+        )
+        .await;
+        assert!(!status.is_success());
+        assert!(!foreign.to_string().contains(key));
+        assert!(!foreign.to_string().contains(cookie));
+        let (status, started) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/playback",
+            body(id, "private-headers", platform),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let playback = started["id"].as_str().unwrap();
+        let ready = settled(&app, playback).await;
+        assert_eq!(ready["status"], "ready");
+        let headers = if platform == "android" {
+            ready["delivery"]["headers"].clone()
+        } else {
+            peer.inputs.lock().unwrap()[0]["headers"].clone()
+        };
+        assert_eq!(headers["cookie"], cookie);
+        assert_eq!(headers["x-api-key"], key);
+        assert_eq!(headers["accept-language"], "en");
+        assert_eq!(headers["user-agent"], "Player");
+        if platform == "roku" {
+            assert!(!ready.to_string().contains(key));
+            assert!(!ready.to_string().contains(cookie));
+        }
+        request(
+            &app,
+            "member-token-1",
+            "DELETE",
+            &format!("/api/v2/playback/{playback}"),
+            Value::Null,
+        )
+        .await;
+    }
 }
 
 #[tokio::test]

@@ -62,6 +62,28 @@ Ordinary client guide/catalog cutover and retired-path removal remain pending.
 
 ## Account management API
 
+### Private source headers checkpoint — 2026-09-30
+
+Source registration preserves the existing closed request-header allowlist and
+adds only `X-API-Key`, which the existing direct-client and gateway transport
+contracts can carry privately. Cookie, Authorization, X-CSRF-Token and X-API-Key
+credential reflections are omitted from source-card display fields, including
+configured producer labels. Ordinary language/client-identification metadata is
+retained; short cookie values are matched at token boundaries.
+
+An unsupported, malformed or case-colliding required request header rejects that
+candidate with safe `source_headers_unsupported` classification rather than
+silently dropping the header. Healthy sibling candidates remain available. No
+raw input URL or diagnostic is included in this error. Authorized direct delivery
+and gateway preparation retain accepted header values; cards and gateway viewer
+delivery do not disclose them.
+
+Synthetic registration, discovery-event and v2 direct/gateway lease fixtures:
+205 tests passed, two opt-in tests ignored; strict all-target Clippy passed. These
+checks do not qualify real gateway media playback or hardware. This checkpoint
+does not remove the pre-existing version-zero plaintext credential fallback;
+offline migration/retirement evidence remains a separate operational gate.
+
 Authenticated account sessions use:
 
 - GET/POST `/api/v2/iptv/connections`

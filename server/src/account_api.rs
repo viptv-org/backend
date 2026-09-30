@@ -126,6 +126,7 @@ fn details(code: &str) -> (StatusCode, &'static str) {
         "discovery_not_found" => (StatusCode::NOT_FOUND,"This source search expired or is unavailable in this session. Search for sources again."),
         "provider_discovery_failed" => (StatusCode::BAD_GATEWAY,"This IPTV provider could not return sources. Try again or choose another provider."),
         "source_format_unsupported" => (StatusCode::NOT_ACCEPTABLE,"Only HTTP(S) streams are supported here. Choose another source or configure a resolver."),
+        "source_headers_unsupported" => (StatusCode::NOT_ACCEPTABLE,"This source requires unsupported or invalid request headers. Choose another source."),
         "addon_timeout" => (StatusCode::GATEWAY_TIMEOUT,"The addon took too long to respond. Try again or choose another addon."),
         "addon_access_denied" => (StatusCode::BAD_GATEWAY,"The addon rejected access. Check its configuration or subscription."),
         "addon_rate_limited" => (StatusCode::TOO_MANY_REQUESTS,"The addon is limiting requests. Wait before trying again."),

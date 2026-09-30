@@ -2,6 +2,52 @@ use crate::{auth_integration_tests::fixture, test_support::request, *};
 use axum::{response::IntoResponse, routing::get, Router};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[tokio::test]
+async fn unsupported_required_header_events_are_safe_and_keep_healthy_siblings() {
+    let app = fixture();
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(7,'Fixture','https://addon.fixture.invalid/manifest.json','{}',1)",[]).unwrap();
+    let mut owned = app.clone().with_lease(ResourceLease {
+        policy_revision: 0,
+        principal: auth::Principal::Account {
+            account_id: 1,
+            role: "member".into(),
+            profile_id: Some(1),
+            session_id: Some("s1".into()),
+        },
+        session_id: Some("s1".into()),
+    });
+    owned.providers = owned.providers.for_account(1);
+    let job = Job {
+        kind: "movie".into(),
+        created: Instant::now(),
+        state: Mutex::new(JobState {
+            events: vec![],
+            pending: 1,
+        }),
+        notify: Notify::new(),
+    };
+    emit(
+        &owned,
+        &job,
+        "addon:7",
+        Ok(vec![
+            json!({"url":"https://fixture.invalid/private-input","name":"private-credential","behaviorHints":{"proxyHeaders":{"request":{"X-Unsupported-Credential":"private-credential"}}}}),
+            json!({"url":"https://fixture.invalid/healthy","name":"Healthy"}),
+        ]),
+    );
+    let state = job.state.lock().unwrap();
+    assert_eq!(state.pending, 0);
+    assert_eq!(state.events[0]["error_code"], "source_headers_unsupported");
+    assert_eq!(
+        state.events[0]["error"],
+        account_api::description("source_headers_unsupported")
+    );
+    assert_eq!(state.events[0]["streams"].as_array().unwrap().len(), 1);
+    assert_eq!(state.events[0]["streams"][0]["name"], "Healthy");
+    assert!(!state.events[0].to_string().contains("private-credential"));
+    assert!(!state.events[0].to_string().contains("private-input"));
+}
+
 struct Upstream {
     url: String,
     mode: Arc<AtomicUsize>,

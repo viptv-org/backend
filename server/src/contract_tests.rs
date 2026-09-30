@@ -352,6 +352,7 @@ async fn pengu_fetch_context_retains_only_explicit_safe_headers_privately() {
         "Accept-Language",
         "X-Requested-With",
         "X-CSRF-Token",
+        "X-API-Key",
     ];
     let denied = [
         "Host",
@@ -366,9 +367,6 @@ async fn pengu_fetch_context_retains_only_explicit_safe_headers_privately() {
     let mut headers = serde_json::Map::new();
     for key in allowed {
         headers.insert(key.into(), json!(format!("private-fixture-{key}")));
-    }
-    for key in denied {
-        headers.insert(key.into(), json!("must-not-forward"));
     }
     let (public,error) = app.register("addon:7",vec![json!({"url":"https://fixture.invalid/private-source-token","name":"Pengu fixture","description":"1080p source","behaviorHints":{"proxyHeaders":{"request":headers}}})],"movie");
     assert!(error.is_none());
@@ -497,7 +495,12 @@ async fn registered_headers_and_display_fallback_are_bounded() {
         (json!("bad\u{0085}value"), false),
         (json!(42), false),
     ] {
-        let (public,_) = app.register("addon:7",vec![json!({"url":"https://fixture.invalid/source","behaviorHints":{"proxyHeaders":{"request":{"Accept":value,"Accept-Language":value,"X-Requested-With":value,"X-CSRF-Token":value}}}})],"movie");
+        let (public,error) = app.register("addon:7",vec![json!({"url":"https://fixture.invalid/source","behaviorHints":{"proxyHeaders":{"request":{"Accept":value,"Accept-Language":value,"X-Requested-With":value,"X-CSRF-Token":value}}}})],"movie");
+        if !retained {
+            assert!(public.is_empty());
+            assert_eq!(error.as_deref(), Some("source_headers_unsupported"));
+            continue;
+        }
         let entries = app.streams.lock().unwrap();
         let headers = &entries
             .get(public[0]["id"].as_str().unwrap())
@@ -528,6 +531,99 @@ async fn registered_headers_and_display_fallback_are_bounded() {
     let title = public[0]["title"].as_str().unwrap();
     assert_eq!(title.len(), 1023);
     assert_eq!(title, "€".repeat(341));
+}
+
+#[tokio::test]
+async fn cookie_and_api_key_reflections_are_redacted_from_every_card_field() {
+    let app = app(Connection::open_in_memory().unwrap());
+    let cookie = "session=cookie-credential; other=\"second-credential\"";
+    let api_key = "fixture-api-key-secret";
+    let url = "https://fixture.invalid/private-input";
+    let text = format!(
+        "French en eng Player {cookie} cookie-credential second-credential {api_key} {url}"
+    );
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(7,?1,'https://addon.fixture.invalid/manifest.json','{}',1)",[text.clone()]).unwrap();
+    let (cards,error) = app.register("addon:7",vec![json!({
+        "url":url,"name":text,"title":text,"description":text,"languages":["en","eng","French"],
+        "behaviorHints":{"filename":format!("prefixcookie-credentialsuffix.{api_key}.mkv"),"bingeGroup":text,"proxyHeaders":{"request":{
+            "Cookie":cookie,"X-API-Key":api_key,"Accept-Language":"en","User-Agent":"Player"
+        }}}
+    })],"movie");
+    assert!(error.is_none());
+    assert_eq!(cards.len(), 1);
+    let public = cards[0].to_string();
+    for secret in [
+        cookie,
+        "cookie-credential",
+        "second-credential",
+        api_key,
+        url,
+    ] {
+        assert!(!public.contains(secret));
+    }
+    for field in [
+        "name",
+        "title",
+        "description",
+        "source_name",
+        "source_binge_group",
+    ] {
+        assert!(cards[0][field]
+            .as_str()
+            .unwrap()
+            .starts_with("French en eng Player"));
+    }
+    assert_eq!(
+        cards[0]["reported_languages"],
+        json!(["en", "eng", "French"])
+    );
+    let entries = app.streams.lock().unwrap();
+    let stored = &entries[cards[0]["id"].as_str().unwrap()];
+    assert_eq!(stored.headers["cookie"], cookie);
+    assert_eq!(stored.headers["x-api-key"], api_key);
+    assert_eq!(stored.headers["accept-language"], "en");
+    assert_eq!(stored.headers["user-agent"], "Player");
+}
+
+#[tokio::test]
+async fn short_cookie_tokens_do_not_tear_language_or_client_identification_words() {
+    let app = app(Connection::open_in_memory().unwrap());
+    let (cards,error) = app.register("addon:7",vec![json!({"url":"https://fixture.invalid/media","name":"French eng Player client","description":"French eng Player client sid=en en", "languages":["eng","French"],"behaviorHints":{"proxyHeaders":{"request":{"Cookie":"sid=en","Accept-Language":"en","User-Agent":"Player"}}}})],"movie");
+    assert!(error.is_none());
+    assert_eq!(cards[0]["name"], "French eng Player client");
+    assert!(cards[0]["description"]
+        .as_str()
+        .unwrap()
+        .starts_with("French eng Player client"));
+    assert!(!cards[0]["description"].as_str().unwrap().contains("sid=en"));
+    assert_eq!(cards[0]["reported_languages"], json!(["eng", "French"]));
+}
+
+#[tokio::test]
+async fn unsupported_required_headers_fail_safely_without_discarding_healthy_sources() {
+    let app = app(Connection::open_in_memory().unwrap());
+    for headers in [
+        json!({"Host":"private-credential"}),
+        json!({"X-Other":"private-credential"}),
+        json!({"Cookie":"sid=private-credential","cookie":"second-private-credential"}),
+        json!({"Authorization":"Bearer private-credential\r\nX-Injected: yes"}),
+        json!({"X-API-Key":"private-credential\r\nX-Injected: yes"}),
+        json!({"X-API-Key":42}),
+        json!("private-credential"),
+    ] {
+        let before = app.streams.lock().unwrap().len();
+        let (cards,error)=app.register("addon:7",vec![
+            json!({"url":"https://fixture.invalid/private-input","name":"private-credential","behaviorHints":{"proxyHeaders":{"request":headers}}}),
+            json!({"url":"https://fixture.invalid/healthy","name":"Healthy"}),
+        ],"movie");
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0]["name"], "Healthy");
+        assert_eq!(error.as_deref(), Some("source_headers_unsupported"));
+        assert!(!serde_json::to_string(&cards)
+            .unwrap()
+            .contains("private-credential"));
+        assert_eq!(app.streams.lock().unwrap().len(), before + 1);
+    }
 }
 
 #[tokio::test]

@@ -57,6 +57,7 @@ impl App {
         };
         let mut out = vec![];
         let mut unsupported = 0;
+        let mut unsupported_headers = false;
         let mut entries = self.streams.lock().unwrap();
         for r in raw.into_iter().take(100) {
             let Some(url) = r["url"].as_str() else {
@@ -72,13 +73,18 @@ impl App {
             }
             let id = Uuid::new_v4().to_string();
             let mut headers = HashMap::new();
-            if let Some(h) = r
+            if let Some(raw_headers) = r
                 .pointer("/behaviorHints/proxyHeaders/request")
-                .and_then(Value::as_object)
+                .filter(|value| !value.is_null())
             {
+                let Some(h) = raw_headers.as_object() else {
+                    unsupported_headers = true;
+                    continue;
+                };
+                let mut invalid = false;
                 for (k, v) in h {
                     let key = k.to_ascii_lowercase();
-                    if [
+                    if ![
                         "user-agent",
                         "cookie",
                         "referer",
@@ -88,15 +94,27 @@ impl App {
                         "accept-language",
                         "x-requested-with",
                         "x-csrf-token",
+                        "x-api-key",
                     ]
                     .contains(&key.as_str())
+                        || headers.contains_key(&key)
                     {
-                        if let Some(v) = v.as_str() {
-                            if v.len() <= 4096 && !v.chars().any(char::is_control) {
-                                headers.insert(key, v.into());
-                            }
-                        }
+                        invalid = true;
+                        break;
                     }
+                    let Some(value) = v.as_str().filter(|value| {
+                        value.len() <= 4096 && !value.chars().any(char::is_control)
+                    }) else {
+                        invalid = true;
+                        break;
+                    };
+                    headers.insert(key, value.into());
+                }
+                // Explicit request headers are required source context. Never
+                // publish an opaque handle after silently discarding one.
+                if invalid {
+                    unsupported_headers = true;
+                    continue;
                 }
             }
             headers.extend(routing.clone());
@@ -135,7 +153,11 @@ impl App {
             self.own_resource("stream", &id);
             out.push(public);
         }
-        let error=(unsupported>0).then(||format!("{unsupported} source(s) unsupported: torrent, external-player, or non-HTTP streams require an external resolver"));
+        let error = if unsupported_headers {
+            Some("source_headers_unsupported".into())
+        } else {
+            (unsupported>0).then(||format!("{unsupported} source(s) unsupported: torrent, external-player, or non-HTTP streams require an external resolver"))
+        };
         (out, error)
     }
 }
@@ -174,15 +196,26 @@ fn source_display_text(
     // e.g. Accept-Language: en must not erase en/eng or letters inside French.
     // Origin/Referer links are handled by the URL redaction below.
     for (_, value) in headers.iter().filter(|(key, value)| {
-        (key.eq_ignore_ascii_case("authorization") || key.eq_ignore_ascii_case("x-csrf-token"))
+        (key.eq_ignore_ascii_case("authorization")
+            || key.eq_ignore_ascii_case("x-csrf-token")
+            || key.eq_ignore_ascii_case("x-api-key"))
             && !value.is_empty()
     }) {
-        text = text.replace(value, "[private value omitted]");
+        text = redact_private_value(&text, value);
         if let Some((scheme, credential)) = value.split_once(' ') {
             if (scheme.eq_ignore_ascii_case("bearer") || scheme.eq_ignore_ascii_case("basic"))
                 && !credential.is_empty()
             {
-                text = text.replace(credential, "[private value omitted]");
+                text = redact_private_value(&text, credential);
+            }
+        }
+    }
+    if let Some(cookie) = headers.get("cookie") {
+        text = redact_private_value(&text, cookie);
+        for pair in cookie.split(';').map(str::trim) {
+            text = redact_private_value(&text, pair);
+            if let Some((_, credential)) = pair.split_once('=') {
+                text = redact_private_value(&text, credential.trim().trim_matches('"'));
             }
         }
     }
@@ -208,6 +241,32 @@ fn source_display_text(
         end -= 1;
     }
     text[..end].to_owned()
+}
+
+fn redact_private_value(text: &str, value: &str) -> String {
+    if value.is_empty() {
+        return text.to_owned();
+    }
+    // Opaque values remain private even when reflected inside filenames or
+    // longer text. Very short values use token boundaries so e.g. cookie en
+    // does not tear letters out of French/eng or client-identification words.
+    if value.chars().count() >= 4 {
+        return text.replace(value, "[private value omitted]");
+    }
+    let boundary =
+        |character: Option<char>| character.is_none_or(|c| !c.is_alphanumeric() && c != '_');
+    let mut out = String::new();
+    let mut copied = 0;
+    for (start, _) in text.match_indices(value) {
+        let end = start + value.len();
+        if boundary(text[..start].chars().next_back()) && boundary(text[end..].chars().next()) {
+            out.push_str(&text[copied..start]);
+            out.push_str("[private value omitted]");
+            copied = end;
+        }
+    }
+    out.push_str(&text[copied..]);
+    out
 }
 
 fn source_card(

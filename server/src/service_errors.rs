@@ -31,6 +31,7 @@ pub(crate) fn provider(raw: &str) -> Option<&'static str> {
         "source_route_migration_required" | "Provider WARP route unavailable" => {
             "source_route_migration_required"
         }
+        "source_headers_unsupported" => "source_headers_unsupported",
         "secret_store_not_configured" => "secret_store_not_configured",
         "secret_key_unavailable" => "secret_key_unavailable",
         "secret_authentication_failed" => "secret_authentication_failed",
