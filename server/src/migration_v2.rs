@@ -759,6 +759,129 @@ mod tests {
         assert!(root.path().join("before.json").exists());
     }
     #[test]
+    fn committed_encryption_cleanup_failure_retries_without_losing_later_history() {
+        let root = tempfile::tempdir().unwrap();
+        let source = fixture(root.path());
+        let database = root.path().join("source.sqlite");
+        apply(
+            &database,
+            &BTreeMap::from([(1, 11), (2, 22)]),
+            &root.path().join("owners.sqlite"),
+            &root.path().join("owners.json"),
+            REVISION,
+        )
+        .unwrap();
+        let vault = crate::secret_store::Vault::from_json(
+            &json!({"active":"test","keys":{"test":STANDARD.encode([7u8;32])}}).to_string(),
+        )
+        .unwrap();
+        // A genuine old WAL reader prevents truncation after logical commit.
+        let reader = open(&database, false).unwrap();
+        reader.execute_batch("BEGIN;").unwrap();
+        assert_eq!(
+            reader
+                .query_row(
+                    "SELECT count(*) FROM providers WHERE credentials_version=0",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            2
+        );
+        let before = root.path().join("before-cleanup.sqlite");
+        let exported = root.path().join("before-cleanup.json");
+        assert_eq!(
+            encrypt_with_vault(&database, &before, &exported, REVISION, &vault).unwrap_err(),
+            "encryption_committed_cleanup_required"
+        );
+        assert_eq!(source.query_row("SELECT count(*) FROM providers WHERE credentials_version=1 AND url='' AND username='' AND password=''", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
+        let sealed: Vec<(i64, String)> = source
+            .prepare("SELECT provider_id,secret FROM provider_credentials_v2 ORDER BY provider_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(sealed.len(), 2);
+        let backup = open(&before, false).unwrap();
+        assert_eq!(
+            backup
+                .query_row(
+                    "SELECT position FROM progress WHERE profile_id=71",
+                    [],
+                    |r| r.get::<_, f64>(0)
+                )
+                .unwrap(),
+            123.5
+        );
+        assert!(std::fs::read_to_string(&exported)
+            .unwrap()
+            .contains("fixture-password"));
+        // An operator must not restore this older snapshot over subsequent data.
+        source.execute_batch("UPDATE progress SET position=456.75 WHERE profile_id=71; INSERT INTO progress VALUES(71,'tt7654321',99);").unwrap();
+        reader.execute_batch("ROLLBACK;").unwrap();
+        drop(reader);
+        drop(backup);
+        let retry_backup = root.path().join("after-commit.sqlite");
+        let retry = encrypt_with_vault(
+            &database,
+            &retry_backup,
+            &root.path().join("after-commit.json"),
+            REVISION,
+            &vault,
+        )
+        .unwrap();
+        assert_eq!(retry["encrypted_count"], 0);
+        let after: Vec<(i64, String)> = source
+            .prepare("SELECT provider_id,secret FROM provider_credentials_v2 ORDER BY provider_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            sealed == after,
+            "Cleanup retry rotated existing credentials"
+        );
+        let latest = open(&retry_backup, false).unwrap();
+        for db in [&source, &latest] {
+            assert_eq!(
+                db.query_row(
+                    "SELECT position FROM progress WHERE profile_id=71 AND id='tt1234567'",
+                    [],
+                    |r| r.get::<_, f64>(0)
+                )
+                .unwrap(),
+                456.75
+            );
+            assert_eq!(
+                db.query_row(
+                    "SELECT position FROM progress WHERE profile_id=71 AND id='tt7654321'",
+                    [],
+                    |r| r.get::<_, f64>(0)
+                )
+                .unwrap(),
+                99.0
+            );
+            assert_eq!(
+                db.query_row(
+                    "SELECT metadata_id FROM provider_matches WHERE vod_id='vod:1:1'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                "tt1234567"
+            );
+        }
+        assert_eq!(source.query_row("SELECT count(*) FROM provider_vod_search_v2 WHERE provider_vod_search_v2 MATCH 'Fixture'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        for path in [&database, &root.path().join("source.sqlite-wal")] {
+            assert!(!std::fs::read(path)
+                .unwrap_or_default()
+                .windows(b"fixture-password".len())
+                .any(|v| v == b"fixture-password"));
+        }
+    }
+    #[test]
     fn encryption_is_backup_first_preserves_identity_and_compacts_old_plaintext() {
         let root = tempfile::tempdir().unwrap();
         let source = fixture(root.path());

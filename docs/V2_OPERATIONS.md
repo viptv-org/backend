@@ -346,6 +346,18 @@ committed**. Stop remaining readers/writers and investigate; do not assume a
 rollback or overwrite the database from an old backup. A fresh-path retry with
 the same valid keyring repeats validation and cleanup.
 
+Synthetic recovery acceptance on 2026-09-30 holds an actual old WAL reader
+through the encryption transaction. The real checkpoint reports
+`encryption_committed_cleanup_required` after commit, while credential rows are
+already sealed and backup/export remain private. The fixture then records later
+progress and a new history row, closes the reader, and retries with new artifact
+paths. Retry validates existing ciphertext without rotating it, compacts the old
+plaintext and rebuilds FTS while retaining both later history writes and source/
+match identity. This is not permission to overwrite current data with the older
+backup, and does not qualify a coordinated old-image/client rollback. The full
+backend suite at this checkpoint passed 210 tests with two opt-in media fixtures
+ignored; strict Clippy, formatting and the extraction inventory passed.
+
 Missing/wrong keys, changed ownership and damaged ciphertext fail closed.
 Running the new backend supplies the vault to the provider reader. Native
 direct admission for migrated providers is independent of legacy cross-provider
