@@ -90,8 +90,15 @@ reservations before claiming complete cleanup.
 
 Each sudo/nsenter process tree runs in its own session, recorded in
 `owned.json`; teardown signals that whole owned process group so an interrupted
-wrapper cannot leave an orphaned addon relay behind. Fresh-start qualification
+wrapper cannot leave an orphaned addon relay behind. Grace and escalation wait
+for the owned process group, independently of wrapper exit; a surviving group
+is a teardown failure, not a successful cleanup report. Fresh-start qualification
 uses only loopback TLS listeners and validates synthetic seed/control inputs.
+Pairing approval uses a fresh real browser login for each control request. An
+extended native run reproduced expiration of the initial approval session
+(`/api/auth/me` returned401); an expired fixture login is setup failure, not a
+native pairing or reconnect verdict. Approval failures return sanitized status
+without fabricating authentication success.
 The delayed-refresh control holds the actual successful rotation response after
 the server has committed it, exposing native cancellation bugs without fake
 authentication responses. Final process-group teardown is checked separately

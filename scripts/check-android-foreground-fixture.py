@@ -115,9 +115,17 @@ class Proxy(Quiet):
                     for k in ['delayIdentity','delayRefreshResponse','offlineIdentity','failIdentityOnce401','rejectRefresh401']:
                         if k in value: controls[k]=value[k]
                 if value.get('approvePairing'):
-                    assert approval is not None and latest_code is not None
-                    csrf=api('/api/auth/me',token=approval)['csrf_token']; status,data,_=upstream('POST','/api/auth/device/approve',json.dumps({'user_code':latest_code}).encode(),{'Content-Type':'application/json','Authorization':'Bearer '+approval,'x-csrf-token':csrf})
-                    assert status==200,'actual pairing approval failed'
+                    if latest_code is None:
+                        self.value({'error':'no_pending_actual_pairing'},409); return
+                    # Long native qualification can outlive the initial browser
+                    # session. Approve with a fresh actual login, not stale auth.
+                    status,data,login_headers=upstream('POST','/api/auth/login',json.dumps({'username':'qa_member','password':old['password']}).encode(),{'Content-Type':'application/json','Origin':origin})
+                    if status!=200:
+                        self.value({'error':'actual_approval_login_failed','status':status},502); return
+                    fresh_approval=login_headers['set-cookie'].split('viptv_session=',1)[1].split(';',1)[0]
+                    csrf=api('/api/auth/me',token=fresh_approval)['csrf_token']; status,data,_=upstream('POST','/api/auth/device/approve',json.dumps({'user_code':latest_code}).encode(),{'Content-Type':'application/json','Origin':origin,'Authorization':'Bearer '+fresh_approval,'x-csrf-token':csrf})
+                    if status!=200:
+                        self.value({'error':'actual_pairing_approval_failed','status':status},502); return
             with lock: self.value(dict(controls))
             return
         headers={k:v for k,v in self.headers.items() if k.lower() not in ('host','connection','content-length')}
@@ -214,8 +222,21 @@ finally:
         # Each owned sudo/nsenter tree has its own session; stop the actual
         # service/relay too, rather than leaving orphaned grandchildren.
         subprocess.run(['sudo','-n','kill','-TERM','--',str(-process.pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        try: process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
+        deadline=time.monotonic()+10
+        while time.monotonic()<deadline:
+            process.poll()  # Reap the wrapper independently of its descendants.
+            remaining=subprocess.run(['sudo','-n','kill','-0','--',str(-process.pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            if remaining.returncode!=0: break
+            time.sleep(.1)
+        else:
             subprocess.run(['sudo','-n','kill','-KILL','--',str(-process.pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-            process.wait(timeout=5)
+        process.wait(timeout=5)
+        # Do not report successful cleanup merely because sudo has exited.
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            remaining=subprocess.run(['sudo','-n','kill','-0','--',str(-process.pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            if remaining.returncode!=0: break
+            time.sleep(.1)
+        else:
+            raise RuntimeError('Owned process group survived teardown: '+str(process.pid))
     print('Exact owned backend/addon/TLS processes stopped; separate gateway lease remains fixture-owned.',flush=True)
