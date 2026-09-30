@@ -21,7 +21,9 @@ python3 scripts/check-android-foreground-fixture.py \
   --emulator-host "$EMULATOR_BRIDGE_HOST"
 ```
 
-The seed is copied through a read-only SQLite backup connection. Existing
+The controller checks the synthetic keyring/configuration markers, exact seeded
+`qa_*` accounts/profiles, synthetic provider names and expected gateway schema
+marker before copying through a read-only SQLite backup connection. Existing
 synthetic providers/addons are disabled in the new database before the service
 starts; no production database, provider credential or developer env is read.
 The backend runs as the caller's UID/GID with supplementary groups cleared in
@@ -36,7 +38,8 @@ stored configuration is encrypted. Media uses the supported `X-API-Key` source
 header; no source-header whitelist exception is added. The finite provider is
 materialized from actual authenticated gateway output with original segment
 bytes/durations and a separate fixture storage cap. The controller serves these
-files over the existing trusted local certificate. It does not claim the
+files over the existing trusted local certificate. Both host TLS listeners bind
+loopback only; the emulator's host bridge reaches those listeners. It does not claim the
 gateway's rolling VOD playlist itself has become a finite native contract.
 
 Before readiness the fixture performs actual native password login, profile
@@ -54,10 +57,15 @@ or response bodies. Other diagnostic artifacts remain private.
 
 ## Transport controls
 
-`GET /__control` returns safe `identityCalls` and `pairingStarts` counters.
+`GET /__control` returns safe `identityCalls`, `pairingStarts`, `refreshCalls` and
+`successfulRefreshes` counters. Successful refresh increments only after the
+actual server returns200, before any requested response hold.
 `POST /__control` accepts:
 
 - `delayIdentity`: milliseconds before forwarding actual identity reads.
+- `delayRefreshResponse`: forward actual device refresh first, receive its real
+  rotated-token response privately, then hold delivery for the requested
+  milliseconds. This exposes cancellation after server-side token rotation.
 - `offlineIdentity`: close the transport before returning an identity response.
 - `failIdentityOnce401`: alter one forwarded bearer token so the actual server
   rejects it; subsequent identity reads retain the app's actual token.
@@ -68,6 +76,11 @@ or response bodies. Other diagnostic artifacts remain private.
 
 The proxy never fulfills successful backend API responses. These controls test
 real native recovery/refresh paths without changing backend authentication.
+Delay values must be integer milliseconds from0 through40000. All other control
+values must be booleans; unknown fields and invalid scalars return400 before
+changing any control state. The fixture also creates a completed alternate
+account-owned profile through the normal API for response/profile replacement
+checks; both profile IDs/names are available in private `native.json`.
 
 Send SIGTERM to the recorded controller owner PID after device acceptance.
 It stops only its owned backend/addon/TLS processes and retains the private
