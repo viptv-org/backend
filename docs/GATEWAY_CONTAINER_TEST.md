@@ -31,6 +31,12 @@ or production migration occurs.
 
 ## Evidence — 2026-09-30
 
+Source `27a0296c6975` (the bounded catalog-cursor runtime) also reran exactly one
+named lifecycle test successfully against gateway `212af567...` below. The
+tracked-source fixture image was `eacc1fd2ea8c`; its disposable container and
+synthetic data were removed. No public network, host DB, physical device or
+production deployment was involved.
+
 Current backend `b8bd04f6321c` also passed exactly one named lifecycle fixture
 against the playlist-reload-fixed gateway image
 `sha256:212af567feefbba9160d5e4dd616ededddf228df4349b7500341c9f7580b36cb`;

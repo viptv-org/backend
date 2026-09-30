@@ -33,6 +33,15 @@ production migration or production ingress. No shared HTTPS service was stopped.
 
 ## Full image HTTP acceptance — 2026-09-30
 
+The current cursor-bound runtime at source
+`27a0296c69755e50412a6efeb9ad52564e029fd3` was independently built from tracked
+backend/dashboard/viewing archives, with the same `93c9316`/`db9c5ab` frontend
+pins. Exact image
+`sha256:5b5900c8697b89e3519a31fb6685e21e75343b0e3caa3861de697b1aead8b6ef`
+passed the seven HTTP groups below and the sixteen trusted-browser groups in
+BROWSER_RUNTIME_TEST.md. This supersedes the earlier image as the current local
+runtime checkpoint, not as production deployment evidence.
+
 `scripts/check-runtime-image.py` exercises an existing local image by exact
 content ID and source label. It never pulls, loads private environment files,
 mounts host/production data, publishes ports or changes the shared HTTPS stack.
