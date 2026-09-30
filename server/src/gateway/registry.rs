@@ -287,3 +287,33 @@ pub(crate) fn grant(
     }
     tx.commit().map_err(|_| "gateway_storage_unavailable")
 }
+
+/// Bounded recipients for this account's registration, never a global directory.
+pub(crate) fn grants(
+    db: &Connection,
+    owner: i64,
+    id: &str,
+    after: i64,
+    limit: usize,
+) -> Result<Vec<i64>> {
+    let tx = db
+        .unchecked_transaction()
+        .map_err(|_| "gateway_storage_unavailable")?;
+    let owns: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM playback_gateways WHERE id=?2 AND owner_account_id=?1)",
+            params![owner, id],
+            |row| row.get(0),
+        )
+        .map_err(|_| "gateway_storage_unavailable")?;
+    if !owns {
+        return Err("gateway_not_found");
+    }
+    let recipients = tx.prepare("SELECT account_id FROM playback_gateway_grants WHERE gateway_id=?1 AND account_id>?2 ORDER BY account_id LIMIT ?3")
+        .map_err(|_| "gateway_storage_unavailable")?
+        .query_map(params![id, after, limit], |row|row.get(0))
+        .map_err(|_| "gateway_storage_unavailable")?
+        .collect::<rusqlite::Result<Vec<_>>>().map_err(|_| "gateway_storage_unavailable")?;
+    tx.commit().map_err(|_| "gateway_storage_unavailable")?;
+    Ok(recipients)
+}

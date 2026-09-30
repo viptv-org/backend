@@ -16,6 +16,7 @@ struct Peer {
     task: tokio::task::JoinHandle<()>,
     calls: Arc<AtomicUsize>,
     mode: Arc<AtomicUsize>,
+    hold: Arc<tokio::sync::Notify>,
 }
 impl Drop for Peer {
     fn drop(&mut self) {
@@ -125,22 +126,256 @@ async fn setup() -> (App, Peer) {
     let mode = Arc::new(AtomicUsize::new(0));
     let count = calls.clone();
     let behavior = mode.clone();
+    let hold = Arc::new(tokio::sync::Notify::new());
+    let waiting = hold.clone();
     let routes=Router::new().route("/v1/capabilities",axum::routing::get(move|headers:HeaderMap|{
-        let count=count.clone();let behavior=behavior.clone();async move {
+        let count=count.clone();let behavior=behavior.clone();let waiting=waiting.clone();async move {
             count.fetch_add(1,Ordering::SeqCst);
             assert_eq!(headers.get("authorization").unwrap().to_str().unwrap(),format!("Bearer {}",key()));
-            match behavior.load(Ordering::SeqCst) {
+            let mode = behavior.load(Ordering::SeqCst);
+            if mode == 7 { waiting.notified().await; }
+            match mode {
                 1=>StatusCode::UNAUTHORIZED.into_response(),
                 2=>(StatusCode::FOUND,[("location","/must-not-follow")]).into_response(),
                 3=>(StatusCode::OK,"x".repeat(65537)).into_response(),
-                mode=>Json(json!({"version":1,"ready":mode!=5,"protocols":["hls","progressive"],"namespaces":["fixture"],"scopes":if mode==4 {vec!["capabilities"]}else{vec!["capabilities","create","read","renew","release"]}})).into_response(),
+                mode=>Json(json!({"version":1,"ready":mode!=5,"protocols":["hls","progressive"],"namespaces":["fixture"],"scopes":if mode==4 {vec!["capabilities"]}else{vec!["capabilities","create","read","renew","release"]},"available":if matches!(mode,6|7) {Some(json!({"inputs":0,"outputs":2,"viewers":3}))}else{None}})).into_response(),
             }
         }
     })).route("/must-not-follow",axum::routing::get(||async{panic!("redirect must not be followed"); #[allow(unreachable_code)] StatusCode::OK}));
     let task = tokio::spawn(async move {
         axum::serve(listener, routes).await.unwrap();
     });
-    (app, Peer { task, calls, mode })
+    (
+        app,
+        Peer {
+            task,
+            calls,
+            mode,
+            hold,
+        },
+    )
+}
+
+#[tokio::test]
+async fn grant_recipient_pages_require_operator_and_own_registration() {
+    let (app, _peer) = setup().await;
+    let (_, added) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/gateways",
+        registration(),
+    )
+    .await;
+    let id = added["id"].as_str().unwrap();
+    let root = format!("/api/v2/gateways/{id}/grants");
+    assert_eq!(
+        request(&app, "member-token-1", "GET", &root, Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("UPDATE auth_accounts SET role='owner' WHERE id=1", [])
+            .unwrap();
+        for account in 3..=253 {
+            db.execute("INSERT INTO auth_accounts(id,username,password_hash,role,recovery_hash,created_at) VALUES(?1,?2,'unused','member','unused',0)", rusqlite::params![account,format!("recipient{account}")]).unwrap();
+            db.execute(
+                "INSERT INTO playback_gateway_grants VALUES(?1,?2)",
+                rusqlite::params![id, account],
+            )
+            .unwrap();
+        }
+    }
+    let (status, first) = request(&app, "member-token-1", "GET", &root, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["items"].as_array().unwrap().len(), 50);
+    assert_eq!(first["items"][0], json!({"account_id":3,"enabled":true}));
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let (_, second) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("{root}?limit=200&cursor={cursor}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(second["items"].as_array().unwrap().len(), 200);
+    assert_eq!(second["items"][0]["account_id"], 53);
+    let (_, terminal) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!(
+            "{root}?limit=200&cursor={}",
+            second["next_cursor"].as_str().unwrap()
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        terminal["items"],
+        json!([{"account_id":253,"enabled":true}])
+    );
+    assert!(terminal["next_cursor"].is_null());
+    assert!(!first.to_string().contains(&key()));
+    for suffix in ["?limit=201", "?limit=0", "?limit=private-sentinel"] {
+        let (status, error) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            &format!("{root}{suffix}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(error["error_code"], "invalid_catalog_query");
+    }
+    let mut other = registration();
+    other["namespace"] = json!("other");
+    // Register directly because this fixture peer only validates fixture namespace.
+    let other: registry::Registration = serde_json::from_value(other).unwrap();
+    let other = registry::register(
+        &app.db.lock().unwrap(),
+        app.secret_vault.as_ref().unwrap(),
+        1,
+        other,
+    )
+    .unwrap();
+    let (status, error) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("/api/v2/gateways/{}/grants?cursor={cursor}", other.id),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error_code"], "invalid_cursor");
+    request(
+        &app,
+        "member-token-1",
+        "PUT",
+        &root,
+        json!({"account_id":2,"enabled":true}),
+    )
+    .await;
+    assert_eq!(
+        request(&app, "member-token-2", "GET", &root, Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    app.db.lock().unwrap().execute_batch("UPDATE auth_accounts SET role='member' WHERE id=1; UPDATE auth_accounts SET role='owner' WHERE id=2;").unwrap();
+    let (status, error) = request(&app, "member-token-2", "GET", &root, Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "gateway_not_found");
+    app.db.lock().unwrap().execute_batch("UPDATE auth_accounts SET role='member' WHERE id=2; UPDATE auth_accounts SET role='owner' WHERE id=1; INSERT INTO kids_profiles(profile_id,enabled) VALUES(1,1);").unwrap();
+    let (status, error) = request(&app, "member-token-1", "GET", &root, Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "parent_required");
+    app.db
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "DELETE FROM kids_profiles; UPDATE auth_sessions SET kind='device' WHERE account_id=1;",
+        )
+        .unwrap();
+    let (status, error) = request(&app, "member-token-1", "GET", &root, Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "account_session_required");
+}
+
+#[tokio::test]
+async fn saved_gateway_checks_expose_scoped_capacity_and_revalidate_revoked_grants() {
+    let (app, peer) = setup().await;
+    let (_, added) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/gateways",
+        registration(),
+    )
+    .await;
+    let id = added["id"].as_str().unwrap();
+    let path = format!("/api/v2/gateways/{id}/check");
+    let (status, absent) = request(&app, "member-token-1", "POST", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(absent, json!({"ready":true,"version":1,"available":null}));
+    peer.mode.store(6, Ordering::SeqCst);
+    let (status, checked) = request(&app, "member-token-1", "POST", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        checked,
+        json!({"ready":true,"version":1,"available":{"inputs":0,"outputs":2,"viewers":3}})
+    );
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE auth_accounts SET role='owner' WHERE id=1", [])
+        .unwrap();
+    request(
+        &app,
+        "member-token-1",
+        "PUT",
+        &format!("/api/v2/gateways/{id}/grants"),
+        json!({"account_id":2,"enabled":true}),
+    )
+    .await;
+    assert_eq!(
+        request(&app, "member-token-2", "POST", &path, Value::Null)
+            .await
+            .1,
+        checked
+    );
+    peer.mode.store(7, Ordering::SeqCst);
+    let calls = peer.calls.load(Ordering::SeqCst);
+    let actor = app.clone();
+    let pending_path = path.clone();
+    let pending = tokio::spawn(async move {
+        request(&actor, "member-token-2", "POST", &pending_path, Value::Null).await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while peer.calls.load(Ordering::SeqCst) == calls {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    request(
+        &app,
+        "member-token-1",
+        "PUT",
+        &format!("/api/v2/gateways/{id}/grants"),
+        json!({"account_id":2,"enabled":false}),
+    )
+    .await;
+    peer.hold.notify_one();
+    let (status, error) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "gateway_not_found");
+    assert!(error.get("available").is_none());
+    let (_, grants) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("/api/v2/gateways/{id}/grants"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(grants["items"], json!([]));
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE auth_sessions SET kind='device' WHERE account_id=1",
+            [],
+        )
+        .unwrap();
+    let (status, error) = request(&app, "member-token-1", "POST", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "account_session_required");
 }
 
 #[tokio::test]

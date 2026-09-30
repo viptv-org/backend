@@ -49,9 +49,25 @@ selected kids profile is locked. Paired-device sessions cannot manage settings.
   supplied key, preserving the gateway ID and incrementing its revision. An
   existing hidden key is never silently sent to a newly entered endpoint.
 - POST /api/v2/gateways/:id/check: verify the saved credential and namespace.
+  Returns `ready`, `version` and additive `available` capacity hints
+  (`inputs`, `outputs`, `viewers`), or `null` when the gateway omits hints. These
+  describe the authorized integration key's capacity at check time, not a
+  reservation or a server-wide account/job directory. Granted recipients may
+  check capacity but cannot manage the registration or list its recipients.
 - DELETE /api/v2/gateways/:id: idempotent owner-only removal.
 - PUT /api/v2/gateways/:id/grants: account_id plus enabled, for a server operator
   explicitly granting/revoking access to its own gateway.
+- GET /api/v2/gateways/:id/grants: the same operator/registration-owner boundary.
+  Query `limit` defaults to 50 and permits 1–200; `cursor` is opaque and bound to
+  that operator account and gateway. Returns `{items, next_cursor}` with only
+  `account_id` and `enabled: true` per recipient. Revocation deletes the grant,
+  so revoked recipients are absent. No account names, keys or ciphertext appear.
+
+The server operator role is named `owner` in the authentication contract.
+Owning a gateway registration alone does not confer this role. Both recipient
+list reads and grant writes require the role and registration ownership, a full
+account session and the existing parent authorization. The role never permits
+inspection of another account's private gateway or grants.
 
 A registered gateway is private to its owning account. There is no implicit
 global/family default and no public grant. A grant permits use/checking, not

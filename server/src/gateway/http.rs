@@ -4,9 +4,13 @@ use crate::{
     app_state::{App, ResourceLease},
 };
 use axum::{
-    extract::{rejection::JsonRejection, Path, State},
+    extract::{
+        rejection::{JsonRejection, QueryRejection},
+        Path, Query, State,
+    },
     Extension, Json,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -76,7 +80,7 @@ pub(crate) async fn check(
         }) {
             return Err(Error::Code("gateway_not_found"));
         }
-        Ok(json!({"ready":capability.ready,"version":capability.version}))
+        Ok(json!({"ready":capability.ready,"version":capability.version,"available":capability.available}))
     })
     .await
 }
@@ -144,6 +148,49 @@ pub(crate) async fn delete(
 pub(crate) struct Grant {
     account_id: i64,
     enabled: bool,
+}
+fn page_size() -> usize {
+    50
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GrantsQuery {
+    cursor: Option<String>,
+    #[serde(default = "page_size")]
+    limit: usize,
+}
+pub(crate) async fn grants(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(id): Path<String>,
+    query: Result<Query<GrantsQuery>, QueryRejection>,
+) -> Result<Json<Value>, Error> {
+    let Query(query) = query.map_err(|_| Error::Code("invalid_catalog_query"))?;
+    if !(1..=200).contains(&query.limit) {
+        return Err(Error::Code("invalid_catalog_query"));
+    }
+    let principal = lease.principal.clone();
+    account_api::work(app, lease, move |db, owner| {
+        principal.require_owner()?;
+        let after = if let Some(cursor) = query.cursor {
+            if cursor.len() > 512 { return Err(Error::Code("invalid_cursor")); }
+            let (account, gateway, after): (i64, String, i64) = serde_json::from_slice(
+                &URL_SAFE_NO_PAD.decode(cursor).map_err(|_| Error::Code("invalid_cursor"))?
+            ).map_err(|_| Error::Code("invalid_cursor"))?;
+            if account != owner || gateway != id || after < 0 {
+                return Err(Error::Code("invalid_cursor"));
+            }
+            after
+        } else { 0 };
+        let mut recipients = registry::grants(db, owner, &id, after, query.limit + 1)?;
+        let more = recipients.len() > query.limit;
+        recipients.truncate(query.limit);
+        let next = if more {
+            Some(URL_SAFE_NO_PAD.encode(serde_json::to_vec(&(owner, &id, recipients.last()))
+                .map_err(|_| Error::Code("invalid_cursor"))?))
+        } else { None };
+        Ok(json!({"items":recipients.into_iter().map(|account| json!({"account_id":account,"enabled":true})).collect::<Vec<_>>(),"next_cursor":next}))
+    }).await
 }
 pub(crate) async fn grant(
     State(app): State<App>,

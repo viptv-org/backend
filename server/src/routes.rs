@@ -214,7 +214,7 @@ pub fn router_with_tv(
         .route("/v2/gateways/:id/check", post(gateway::http::check))
         .route(
             "/v2/gateways/:id/grants",
-            axum::routing::put(gateway::http::grant),
+            get(gateway::http::grants).put(gateway::http::grant),
         )
         .route(
             "/v2/iptv/matches",

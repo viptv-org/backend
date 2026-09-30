@@ -2,7 +2,7 @@
 //! do not follow redirects with integration credentials or inherit host proxies.
 pub(crate) use crate::source_http::public_ip;
 use futures::FutureExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use url::{Host, Url};
 
@@ -70,7 +70,7 @@ pub(crate) struct Capabilities {
     pub scopes: Vec<String>,
     pub available: Option<Capacity>,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Capacity {
     pub inputs: u32,
     pub outputs: u32,
