@@ -188,6 +188,18 @@ impl Addons {
         Ok((url.to_string(), manifest))
     }
     pub fn entries(&self) -> Result<Vec<(i64, String, Value)>, String> {
+        let (entries, errors) = self.entries_with_errors()?;
+        if entries.is_empty() {
+            if let Some((_, error)) = errors.into_iter().next() {
+                return Err(error);
+            }
+        }
+        Ok(entries)
+    }
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn entries_with_errors(
+        &self,
+    ) -> Result<(Vec<(i64, String, Value)>, Vec<(i64, String)>), String> {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
         let mut q = db
             .prepare(
@@ -204,9 +216,11 @@ impl Addons {
                 ))
             })
             .map_err(|_| "Database query failed")?;
-        rows.map(|r| {
+        let mut entries = vec![];
+        let mut errors = vec![];
+        for r in rows {
             let (i, u, m, version) = r.map_err(|_| "Database query failed")?;
-            let (u, m) = credentials_v2::read(
+            match credentials_v2::read(
                 &db,
                 self.vault.as_deref(),
                 self.account_id,
@@ -214,10 +228,12 @@ impl Addons {
                 u,
                 m,
                 version,
-            )?;
-            Ok((i, u, m))
-        })
-        .collect()
+            ) {
+                Ok((u, m)) => entries.push((i, u, m)),
+                Err(error) => errors.push((i, error.into())),
+            }
+        }
+        Ok((entries, errors))
     }
     pub fn list(&self) -> Result<Value, String> {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
@@ -236,7 +252,7 @@ impl Addons {
     }
     fn config_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         Ok(
-            json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"manifest_url":if r.get::<_,i64>(5)?==0 {Some(r.get::<_,String>(2)?)} else {None},"enabled":r.get::<_,bool>(3)?,"credentials_encrypted":r.get::<_,i64>(5)?==1}),
+            json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"manifest_url":null,"enabled":r.get::<_,bool>(3)?,"credentials_encrypted":r.get::<_,i64>(5)?==1}),
         )
     }
     /// Patch only enabled, preserving omitted fields. The complete saved
@@ -274,30 +290,14 @@ impl Addons {
             .map_err(|_| "Database task failed")?
     }
     pub async fn add(&self, url: &str) -> Result<Value, String> {
-        if self.vault.is_none() {
-            let checking = self.clone();
-            let protected=tokio::task::spawn_blocking(move || {
-                checking.db.lock().map_err(|_|"Database unavailable")?.query_row("SELECT EXISTS(SELECT 1 FROM addon_encryption_accounts_v2 WHERE account_id=?1)",[checking.account_id],|r|r.get::<_,bool>(0)).map_err(|_|"Database query failed")
-            }).await.map_err(|_|"Database task failed")??;
-            if protected {
-                return Err("secret_store_not_configured".into());
-            }
-        }
+        let vault = self.vault.clone().ok_or("secret_store_not_configured")?;
         let (url, m) = self.prepare_manifest(url).await?;
         self.cache.lock().unwrap().remove(&self.cache_key(&url));
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
             let db = this.db.lock().map_err(|_| "Database unavailable")?;
-            if let Some(vault)=&this.vault {
-                let id=credentials_v2::store(&db,vault,this.account_id,&url,&m)?;
-                return db.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE id=?1 AND account_id=?2",params![id,this.account_id],Self::config_row).map_err(|_|"Database query failed".into());
-            }
-            let tx=db.unchecked_transaction().map_err(|_|"Database update failed")?;
-            let protected:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM addon_encryption_accounts_v2 WHERE account_id=?1) OR EXISTS(SELECT 1 FROM addons WHERE account_id=?1 AND credentials_version<>0)",[this.account_id],|r|r.get(0)).map_err(|_|"Database query failed")?;
-            if protected {return Err("secret_store_not_configured".into());}
-            tx.execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES(?1,?2,?3,?4) ON CONFLICT(account_id,manifest_url) DO UPDATE SET name=excluded.name,manifest=excluded.manifest",params![m["name"].as_str(),url,m.to_string(),this.account_id]).map_err(|_|"Could not save addon")?;
-            let saved=tx.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE manifest_url=?1 AND account_id=?2", params![url,this.account_id], Self::config_row).map_err(|_| "Database query failed")?;
-            tx.commit().map_err(|_|"Database update failed")?;Ok(saved)
+            let id=credentials_v2::store(&db,&vault,this.account_id,&url,&m)?;
+            db.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE id=?1 AND account_id=?2",params![id,this.account_id],Self::config_row).map_err(|_|"Database query failed".into())
         }).await.map_err(|_| "Database task failed")?
     }
     pub fn delete(&self, id: i64) -> Result<(), String> {

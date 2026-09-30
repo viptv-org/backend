@@ -682,6 +682,7 @@ async fn v2_discovery_uses_three_owned_providers_not_live_default_or_foreign_sou
         super::v2::set_live_default(&db, 1, 2).unwrap();
     }
     async fn finish(app: &App, value: Value) -> (String, Value) {
+        crate::test_support::encrypt_fixture_sources(app);
         let (status, start) =
             request(app, "member-token-1", "POST", "/api/v2/streams", value).await;
         assert_eq!(status, StatusCode::OK, "{start}");
@@ -802,6 +803,7 @@ async fn v2_discovery_revocation_during_series_fetch_does_not_publish_or_cache()
             .unwrap();
         db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,imdb_id,extension) VALUES('series1',1,'1','series','Exact Title','exact title',2020,'tt1234567','mp4')",[]).unwrap();
     }
+    crate::test_support::encrypt_fixture_sources(&app);
     let (status, start) = request(
         &app,
         "member-token-1",
@@ -865,6 +867,7 @@ async fn v2_guide_uses_owned_raw_channel_and_hides_foreign_or_missing_ids() {
             db.execute("INSERT INTO provider_cache VALUES(?1,'get_short_epg:1',?2,?3)",params![provider,util::now()+60,json!({"epg_listings":[{"title":"VGVzdA==","start_timestamp":"1700000000","stop_timestamp":"1700003600"}]}).to_string()]).unwrap();
         }
     }
+    crate::test_support::encrypt_fixture_sources(&app);
     let (status, guide) = request(
         &app,
         "member-token-1",
@@ -933,6 +936,7 @@ async fn v2_guide_uses_owned_raw_channel_and_hides_foreign_or_missing_ids() {
 #[tokio::test]
 async fn exact_live_source_is_owned_private_and_independent_of_addon_discovery() {
     let app = seeded();
+    crate::test_support::encrypt_fixture_sources(&app);
     {
         let db = app.db.lock().unwrap();
         for provider in 1..=4 {
@@ -1065,6 +1069,7 @@ async fn exact_live_source_is_owned_private_and_independent_of_addon_discovery()
 #[tokio::test]
 async fn live_registration_does_not_stamp_old_urls_with_updated_credentials() {
     let app = seeded();
+    crate::test_support::encrypt_fixture_sources(&app);
     let original = crate::sources::source_configuration(&app.db.lock().unwrap(), "iptv:1")
         .unwrap()
         .unwrap();
@@ -1089,6 +1094,7 @@ async fn live_registration_does_not_stamp_old_urls_with_updated_credentials() {
 #[tokio::test]
 async fn approved_kids_vod_uses_v2_without_unlock_and_cannot_smuggle_other_titles() {
     let app = seeded();
+    crate::test_support::encrypt_fixture_sources(&app);
     {
         let db = app.db.lock().unwrap();
         db.execute(

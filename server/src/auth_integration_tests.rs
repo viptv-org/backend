@@ -10,7 +10,8 @@ use tower::ServiceExt;
 use crate::test_support::request;
 
 pub(crate) fn fixture() -> App {
-    let a = crate::test_support::app();
+    let mut a = crate::test_support::app();
+    crate::test_support::configure_vault(&mut a);
     {
         let db = a.db.lock().unwrap();
         db.execute("DELETE FROM addons", []).unwrap();
@@ -818,6 +819,7 @@ async fn addons_are_account_shared_and_cross_account_mutations_are_isolated() {
             db.execute("INSERT INTO addons(id,account_id,name,manifest_url,manifest) VALUES(?1,?1,?2,'https://example.com/manifest.json',?3)",params![owner,format!("Account {owner}"),json!({"name":format!("Account {owner}"),"catalogs":[{"id":"top","type":"movie"}]}).to_string()]).unwrap();
         }
     }
+    crate::test_support::encrypt_fixture_sources(&a);
     for owner in 1..=2 {
         let (status, list) = request(
             &a,
@@ -1448,7 +1450,8 @@ async fn playback_after_a_correction_becomes_the_current_episode_immediately() {
 }
 
 async fn kids_metadata_fixture() -> (App, tokio::task::JoinHandle<()>) {
-    let a = fixture();
+    let mut a = fixture();
+    a.addons.allow_test_loopback = true;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let service = Router::new().route(
@@ -1495,6 +1498,7 @@ async fn kids_metadata_fixture() -> (App, tokio::task::JoinHandle<()>) {
         let hash = format!("{:x}", Sha256::digest(b"parent-token"));
         db.execute("INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,profile_id,kind,device_name,access_expires,refresh_expires,created_at) VALUES('parent',1,?1,'parent-refresh','unused',1,'browser','parent',?2,?2,0)",params![hash,util::now()+3600]).unwrap();
     }
+    crate::test_support::encrypt_fixture_sources(&a);
     (a, task)
 }
 #[tokio::test]

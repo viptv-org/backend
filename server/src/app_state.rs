@@ -92,6 +92,9 @@ impl IntoResponse for ApiError {
             "secret_authentication_failed" => Some("secret_authentication_failed"),
             "invalid_secret_envelope" => Some("invalid_secret_envelope"),
             "addon_encryption_required" => Some("addon_encryption_required"),
+            "source_credentials_migration_required" => {
+                Some("source_credentials_migration_required")
+            }
             "addon_storage_unavailable" => Some("addon_storage_unavailable"),
             _ => None,
         };

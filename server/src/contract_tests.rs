@@ -91,6 +91,8 @@ fn app(db: Connection) -> App {
         principal,
         session_id: Some(session_id),
     });
+    crate::test_support::configure_vault(&mut app);
+    app.addons.allow_test_loopback = true;
     app
 }
 async fn api(app: &App, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
@@ -106,6 +108,7 @@ fn indexed_series(app: &App) {
 async fn discover(app: &App, body: Value) -> Value {
     // Explicit synthetic fixture ownership; never production migration inference.
     app.db.lock().unwrap().execute("INSERT OR IGNORE INTO provider_ownership(provider_id,account_id) SELECT id,1 FROM providers",[]).unwrap();
+    crate::test_support::encrypt_fixture_sources(app);
     let (status, job) = api(app, "POST", "/api/v2/streams", body).await;
     assert_eq!(status, StatusCode::OK, "{job}");
     let id = job["id"].as_str().unwrap();
@@ -543,6 +546,7 @@ async fn cookie_and_api_key_reflections_are_redacted_from_every_card_field() {
         "French en eng Player {cookie} cookie-credential second-credential {api_key} {url}"
     );
     app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(7,?1,'https://addon.fixture.invalid/manifest.json','{}',1)",[text.clone()]).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
     let (cards,error) = app.register("addon:7",vec![json!({
         "url":url,"name":text,"title":text,"description":text,"languages":["en","eng","French"],
         "behaviorHints":{"filename":format!("prefixcookie-credentialsuffix.{api_key}.mkv"),"bingeGroup":text,"proxyHeaders":{"request":{
@@ -659,9 +663,15 @@ async fn source_filter_labels_use_configured_producer_not_upstream_name() {
     app.db
         .lock()
         .unwrap()
+        .execute("INSERT INTO provider_ownership VALUES(1,1)", [])
+        .unwrap();
+    app.db
+        .lock()
+        .unwrap()
         .execute("UPDATE providers SET name='Family IPTV' WHERE id=1", [])
         .unwrap();
-    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(99,'Cinema Addon','https://example.invalid/manifest.json','{}',0)", []).unwrap();
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(99,'Cinema Addon','https://example.invalid/manifest.json','{}',1)", []).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
     for (source, name) in [("iptv:1", "Family IPTV"), ("addon:99", "Cinema Addon")] {
         let (cards, _) = app.register(source, vec![json!({"url":"https://example.invalid/video.mp4","name":"Release label 2160p","source_name":"Spoofed producer"})], "movie");
         assert_eq!(cards[0]["source"], source);
@@ -874,6 +884,7 @@ async fn next_api_reads_metadata_envelope_then_discovers_actual_iptv_episode() {
         axum::serve(listener,Router::new().fallback(||async {axum::Json(json!({"meta":{"id":"canonical","type":"series","videos":[{"id":"opaque-before","season":2,"episode":3},{"id":"opaque-next","season":2,"episode":4}]}}))})).await.unwrap();
     });
     app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(99,'Fixture',?1,?2,1)",params![format!("http://{address}/manifest.json"),json!({"resources":["meta"],"types":["series"]}).to_string()]).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
     let (status,next)=api(&app,"POST","/api/profiles/1/continue/next",json!({"type":"series","id":"opaque-before","series_id":"canonical","name":"Canonical Series","season":2,"episode":3,"year":2001,"source_addon_id":"iptv:1"})).await;
     assert_eq!(status, StatusCode::OK, "{next}");
     assert_eq!(next["item"]["id"], "opaque-next", "{next}");

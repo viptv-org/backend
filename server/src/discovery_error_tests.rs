@@ -1,4 +1,124 @@
 use crate::{auth_integration_tests::fixture, test_support::request, *};
+
+#[tokio::test]
+async fn plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_siblings() {
+    let app = fixture();
+    {
+        let db = app.db.lock().unwrap();
+        db.execute_batch("INSERT INTO providers(id,name,url,username,password) VALUES(2,'Healthy','https://fixture.invalid','user','password'); INSERT INTO provider_ownership VALUES(2,1);
+            INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(2,'Healthy','https://fixture.invalid/manifest.json','{\"name\":\"Healthy\",\"resources\":[],\"catalogs\":[{\"id\":\"top\",\"type\":\"movie\"}]}',1);").unwrap();
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    {
+        let db = app.db.lock().unwrap();
+        db.execute_batch("INSERT INTO providers(id,name,url,username,password) VALUES(1,'Legacy','https://fixture.invalid/private-token','private-user','private-password'); INSERT INTO provider_ownership VALUES(1,1);
+            INSERT INTO provider_live(id,provider_id,stream_id,name) VALUES('iptv:1:7',1,'7','Legacy raw channel');
+            INSERT INTO provider_live(id,provider_id,stream_id,name) VALUES('iptv:2:7',2,'7','Healthy raw channel');
+            INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Legacy','https://fixture.invalid/private-addon/manifest.json','{\"resources\":[\"stream\"],\"types\":[\"movie\"]}',1);").unwrap();
+    }
+    let code = "source_credentials_migration_required";
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/iptv/live/iptv:2:7/source",
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let addons = app.addons.clone().for_account(1);
+    let (healthy, errors) = addons.entries_with_errors().unwrap();
+    assert_eq!(healthy.len(), 1);
+    assert_eq!(healthy[0].0, 2);
+    assert_eq!(errors, vec![(1, code.to_owned())]);
+    assert_eq!(addons.catalogs().unwrap()[0]["addon_id"], 2);
+    let (status, metadata) =
+        request(&app, "member-token-1", "GET", "/api/v2/addons", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(metadata["items"][0]["configuration_error_code"], code);
+    assert!(!metadata.to_string().contains("private-addon"));
+    assert!(!addons.list().unwrap().to_string().contains("private-addon"));
+    let (status, error) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/iptv/live/iptv:1:7/source",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(error["error_code"], code);
+    assert!(!error.to_string().contains("private-token"));
+    let (status, index) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/iptv/live/channels?catalog_id=1",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{index}");
+    assert_eq!(index["items"][0]["id"], "iptv:1:7");
+    assert_eq!(
+        request(&app, "member-token-1", "GET", "/api/profiles", Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/profiles/1/continue/page",
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/streams",
+        json!({"type":"movie","id":"tt1234567","only_addons":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{start}");
+    let (_, events) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("/api/v2/streams/{}", start["id"].as_str().unwrap()),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(events["events"][0]["error_code"], code);
+    assert_eq!(events["done"], true);
+    assert!(!events.to_string().contains("private-addon"));
+    let db = app.db.lock().unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT credentials_version FROM providers WHERE id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.query_row("SELECT manifest_url FROM addons WHERE id=1", [], |r| r
+            .get::<_, String>(
+            0
+        ))
+        .unwrap(),
+        "https://fixture.invalid/private-addon/manifest.json"
+    );
+}
 use axum::{response::IntoResponse, routing::get, Router};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -6,6 +126,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 async fn unsupported_required_header_events_are_safe_and_keep_healthy_siblings() {
     let app = fixture();
     app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(7,'Fixture','https://addon.fixture.invalid/manifest.json','{}',1)",[]).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
     let mut owned = app.clone().with_lease(ResourceLease {
         policy_revision: 0,
         principal: auth::Principal::Account {
@@ -143,6 +264,7 @@ async fn iptv_discovery_and_guide_explain_failures_without_losing_healthy_source
             db.execute("INSERT INTO provider_live(id,provider_id,stream_id,name) VALUES(?1,?2,'1','Channel')",params![format!("iptv:{id}:1"),id]).unwrap();
         }
     }
+    crate::test_support::encrypt_fixture_sources(&app);
     for (mode, code, http_status) in [
         (
             0,
@@ -185,6 +307,7 @@ async fn addon_errors_and_invalid_success_bodies_are_not_silent_empty_results() 
     app.addons.allow_test_loopback = true;
     let upstream = upstream().await;
     app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Fixture addon',?1,?2,1)",params![format!("{}/private-token/manifest.json",upstream.url),json!({"id":"fixture","name":"Fixture addon","version":"1.0.0","resources":["stream"],"types":["series"],"catalogs":[]}).to_string()]).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
     for (mode, code) in [
         (0, "addon_access_denied"),
         (1, "addon_rate_limited"),

@@ -154,8 +154,8 @@
       "source": "server/src/addon.rs",
       "destination": "server/src/addon.rs",
       "sha256": "2544d3bd448b2db521d055e866c1dab45e56c5e0529739dcdef9d6756bfd281e",
-      "extracted_sha256": "4b58955f6df22e6dc9007a96ada7f866a2dc74620a24db03b6dfca332f8e02bb",
-      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "extracted_sha256": "1a7f4cf55d8358a433219734f3f6051ec0db3e8caeb6c27c9cdf0e6e210c633f",
+      "reason": " BE-002 engine-free runtime and explicit legacy refusal; coordinated runtime encryption boundary with encrypted-only addon writes and healthy-source isolation; original extraction hash retained."
     },
     {
       "source": "server/src/auth.rs",
@@ -168,8 +168,8 @@
       "source": "server/src/auth_integration_tests.rs",
       "destination": "server/src/auth_integration_tests.rs",
       "sha256": "b04b9dd5f26c06e4660200e9d537c8dc1a19da07739b8cc66f64769ec840e938",
-      "extracted_sha256": "2493eb1222353ba36da9ee8829b8aecbc27360d6adba922e5465b9aabb8415a2",
-      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "extracted_sha256": "34e7afde97e2ecf59af03cd0c3afa6a2a30aab6432f7de54c63a73a4f6a41b60",
+      "reason": " BE-002 engine-free runtime and explicit legacy refusal; genuine account-source fixtures converted to encrypted credentials for runtime cutover while retaining offline migration cases; original extraction hash retained."
     },
     {
       "source": "server/src/automation.rs",
@@ -187,8 +187,8 @@
       "source": "server/src/contract_tests.rs",
       "destination": "server/src/contract_tests.rs",
       "sha256": "38a029f8cbbffc92c2771e1a95b5c092727174e9bd055b4788bbc5e66e2fd02d",
-      "extracted_sha256": "57613aa6f7808a79f4afda2b7ad8ee0f3665c0a1e0d027f977a84d824c49aa71",
-      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures, plus reflected credential privacy and required-header classification fixtures; original extraction hash retained."
+      "extracted_sha256": "e158f3d9fcf72ff04d089be6ad5bec54488a84aa8f748b3989518e9695897bf1",
+      "reason": " BE-002 engine-free runtime, explicit legacy refusal, reflected credential privacy and required-header classification; genuine source fixtures use encrypted credentials/cache under the runtime migration boundary; original extraction hash retained."
     },
     {
       "source": "server/src/country_names.json",

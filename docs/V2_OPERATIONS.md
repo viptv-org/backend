@@ -84,6 +84,37 @@ checks do not qualify real gateway media playback or hardware. This checkpoint
 does not remove the pre-existing version-zero plaintext credential fallback;
 offline migration/retirement evidence remains a separate operational gate.
 
+### Runtime encryption boundary checkpoint — 2026-09-30
+
+The subsequent coordinated runtime checkpoint supersedes the plaintext fallback
+caveat above: provider/addon credential readers and opaque-source registration
+refuse version-zero credentials with safe `source_credentials_migration_required`
+copy. Restoring the correct keyring remains necessary for encrypted sources.
+There is no whole-server startup refusal or runtime encryption/owner assignment;
+authentication, history and owned raw catalog-index inspection remain available.
+Unmigrated sources retain their identities and bytes for reviewed offline work.
+
+Explicit offline inspection, ownership assignment, encryption and export tools
+still inspect legacy data. Only the private offline add-on encryption reader may
+decode a legacy manifest URL; runtime discovery never invokes that reader.
+Healthy encrypted siblings remain usable. Source discovery reports bounded safe
+per-add-on failures, and the v2 management list exposes configuration errors.
+Compatibility catalog arrays retain their existing shape and list only usable
+encrypted sources when mixed with legacy entries.
+
+Android and Roku still call legacy `/api/addons` and `/api/catalogs` metadata
+routes. These routes are retained: metadata never returns stored manifest URLs;
+enable/delete remain account-scoped. Legacy add-on POST now requires a keyring
+before fetching and writes only encrypted records. It cannot reinstall a legacy
+source to bypass the reviewed migration. No client contract fields or UI changed.
+
+Validation: 206 tests passed, two opt-in tests ignored; strict all-target Clippy
+passed. Synthetic fixtures cover plaintext refusal, unchanged legacy bytes,
+healthy encrypted sources, auth/history/raw-index availability and missing-keyring
+POST refusal before network/write. Genuine source/lease fixtures now use encrypted
+credentials and detail caches. Existing offline migration/export fixtures pass.
+No production migration, deployment, real gateway media or hardware was exercised.
+
 Authenticated account sessions use:
 
 - GET/POST `/api/v2/iptv/connections`

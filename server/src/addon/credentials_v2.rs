@@ -98,6 +98,21 @@ pub(super) fn read(
     manifest: String,
     version: i64,
 ) -> Result<(String, Value), &'static str> {
+    read_inner(db, vault, account, id, url, manifest, version, false)
+}
+
+// Explicitly offline only: encryption must inspect the original plaintext.
+#[allow(clippy::too_many_arguments)]
+fn read_inner(
+    db: &Connection,
+    vault: Option<&Vault>,
+    account: i64,
+    id: i64,
+    url: String,
+    manifest: String,
+    version: i64,
+    offline_legacy: bool,
+) -> Result<(String, Value), &'static str> {
     let stored: Option<(i64, String)> = db
         .query_row(
             "SELECT account_id,secret FROM addon_credentials_v2 WHERE addon_id=?1",
@@ -107,6 +122,9 @@ pub(super) fn read(
         .optional()
         .map_err(storage)?;
     if version == 0 && stored.is_none() {
+        if !offline_legacy {
+            return Err("source_credentials_migration_required");
+        }
         return Ok((
             url,
             serde_json::from_str(&manifest).map_err(|_| "Invalid stored manifest")?,
@@ -282,7 +300,8 @@ pub(crate) fn encrypt_legacy(
             [account],
         )
         .map_err(storage)?;
-        let (url, manifest) = read(tx, Some(vault), account, id, url, manifest, version)?;
+        let (url, manifest) =
+            read_inner(tx, Some(vault), account, id, url, manifest, version, true)?;
         if version == 1 {
             continue;
         }
@@ -511,7 +530,7 @@ mod tests {
                 &manifest
             )
             .unwrap_err(),
-            "addon_encryption_required"
+            "source_credentials_migration_required"
         );
         let tx = db.unchecked_transaction().unwrap();
         assert_eq!(encrypt_legacy(&tx, &vault).unwrap(), 1);

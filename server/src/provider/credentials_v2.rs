@@ -39,6 +39,7 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
         account_id INTEGER NOT NULL, secret TEXT NOT NULL);",
     )
 }
+#[cfg(test)]
 pub(super) fn sealed(db: &Connection, id: i64) -> Result<bool, String> {
     db.query_row(
         "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND credentials_version<>0) OR EXISTS(SELECT 1 FROM provider_credentials_v2 WHERE provider_id=?1)",
@@ -69,7 +70,7 @@ pub(super) fn read(
         .map_err(db_error)?;
     let Some((account, envelope)) = stored else {
         return if version == 0 {
-            Ok(())
+            Err("source_credentials_migration_required".into())
         } else {
             Err("invalid_secret_envelope".into())
         };
@@ -188,6 +189,7 @@ mod tests {
     async fn encrypted_readers_preserve_http_identity_and_fail_closed() {
         let app = crate::auth_integration_tests::fixture();
         let mut service = app.providers.for_account(1);
+        service.vault = None;
         let vault=Arc::new(Vault::from_json(&json!({"active":"test","keys":{"test":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string()).unwrap());
         let id=service.add(json!({"name":"Encrypted fixture","url":"http://fixture.invalid/base","username":"private-user","password":"private-password"})).unwrap()["id"].as_i64().unwrap();
         app.db
@@ -195,13 +197,15 @@ mod tests {
             .unwrap()
             .execute("INSERT INTO provider_ownership VALUES(?1,1)", [id])
             .unwrap();
-        let old = service.provider(id).unwrap();
+        assert_eq!(
+            service.provider(id).err().unwrap(),
+            "source_credentials_migration_required"
+        );
         {
             let db = app.db.lock().unwrap();
             let tx = db.unchecked_transaction().unwrap();
             assert_eq!(encrypt_legacy(&tx, &vault).unwrap(), 1);
             tx.commit().unwrap();
-            assert!(old.ensure_current(&db).is_err());
             // Restart schema initialization must not reinterpret encrypted rows.
             crate::provider::init(&db).unwrap();
         }

@@ -32,6 +32,7 @@ pub(crate) fn provider(raw: &str) -> Option<&'static str> {
             "source_route_migration_required"
         }
         "source_headers_unsupported" => "source_headers_unsupported",
+        "source_credentials_migration_required" => "source_credentials_migration_required",
         "secret_store_not_configured" => "secret_store_not_configured",
         "secret_key_unavailable" => "secret_key_unavailable",
         "secret_authentication_failed" => "secret_authentication_failed",
@@ -53,6 +54,11 @@ pub(crate) fn provider(raw: &str) -> Option<&'static str> {
 }
 pub(crate) fn addon(raw: &str) -> Option<&'static str> {
     Some(match raw {
+        "source_credentials_migration_required" => "source_credentials_migration_required",
+        "secret_store_not_configured" => "secret_store_not_configured",
+        "secret_key_unavailable" => "secret_key_unavailable",
+        "secret_authentication_failed" => "secret_authentication_failed",
+        "invalid_secret_envelope" => "invalid_secret_envelope",
         "invalid_addon_endpoint" | "Manifest URL must end in /manifest.json" => {
             "invalid_addon_endpoint"
         }

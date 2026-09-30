@@ -118,6 +118,7 @@ fn details(code: &str) -> (StatusCode, &'static str) {
         "addon_dns_unavailable" => (StatusCode::BAD_GATEWAY,"The addon address could not be resolved. Check its address or try again later."),
         "addon_response_interrupted" => (StatusCode::BAD_GATEWAY,"The addon's response was interrupted. Try again later."),
         "addon_encryption_required" => (StatusCode::CONFLICT,"This legacy addon needs the operator's reviewed encryption migration before it can be updated."),
+        "source_credentials_migration_required" => (StatusCode::CONFLICT,"This source needs the operator's reviewed ownership and encryption migration before it can be used. Ask the server operator to migrate it and configure the encryption keyring."),
         "addon_storage_unavailable" => (StatusCode::SERVICE_UNAVAILABLE,"Addon settings are temporarily unavailable. Try again."),
         "invalid_episode_selection" => (StatusCode::BAD_REQUEST,"Choose a specific season and episode before requesting IPTV sources."),
         "invalid_discovery_request" => (StatusCode::BAD_REQUEST,"Choose a movie, exact episode or live channel and valid source filters."),

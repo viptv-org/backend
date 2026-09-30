@@ -18,9 +18,10 @@ impl App {
         kind: &str,
         expected: Option<[u8; 32]>,
     ) -> (Vec<Value>, Option<String>) {
-        let configuration = source_configuration(&self.db.lock().unwrap(), source)
-            .ok()
-            .flatten();
+        let configuration = match source_configuration(&self.db.lock().unwrap(), source) {
+            Ok(configuration) => configuration,
+            Err(error) => return (vec![], Some(error.1)),
+        };
         if expected.is_some() && configuration != expected {
             return (vec![], Some("source_configuration_changed".into()));
         }
@@ -174,6 +175,27 @@ pub(crate) fn source_configuration(
     let Ok(id) = id.parse::<i64>() else {
         return Ok(None);
     };
+    let table = match kind {
+        "iptv" => Some("providers"),
+        "addon" => Some("addons"),
+        _ => None,
+    };
+    if let Some(table) = table {
+        let version: Option<i64> = db
+            .query_row(
+                &format!("SELECT credentials_version FROM {table} WHERE id=?1"),
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        if version == Some(0) {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "source_credentials_migration_required".into(),
+            ));
+        }
+    }
     let value:Option<String>=match kind {
         "iptv"=>{
             let (route,join)=if provider::egress::table_exists(db).map_err(ApiError::from)? {("COALESCE(r.warp,0)","LEFT JOIN provider_routes r ON r.provider_id=p.id")}else{("0","")};

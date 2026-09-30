@@ -595,7 +595,7 @@ async fn stalled_installs_do_not_take_viewing_request_slots() {
 }
 
 #[tokio::test]
-async fn legacy_save_rechecks_encryption_protection_after_download() {
+async fn legacy_save_without_keyring_refuses_before_download_or_write() {
     let app = app();
     let mut old = app.addons.clone().for_account(1);
     old.vault = None;
@@ -628,15 +628,6 @@ async fn legacy_save_rechecks_encryption_protection_after_download() {
         .unwrap();
     });
     let pending = tokio::spawn(async move { old.add(&url).await });
-    tokio::time::timeout(Duration::from_secs(3), entered.notified())
-        .await
-        .unwrap();
-    app.db
-        .lock()
-        .unwrap()
-        .execute("INSERT INTO addon_encryption_accounts_v2 VALUES(1)", [])
-        .unwrap();
-    release.notify_one();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(3), pending)
             .await
@@ -644,6 +635,11 @@ async fn legacy_save_rechecks_encryption_protection_after_download() {
             .unwrap()
             .unwrap_err(),
         "secret_store_not_configured"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), entered.notified())
+            .await
+            .is_err()
     );
     assert_eq!(
         app.db

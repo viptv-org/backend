@@ -35,17 +35,7 @@ impl Provider {
                 Err("source_configuration_changed".into())
             };
         }
-        if credentials_v2::sealed(db, self.id)? {
-            return Err("source_configuration_changed".into());
-        }
-        let current:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND url=?2 AND username=?3 AND password=?4 AND enabled=1)",params![self.id,self.url,self.username,self.password],|r|r.get(0)).map_err(db_error)?;
-        if !current {
-            return Err(
-                "Provider credentials changed or account became unavailable; retry the request"
-                    .into(),
-            );
-        }
-        Ok(())
+        Err("source_credentials_migration_required".into())
     }
 }
 

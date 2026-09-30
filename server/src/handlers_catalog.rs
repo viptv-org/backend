@@ -134,8 +134,9 @@ pub(crate) async fn start_streams(
     let id = text(&v, "id", 512)?.to_string();
     a.prune();
     let addons = a.addons.clone();
-    let sources = blocking(move || Ok(addons.entries()?))
-        .await?
+    let (sources, source_errors) = blocking(move || Ok(addons.entries_with_errors()?)).await?;
+    let source_errors = source_errors.into_iter().take(32).collect::<Vec<_>>();
+    let sources = sources
         .into_iter()
         .filter(|(_, _, m)| only_provider.is_none() && addon::supports(m, "stream", &kind, &id))
         .take(32)
@@ -146,7 +147,13 @@ pub(crate) async fn start_streams(
         created: Instant::now(),
         state: Mutex::new(JobState {
             events: vec![],
-            pending: sources.len() + usize::from(!only_addons),
+            pending: sources.len()
+                + usize::from(!only_addons)
+                + if only_provider.is_none() {
+                    source_errors.len()
+                } else {
+                    0
+                },
         }),
         notify: Notify::new(),
     });
@@ -161,6 +168,11 @@ pub(crate) async fn start_streams(
         }
         jobs.insert(jid.clone(), job.clone());
         a.own_resource("job", &jid);
+    }
+    if only_provider.is_none() {
+        for (id, error) in source_errors {
+            emit(&a, &job, &format!("addon:{id}"), Err(error));
+        }
     }
     for (aid, u, _) in sources {
         let a = a.clone();

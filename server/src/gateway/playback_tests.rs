@@ -41,6 +41,7 @@ fn lease() -> ResourceLease {
 }
 fn source(app: &App) -> String {
     app.db.lock().unwrap().execute("INSERT OR IGNORE INTO addons(id,name,manifest_url,enabled,manifest,account_id) VALUES(1,'Fixture','https://addon.fixture.invalid/manifest.json',1,'{}',1)",[]).unwrap();
+    crate::test_support::encrypt_fixture_sources(app);
     let scoped = app.clone().with_lease(lease());
     let (sources, _) = scoped.register(
         "addon:1",
@@ -60,6 +61,7 @@ async fn live_source_fixture(app: &App) -> String {
             .unwrap();
         db.execute("INSERT INTO provider_live(id,provider_id,stream_id,name,logo) VALUES('iptv:1:7',1,'7','Selected channel','https://logo.fixture.invalid/7.png')", []).unwrap();
     }
+    crate::test_support::encrypt_fixture_sources(app);
     let (status, response) = request(
         app,
         "member-token-1",
@@ -317,6 +319,8 @@ async fn setup() -> (App, Peer) {
         )
         .unwrap(),
     ));
+    app.providers.vault = app.secret_vault.clone();
+    app.addons.vault = app.secret_vault.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     app.gateway_client = client::Client::fixture(
         format!("http://{}/", listener.local_addr().unwrap())
@@ -478,6 +482,7 @@ async fn playback_never_falls_back_to_another_accounts_gateway_without_a_grant()
     let (app, peer) = setup().await;
     let gateway = gateway(&app, "first", 0);
     app.db.lock().unwrap().execute_batch("INSERT INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Second','two',1); INSERT INTO profile_owners VALUES(2,2,0); INSERT INTO auth_profiles VALUES(2,2); UPDATE auth_sessions SET profile_id=2 WHERE account_id=2; INSERT INTO addons(id,name,manifest_url,enabled,manifest,account_id) VALUES(2,'Second','https://second.fixture.invalid/manifest.json',1,'{}',2);").unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
     let lease = ResourceLease {
         policy_revision: 0,
         principal: auth::Principal::Account {
@@ -919,6 +924,21 @@ async fn fresh_playback_skips_full_gateways_and_unassigned_provider_sources_fail
     assert_eq!(ready["status"], "ready");
     assert_eq!(*peer.starts.lock().unwrap(), vec!["second"]);
     app.db.lock().unwrap().execute("INSERT INTO providers(id,name,url,username,password) VALUES(1,'Unassigned','http://provider.fixture.invalid','user','password')",[]).unwrap();
+    {
+        let db = app.db.lock().unwrap();
+        let secret = app.secret_vault.as_ref().unwrap().seal(1,"xtream","1",json!({"url":"http://provider.fixture.invalid","username":"user","password":"password"}).to_string().as_bytes()).unwrap();
+        db.execute(
+            "INSERT INTO provider_credentials_v2 VALUES(1,1,?1)",
+            [secret],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE providers SET url='',username='',password='',credentials_version=1 WHERE id=1",
+            [],
+        )
+        .unwrap();
+        // Deliberately no ownership: admission must still reject this fixture.
+    }
     let scoped = app.clone().with_lease(lease());
     let (items, _) = scoped.register(
         "iptv:1",
