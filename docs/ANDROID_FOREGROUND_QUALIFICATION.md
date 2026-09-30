@@ -121,3 +121,24 @@ This preflight is not physical-device, foreground UI, decoder-quality,
 production deployment or universal gateway acceptance. Android owns subsequent
 emulator evidence, including affected route/focus, timeout/retry, real refresh,
 pairing, Resume and independent playback cleanup outcomes.
+
+## Helper lifecycle qualification
+
+Helper source `aeaff96b1ba126555d6b6aee07333d441532ee9f` passed fresh
+preflight on separate loopback TLS18448/18449 and namespace18196/18095 ports.
+Through actual authenticated HTTP, DELETE `/api/auth/sessions` revoked all
+synthetic account browser sessions, including the fixture's initial approval
+session. A subsequent actual device-code request, fixture approval and native
+token exchange succeeded for the same account. This repeated twice with trusted
+TLS; no stale browser session or fabricated native grant was used.
+
+Normal owner SIGTERM exited0 and left no recorded owner/process-group member
+or test listener. A second fresh run deliberately interrupted only the recorded
+relay launcher with SIGKILL. Its child still served actual HTTPS health200;
+subsequent owner SIGTERM exited0 and removed that child and both owned groups.
+Namespace18196/18095 and TLS18448/18449 were absent afterward. Shared18180/8443
+and the still-active native fixture18444/18445 remained listening.
+
+These checks qualify fixture containment, not the Android product or production
+rollback. Final teardown of the active native fixture and its independently
+owned gateway viewer remains a separate check after device acceptance.
