@@ -63,3 +63,8 @@ container-namespace HTTP. This is API/packaging evidence, **not browser TLS,
 Secure/SameSite cookie-storage behavior, browser navigation/focus, production
 ingress, deployment or real media/provider/gateway/hardware qualification**.
 Those remain separate isolated HTTPS and native acceptance gates.
+
+The isolated real-browser gate is now checked separately in
+[BROWSER_RUNTIME_TEST.md](BROWSER_RUNTIME_TEST.md): actual account/auth/parent/
+device flows at both desktop and phone viewports against this exact full image.
+It does not qualify gateway media or populated provider/operator data.
