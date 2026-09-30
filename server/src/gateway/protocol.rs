@@ -3,6 +3,27 @@ use super::client;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 type Result<T> = std::result::Result<T, &'static str>;
+
+/// One closed mapping for control-API errors and asynchronous session failures.
+/// HTTP status alone is never evidence of an upstream connection limit.
+pub(crate) fn failure_code(code: Option<&str>) -> Option<&'static str> {
+    Some(match code? {
+        "unauthorized" => "gateway_key_rejected",
+        "forbidden" => "gateway_scope_missing",
+        "viewer_capacity" | "input_capacity" | "output_capacity" | "session_capacity" => {
+            "gateway_capacity"
+        }
+        "input_cleanup_pending" => "gateway_cleanup_pending",
+        "processing_failed" => "gateway_processing_failed",
+        "source_connection_limit" => "provider_connection_limit",
+        "source_preparation_failed" | "source_unavailable" => "source_unavailable",
+        "unsupported_output" | "unsupported_media" => "delivery_unsupported",
+        "startup_timeout" => "gateway_startup_timeout",
+        "session_expired" | "session_not_found" | "media_unauthorized" => "playback_expired",
+        "idempotency_conflict" => "playback_conflict",
+        _ => return None,
+    })
+}
 pub(crate) fn identifier(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
@@ -165,13 +186,12 @@ impl Session {
         ))
     }
     pub(crate) fn failure(&self) -> &'static str {
-        match self.error_code.as_deref() {
-            Some("source_connection_limit") => "provider_connection_limit",
-            Some("unsupported_media") => "delivery_unsupported",
-            Some("source_unavailable") => "source_unavailable",
-            Some("startup_timeout") => "gateway_startup_timeout",
-            _ if matches!(self.status.as_str(), "released" | "expired") => "playback_expired",
-            _ => "gateway_processing_failed",
-        }
+        failure_code(self.error_code.as_deref()).unwrap_or({
+            if matches!(self.status.as_str(), "released" | "expired") {
+                "playback_expired"
+            } else {
+                "gateway_processing_failed"
+            }
+        })
     }
 }

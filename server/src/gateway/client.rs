@@ -192,34 +192,16 @@ impl Client {
                 serde_json::from_slice(&data).map_err(|_| "gateway_protocol_invalid")?
             };
             if !(200..300).contains(&status) {
-                return Err(
-                    match value
+                return Err(super::protocol::failure_code(
+                    value
                         .pointer("/error/code")
-                        .and_then(serde_json::Value::as_str)
-                    {
-                        Some("unauthorized") => "gateway_key_rejected",
-                        Some("forbidden") => "gateway_scope_missing",
-                        Some(
-                            "viewer_capacity" | "input_capacity" | "output_capacity"
-                            | "session_capacity",
-                        ) => "gateway_capacity",
-                        Some("input_cleanup_pending") => "gateway_cleanup_pending",
-                        Some("processing_failed") => "gateway_processing_failed",
-                        Some("source_connection_limit") => "provider_connection_limit",
-                        Some("source_preparation_failed" | "source_unavailable") => {
-                            "source_unavailable"
-                        }
-                        Some("unsupported_output" | "unsupported_media") => "delivery_unsupported",
-                        Some("startup_timeout") => "gateway_startup_timeout",
-                        Some("session_expired" | "session_not_found" | "media_unauthorized") => {
-                            "playback_expired"
-                        }
-                        Some("idempotency_conflict") => "playback_conflict",
-                        _ if status == 401 => "gateway_key_rejected",
-                        _ if status == 403 => "gateway_scope_missing",
-                        _ => "gateway_unavailable",
-                    },
-                );
+                        .and_then(serde_json::Value::as_str),
+                )
+                .unwrap_or(match status {
+                    401 => "gateway_key_rejected",
+                    403 => "gateway_scope_missing",
+                    _ => "gateway_unavailable",
+                }));
             }
             Ok(value)
         }

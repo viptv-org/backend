@@ -34,6 +34,84 @@ fn vault(byte: u8) -> Vault {
 fn registration() -> Value {
     json!({"name":"Private gateway","endpoint":"https://gateway.example.test/","namespace":"fixture","priority":10,"integration_key":key()})
 }
+
+#[tokio::test]
+async fn gateway_http_and_async_failures_share_only_allowlisted_classifications() {
+    let cases = [
+        (429, "source_connection_limit", "provider_connection_limit"),
+        (403, "source_connection_limit", "provider_connection_limit"),
+        (502, "source_preparation_failed", "source_unavailable"),
+        (502, "source_unavailable", "source_unavailable"),
+        (422, "unsupported_output", "delivery_unsupported"),
+        (422, "unsupported_media", "delivery_unsupported"),
+        (503, "input_cleanup_pending", "gateway_cleanup_pending"),
+        (429, "viewer_capacity", "gateway_capacity"),
+        (504, "startup_timeout", "gateway_startup_timeout"),
+        (502, "processing_failed", "gateway_processing_failed"),
+    ];
+    for (status, code, expected) in cases {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = client::Client::fixture(
+            format!("http://{}/", listener.local_addr().unwrap())
+                .parse()
+                .unwrap(),
+        );
+        let routes = Router::new().route("/v1/sessions", axum::routing::post(move || async move {
+            (StatusCode::from_u16(status).unwrap(), Json(json!({"error":{"code":code,"message":"https://provider.invalid/private-password"}})))
+        }));
+        let task = tokio::spawn(async move {
+            axum::serve(listener, routes).await.unwrap();
+        });
+        let failure = client
+            .request(
+                "https://gateway.example.test/",
+                key().as_bytes(),
+                reqwest::Method::POST,
+                "v1/sessions",
+                None,
+                None,
+                std::time::Duration::from_secs(3),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(failure, expected);
+        let session = protocol::Session::parse(json!({"id":"viewer","status":"failed","expires_at":0,"error_code":code,"error":"https://provider.invalid/private-password"})).unwrap();
+        assert_eq!(session.failure(), expected);
+        task.abort();
+    }
+    for (status, expected) in [(403, "gateway_scope_missing"), (429, "gateway_unavailable")] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = client::Client::fixture(
+            format!("http://{}/", listener.local_addr().unwrap())
+                .parse()
+                .unwrap(),
+        );
+        let routes = Router::new().route("/v1/sessions", axum::routing::post(move || async move {
+            (StatusCode::from_u16(status).unwrap(), Json(json!({"error":{"code":"untrusted-private-password","message":"connection limit reached"}})))
+        }));
+        let task = tokio::spawn(async move {
+            axum::serve(listener, routes).await.unwrap();
+        });
+        assert_eq!(
+            client
+                .request(
+                    "https://gateway.example.test/",
+                    key().as_bytes(),
+                    reqwest::Method::POST,
+                    "v1/sessions",
+                    None,
+                    None,
+                    std::time::Duration::from_secs(3)
+                )
+                .await
+                .unwrap_err(),
+            expected
+        );
+        task.abort();
+    }
+    let session = protocol::Session::parse(json!({"id":"viewer","status":"failed","expires_at":0,"error_code":"untrusted-private-password","error":"connection limit reached"})).unwrap();
+    assert_eq!(session.failure(), "gateway_processing_failed");
+}
 async fn setup() -> (App, Peer) {
     let mut app = fixture();
     app.secret_vault = Some(Arc::new(vault(7)));

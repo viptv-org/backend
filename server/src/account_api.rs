@@ -106,6 +106,7 @@ pub(crate) fn description(code: &str) -> &'static str {
 }
 fn details(code: &str) -> (StatusCode, &'static str) {
     match code {
+        "invalid_v2_request" => (StatusCode::BAD_REQUEST,"This request is invalid. Check its path, query and body, then try again."),
         "secret_too_large" => (StatusCode::PAYLOAD_TOO_LARGE,"This source configuration exceeds the server's storage limit. Use a smaller configuration."),
         "invalid_addon_endpoint" => (StatusCode::BAD_REQUEST,"Use a valid HTTP or HTTPS addon manifest URL without embedded user credentials or fragments."),
         "addon_private_destination" => (StatusCode::BAD_REQUEST,"The addon uses a private or reserved network address, which the server's source policy does not allow."),
