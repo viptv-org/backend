@@ -30,3 +30,36 @@ helper tests, shell syntax, extraction inventory and locked offline backend buil
 passed. `docker build --build-arg FRONTENDS=0` also passed with local runtime image
 `sha256:4a9b5e7a1a7b` (short ID); it does not qualify frontend packaging, physical devices, real subscriptions,
 production migration or production ingress. No shared HTTPS service was stopped.
+
+## Full image HTTP acceptance — 2026-09-30
+
+`scripts/check-runtime-image.py` exercises an existing local image by exact
+content ID and source label. It never pulls, loads private environment files,
+mounts host/production data, publishes ports or changes the shared HTTPS stack.
+Each run creates a new network-none/read-only/nonroot container with private
+tmpfs synthetic SQLite data and removes only its returned container ID. Private
+summary/log evidence is retained in a fresh mode-0700 temporary directory; no
+credentials or database are included in the public result or committed evidence.
+
+```sh
+python3 scripts/check-runtime-image.py --sudo viptv:qualification-205a70a \
+  --expect-image-id sha256:9b2393c866d55321fabd21e61aba86035915e0e1ad1b28108bfb449cb9f94827 \
+  --expect-revision 205a70a06527a9b054e96b84e726e86a51b22fe1
+```
+
+That exact full image passed seven acceptance groups: image/source identity;
+UID10001, read-only root, no capabilities/mounts/ports and no FFmpeg; actual
+Docker healthy status; dashboard/TV HTML and linked module/CSS MIME; real
+registration/profile/account isolation and quality-free preferences; empty lazy
+catalog/default and no-keyring refusal before fetch/write; retired namespaces
+across GET/POST/PUT/PATCH/DELETE with malformed JSON and no media child processes;
+and browser/native login, refresh rotation, stale-token rejection, logout and
+session revocation. The image contains dashboard `93c9316` and TV `db9` from the
+tracked-source packaging build. The TV entry has linked modules rather than a
+separate CSS link; dashboard CSS is explicitly checked.
+
+Cookie requests deliberately supply the pinned HTTPS Origin and CSRF token over
+container-namespace HTTP. This is API/packaging evidence, **not browser TLS,
+Secure/SameSite cookie-storage behavior, browser navigation/focus, production
+ingress, deployment or real media/provider/gateway/hardware qualification**.
+Those remain separate isolated HTTPS and native acceptance gates.
