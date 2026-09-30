@@ -1,9 +1,9 @@
 //! Gateway-only HTTPS control transport. Resolve/validate/pin each destination;
 //! do not follow redirects with integration credentials or inherit host proxies.
+pub(crate) use crate::source_http::public_ip;
 use futures::FutureExt;
 use serde::Deserialize;
 use std::time::Duration;
-pub(crate) use crate::source_http::public_ip;
 use url::{Host, Url};
 
 type Result<T> = std::result::Result<T, &'static str>;

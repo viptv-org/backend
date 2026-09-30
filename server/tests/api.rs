@@ -893,10 +893,7 @@ async fn family_startup_tries_verified_backup_and_reports_sanitized_attempts() {
     )
     .await;
     assert_eq!(busy_status, StatusCode::TOO_MANY_REQUESTS, "{busy}");
-    assert!(busy["error"]
-        .as_str()
-        .unwrap()
-        .contains("connection limit"));
+    assert!(busy["error"].as_str().unwrap().contains("connection limit"));
     assert_eq!(busy["error_code"], "provider_connection_limit");
     request(
         &app,

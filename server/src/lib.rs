@@ -1,11 +1,13 @@
-mod activity;
 mod account_api;
+mod activity;
 pub mod addon;
 pub mod auth;
 mod automation;
 mod continuation;
-mod guides;
+#[cfg(test)]
+mod discovery_error_tests;
 mod gateway;
+mod guides;
 mod health;
 mod kids;
 mod library;
@@ -17,13 +19,11 @@ pub mod migration_v2;
 pub mod playback;
 mod preferences;
 pub mod provider;
-mod service_health;
-mod service_errors;
-mod source_http;
-#[cfg(test)]
-mod discovery_error_tests;
 mod secret_store;
+mod service_errors;
+mod service_health;
 mod session;
+mod source_http;
 pub mod util;
 
 mod app_state;

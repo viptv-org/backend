@@ -278,7 +278,9 @@ pub(crate) async fn renew(
         .blocking(move |s| {
             let mut db = s.lock()?;
             owner(&lease, &db)?;
-            if super::credentials_v2::sealed(&db,id)? {return Err("client_update_required".into());}
+            if super::credentials_v2::sealed(&db, id)? {
+                return Err("client_update_required".into());
+            }
             if duplicate(&db, &credentials, Some(id))?.is_some() {
                 return Err("Provider login already configured on another entry".into());
             }

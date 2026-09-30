@@ -86,16 +86,18 @@ impl From<&str> for ApiError {
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let secret_code=match self.1.as_str() {
-            "secret_store_not_configured"=>Some("secret_store_not_configured"),
-            "secret_key_unavailable"=>Some("secret_key_unavailable"),
-            "secret_authentication_failed"=>Some("secret_authentication_failed"),
-            "invalid_secret_envelope"=>Some("invalid_secret_envelope"),
-            "addon_encryption_required"=>Some("addon_encryption_required"),
-            "addon_storage_unavailable"=>Some("addon_storage_unavailable"),
-            _=>None,
+        let secret_code = match self.1.as_str() {
+            "secret_store_not_configured" => Some("secret_store_not_configured"),
+            "secret_key_unavailable" => Some("secret_key_unavailable"),
+            "secret_authentication_failed" => Some("secret_authentication_failed"),
+            "invalid_secret_envelope" => Some("invalid_secret_envelope"),
+            "addon_encryption_required" => Some("addon_encryption_required"),
+            "addon_storage_unavailable" => Some("addon_storage_unavailable"),
+            _ => None,
         };
-        if let Some(code)=secret_code {return account_api::Error::Code(code).into_response();}
+        if let Some(code) = secret_code {
+            return account_api::Error::Code(code).into_response();
+        }
         let message = match self.api_error_code() {
             Some("client_update_required") => "This IPTV connection has been migrated. Update the client to manage it with the new account API.",
             Some("provider_connection_limit") => "This IPTV provider has reached its connection limit. Stop another stream or choose another provider.",
@@ -271,7 +273,7 @@ pub(crate) struct JobState {
 }
 pub(crate) struct StreamEntry {
     pub(crate) producer: String,
-    pub(crate) configuration: Option<[u8;32]>,
+    pub(crate) configuration: Option<[u8; 32]>,
     pub(crate) provider_id: Option<i64>,
     pub(crate) kind: String,
     pub(crate) live: bool,
@@ -301,7 +303,7 @@ impl App {
         automation::init(&db).map_err(|_| "Automation database initialization failed")?;
         let db = Arc::new(Mutex::new(db));
         let mut addons = Addons::new(db.clone(), client.clone())?;
-        addons.vault=secret_vault.clone();
+        addons.vault = secret_vault.clone();
         let mut providers = ProviderService::new(db.clone(), client);
         providers.vault = secret_vault.clone();
         provider::refresh_v2::start(&providers);

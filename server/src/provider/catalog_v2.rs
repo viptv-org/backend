@@ -82,6 +82,15 @@ struct Cursor {
     filter: Filter,
     ordinal: i64,
     id: String,
+    #[serde(default)]
+    direction: Direction,
+}
+#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum Direction {
+    #[default]
+    Next,
+    Previous,
 }
 #[derive(Debug, Serialize)]
 pub(crate) struct Page {
@@ -89,6 +98,7 @@ pub(crate) struct Page {
     pub generation: Option<i64>,
     pub items: Vec<Value>,
     pub next_cursor: Option<String>,
+    pub previous_cursor: Option<String>,
 }
 fn storage(_: rusqlite::Error) -> &'static str {
     "provider_storage_unavailable"
@@ -152,6 +162,7 @@ pub(crate) fn page(
             generation: None,
             items: vec![],
             next_cursor: None,
+            previous_cursor: None,
         });
     };
     let generation = tx
@@ -202,32 +213,84 @@ pub(crate) fn page(
         }
         _=>return Err("invalid_catalog_query"),
     };
-    let mut rows = tx.prepare(sql).map_err(storage)?.query_map(params![catalog,ordinal,id,filter.category_id,filter.search,limit+1,filter.profile_id], |row| {
+    let read = |ordinal: i64,
+                id: &str,
+                reverse: bool,
+                bound: usize|
+     -> Result<Vec<(i64, String, Value)>, &'static str> {
+        let sql = if reverse {
+            sql.replace(">(?2,?3)", "<(?2,?3)")
+                .replace(
+                    "ORDER BY l.ordinal,l.id",
+                    "ORDER BY l.ordinal DESC,l.id DESC",
+                )
+                .replace("ORDER BY ordinal,id", "ORDER BY ordinal DESC,id DESC")
+        } else {
+            sql.to_owned()
+        };
+        let rows = tx.prepare(&sql).map_err(storage)?.query_map(params![catalog,ordinal,id,filter.category_id,filter.search,bound,filter.profile_id], |row| {
         let item = match kind {
             Kind::Channels => json!({"id":row.get::<_,String>(1)?,"name":row.get::<_,String>(2)?,"logo":row.get::<_,Option<String>>(3)?,"category_id":row.get::<_,Option<String>>(4)?,"category":row.get::<_,Option<String>>(5)?,"epg_channel_id":row.get::<_,Option<String>>(6)?}),
             Kind::Categories => json!({"id":row.get::<_,String>(1)?,"name":row.get::<_,String>(2)?}),
         };
         Ok((row.get::<_,i64>(0)?,row.get::<_,String>(1)?,item))
-    }).map_err(storage)?.collect::<rusqlite::Result<Vec<_>>>().map_err(storage)?;
+        }).map_err(storage)?.collect::<rusqlite::Result<Vec<_>>>().map_err(storage)?;
+        Ok(rows)
+    };
+    let reverse = previous
+        .as_ref()
+        .is_some_and(|cursor| cursor.direction == Direction::Previous);
+    let mut rows = read(ordinal, id, reverse, limit + 1)?;
     let more = rows.len() > limit;
     rows.truncate(limit);
-    let next_cursor = if more {
-        let (ordinal, id, _) = rows.last().ok_or("invalid_cursor")?;
-        Some(
-            URL_SAFE_NO_PAD.encode(
-                serde_json::to_vec(&Cursor {
-                    version: 1,
-                    account,
-                    catalog,
-                    generation,
-                    kind,
-                    filter,
-                    ordinal: *ordinal,
-                    id: id.clone(),
-                })
-                .map_err(|_| "invalid_cursor")?,
-            ),
-        )
+    if reverse {
+        rows.reverse();
+    }
+    if rows.is_empty() && previous.is_some() {
+        return Err("catalog_changed");
+    }
+    let encode = |row: &(i64, String, Value), direction| {
+        serde_json::to_vec(&Cursor {
+            version: 1,
+            account,
+            catalog,
+            generation,
+            kind,
+            filter: filter.clone(),
+            ordinal: row.0,
+            id: row.1.clone(),
+            direction,
+        })
+        .map(|value| URL_SAFE_NO_PAD.encode(value))
+        .map_err(|_| "invalid_cursor")
+    };
+    let next_cursor = if let Some(last) = rows.last() {
+        let has_next = if reverse {
+            !read(last.0, &last.1, false, 1)?.is_empty()
+        } else {
+            more
+        };
+        if has_next {
+            Some(encode(last, Direction::Next)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let previous_cursor = if let Some(first) = rows.first() {
+        let has_previous = if reverse {
+            more
+        } else if previous.is_some() {
+            !read(first.0, &first.1, true, 1)?.is_empty()
+        } else {
+            false
+        };
+        if has_previous {
+            Some(encode(first, Direction::Previous)?)
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -237,6 +300,7 @@ pub(crate) fn page(
         generation: Some(generation),
         items: rows.into_iter().map(|(_, _, v)| v).collect(),
         next_cursor,
+        previous_cursor,
     })
 }
 

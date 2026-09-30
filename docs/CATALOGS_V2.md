@@ -20,7 +20,7 @@ ID. Unknown parameters and invalid limits fail with `invalid_catalog_query`.
 Search is a literal substring (SQLite's built-in case folding), not wildcard
 syntax or linguistic/tokenized matching.
 
-Response: `{catalog_id, generation, items, next_cursor}`. Channel items contain
+Response: `{catalog_id, generation, items, next_cursor, previous_cursor}`. Channel items contain
 `id`, `name`, `logo`, `category_id`, `category`, `epg_channel_id`. Category items
 contain `id`, `name`. Nullable provider fields stay nullable. No whole-library
 count, provider credentials, stream URLs, or implicit global catalog is returned.
@@ -39,6 +39,13 @@ token from another account/route yields `invalid_cursor`. A refresh or changed
 default yields 409 `catalog_changed`; clients must discard the old list/token and
 restart. Changing the page size is supported. There is no silent mixed-snapshot
 continuation.
+
+Both cursors carry direction and bind the same account/filter/snapshot scope.
+Backward reads use a descending keyset query, then return items in original
+provider order. Adjacent existence checks use bounded limit-one reads; neither
+direction uses offsets or whole-playlist counts. An empty continuation page is
+`catalog_changed`, not a silently truncated guide. Forward cursor compatibility
+is retained for already-issued version-one tokens.
 
 ## Storage and refresh
 
@@ -63,6 +70,11 @@ category order, changed-snapshot refusal, devices, selected-profile checks and
 restricted-profile protection. Storage fixtures cover repeatable additive schema,
 provider ordering, successful/empty refresh generations, and rollback after a
 duplicate stream causes an insert failure following deletion.
+
+2026-09-29 backward paging checkpoint: exact previous-page order, first-page
+termination and authorization checks pass. Full backend suite: 281 passed,
+four opt-in tests ignored; strict all-target Clippy passes. React/Solid client
+cutover is in progress; this is not production or physical-device qualification.
 
 ## Source discovery and native Xtream guide
 

@@ -18,26 +18,26 @@ pub(crate) mod selection;
 
 mod candidates;
 pub(crate) mod catalog_v2;
-pub(crate) mod credentials_v2;
 pub(crate) mod connections_v2;
+pub(crate) mod credentials_v2;
 pub(crate) mod discovery_v2;
 mod http;
 mod live;
 mod normalize;
+pub(crate) mod refresh_v2;
 mod service;
 mod streams;
 mod sync;
-pub(crate) mod refresh_v2;
 mod transport_v2;
 pub(crate) mod v2;
 pub(crate) mod v2_http;
 
 #[cfg(test)]
+mod connections_v2_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod v2_http_tests;
-#[cfg(test)]
-mod connections_v2_tests;
 
 pub use self::service::ProviderService;
 use candidates::*;

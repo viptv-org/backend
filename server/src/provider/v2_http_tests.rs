@@ -272,6 +272,32 @@ async fn raw_live_pages_preserve_order_logos_and_account_default() {
     let (status, second) = request(&app, "member-token-1", "GET", &next_path, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(second["items"][0]["id"], "iptv:1:50");
+    assert!(first["previous_cursor"].is_null());
+    let backward = second["previous_cursor"].as_str().unwrap();
+    let (status, restored) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("{root}?cursor={backward}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert_eq!(restored["items"], first["items"]);
+    assert!(restored["previous_cursor"].is_null());
+    assert!(restored["next_cursor"].is_string());
+    assert_eq!(
+        request(
+            &app,
+            "member-token-2",
+            "GET",
+            &format!("{root}?cursor={backward}"),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
     let mut ids = first["items"]
         .as_array()
         .unwrap()
@@ -279,6 +305,7 @@ async fn raw_live_pages_preserve_order_logos_and_account_default() {
         .map(|v| v["id"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
     let mut next = first["next_cursor"].as_str().map(str::to_owned);
+    let mut last_page = first.clone();
     while let Some(cursor) = next {
         let (status, page) = request(
             &app,
@@ -297,10 +324,35 @@ async fn raw_live_pages_preserve_order_logos_and_account_default() {
                 .map(|v| v["id"].as_str().unwrap().to_owned()),
         );
         next = page["next_cursor"].as_str().map(str::to_owned);
+        last_page = page;
     }
     assert_eq!(
         ids,
         (0..235).map(|i| format!("iptv:1:{i}")).collect::<Vec<_>>()
+    );
+    let mut reversed = last_page["items"].as_array().unwrap().clone();
+    let mut previous = last_page["previous_cursor"].as_str().map(str::to_owned);
+    while let Some(cursor) = previous {
+        let (status, page) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            &format!("{root}?cursor={cursor}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let mut prior = page["items"].as_array().unwrap().clone();
+        prior.extend(reversed);
+        reversed = prior;
+        previous = page["previous_cursor"].as_str().map(str::to_owned);
+    }
+    assert_eq!(
+        reversed
+            .iter()
+            .map(|item| item["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ids.iter().map(String::as_str).collect::<Vec<_>>()
     );
     let (_, overridden) = request(
         &app,
@@ -593,7 +645,7 @@ async fn empty_account_live_catalog_has_no_implicit_global_fallback() {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             page,
-            json!({"catalog_id":null,"generation":null,"items":[],"next_cursor":null})
+            json!({"catalog_id":null,"generation":null,"items":[],"next_cursor":null,"previous_cursor":null})
         );
     }
 }

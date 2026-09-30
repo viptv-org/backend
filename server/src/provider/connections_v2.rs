@@ -58,7 +58,7 @@ fn own(db: &Connection, account: i64, id: i64) -> Result<(), Error> {
 fn record(db: &Connection, account: i64, id: i64) -> Result<Value, Error> {
     own(db, account, id)?;
     let mut result=db.query_row("SELECT id,name,enabled,enable_live,enable_movies,enable_series,credentials_version FROM providers WHERE id=?1",[id],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"enabled":r.get::<_,bool>(2)?,"enable_live":r.get::<_,bool>(3)?,"enable_movies":r.get::<_,bool>(4)?,"enable_series":r.get::<_,bool>(5)?,"credentials_encrypted":r.get::<_,i64>(6)?==1}))).map_err(storage)?;
-    result["refresh"]=refresh_v2::status(db,id)?;
+    result["refresh"] = refresh_v2::status(db, id)?;
     Ok(result)
 }
 pub(super) fn managed(db: &Connection, account: i64, id: i64) -> Result<(), Error> {
@@ -86,7 +86,10 @@ fn seal(
     );
     Ok(vault.seal(account, "xtream", &id.to_string(), &bytes)?)
 }
-pub(super) async fn login(service: &ProviderService, credentials: &Credentials) -> Result<usize, Error> {
+pub(super) async fn login(
+    service: &ProviderService,
+    credentials: &Credentials,
+) -> Result<usize, Error> {
     let _permit = service
         .semaphore
         .clone()

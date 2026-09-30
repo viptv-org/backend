@@ -1,7 +1,9 @@
 use super::*;
 
 pub(crate) async fn private_api_response(mut response: Response) -> Response {
-    response.headers_mut().insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
     response
 }
 

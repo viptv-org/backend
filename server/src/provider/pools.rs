@@ -16,7 +16,9 @@ pub(super) fn init(db: &Connection) -> rusqlite::Result<()> {
     CREATE TABLE IF NOT EXISTS account_observations(pool_id INTEGER PRIMARY KEY REFERENCES account_pools(id),reported_limit INTEGER,limit_at INTEGER,reported_usage INTEGER,usage_at INTEGER,external_estimate INTEGER);")
 }
 pub(crate) fn ensure(db: &Connection, id: i64) -> Result<i64, String> {
-    if credentials_v2::sealed(db,id)? {return Err("client_update_required".into());}
+    if credentials_v2::sealed(db, id)? {
+        return Err("client_update_required".into());
+    }
     if let Some(pool) = db
         .query_row(
             "SELECT pool_id FROM provider_pools WHERE provider_id=?1",
@@ -342,7 +344,7 @@ pub(crate) async fn refresh(
             let db = s.lock()?;
             accounts::owner(&auth, &db)?;
             let pool = ensure(&db, id)?;
-            let provider = provider_row(&db, id,s.vault.as_deref())?;
+            let provider = provider_row(&db, id, s.vault.as_deref())?;
             let mut gates = s
                 .playback_gates
                 .lock()
