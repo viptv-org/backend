@@ -62,11 +62,17 @@ session hashes, ownership, ciphertext, raw indexes, source matches, default,
 favorites, hidden queue and the retirement marker. Only the deliberate progress,
 preferences and mirrored autoplay write may change before the new baseline;
 after rollback every sampled table must be byte-equivalent at the row level.
+The current-write checks additionally compare every existing progress column
+(including non-null resume identity/context and poster), untouched history,
+the exact newly inserted row, and the precise preference/autoplay changes.
+Setup/offline helpers are created and tracked before starting; timeout cleanup
+also resolves only this invocation's unique ownership label, avoiding untracked
+helpers retaining the fixture volume or keyring.
 Archived `quality:1080p` stays stored but is absent from the active preference
 response, and the retired table must not reappear.
 
 2026-09-30: all four setup/image groups passed with those exact images. Private
-evidence is `/tmp/viptv-rollback-images-hgbxvsis`; its summary contains table
+Final tightened evidence is `/tmp/viptv-rollback-images-2drbyl47`; its summary contains table
 counts/hashes, not row contents, passwords or keyring. The exact test containers
 and volume—including synthetic DB and private preservation artifacts—were
 removed; only private diagnostic summaries remain. Early setup/fixture-contract

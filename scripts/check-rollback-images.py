@@ -38,6 +38,7 @@ def main():
     volume = None
     mountpoint = None
     checks = []
+    container_sequence = 0
     keyring = json.dumps({"active": "fixture", "keys": {"fixture": base64.b64encode(os.urandom(32)).decode()}})
     username = "rollback_" + uuid.uuid4().hex[:12]
     password = uuid.uuid4().hex
@@ -51,6 +52,26 @@ def main():
         if check and result.returncode:
             (evidence / "docker-error.log").write_bytes(result.stdout + result.stderr)
             raise RuntimeError("Docker operation failed; private diagnostics retained")
+        return result
+
+    def create(arguments):
+        nonlocal container_sequence
+        container_sequence += 1
+        ident = docker(["create", "--name", f"{volume_name}-{container_sequence}",
+                        "--label", "tech.syek.viptv.test-owner=" + identifier, *arguments]).stdout.decode().strip()
+        assert re.fullmatch(r"[0-9a-f]{64}", ident)
+        containers.add(ident)
+        return ident
+
+    def tool(arguments):
+        # Track the object before starting it. A start/wait timeout must not
+        # orphan a helper retaining the volume or its synthetic keyring.
+        ident = create(arguments)
+        result = docker(["start", "--attach", ident], timeout=30)
+        state = json.loads(docker(["inspect", ident]).stdout)[0]["State"]
+        assert not state["Running"] and state["ExitCode"] == 0
+        docker(["container", "rm", ident])
+        containers.remove(ident)
         return result
 
     def scoped_volume():
@@ -84,6 +105,18 @@ def main():
                 result[table] = {"rows": len(rows), "sha256": hashlib.sha256(encoded).hexdigest()}
         return result
 
+    def mutable_rows():
+        with database() as db:
+            db.row_factory = sqlite3.Row
+            history = {}
+            for row in db.execute("SELECT * FROM progress ORDER BY rowid"):
+                value = dict(row)
+                value["context"] = json.loads(value["context"])
+                history[(value["profile_id"], value["type"], value["id"])] = value
+            preferences = {row["profile_id"]: json.loads(row["value"]) for row in db.execute("SELECT * FROM playback_preferences")}
+            viewing = {row["profile_id"]: dict(row) for row in db.execute("SELECT * FROM viewing_settings")}
+        return history, preferences, viewing
+
     def api(path, method="GET", body=None, expected=200, bearer=None):
         assert container in containers
         command = ["exec", "-i", container, "curl", "--silent", "--show-error", "--max-time", "5",
@@ -111,16 +144,15 @@ def main():
     def start(image):
         nonlocal container
         assert container is None
-        container = docker(["run", "--detach", "--pull=never", "--network", "none", "--read-only",
+        container = create(["--pull=never", "--network", "none", "--read-only",
                             "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "128",
                             "--memory", "512m", "--memory-swap", "512m", "--cpus", "2",
                             "--mount", f"type=volume,src={volume_name},dst=/data",
                             "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=16m",
                             "--env", "VIPTV_DATABASE=/data/synthetic.sqlite",
                             "--env", "VIPTV_AUTH_ORIGIN=https://rollback.invalid",
-                            "--env", "VIPTV_SECRETS_KEYRING=" + keyring, image]).stdout.decode().strip()
-        assert re.fullmatch(r"[0-9a-f]{64}", container)
-        containers.add(container)
+                            "--env", "VIPTV_SECRETS_KEYRING=" + keyring, image])
+        docker(["start", container])
         for _ in range(40):
             try:
                 api("/api/health")
@@ -146,12 +178,12 @@ def main():
 
     def offline(arguments):
         assert container is None and scoped_volume() == mountpoint
-        result = docker(["run", "--rm", "--pull=never", "--network", "none", "--read-only",
+        result = tool(["--pull=never", "--network", "none", "--read-only",
                          "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                          "--mount", f"type=volume,src={volume_name},dst=/data",
                          "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=16m",
                          "--env", "VIPTV_SECRETS_KEYRING=" + keyring,
-                         "--entrypoint", "/usr/local/bin/provider-owners", args.current_image_id, *arguments], timeout=30)
+                         "--entrypoint", "/usr/local/bin/provider-owners", args.current_image_id, *arguments])
         return json.loads(result.stdout)
 
     try:
@@ -164,13 +196,13 @@ def main():
         mountpoint = scoped_volume()
         # Setup-only helper can change the exact newly created mount's owner.
         # The normal backend subsequently runs nonroot with no capabilities.
-        docker(["run", "--rm", "--pull=never", "--network", "none", "--read-only", "--user", "0:0",
+        tool(["--pull=never", "--network", "none", "--read-only", "--user", "0:0",
                 "--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "FOWNER",
                 "--mount", f"type=volume,src={volume_name},dst=/data",
                 "--entrypoint", "sh", args.current_image_id, "-c", "chown 10001:10001 /data && chmod 700 /data"])
         start(args.current_image_id)
         api("/api/auth/register", "POST", {"username": username, "password": password, "name": "Synthetic rollback member"})
-        profile = api("/api/profiles", "POST", {"name": "Preserved profile"})["id"]
+        profile = int(api("/api/profiles", "POST", {"name": "Preserved profile"})["id"])
         api("/api/auth/profile", "POST", {"profile_id": profile})
         me = api("/api/auth/me")
         account = int(me.get("account_id") or me.get("id") or me.get("account", {}).get("id"))
@@ -192,7 +224,9 @@ def main():
             db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,extension) VALUES('vod:31:8',31,'8','movie','Fixture movie','fixture movie','mp4')")
             db.execute("INSERT INTO provider_matches VALUES('vod:31:8','tt1234567','movie')")
             db.execute("INSERT INTO favorites(profile_id,id,type,name) VALUES(?,'family:historical','live','Archived reference')", (profile,))
-            db.execute("INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at,title_id) VALUES(?,'tt1234567','movie','Fixture movie',123.5,900,1,'tt1234567')", (profile,))
+            identity = json.dumps({"source_addon_id":"iptv:31", "source_fingerprint":"f" * 64, "source_quality":"2160p"})
+            db.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,title_id,context) VALUES(?,'tt1234567','movie','Fixture movie','https://art.invalid/kept.png',123.5,900,1,'tt1234567',?)", (profile, identity))
+            db.execute("INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at,title_id,context) VALUES(?,'tt2222222','movie','Untouched history',15,800,1,'tt2222222',?)", (profile, identity))
             db.execute("INSERT INTO queue_hidden VALUES(?,'movie','tt8888888')", (profile,))
             archived_preferences = {"audio_language":"en","subtitle_language":"en","subtitles_enabled":False,
                                     "subtitle_size":"normal","subtitle_style":"system","autoplay":True,"quality":"1080p"}
@@ -210,6 +244,7 @@ def main():
         offline(["encrypt-addons", "/data/synthetic.sqlite", "/data/preservation/addons.sqlite", "/data/preservation/addons.json", revision, "--confirm-encryption"])
         offline(["retire", "/data/synthetic.sqlite", "/data/preservation/retirement.sqlite", "/data/preservation/retirement.json", revision, "--confirm-retirement"])
         before = snapshot()
+        original_mutable = mutable_rows()
         checks.append("explicit ownership/encryption/backup-first retirement on synthetic closed DB")
         # Start the selected prior engine-free release, then newer current code,
         # and finally roll back without restoring any older database snapshot.
@@ -234,13 +269,13 @@ def main():
             assert api("/api/v2/iptv/live/family:historical/source", "POST", {}, bearer=access, expected=404)["error_code"] == "source_not_found"
             assert api("/media/old", bearer=access, expected=409)["error_code"] == "client_update_required"
             if phase == "current":
-                api(f"/api/profiles/{profile}/progress", "PUT", {"id":"tt1234567","type":"movie","name":"Fixture movie","position":456.75,"duration":900}, bearer=access)
+                api(f"/api/profiles/{profile}/progress", "PUT", {"id":"tt1234567","type":"movie","name":"Fixture movie","poster":"https://art.invalid/kept.png","position":456.75,"duration":900}, bearer=access)
                 api(f"/api/profiles/{profile}/progress", "PUT", {"id":"tt7654321","type":"movie","name":"Later history","position":99,"duration":1000}, bearer=access)
                 api(f"/api/profiles/{profile}/preferences", "PUT", {"audio_language":"ja","subtitle_language":"en","subtitles_enabled":True,"subtitle_size":"normal","subtitle_style":"system","autoplay":False}, bearer=access)
             if phase == "rollback":
                 assert api(f"/api/profiles/{profile}/preferences", bearer=access)["audio_language"] == "ja"
                 history = api(f"/api/profiles/{profile}/progress/page", bearer=access)["items"]
-                assert {row["id"]: row["position"] for row in history} == {"tt1234567":456.75,"tt7654321":99}
+                assert {row["id"]: row["position"] for row in history} == {"tt1234567":456.75,"tt7654321":99,"tt2222222":15}
             stop()
             after = snapshot()
             if phase == "current":
@@ -249,6 +284,25 @@ def main():
                 allowed = {"progress", "playback_preferences", "viewing_settings"}
                 changed = [table for table in before if before[table] != after[table] and table not in allowed]
                 assert not changed, "Unexpected preservation change in tables: " + ", ".join(changed)
+                old_history, old_preferences, old_viewing = original_mutable
+                history, preferences, viewing = mutable_rows()
+                key = (profile, "movie", "tt1234567")
+                expected = old_history[key].copy()
+                expected["position"] = 456.75
+                assert history[key]["updated_at"] > expected["updated_at"]
+                expected["updated_at"] = history[key]["updated_at"]
+                assert history[key] == expected, "Existing progress metadata/resume identity changed unexpectedly"
+                assert all(history[key] == value for key, value in old_history.items() if key[2] != "tt1234567"), "Untargeted history changed"
+                new_key = (profile, "movie", "tt7654321")
+                assert set(history) == set(old_history) | {new_key}
+                new = history[new_key]
+                assert new == {"profile_id":profile,"id":"tt7654321","type":"movie","name":"Later history","poster":None,
+                               "position":99,"duration":1000,"updated_at":new["updated_at"],"context":{},"title_id":"tt7654321"}
+                assert new["updated_at"] > 1
+                expected_preferences = old_preferences.copy()
+                expected_preferences[profile] = {**old_preferences[profile], "audio_language":"ja", "subtitles_enabled":True, "autoplay":False}
+                assert preferences == expected_preferences, "Unexpected preference changes"
+                assert viewing == {**old_viewing, profile: {"profile_id":profile,"autoplay":0}}, "Unexpected viewing setting changes"
                 with database() as db:
                     assert db.execute("SELECT autoplay FROM viewing_settings WHERE profile_id=?", (profile,)).fetchone()[0] == 0
                 before = after
@@ -264,17 +318,32 @@ def main():
         (evidence / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     finally:
         failures = []
+        # Also recover create/start timeouts whose returned ID never reached
+        # Python. Only this invocation's unpredictable ownership label is used.
+        try:
+            listed = docker(["container", "ls", "--all", "--quiet", "--no-trunc", "--filter", "label=tech.syek.viptv.test-owner=" + identifier]).stdout.decode().splitlines()
+            containers.update(listed)
+        except RuntimeError:
+            failures.append("owned container inventory")
         for ident in list(containers):
-            logs = docker(["logs", ident], check=False)
-            (evidence / f"failed-{ident[:12]}.log").write_bytes(logs.stdout + logs.stderr)
-            result = docker(["container", "rm", "--force", ident], check=False)
-            if result.returncode:
-                failures.append("owned container")
+            try:
+                assert re.fullmatch(r"[0-9a-f]{64}", ident)
+                info = json.loads(docker(["inspect", ident]).stdout)[0]
+                assert info["Config"]["Labels"].get("tech.syek.viptv.test-owner") == identifier
+                logs = docker(["logs", ident], check=False)
+                (evidence / f"failed-{ident[:12]}.log").write_bytes(logs.stdout + logs.stderr)
+                if docker(["container", "rm", "--force", ident], check=False).returncode:
+                    failures.append("owned container")
+            except (RuntimeError, AssertionError):
+                failures.append("owned container verification/removal")
         if volume:
             # Validate the exact fresh volume label again; never target a caller volume.
-            scoped_volume()
-            if docker(["volume", "rm", volume_name], check=False).returncode:
-                failures.append("owned volume")
+            try:
+                scoped_volume()
+                if docker(["volume", "rm", volume_name], check=False).returncode:
+                    failures.append("owned volume")
+            except (RuntimeError, AssertionError):
+                failures.append("owned volume verification/removal")
         if failures:
             raise RuntimeError("Fixture cleanup failed; inspect private evidence")
     print(f"PASS: {len(checks)} current-data image rollback groups; owned synthetic volume/data removed; private evidence {evidence}")
