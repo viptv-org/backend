@@ -31,6 +31,16 @@ or production migration occurs.
 
 ## Evidence — 2026-09-30
 
+Current backend `b8bd04f6321c` also passed exactly one named lifecycle fixture
+against the playlist-reload-fixed gateway image
+`sha256:212af567feefbba9160d5e4dd616ededddf228df4349b7500341c9f7580b36cb`;
+fixture image `867ba56773b4`. Owned synthetic container/data were removed.
+Gateway `c4e692d` independently records an 18-second observed 4K/5fps/40Mbps copy
+workload in explicit operator budgets, advancing output, two compatible viewers
+on one upstream and complete release/reclamation. That separate regression is
+not implied by this short backend lifecycle check and does not qualify default
+budgets, motion/30fps/HDR or hardware.
+
 The engine-free backend `ab364ba99aaf` reran the named real-media test exactly
 once against the bounded-storage gateway content image
 `sha256:9258fd82bd1dff31b1739e03ade1e7706ec0d699971ea45c9887980b0b8c8b61`.
