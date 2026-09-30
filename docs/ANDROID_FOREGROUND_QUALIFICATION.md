@@ -148,5 +148,27 @@ Namespace18196/18095 and TLS18448/18449 were absent afterward. Shared18180/8443
 and the still-active native fixture18444/18445 remained listening.
 
 These checks qualify fixture containment, not the Android product or production
-rollback. Final teardown of the active native fixture and its independently
-owned gateway viewer remains a separate check after device acceptance.
+rollback.
+
+## Final ordinary-client qualification and cleanup
+
+Explicit-close helper source `7ea0c60908919d4b8b1b3ba28f2327da7688e4a2`
+passed fresh preflight and advertised `Connection: close` with trusted HTTPS.
+The ordinary Android shell (source `ce0f33b`, no diagnostic client header/logs)
+then passed the held successful-refresh profile-choice loop: actual profile
+POST200, profile4 Home, explicit profile2 restoration POST200/Home, exactly one
+successful rotation and no extra pairing. Android PR7 and its
+`qualification/FOREGROUND_ACCEPTANCE.md` own product/normal-APK evidence.
+
+Native fixture5 owner SIGTERM exited0. Its owner and both recorded process
+groups were absent; namespace18195/18094 and TLS18444/18445 listeners were gone.
+The independently owned gateway launcher/materializer/relay had already exited,
+but its exact isolated container still ran. Authenticated live inspection found
+the old viewer lookup404; idempotent DELETE returned204 and all two
+input/output/viewer reservations were available. There was no FFmpeg child and
+zero media-cache files before removing that exact test container. Do not call
+the absent viewer an observed explicit released/expired status.
+
+All dedicated emulators and fixture containers/listeners are stopped; shared
+18180/8443 remain up. Private synthetic data, source media and sanitized evidence
+were retained. No production, shared-stack, merge or deployment action occurred.
