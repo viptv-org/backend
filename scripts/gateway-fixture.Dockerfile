@@ -10,14 +10,15 @@ RUN cargo test --locked --lib --no-run \
     && executable="$(find target/debug/deps -maxdepth 1 -type f -executable -name 'viptv_server-*')" \
     && test -n "$executable" \
     && test "$(printf '%s\n' "$executable" | wc -l)" -eq 1 \
-    && cp "$executable" /out/backend-fixture
+    && cp "$executable" /out/backend-fixture \
+    && chmod 0555 /out/backend-fixture
 
 FROM ${GATEWAY_IMAGE}
 ARG BACKEND_REVISION
 ARG GATEWAY_REVISION_IMAGE
 LABEL tech.syek.viptv.fixture.backend="${BACKEND_REVISION}" \
       tech.syek.viptv.fixture.gateway-image="${GATEWAY_REVISION_IMAGE}"
-COPY --from=fixture-build --chmod=0555 /out/backend-fixture /fixtures/backend-fixture
+COPY --from=fixture-build /out/backend-fixture /fixtures/backend-fixture
 ENV VIPTV_TEST_ISOLATED_NETWORK=container \
     VIPTV_TEST_GATEWAY_BINARY=/usr/local/bin/playback-gateway \
     VIPTV_TEST_FFMPEG=/opt/ffmpeg/bin/ffmpeg \

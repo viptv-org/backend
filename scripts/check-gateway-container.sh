@@ -19,7 +19,7 @@ docker image tag "$gateway_image_id" "$fixture_parent"
 fixture_image="viptv-backend-gateway-fixture:${backend_revision:0:12}-${gateway_image_id:7:12}"
 printf 'Backend revision: %s\nGateway image: %s\n' "$backend_revision" "$gateway_image_id"
 git -C "$backend_root" archive --format=tar "$backend_revision" server scripts/gateway-fixture.Dockerfile \
-  | docker build --pull=false --progress=plain \
+  | docker build --pull=false \
       --build-arg "GATEWAY_IMAGE=$fixture_parent" \
       --build-arg "GATEWAY_REVISION_IMAGE=$gateway_image_id" \
       --build-arg "BACKEND_REVISION=$backend_revision" \
