@@ -99,6 +99,14 @@ extended native run reproduced expiration of the initial approval session
 (`/api/auth/me` returned401); an expired fixture login is setup failure, not a
 native pairing or reconnect verdict. Approval failures return sanitized status
 without fabricating authentication success.
+API/addon/relay responses explicitly advertise `Connection: close`, matching
+their HTTP/1.0 handler lifecycle. A dispatch-proven native profile POST immediately
+after identity read returned transport I/O failure before a completed backend
+request. Request shape/origin and Core phase/profile membership were valid;
+cancellation was ruled out. One QA-only client-close-header discriminator made
+the identical held-refresh profile switch and return pass without write replay.
+The client workaround was removed; final ordinary-shell acceptance must use the
+explicit-close fixture, not count the diagnostic build as final evidence.
 The delayed-refresh control holds the actual successful rotation response after
 the server has committed it, exposing native cancellation bugs without fake
 authentication responses. Final process-group teardown is checked separately

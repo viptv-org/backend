@@ -22,6 +22,9 @@ class Quiet(http.server.BaseHTTPRequestHandler):
     def respond(self,status,data,headers=None):
         self.send_response(status)
         for k,v in (headers or {}).items(): self.send_header(k,v)
+        # HTTP/1.0 handlers close after every response. State that explicitly:
+        # otherwise an immediate native write can race a silently closed socket.
+        self.send_header('Connection','close'); self.close_connection=True
         self.send_header('Content-Length',str(len(data))); self.end_headers()
         if self.command!='HEAD': self.wfile.write(data)
     def value(self,value,status=200): self.respond(status,json.dumps(value).encode(),{'Content-Type':'application/json'})
