@@ -31,6 +31,16 @@ or production migration occurs.
 
 ## Evidence — 2026-09-30
 
+The engine-free backend `ab364ba99aaf` reran the named real-media test exactly
+once against the bounded-storage gateway content image
+`sha256:9258fd82bd1dff31b1739e03ade1e7706ec0d699971ea45c9887980b0b8c8b61`.
+The tracked-source fixture image was `d6733f77bd8d`; one test passed with no
+failures or ignored tests. This verifies admission, generated H264 HLS delivery,
+heartbeat, release and process cleanup for the current v1 gateway contract.
+The exact disposable container and synthetic data were removed. The fixture
+privilege/TLS/native/hardware boundaries below still apply; production tmpfs
+capacity and sustained 4K are independently qualified by the gateway repo.
+
 Backend `38c8d8fc7840` passed the named fixture against gateway `a47c25c`, local
 image `sha256:1fbc1c6ffac58cf09fb185fcbdc9c96853f95afc6256a0c7477116421ff9d6a7`.
 The qualification image was `947861128673`. This verifies a real generated H264
