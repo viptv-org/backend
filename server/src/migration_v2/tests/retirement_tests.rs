@@ -26,6 +26,9 @@ fn ready(root: &Path) -> (Connection, crate::secret_store::Vault) {
         &vault,
     )
     .unwrap();
+    // This routed connection is deliberately archived, not silently rerouted.
+    db.execute("UPDATE providers SET enabled=0 WHERE id=1", [])
+        .unwrap();
     (db, vault)
 }
 fn exists(db: &Connection, table: &str) -> bool {
@@ -35,6 +38,51 @@ fn exists(db: &Connection, table: &str) -> bool {
         |row| row.get(0),
     )
     .unwrap()
+}
+
+#[test]
+fn active_legacy_routing_refuses_retirement_and_preserves_route_and_all_source_rows() {
+    let root = tempfile::tempdir().unwrap();
+    let (db, vault) = ready(root.path());
+    db.execute("UPDATE providers SET enabled=1 WHERE id=1", [])
+        .unwrap();
+    assert_eq!(
+        retire_with_vault(
+            &root.path().join("source.sqlite"),
+            &root.path().join("routing.sqlite"),
+            &root.path().join("routing.json"),
+            REVISION,
+            &vault
+        )
+        .unwrap_err(),
+        "retirement_routing_review_required"
+    );
+    assert!(exists(&db, "provider_routes"));
+    assert!(exists(&db, "family_channels"));
+    assert!(exists(&db, "family_aliases"));
+    assert!(!exists(&db, "retired_features_v2"));
+    assert_eq!(
+        db.query_row(
+            "SELECT warp FROM provider_routes WHERE provider_id=1",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.query_row("SELECT enabled FROM providers WHERE id=1", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(crate::provider::egress::headers(&db, 1).is_err());
+    let exported: Value =
+        serde_json::from_reader(File::open(root.path().join("routing.json")).unwrap()).unwrap();
+    assert_eq!(exported["tables"]["provider_routes"][0]["warp"], 1);
+    assert_eq!(exported["tables"]["providers"][0]["enabled"], 1);
+    let backup = open(&root.path().join("routing.sqlite"), false).unwrap();
+    assert!(exists(&backup, "provider_routes"));
 }
 
 #[test]

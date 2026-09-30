@@ -36,6 +36,11 @@ streams the version-1 `contains_secrets=true` export, and syncs both files and
 their directories before any source mutation. Existing artifact paths fail.
 Missing ownership, plaintext/missing/corrupt ciphertext, wrong keys and unknown
 foreign dependencies refuse/roll back deletion. No owner is inferred or assigned.
+An enabled provider with a legacy WARP route also refuses retirement with
+`retirement_routing_review_required`; its route remains fenced and preserved in
+the private artifacts. The operator must review routing outside VIPTV before
+disabling/archiving that connection. Only disabled archived route rows may be
+exported/dropped; review their exported requirements before later re-enablement.
 The static deletion set excludes accounts, profiles, favorite/progress/queue
 records, addons, provider identities/raw indexes, manual VOD matches and v2 data.
 Auth/profile family-token terminology is unrelated and remains intact.
@@ -56,8 +61,8 @@ Actual client decoder dimensions remain in the unchanged v2 playback request.
 
 ## Evidence boundary
 
-Four synthetic offline fixtures verify backup/export contents and permissions,
-ID/history/match preservation, ownership/encryption refusal, wrong-key/unknown-FK
+Five synthetic offline fixtures verify backup/export contents and permissions,
+ID/history/match preservation, active-routing/ownership/encryption refusal, wrong-key/unknown-FK
 rollback, idempotence and no table resurrection at boot. Runtime retirement
 fixtures verify no job allocation/media relay, async responsiveness, exact
 raw/composite history IDs and quality-free writer preservation. The removed

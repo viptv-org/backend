@@ -165,6 +165,15 @@ fn retire_with_vault(
         if crate::provider::credentials_v2::encrypt_legacy(tx, vault)? != 0 {
             return Err("retirement_encryption_required");
         }
+        // Removing this table must never turn an active required legacy route
+        // into ordinary network delivery. Only archived disabled rows may retire.
+        let routes:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='provider_routes')",[],|row|row.get(0)).map_err(|_|"retirement_failed")?;
+        if routes {
+            let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM providers p JOIN provider_routes r ON r.provider_id=p.id WHERE p.enabled=1 AND r.warp!=0)",[],|row|row.get(0)).map_err(|_|"retirement_failed")?;
+            if active {
+                return Err("retirement_routing_review_required");
+            }
+        }
         tx.execute_batch("DROP TRIGGER IF EXISTS kids_family_policy_update; DROP TRIGGER IF EXISTS kids_family_policy_delete;").map_err(|_|"retirement_failed")?;
         let mut removed = Vec::new();
         for table in RETIRED_TABLES {
