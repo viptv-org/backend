@@ -1,6 +1,6 @@
 # V2 account IPTV operations
 
-The isolated engine-free runtime/guarded offline retirement candidate is described
+The development engine-free runtime/guarded offline retirement is described
 in [RUNTIME_RETIREMENT.md](RUNTIME_RETIREMENT.md). Reviewed clients now have v2
 adoption candidates; historical checkpoint paragraphs below do not override that
 source evidence or authorize production migration. The user's Android UI checkout
@@ -14,16 +14,20 @@ playlist swap control is introduced by these endpoints.
 ## Reviewed frontend source checkpoint — 2026-09-30
 
 The dashboard submodule now pins ADM-002 management commit
-`040ce6b96b117d073ca44cc4d751bae3d2a9659d`; the viewing submodule pins
-`ecec4860e2c5940739e2ad2ef6e30eecfd7512b2`. Account management uses the v2
+`93c93164ab6fc97b5d40ed6b8702628d82f987ed`; the viewing submodule pins
+`db9c5ab2da35867e83d970763f53a10628924501`. Account management uses the v2
 connection, matches and gateway contracts, while ordinary live viewing uses
 the raw cursor catalog and exact source selection. Retired organizer/setup
 controls are absent from the dashboard. This supersedes the historical notes
 below about the old dashboard matches route and pending client guide adoption.
 The follow-up dashboard pin also rejects repeated/overlapping management pages
-and retains failed-refresh source identity; its 76 unit tests and HTTPS fixture
-evidence remain client-side evidence, separate from backend runtime acceptance.
-Backend legacy runtime removal remains a separate isolated checkpoint.
+and retains failed-refresh source identity. Same-profile drafts survive parent
+challenges without exposing protected portals, persisting secrets or replaying
+saves; 88 unit tests and both desktop/phone HTTPS fixtures passed. Viewing source
+retires dormant local-only code and adopts Core `8ae9f81`; 234 retained tests and
+36 HTTPS cases passed. These remain client-side evidence, separate from backend
+runtime acceptance. The engine-free backend at `dd37044` passed 207 tests and
+the exact-source isolated real-gateway media lifecycle fixture.
 
 These are source pins, not deployment evidence. Dashboard acceptance used
 mocked APIs over local HTTPS; TV-web passed local unit/browser checks.
