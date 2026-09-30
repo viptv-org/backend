@@ -53,9 +53,15 @@ if ! result=$(timeout --signal=TERM --kill-after=5s 120s docker wait "$container
   echo 'Isolated gateway fixture did not finish within its bound.' >&2
   exit 1
 fi
-docker logs "$container_id"
+test_output=$(docker logs "$container_id" 2>&1)
+printf '%s\n' "$test_output"
 if [[ "$result" != 0 ]]; then
   printf 'Isolated gateway fixture failed with status %s.\n' "$result" >&2
+  exit 1
+fi
+if ! grep -Fq 'test gateway::playback_tests::isolated_backend_gateway_real_media_lifecycle ... ok' <<< "$test_output" \
+  || ! grep -Fq 'test result: ok. 1 passed; 0 failed; 0 ignored;' <<< "$test_output"; then
+  echo 'The named real-media test did not execute exactly once; zero filtered tests are not acceptance.' >&2
   exit 1
 fi
 echo 'Isolated real-media lifecycle passed; disposable container/data removed on exit.'
