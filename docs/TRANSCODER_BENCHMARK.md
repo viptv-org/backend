@@ -1,6 +1,13 @@
 # Transcoder decision — 2026-09-27
 
-Keep the deployed FFmpeg 5.1.9 as the default. The candidate is Jellyfin-FFmpeg
+Historical pre-BE-002 backend evidence only. The backend no longer runs FFmpeg,
+GPU probes or these benchmark hooks; their source is recoverable from Git history.
+The generic `scripts/benchmark-source.py` HTTPS byte-range fixture is retained
+after coordination with the gateway owner for possible later diagnostic reuse.
+It is not a backend packaging, runtime or deployment entry point. Media settings
+and current decoder qualification belong to the independent gateway.
+
+The historical decision kept FFmpeg 5.1.9 as the default. The candidate was Jellyfin-FFmpeg
 8.1.2-5, portable archive SHA-256
 `1fd859927053c44a4f2dbf67ae8b9ba8d29fb3b8930df0dd57d91aa60589363d`.
 
@@ -21,10 +28,10 @@ Every workload exceeded the 1.25x realtime gate. Software startup regressed
 QSV improved, but that does not remove the software fallback requirement.
 These synthetic startup measurements are not provider/network startup promises.
 
-`scripts/benchmark-source.py` serves a controlled HTTPS fixture;
-`scripts/benchmark-transcoder.py` runs the repeatable workload comparison.
-`VIPTV_FFMPEG` and `VIPTV_FFPROBE` remain independent binary-selection settings.
-No Jellyfin server or browser extension is needed.
+`scripts/benchmark-source.py` retains the controlled HTTPS fixture. The removed
+workload runner and its backend-only `VIPTV_FFMPEG` / `VIPTV_FFPROBE` settings are
+recoverable from the pre-retirement revision `d6b8d570326fa98bdb8077e8078f660617071b02`;
+they are not current deployment instructions or supported backend settings.
 
 References: [pinned release](https://github.com/jellyfin/jellyfin-ffmpeg/releases/tag/v8.1.2-5),
 [Jellyfin acceleration](https://jellyfin.org/docs/general/post-install/transcoding/hardware-acceleration/),

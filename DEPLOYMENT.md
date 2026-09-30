@@ -1,48 +1,77 @@
 # Production deployment and migration
 
-## Authorized target
+This document separates current v2 operations from historical rollout evidence.
+No source checkpoint or fixture authorizes a production change.
 
-Production is `https://viptv.syek.tech`, currently routed to the authorized VIPTV Docker host. Host access, sudo transport, account credentials, recovery material, database backups, and release assets remain private and are never stored in this repository.
+## Current deployment boundary
 
-The application container runs UID/GID 10001, read-only, with all Linux capabilities dropped and `no-new-privileges`. `/data` persists SQLite; generated HLS and temporary files are bounded tmpfs. FFmpeg has automatic threading and the container intentionally has no CPU, memory, swap, or PID quota. Provider and playback concurrency remain bounded.
+Production access, account credentials, keyrings, backups and rollback material
+remain private. The backend runs UID/GID10001, read-only, cap_drop ALL and
+no-new-privileges. /data retains SQLite in viptv_viptv_data; /tmp is bounded.
+FFmpeg, GPU devices, WARP sidecars and generated media storage belong outside
+this backend's active packaging.
 
-## Account-only configuration
+Configure one exact public HTTPS VIPTV_AUTH_ORIGIN. Preserve the watch proxy's
+Host/Origin rewrites; two hostnames are not independent backend API origins.
+Retain existing private environment/overlays for review and rollback, but do not
+blindly reapply removed public media/GPU/WARP overlays to this candidate.
+Provision and securely retain VIPTV_SECRETS_KEYRING separately from backups.
+No default key material or shared application credential is shipped.
 
-The host `.env` must be owner-readable only and contain the public origins:
+Fresh owner creation is an explicit offline operation. Existing accounts,
+profiles and histories must not be reseeded or replaced.
 
-```dotenv
-# Comma-separated HTTPS origins. The FIRST entry is canonical: device-pairing
-# QR codes and verification URLs always send devices there. Additional entries
-# are extra accepted browser origins, e.g. a reverse-proxy hostname that
-# serves the same bundle against this backend (no Host/Origin rewriting needed).
-VIPTV_AUTH_ORIGIN=https://viptv.syek.tech
-VIPTV_PUBLISH_IP=<server-lan-ip>
-VIPTV_PORT=8080
-VIPTV_MAX_SESSIONS=2
-VIPTV_SESSION_TTL=120
+## Separately approved upgrade checklist
+
+1. Review exact backend/gateway/frontend/client revisions and confirm every
+   ordinary media/catalog client has adopted v2, including the user's Android
+   handoff. Retired endpoints explicitly require a client update.
+2. Coordinate downtime and inspect authenticated v2 viewer state/known clients;
+   the removed /api/status is not an admission or maintenance oracle.
+3. Preserve current private environment, keyring and a consistent SQLite online
+   backup with checksum, stable IDs and representative history values. Never
+   raw-copy an active DB or overwrite newer history from an older backup.
+4. Review explicit ownership and encrypted source migration, then the offline
+   backup/export retirement phase in docs/RUNTIME_RETIREMENT.md. Enabled legacy
+   routed sources refuse retirement; disabling/archive and later re-enablement
+   require operator routing review. No owner is inferred.
+5. Build/test an isolated candidate and copied-data fixture before any rollout.
+   Initialize reviewed dashboard/tv gitlinks for a full frontend image. Keep
+   origin/keyring/provider/gateway policy and viptv_viptv_data intact.
+6. Run local Rust/configuration checks and the network-none gateway fixture.
+   Verify public TLS/redirect behavior, actual gateway/source integration and
+   physical device/4K/tracks separately from mocks.
+7. Replace production only under explicit approval. Inspect actual deployment
+   status, served frontend asset hashes, unauthorized API rejection and existing
+   account/profile behavior; do not infer live success from build output.
+8. Compare preserved IDs/history/positions afterwards. Keep current recovery
+   artifacts protected through the observation window.
+
+Never run docker compose down -v against production. Rollback needs stopped
+writers, a fresh preservation snapshot of current data and reviewed compatibility.
+Old globally scoped/family/media code cannot simply be restored onto a retired
+multi-tenant database.
+
+## Local checks
+
+```sh
+node tests/validate_deployment.cjs
+python3 tests/test_host_check.py
+bash scripts/host-check.sh
+bash scripts/container-check.sh LOCAL_GATEWAY_IMAGE
 ```
 
-There is no shared application credential in Compose or the Roku package. The Roku private package locks only `https://viptv.syek.tech`; each TV obtains revocable device credentials through QR/device pairing.
+host-check is read-only and suppresses rendered secret configuration. The
+container check uses uniquely disposable, network-none resources and tracked
+source only. No legacy owner-login/embedded-playback deployment probe is active.
 
-For a genuinely new database, create the owner offline with `viptv-server create-admin` before starting public service. Public registration never creates an owner. Existing production already has its owner and must not run owner creation again.
+## Historical evidence below
 
-## Guarded upgrade procedure
+The following records describe their exact older source/images. Their embedded
+media/GPU/WARP observations are not current backend instructions or proof of this
+candidate's deployment, decoder behavior or production migration.
 
-1. Confirm the candidate commit/release and keep the current production image/source as rollback material.
-2. Confirm `GET /api/status` reports zero active playback sessions, or coordinate a maintenance window.
-3. Create a private consistent backup using SQLite's online backup API from a read-only source connection, or stop the application for a complete database/WAL backup. Never raw-copy an active SQLite database. Record file checksum, profile/favorite/progress/provider/addon row counts, stable profile IDs, and progress timestamps/positions. Refresh this backup immediately before replacement if data has changed.
-4. Build the candidate without changing the production volume or tag. Preserve configured overlays (`compose.warp.yaml` and `compose.qsv.yaml`) when replacing production. Run `scripts/container-check.sh` against the candidate in its isolated project.
-5. Run Rust, dashboard, Roku, static deployment, and migration tests. Migration acceptance must prove existing IDs/history remain unchanged and ambiguous historical multi-account profile ownership fails safely.
-6. Start the candidate against a copy of production SQLite first. Verify migration ledger, row counts, representative values, owner login, imported-profile setup state, and provider/addon inventory.
-7. Replace production only after the copied-data check passes. Keep a protected copy of the original `.env` for rollback. Set the exact `VIPTV_AUTH_ORIGIN` and remove retired shared-access configuration from the active environment, preserving other settings, the named volume, HTTPS route, and rollback image.
-8. Verify public health and unauthorized API rejection. Use `tests/live_deployment_check.py` with existing owner credentials supplied through `VIPTV_TEST_USERNAME`/`VIPTV_TEST_PASSWORD`; it never creates accounts, profiles, or library rows.
-9. Verify browser registration with a deliberate disposable account only in an isolated environment—not production. On production, verify existing owner/member login, profile selection, and administration without creating test library data.
-10. Pair the physical Roku through its QR, verify remembered profile/switching, manual source selection, Resume source identity, direct/remux/transcode startup, native pause, repeated seeks, seek rollback, cleanup, and device revocation.
-11. Compare production row counts and representative history again. Keep the backup and prior image until the observation window ends.
-
-Never publish database copies, cookies, passwords, recovery codes, device tokens, provider URLs/credentials, addon installation URLs, or secret-bearing logs.
-
-## Verified native playback rollout — 2026-09-26
+## Historical native playback rollout — 2026-09-26
 
 Backend `d715195aa16df7f9fd52f50e4f6d045e077449d9` and TV-web `f620993` were built together and promoted as image `sha256:5ab7ca9a28541086fd3a45302c8a2496dedc683a281305b2e73487e8ed29894a`. The running container's exact image and healthy public API were verified. Both `/tv/` and the viewing hostname serve `index-C6qjErCC.js`; all entry script/style requests returned the correct content types. The deployed viewing app reached its native account sign-in screen in a browser.
 
@@ -52,51 +81,8 @@ The first replacement encountered the host WARP service's existing D-Bus stale-P
 
 The native credential-login endpoint is live and validates requests. An authenticated production live-channel launch returned direct mode in 49 ms, followed by successful lease release; this measures API launch, not time to first decoded frame. Native password login, direct decoding/seeking, source headers, loading/cancellation and player lifetime were separately verified on the isolated Android emulator. No new physical Roku, Tizen/Vizio, phone HDR/DRM, or universal provider qualification is claimed.
 
-## Rollback
 
-Do not run an older binary against a migrated database unless compatibility is proven. If rollback is required:
-
-1. Stop the candidate.
-2. Preserve candidate logs privately and checksum the failed database for diagnosis.
-3. Restore the complete stopped-instance pre-upgrade SQLite backup with UID/GID 10001 and mode 0600.
-4. Restore the prior image/source and unchanged `.env`/HTTPS route.
-5. Start, check health, authenticate as the existing owner, and compare recorded IDs/history/counts.
-
-`docker compose down` preserves the named volume; `docker compose down -v` deletes it and is never part of upgrade/rollback.
-
-## Validation commands
-
-On the host, without printing rendered configuration:
-
-```sh
-bash scripts/host-check.sh
-sudo bash scripts/container-check.sh
-sudo docker compose --project-directory /home/vynxc/viptv \
-  --env-file /home/vynxc/viptv/.env -f /home/vynxc/viptv/compose.yaml ps
-```
-
-Live read-only account/API/container validation:
-
-```sh
-read -rp 'Existing owner username: ' VIPTV_TEST_USERNAME
-read -rsp 'Existing owner password: ' VIPTV_TEST_PASSWORD; printf '\n'
-export VIPTV_TEST_USERNAME VIPTV_TEST_PASSWORD
-sudo -E python3 tests/live_deployment_check.py \
-  --env-file /home/vynxc/viptv/.env --check-cinemeta
-unset VIPTV_TEST_USERNAME VIPTV_TEST_PASSWORD
-```
-
-Prefer a root-owned environment/credential handoff instead of `sudo -E` where available. Credentials must not be command-line arguments or written into shell history.
-
-## HTTPS route
-
-The public route terminates TLS and forwards to the host application port. It must preserve the public Host and proxy `/api`, `/media`, SSE, and dashboard assets without bypassing authentication. Do not place browser SSO in front of Roku API/media routes unless the native client is designed for it. Do not disable TLS certificate validation.
-
-## Release gate
-
-A release requires all automated checks, isolated Docker/real-FFmpeg acceptance, copied-production migration proof, actual production validation, and physical Roku evidence. Simulator success is not physical-device proof. Release ZIPs include no credential, only the locked origin, and must be distributed privately with complete corresponding GPLv2 Roku source/notices and rebuild instructions.
-
-## Verified browser media rollout — 2026-09-27
+## Historical browser media rollout — 2026-09-27
 
 Backend `9b0c206f0328ad3583bce7ef4954fe2bd1ff8c1c` and TV-web
 `fdcdbf7298fa6280bf9bff497c5000569e806530` are deployed as image

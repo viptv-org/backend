@@ -1,68 +1,65 @@
 # VIPTV server
 
-Rust/Axum, SQLite, Xtream and Stremio-compatible addons, managed FFmpeg HLS. Requires Rust 1.88 or newer. Build with `cargo build --release --locked`; validate with `cargo test --locked`. Native build needs a C compiler for bundled SQLite. Runtime requires FFmpeg (libx264/AAC encoders) and ffprobe on PATH. No torrent engine or debrid credentials are implemented: non-HTTP streams return explicit unsupported-source errors while other sources continue.
+Rust/Axum, SQLite, account-owned Xtream and Stremio-compatible addons. Requires
+Rust 1.88+, a C compiler for bundled SQLite at build time, and trusted HTTPS
+ingress for clients. The backend does not run FFmpeg, probe media, expose a
+generic media relay or manage GPU devices. The separate playback gateway owns
+media processing and viewer capabilities.
 
-The managed playback engine lives in the `viptv-playback-engine` path-dependency crate (`playback-engine/`): an identity-free HLS engine — direct delivery, the managed ladder, probing and session leases — with no database or account dependencies. The server re-exports it as `playback::` so the internal namespace is unchanged, and the capability-capacity wire message is single-sourced in the engine. The egress proxy routing header (`x-viptv-egress-proxy`), URL validation and source display redaction are engine-local seams; a standalone media-gateway binary builds directly on this crate.
+Build with `cargo build --release --locked`; check with `cargo fmt --check`,
+`cargo clippy --locked --all-targets -- -D warnings` and `cargo test --locked`.
+See ../tests/README.md for disposable network-none gateway acceptance.
 
 ## Configuration
 
 | Variable | Default / purpose |
 | --- | --- |
-| `VIPTV_BIND` | `0.0.0.0:8080` |
-| `VIPTV_AUTH_ORIGIN` | Optional pinned HTTPS browser origin (e.g. `https://tv.example`), validated at startup; otherwise HTTPS request Host must match Origin |
-| `VIPTV_DATABASE` | `data/viptv.sqlite` |
-| `VIPTV_MEDIA_DIR` | `data/hls` (dedicated writable session storage; do not share between running instances) |
-| `VIPTV_DASHBOARD_DIST` | Optional dashboard built assets directory, SPA fallback |
-| `VIPTV_TV_DIST` | Optional TV React built assets directory, mounted only at `/tv` with SPA fallback |
-| `VIPTV_FFMPEG`, `VIPTV_FFPROBE` | Executable paths, default `ffmpeg`, `ffprobe` |
-| `VIPTV_MAX_SESSIONS` | `3`, range 1–32 |
-| `VIPTV_SESSION_TTL` | `120` seconds, range 30–3600 |
-| `VIPTV_QSV_DEVICE` | Optional Intel Quick Sync render node (`/dev/dri/renderD*`); SDR transcodes decode, scale and encode on it. It is also checked for VAAPI HDR10 tone mapping (below) |
-| `VIPTV_VAAPI_DEVICE` | Optional VAAPI render node for any vendor (AMD radeonsi, Intel iHD, other Mesa drivers): decode, scale and H.264 encode on the GPU when Quick Sync is absent or failed its check |
-| `VIPTV_MEDIA_CORS_ORIGINS` | `https://mediabunny.dev`; comma-separated exact origins allowed to read `/media` cross-origin. Empty disables it entirely |
+| VIPTV_BIND | 0.0.0.0:8080 |
+| VIPTV_AUTH_ORIGIN | One exact public HTTPS origin, required for normal public browser deployment |
+| VIPTV_DATABASE | data/viptv.sqlite |
+| VIPTV_DASHBOARD_DIST | Optional account/admin assets at / |
+| VIPTV_TV_DIST | Optional viewing assets at /tv |
+| VIPTV_SECRETS_KEYRING | Operator-managed encrypted source/gateway storage; no insecure default |
 
-Both GPU settings are validated as render nodes and proven at startup by real encodes, including an embedded HDR10 frame for tone mapping; `GET /api/status` reports `video_acceleration` (`qsv`, `vaapi`, `software_fallback`, `software`) and `hdr_tone_mapping` (`vaapi`, `libplacebo`, `software`). HDR10/HLG sources are converted to SDR BT.709 on the GPU when the device can: HDR10 on the VAAPI video processor (`procamp_vaapi` + `tonemap_vaapi`, Intel iHD; Jellyfin's +16 brightness gain), otherwise on Vulkan through `libplacebo` (needs a Vulkan driver, e.g. AMD RADV). HLG uses libplacebo or the CPU. Any GPU pipeline that fails to start retries on the CPU under the same reservation, ending on the software `zscale`/`tonemap` path.
+The Compose template passes a configured keyring through and leaves an absent
+value unresolved/omitted, rather than inventing empty JSON. Keep real keyrings,
+deployment env, database copies and exports private. Preserve the existing
+named data volume. Backend media/GPU/WARP/session-limit environment settings
+are retired; keep historical private deployment copies for operator review,
+not as active backend hooks.
 
-Bind behind a TLS reverse proxy for use beyond a trusted network. Health, registration/login/recovery and credential-exchange endpoints, device pairing initiation/polling, and expiring media-capability URLs are public entry points; application and account administration require authentication. No permissive CORS is enabled: serve dashboard assets on the API origin or proxy `/api` and `/media` through its origin. `VIPTV_TV_DIST` keeps the TV app on that same HTTPS origin at `/tv`; it does not replace the account dashboard at `/`. Vizio should load that hosted URL. A Tizen installation should be a thin signed launcher for that hosted `/tv/?platform=tizen` URL, rather than a packaged local-origin copy of the React bundle. Proxy SSE without buffering. Secrets are never included in playback responses or process error messages; SQLite necessarily stores provider credentials, so protect database/backup permissions. Do not expose process listings or FFmpeg command lines to untrusted local users. Addon manifests may themselves contain installation credentials, and the owner-only addon API displays their configured URL.
+## Contracts and ownership
 
-`VIPTV_MEDIA_CORS_ORIGINS` is the one exception, and it is scoped to `/media` only, never `/api`. A session capability is itself the credential, so letting an external tool read a session's bytes grants nothing beyond what the capability already grants. It is read-only (`GET`, `HEAD`), sends no credentials, and exposes no cookie, so a cross-origin page cannot make an authenticated API mutation with it. Leave it empty unless a specific cross-origin player or instrument must read session media.
+Authentication, account/profile IDs, favorites, progress, Continue Watching,
+parent policy, manual VOD matches and addon metadata remain backend-owned.
+See AUTH.md, ../docs/V2_OPERATIONS.md, ../docs/ADDONS_V2.md and
+../docs/CATALOGS_V2.md. /api/catalogs, /api/discover and /api/meta remain active;
+source discovery uses /api/v2/streams. Sources are opaque and caller-scoped.
 
-## Browser playback capabilities
+Ordinary raw live viewing uses cursor-bound /api/v2/iptv/live/channels and
+categories, native Xtream guide reads and exact-channel source resolution.
+Preserve provider ordering/IDs/logos; never reconstruct a full client playlist.
+There is no generic M3U/external XMLTV import or automatic family remapping.
 
-Browser playback follows the design-owned [browser capability and delivery contract](https://github.com/viptv-org/design/blob/main/BROWSER_PLAYBACK.md). Playback `capabilities.direct_mp4` and `capabilities.direct_hls` are optional booleans: `false` excludes that original transport, while omission (or `null`) preserves legacy eligibility. Both remain subject to `direct_play:true`, inspected codec/track compatibility and the existing proxy checks. These flags do not disable managed HLS; browser clients must establish a working H.264/AAC HLS engine before requesting playback. Existing Roku requests and Tizen AVPlay capability decisions retain their behavior.
+Playback uses /api/v2/playback start/status/heartbeat/release. Only account-
+authorized gateways are eligible; Roku/Vizio require one. Other eligible native
+clients may receive direct source URLs/headers deliberately after authorization.
+Actual decoder limits remain; profile maximum quality is retired. The backend
+never falls back to embedded execution or another account's gateway.
 
-Media URLs remain opaque, session-bound `/media/` paths on the application origin. Supported original media HLS references (segments, AES-128 keys and init maps) are rewritten; adaptive masters, alternate tracks and selected subtitles use managed HLS. MP4 range/HEAD requests and upstream redirects stay server-side. No provider CORS changes or arbitrary URL proxy are required.
+Serve frontend/API control on the same HTTPS origin. The watch reverse proxy's
+Host/Origin rewrites satisfy the single-origin policy and must remain. Media
+URLs point to the authorized delivery endpoint, not a backend relay. Do not
+disable TLS validation or restore obsolete SSE/media proxy settings.
 
-## Accounts and onboarding
+## Migration and evidence
 
-VIPTV is account-only. A fresh database has no account or profile. Create the sole owner offline with `viptv-server create-admin USERNAME DISPLAY_NAME`, providing its password on standard input. Public `POST /auth/register` always creates an ordinary member with zero profiles and cannot claim administration. Existing deployments preserve the owner, stable profile IDs, favorites, progress, providers, and addons through additive migration; ambiguous historical ownership fails safely.
+No runtime boot performs destructive retirement or infers provider ownership.
+Explicit ownership/encryption and backup-first offline retirement are documented
+in ../docs/RUNTIME_RETIREMENT.md. Active legacy routed connections refuse
+retirement until operator review; archived routing must be reviewed before
+re-enablement. Old protocol namespaces return client_update_required.
 
-The backend implements account login/recovery, browser sessions, account-owned profiles, and device pairing. See [`AUTH.md`](AUTH.md). Browser cookies are `Secure`, `HttpOnly`, and `SameSite=Strict`; cookie mutations require an allowed Origin and CSRF header. Password, recovery, and device secrets belong only in JSON bodies or the appropriate cookie/Authorization header, never URL query parameters. Auth responses are not cacheable.
-
-The dashboard uses browser account sessions and profile setup/selection. Roku obtains revocable device credentials through QR/code confirmation for the current browser account. A paired device may manage only that account's profiles and can never administer providers, addons, matches, or accounts. Back up SQLite before upgrades and retain the old executable plus pre-upgrade backup for rollback.
-
-## Operational behavior
-
-- No profile is seeded. New accounts remain at zero profiles until the browser or paired device creates one; imported profiles retain stable IDs/history and require presentation setup. Cinemeta is seeded **only on first creation of the addon table**; existing databases, including empty addon lists, are never reseeded. Addon deletion/disable/priority survives restart. POST the same manifest URL refreshes its manifest without resetting configuration. `PATCH /api/addons/{id}` accepts `enabled` (boolean) and/or `priority` (signed 64-bit integer); omitted values remain unchanged. GET addons includes disabled entries and priority. Lower priority wins, ties use addon ID; catalogs, metadata, and new stream discovery use enabled addons only. Metadata preference is deterministic, not fastest-response-wins.
-- `GET /api/catalogs` preserves bounded Stremio filter capabilities as `extra:[{name,is_required,options,options_limit}]`, plus `supports_search`, `supports_skip`, and normalized `genres`; it accepts modern object entries, string entries, and legacy `extraSupported`/`extraRequired` declarations. Names and option values are bounded, duplicate options are removed, and at most 16 extras with 64 options each are exposed. `GET /api/discover` accepts `genre` only when the selected catalog advertises it, rejects values outside advertised options, and encodes it exactly once into the Stremio catalog extra path. Supplying a genre satisfies a required genre declaration; catalogs with other unsatisfied required extras remain inapplicable.
-- Browsing defaults to the first matching enabled catalog in configured order; explicit addon/catalog filters also apply to search and genre discovery. Discover returns `has_more` and `next_skip`: follow `next_skip`, never `metas.length`, because it advances by raw upstream count before deduplication and the 200-result cap. `has_more` means another page **may** exist (upstream page size/total is unknown), not a guaranteed total. Empty pages or catalogs without skip support terminate. Skip above 10000 is rejected. Search explicitly does not paginate: `aggregated:true,max_catalogs:32,max_results:200,has_more:false,next_skip:null`; nonzero search skip is rejected. Search checks declared extras support and aggregates at most 32 catalogs with 8 concurrent fetches and 200 deduplicated results. Catalog/meta caches expire automatically. Discovery has up to 32 addon sources plus IPTV. JSON bodies are bounded and upstream requests timeout.
-- Stream jobs are append-only. IPTV emits candidate batches immediately under `source:"iptv:{provider_id}"` (up to 100 candidates, eight concurrent lookups, four concurrent IPTV API requests globally), interleaving providers rather than resolving one entire library first. Each candidate has its own 30-second timeout including queue time; a stalled candidate/provider cannot erase prior successes. A final empty `iptv` event closes that producer. There may be multiple events per source, each with its own monotonically increasing sequence. Poll using the last sequence as `after`; `done` means all sources have finished. SSE uses `streams` and `done` events; reconnect with `?after=<last-seq>`. Discovery retention is 10 minutes; registered HTTP stream IDs expire after 30 minutes. Discover again after expiry. Source failures never remove successful results.
-- Upstream URLs are restricted to HTTP(S), without userinfo or fragments. LAN endpoints are intentionally permitted for private providers/Dispatcharr; authenticated administrators must trust configured providers/addons. Enforce outbound firewall restrictions if untrusted administrators can configure sources. The server is not a general internet-facing SSRF isolation boundary.
-- Provider sync parses bounded JSON and builds/commits indexes on blocking workers. Request handlers and async addon/provider lookups also offload shared SQLite mutex waits, so a long transaction does not occupy Tokio workers. The single SQLite connection still serializes database access: unrelated DB requests can wait for a sync commit, but health/media/timers remain schedulable. This is not a multi-connection database pool.
-- `POST /api/providers` accepts optional `max_connections` (integer 1–32, default 1); GET providers includes the persisted setting. `PATCH /api/providers/{id}` accepts `enabled` (boolean) and/or `max_connections`; changing a limit while provider playback is active is rejected (stop sessions first). Disabling prevents new discovery/playback but does not forcibly terminate existing sessions. Existing providers migrate to 1. Provider playback admission returns HTTP 429 on exhaustion before ffprobe starts; one permit covers probing and the full FFmpeg session, including cleanup, shared across live and discovered IPTV sources. The global session limit applies too. Limits are per server process, not coordinated with other IPTV clients or replicas; provider account-advertised limits are not currently fetched, so administrators must configure their subscription limit accurately. Index/guide requests have separate API concurrency controls.
-- Playback is always managed HLS, not blind direct passthrough. Positively probed compatible H264/AAC sources within device caps are fully transmuxed. Compatible H264 video is still packet-copied when audio alone needs AAC conversion; `video_mode` and `audio_mode` report each decision. Unknown/incompatible video or forced fallback encodes video. Default cap 1280×720, hard ceiling 1920×1080, no upscaling. Unsupported H264/AAC device capability is rejected. FFmpeg arguments are passed without a shell and unsupported protocols are denied.
-- Audio language tags are informational, never a playback gate. An explicitly requested input audio track wins; otherwise playback prefers a default non-commentary/non-description track, then a clean English or first available track. Unknown and non-English tracks remain selectable. VOD ffprobe metadata is cached for two minutes under a bounded SHA-256 source/header identity so an authenticated seek/restart does not repeat inspection or retain upstream URLs/headers as cache keys; live sources are always reprobed. Structured preparation logs report probe and FFmpeg-ready milliseconds without logging source URLs or credentials. Startup waits for usable playlist/segment, bounded by timeouts. On a remux playback/start failure the app should POST again with `force_transcode:true`. Concurrency exhaustion returns an error, not an unbounded queue. HLS uses a bounded rolling segment window. Live input is read as it arrives; an on-demand encoder is suspended once it is well ahead of the furthest segment a viewer fetched and resumed as the viewer catches up, so the window never slides past a realtime viewer. Seeking outside its window requires a replacement session with the target `position` (returned position is the media offset). Playback responses additionally include `video_mode: copy|encode`, `audio_mode: copy|encode|none`, `live: boolean` and `duration: number` (`0` when unknown) (full source seconds, not the rolling playlist duration). Live channels always return `live: true, duration: 0` and reject nonzero offsets. VOD/episodes return `live: false`; use the probed full duration for progress, and persist `response.position + playerElapsedSeconds` rather than treating the rolling manifest as a complete VOD timeline. If duration is unknown, keep it unknown instead of inventing one. Do not seek directly beyond the rolling window or label a growing playlist `EXT-X-PLAYLIST-TYPE:VOD`. Send heartbeat every 20–30 seconds while active, DELETE sessions on stop. Media reads also keep active sessions alive. Graceful shutdown and TTL expiry stop subprocesses and remove session files.
-- An opt-in real FFmpeg integration test is included in `src/playback.rs`; run ignored tests with `VIPTV_TEST_FFMPEG=/path/to/ffmpeg VIPTV_TEST_FFPROBE=/path/to/ffprobe cargo test --locked -- --include-ignored`. Tests generate a fixture, serve it over HTTP, verify remux/forced transcode and cleanup, and reject nested local-file references in HLS segments and keys. Use a known-good FFmpeg build.
-## Network isolation boundary and hardening plan
-
-Current HTTP(S) validation deliberately trusts LAN origins. Neither URL scheme checks nor FFmpeg protocol whitelists provide full SSRF isolation: redirects, DNS changes, and nested HLS playlists/segments/keys can access additional HTTP(S) origins. Do not install untrusted addons or expose administrative access to untrusted users.
-
-A future public-only mode must classify all resolved IPv4/IPv6 addresses (including mapped IPv6), deny loopback/private/link-local/reserved/cloud-metadata targets unless explicitly allowlisted, recheck every redirect, and pin the checked address to the connection to prevent DNS rebinding. Trusted LAN providers need an explicit separate allowlist/policy rather than disabling all checks. The FFmpeg engine boundary additionally requires a vetted fetch broker or isolated network namespace plus egress proxy applying the same policy to **every nested fetch**; restrict filesystem visibility to session output and executable dependencies. Until that boundary exists, use deployment egress firewall rules and least-privilege process/container permissions. This is a scoped hardening plan, **not implemented isolation**.
-
-- Actual provider reachability, decoder compatibility, Roku playback and throughput require real credentials, FFmpeg and device testing. Automated mocks exercise API persistence, authentication, incremental discovery, unsupported-source reporting, provider mappings and managed-session internals without claiming physical Roku validation.
-
-## Native Android playback and sign-in (AND-036)
-
-`POST /api/auth/device/login` accepts username, password and an optional device name, requires the configured HTTPS Origin, and returns the same revocable bearer/refresh credentials as device pairing. Phone sign-in does not create browser cookies or require a device-code round trip. Credential validation and rate limits are shared with existing login.
-
-A playback request with `capabilities.direct_urls: true` returns the original source plus explicit private playback headers after authorization, source validation and admission. It does not probe or transcode media. The native player determines codec support, tracks, duration and seeking; unsupported media returns its actual native error. Session leases, heartbeats and release still apply. Forced transcoding is incompatible with this mode. Addon Cookie headers are retained privately, never included in public source cards.
+Host tests, client mocks and isolated gateway media fixtures have separate
+evidence limits. Production backup/migration/rollback, real providers and physical
+TV/4K/tracks remain separately qualified operations.

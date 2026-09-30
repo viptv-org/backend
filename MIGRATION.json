@@ -13,78 +13,92 @@
       "source": ".env.example",
       "destination": ".env.example",
       "sha256": "8d2fe214b35ca561c77bf82afed1e9e47b368671702389ebad8f39c272c57863",
-      "extracted_sha256": "25b62b723c94beac48feee2e51051689d22fb594d7fbe4f82eb69a3d76ad28ae",
-      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "extracted_sha256": "c2aab43cf94d9c2f35631a508fd96b6e6bf754874c853db46a0e66999a273f01",
+      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained. BE-002 engine-free public packaging/docs/helper checkpoint; original extraction hash retained."
     },
     {
       "source": "DEPLOYMENT.md",
       "destination": "DEPLOYMENT.md",
       "sha256": "98cd9bbe715ecb7cfe7321e75810601ad5e4bcc9d8a812cab22c725277491606",
-      "extracted_sha256": "52ee5962d929e119a3816e79ad057cb7b37c77023a29265f26e3de4d699d3485",
-      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "extracted_sha256": "db9b9dffab628c6473e5a0fdee8d1d60da0686b10bb7d5ffb82b0bd873c3964d",
+      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained. BE-002 engine-free public packaging/docs/helper checkpoint; original extraction hash retained."
     },
     {
       "source": "Dockerfile",
       "destination": "Dockerfile",
       "sha256": "76f6a1644769cc429a3ecb381758f62c7e13d975e5fec26a4a7b8abf132720e3",
-      "extracted_sha256": "fe9ecbb24f984e2832b8d9af517443f86fcd6e8d167302e3674f0d1d68f822ee",
-      "reason": "packaging: drops the dashboard-build node stage and copies the checksummed web-dist/ bundle BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "extracted_sha256": "9e42b50789fd57d39eecf11bae2c0712242464470786c98ccc752929381bfe53",
+      "reason": "packaging: drops the dashboard-build node stage and copies the checksummed web-dist/ bundle BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained. BE-002 engine-free public packaging/docs/helper checkpoint; original extraction hash retained."
     },
     {
       "source": "compose.qsv.yaml",
       "destination": "compose.qsv.yaml",
       "sha256": "3c35361bb7e5172353554aa0f4c39a01ad1b2ac6cc3579255f59809997be5471",
-      "extracted_sha256": "b6510e980b11c3aa9155a618066cf22baff925dd62d303f3498aa4c5f8c27e9f",
-      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained. BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02.",
+      "removed": true
     },
     {
       "source": "compose.validation.qsv.yaml",
       "destination": "compose.validation.qsv.yaml",
-      "sha256": "c70b92ecb86fbf3f5423432fbc87aa74f038f65ed7f395ad871df50baeb887d1"
+      "sha256": "c70b92ecb86fbf3f5423432fbc87aa74f038f65ed7f395ad871df50baeb887d1",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "compose.validation.yaml",
       "destination": "compose.validation.yaml",
       "sha256": "fdea62966a98dcad169b0361dd1901ecadadfe45c4d4a2dd519acf017ec66eed",
-      "extracted_sha256": "3ac8e49e486984143cd06f9586a89f54a1c669e6f1b736f6b75243b3a319006f",
-      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained. BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02.",
+      "removed": true
     },
     {
       "source": "compose.warp.yaml",
       "destination": "compose.warp.yaml",
-      "sha256": "48831f2c53cf36791056737e65b2e2079419db8b7bdcd0fe810f503edd5e84c2"
+      "sha256": "48831f2c53cf36791056737e65b2e2079419db8b7bdcd0fe810f503edd5e84c2",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "compose.yaml",
       "destination": "compose.yaml",
       "sha256": "72bdee95cc933de4ce780f15996fdff4cc40d50e2f7e80ef724e4ead8f009787",
-      "extracted_sha256": "8d3f909d9edf273b31da02c226b5e879ee92b61dc7b62fbee1e3f09741d3ac86",
-      "reason": "packaging: names the volume viptv_viptv_data so a renamed checkout keeps the same data BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "extracted_sha256": "c8a8c682bd74b1e3593437c7f03bac071e0f29628fac5485193af854e922a38a",
+      "reason": "packaging: names the volume viptv_viptv_data so a renamed checkout keeps the same data BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained. BE-002 engine-free public packaging/docs/helper checkpoint; original extraction hash retained."
     },
     {
       "source": "deploy/warp/Dockerfile",
       "destination": "deploy/warp/Dockerfile",
-      "sha256": "fe82d97ddb1995f3af67fc6b5b3778c201f145de8363c82f7918662ed47c6593"
+      "sha256": "fe82d97ddb1995f3af67fc6b5b3778c201f145de8363c82f7918662ed47c6593",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "deploy/warp/tinyproxy.conf",
       "destination": "deploy/warp/tinyproxy.conf",
-      "sha256": "64a62d27879d7eed61f83d63eebf7ddca2f63134409ffe292f327b72e842e09e"
+      "sha256": "64a62d27879d7eed61f83d63eebf7ddca2f63134409ffe292f327b72e842e09e",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "scripts/container-check.sh",
       "destination": "scripts/container-check.sh",
-      "sha256": "8ad4794f83d5086a66662f50b01681539e80f34936a0de37d0eb28ffe6bb5dc8"
+      "sha256": "8ad4794f83d5086a66662f50b01681539e80f34936a0de37d0eb28ffe6bb5dc8",
+      "extracted_sha256": "e585640c46f5b6d473e2fa855c001ce6a6d09a0d6b411dc49d9af9a65853086d",
+      "reason": " BE-002 engine-free public packaging/docs/helper checkpoint; original extraction hash retained."
     },
     {
       "source": "scripts/host-check.sh",
       "destination": "scripts/host-check.sh",
-      "sha256": "4fe768f839aab01f610876e46aa3bfc7285c3f5bbf157f79910973cf247d64f0"
+      "sha256": "4fe768f839aab01f610876e46aa3bfc7285c3f5bbf157f79910973cf247d64f0",
+      "extracted_sha256": "0ff42b134606a9d2130d9d91e4b56cb8c3f340ea8cfd2369df487c74e69a621d",
+      "reason": " BE-002 engine-free public packaging/docs/helper checkpoint; original extraction hash retained."
     },
     {
       "source": "scripts/qsv-frame-check.py",
       "destination": "scripts/qsv-frame-check.py",
-      "sha256": "004245519e7060907f0e9c562438d3cef7a65a7e2781106f5fdb1193cc104a78"
+      "sha256": "004245519e7060907f0e9c562438d3cef7a65a7e2781106f5fdb1193cc104a78",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "server/.gitignore",
@@ -114,8 +128,8 @@
       "source": "server/README.md",
       "destination": "server/README.md",
       "sha256": "d1a0409c5c28bd5f412181b511badd82758c258e5bb24cf5607e46bc3082b36f",
-      "extracted_sha256": "bcd567e110938f66071072dd15adbd18b92c4b384fd89f9818636fb64badaf10",
-      "reason": "pre-existing af35a6a/39c1b3e: documents VIPTV_TV_DIST and browser playback capabilities; untouched by the cleanup BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "extracted_sha256": "e60eefa859d793fdf6098798e7ef7c9674b97c393055ab909560fdbcd5f3e8ef",
+      "reason": "pre-existing af35a6a/39c1b3e: documents VIPTV_TV_DIST and browser playback capabilities; untouched by the cleanup BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained. BE-002 engine-free public packaging/docs/helper checkpoint; original extraction hash retained."
     },
     {
       "source": "server/assets/character-avatars.json",
@@ -394,14 +408,16 @@
     {
       "source": "tests/Dockerfile.integration",
       "destination": "tests/Dockerfile.integration",
-      "sha256": "4f8df4e7727ddc67c08ea13a23d34c012b33c2bb7f0d50b831ed5a8287fe1bc7"
+      "sha256": "4f8df4e7727ddc67c08ea13a23d34c012b33c2bb7f0d50b831ed5a8287fe1bc7",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "tests/README.md",
       "destination": "tests/README.md",
       "sha256": "aea3887b77e18e27c5014b1e45637a3f59021e5808e4e85467664059e7630eaf",
-      "extracted_sha256": "ba538a88f255d87af9cce4ef678664068c9e3deff65ae5e98e8829ee19d6f3b9",
-      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "extracted_sha256": "4a12dcf336bcaf0102410c8ad576f74ff2987dc70ea543a10df19117b66440e4",
+      "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained. BE-002 engine-free public packaging/docs/helper checkpoint; original extraction hash retained."
     },
     {
       "source": "tests/account_smoke.py",
@@ -411,32 +427,44 @@
     {
       "source": "tests/generate_long_fixture.sh",
       "destination": "tests/generate_long_fixture.sh",
-      "sha256": "a8b8e4c91eeca48f37abf6aafeaa9589a5c40927fc935982370f3cbd7521b330"
+      "sha256": "a8b8e4c91eeca48f37abf6aafeaa9589a5c40927fc935982370f3cbd7521b330",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "tests/incremental_providers.py",
       "destination": "tests/incremental_providers.py",
-      "sha256": "3a6a7df39be886227a71532a073a0f1b690f591cca413f330f39d5e4616f4118"
+      "sha256": "3a6a7df39be886227a71532a073a0f1b690f591cca413f330f39d5e4616f4118",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "tests/live_deployment_check.py",
       "destination": "tests/live_deployment_check.py",
-      "sha256": "4d7b3b7a9f59aea69a45c59d73c0e9f608a3f4c0803782ea19ca78cf9eaae578"
+      "sha256": "4d7b3b7a9f59aea69a45c59d73c0e9f608a3f4c0803782ea19ca78cf9eaae578",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "tests/mock_upstream.py",
       "destination": "tests/mock_upstream.py",
-      "sha256": "35c9a55d1c4fde7525dd538ff2fcc02456a7db722e50d1f37791054edb2172f2"
+      "sha256": "35c9a55d1c4fde7525dd538ff2fcc02456a7db722e50d1f37791054edb2172f2",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "tests/smoke.py",
       "destination": "tests/smoke.py",
-      "sha256": "cdee9e9d738f35ce915c2ed1e5683ac6d5f8e5be8fc693d55c532012a6fa1137"
+      "sha256": "cdee9e9d738f35ce915c2ed1e5683ac6d5f8e5be8fc693d55c532012a6fa1137",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "tests/sustained_playback.py",
       "destination": "tests/sustained_playback.py",
-      "sha256": "86867f237478dc90832b03a213e06412787c0ca3ec87253d75da3d8808270571"
+      "sha256": "86867f237478dc90832b03a213e06412787c0ca3ec87253d75da3d8808270571",
+      "removed": true,
+      "reason": " BE-002 obsolete embedded-media packaging or helper retired; original extraction hash retained in sha256 and source recoverable at d6b8d570326fa98bdb8077e8078f660617071b02."
     },
     {
       "source": "tests/test_host_check.py",
@@ -446,7 +474,9 @@
     {
       "source": "tests/validate_deployment.cjs",
       "destination": "tests/validate_deployment.cjs",
-      "sha256": "147c95502b8aab1f27ef770412f20aa5af073378bfb43d9fc4c53d0b157daf47"
+      "sha256": "147c95502b8aab1f27ef770412f20aa5af073378bfb43d9fc4c53d0b157daf47",
+      "extracted_sha256": "8514244a5f9cbc22404249e23e6f00f7d8d138918612036bb24d81e436ecb2d0",
+      "reason": " BE-002 engine-free public packaging/docs/helper checkpoint; original extraction hash retained."
     }
   ],
   "packaging_changes": [
@@ -461,6 +491,9 @@
     "repinned_pre_existing_source": 3,
     "repinned_cleanup_only": 9,
     "repinned_cleanup_and_earlier": 3,
-    "removed": 0
+    "removed": 0,
+    "current_repinned": 28,
+    "current_removed": 35,
+    "note": "Original extraction classification retained above; current counts include reviewed BE-002 checkpoints."
   }
 }

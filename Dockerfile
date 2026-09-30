@@ -36,7 +36,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 viptv \
     && useradd --uid 10001 --gid viptv --no-create-home --home-dir /data --shell /usr/sbin/nologin viptv \
-    && install -d -o viptv -g viptv -m 0700 /data /cache \
+    && install -d -o viptv -g viptv -m 0700 /data \
     && install -d -m 0755 /app/dashboard /app/tv
 COPY --from=server-build /src/server/target/release/viptv-server /usr/local/bin/viptv-server
 COPY --from=server-build /src/server/target/release/provider-owners /usr/local/bin/provider-owners
@@ -47,7 +47,6 @@ RUN chmod -R a+rX /app/dashboard /app/tv
 WORKDIR /app
 ENV VIPTV_BIND=0.0.0.0:8080 \
     VIPTV_DATABASE=/data/viptv.sqlite \
-    VIPTV_MEDIA_DIR=/cache/hls \
     VIPTV_DASHBOARD_DIST=/app/dashboard \
     VIPTV_TV_DIST=/app/tv
 USER 10001:10001
