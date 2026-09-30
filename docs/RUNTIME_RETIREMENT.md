@@ -36,6 +36,14 @@ streams the version-1 `contains_secrets=true` export, and syncs both files and
 their directories before any source mutation. Existing artifact paths fail.
 Missing ownership, plaintext/missing/corrupt ciphertext, wrong keys and unknown
 foreign dependencies refuse/roll back deletion. No owner is inferred or assigned.
+Before any destructive DDL, an incoming-FK preflight refuses every preserved or
+unreviewed child table referencing a retired target, regardless of deletion
+action or row count. Names are bound into the table-valued PRAGMA and targets
+match SQLite's ASCII case-insensitive identifier semantics. Only children in
+the static reviewed retirement set may depend on retired parents. This prevents
+`DROP TABLE` from silently cascading deletions or nulling preserved child data
+while a final integrity check still passes. Refusal leaves source data/schema
+and retirement marker unchanged; already-created private artifacts remain valid.
 An enabled provider with a legacy WARP route also refuses retirement with
 `retirement_routing_review_required`; its route remains fenced and preserved in
 the private artifacts. The operator must review routing outside VIPTV before
@@ -61,16 +69,21 @@ Actual client decoder dimensions remain in the unchanged v2 playback request.
 
 ## Evidence boundary
 
-Five synthetic offline fixtures verify backup/export contents and permissions,
+Synthetic offline fixtures verify backup/export contents and permissions,
 ID/history/match preservation, active-routing/ownership/encryption refusal, wrong-key/unknown-FK
 rollback, idempotence and no table resurrection at boot. Runtime retirement
 fixtures verify no job allocation/media relay, async responsiveness, exact
 raw/composite history IDs and quality-free writer preservation. The removed
 legacy API suite's shared cases are audited in RETIRED_TEST_AUDIT.md.
 
-Passed: 199 locked Rust tests (185 library + 14 integration), two opt-in gateway
-fixtures ignored; strict all-target Clippy, formatting and original extraction
-inventory checks. This replaces retired fixture expectations explicitly rather
+The original runtime checkpoint passed 199 locked Rust tests (185 library + 14
+integration). The incoming-FK guard checkpoint passed 201 (187 library + 14
+integration), with two opt-in gateway fixtures ignored, strict all-target Clippy,
+formatting and original extraction inventory checks. Its new eight-case fixture
+failed against the pre-guard baseline because retirement incorrectly succeeded;
+the guarded run verifies CASCADE/SET NULL, empty/populated children, mixed-case
+targets, unusual child names, private artifacts and unchanged source/marker.
+This replaces retired fixture expectations explicitly rather
 than retaining backend media execution. Root's network-none real-gateway harness
 must be rerun on this exact
 source commit. Production ownership/migration/rollback, native TLS, real provider,

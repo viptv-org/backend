@@ -174,6 +174,7 @@ fn retire_with_vault(
                 return Err("retirement_routing_review_required");
             }
         }
+        refuse_preserved_foreign_dependencies(tx)?;
         tx.execute_batch("DROP TRIGGER IF EXISTS kids_family_policy_update; DROP TRIGGER IF EXISTS kids_family_policy_delete;").map_err(|_|"retirement_failed")?;
         let mut removed = Vec::new();
         for table in RETIRED_TABLES {
@@ -204,6 +205,44 @@ fn retire_with_vault(
         tx.execute("INSERT INTO retired_features_v2 VALUES(1,2,?1,?2) ON CONFLICT(id) DO UPDATE SET source_revision=excluded.source_revision,retired_at=excluded.retired_at",rusqlite::params![revision,crate::util::now()]).map_err(|_|"retirement_failed")?;
         Ok(json!({"retirement_version":2,"removed_tables":removed}))
     })
+}
+
+/// DROP TABLE may cascade or null preserved child rows without failing a final
+/// integrity check. Refuse incoming dependencies before any destructive DDL,
+/// even for empty children. Only statically reviewed retired children may refer
+/// to retired parents. SQLite identifier matching is ASCII case-insensitive.
+fn refuse_preserved_foreign_dependencies(tx: &Connection) -> Result<()> {
+    let retired = |name: &str| {
+        RETIRED_TABLES
+            .iter()
+            .any(|table| table.eq_ignore_ascii_case(name))
+    };
+    let mut tables = tx
+        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        .map_err(|_| "retirement_dependency_requires_review")?;
+    let names = tables
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|_| "retirement_dependency_requires_review")?;
+    for name in names {
+        let name = name.map_err(|_| "retirement_dependency_requires_review")?;
+        if retired(&name) {
+            continue;
+        }
+        // Table-valued PRAGMA binds the child name as data; no identifier or SQL
+        // interpolation, including quoted or otherwise unusual extension names.
+        let mut dependencies = tx
+            .prepare("SELECT \"table\" FROM pragma_foreign_key_list(?1)")
+            .map_err(|_| "retirement_dependency_requires_review")?;
+        let targets = dependencies
+            .query_map([&name], |row| row.get::<_, String>(0))
+            .map_err(|_| "retirement_dependency_requires_review")?;
+        for target in targets {
+            if retired(&target.map_err(|_| "retirement_dependency_requires_review")?) {
+                return Err("retirement_dependency_requires_review");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn open(path: &Path, writable: bool) -> Result<Connection> {

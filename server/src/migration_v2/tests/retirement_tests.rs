@@ -278,6 +278,77 @@ fn bad_keys_existing_artifacts_and_unreviewed_foreign_dependencies_roll_back_ret
     assert!(!exists(&db, "retired_features_v2"));
 }
 
+#[test]
+fn incoming_foreign_dependencies_refuse_cascade_null_empty_and_mixed_case_targets() {
+    for action in ["CASCADE", "SET NULL"] {
+        for populated in [false, true] {
+            for target in ["family_channels", "FaMiLy_ChAnNeLs"] {
+                let root = tempfile::tempdir().unwrap();
+                let (db, vault) = ready(root.path());
+                // Quoted child names must be treated as data, never SQL fragments.
+                db.execute_batch(&format!("CREATE TABLE \"extension'odd\"(id INTEGER PRIMARY KEY,family_id TEXT REFERENCES \"{target}\"(id) ON DELETE {action});")).unwrap();
+                if populated {
+                    db.execute_batch("INSERT INTO \"extension'odd\" VALUES(1,'family:old');")
+                        .unwrap();
+                }
+                let rows = |connection: &Connection| -> Vec<(i64, Option<String>)> {
+                    connection
+                        .prepare("SELECT id,family_id FROM \"extension'odd\" ORDER BY id")
+                        .unwrap()
+                        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                        .unwrap()
+                        .collect::<rusqlite::Result<_>>()
+                        .unwrap()
+                };
+                let before = rows(&db);
+                let schema: String = db
+                    .query_row(
+                        "SELECT sql FROM sqlite_master WHERE name=?1",
+                        ["extension'odd"],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    retire_with_vault(
+                        &root.path().join("source.sqlite"),
+                        &root.path().join("dependency.sqlite"),
+                        &root.path().join("dependency.json"),
+                        REVISION,
+                        &vault
+                    )
+                    .unwrap_err(),
+                    "retirement_dependency_requires_review",
+                    "{action}, populated={populated}, target={target}"
+                );
+                assert_eq!(rows(&db), before);
+                assert_eq!(
+                    db.query_row(
+                        "SELECT sql FROM sqlite_master WHERE name=?1",
+                        ["extension'odd"],
+                        |row| row.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                    schema
+                );
+                assert!(exists(&db, "family_channels"));
+                assert!(exists(&db, "family_aliases"));
+                assert!(exists(&db, "provider_routes"));
+                assert!(!exists(&db, "retired_features_v2"));
+                let backup = open(&root.path().join("dependency.sqlite"), false).unwrap();
+                assert_eq!(rows(&backup), before);
+                assert!(exists(&backup, "family_channels"));
+                assert!(!exists(&backup, "retired_features_v2"));
+                let exported: Value = serde_json::from_reader(
+                    File::open(root.path().join("dependency.json")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(exported["tables"]["family_channels"][0]["id"], "family:old");
+                assert_eq!(exported["tables"]["provider_routes"][0]["warp"], 1);
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn normal_boot_never_recreates_retired_tables() {
     let root = tempfile::tempdir().unwrap();
