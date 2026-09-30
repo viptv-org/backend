@@ -1,9 +1,13 @@
 # Account-owned addon secrets
 
-This is an implementation checkpoint, not a completed client cutover or approval
-to migrate production. Protected public-network requests and guarded v2 management
-are implemented; client adoption, operator-managed private-network exceptions,
-bulk key rotation and removal of legacy paths remain open.
+Current contract at backend `8823114`: runtime addon credential readers and
+authenticated addon installs are encrypted-only. This supersedes the historical unkeyed
+installation/read-fallback descriptions, not the retained metadata compatibility
+wrappers below. Stored legacy records remain preserved for explicit offline
+migration; runtime does not silently encrypt, assign owners or read their secrets.
+Reviewed client source adoption is recorded in [V2 operations](V2_OPERATIONS.md),
+not inferred from these fixtures. Production cutover, operator-managed private-
+network exceptions and bulk key rotation remain separately unqualified.
 
 ## V2 management and protected requests
 
@@ -13,6 +17,9 @@ bulk key rotation and removal of legacy paths remain open.
   gets a safe per-record error rather than leaking its URL or blocking the list.
 - POST `/api/v2/addons` accepts only `manifest_url`. It validates and downloads
   the manifest, rechecks the captured authorization, and encrypts it before save.
+  A missing keyring refuses before download or write. Existing owned credentials
+  are checked before this v2 install fetch; legacy plaintext is not converted
+  online.
   A concurrent deletion/reconfiguration conflicts rather than resurrecting a
   deleted source or overwriting a newer manifest.
 - PATCH `/api/v2/addons/:id` accepts `enabled`; DELETE removes that owned addon.
@@ -39,10 +46,15 @@ installs do not occupy the browsing pool. Downloads retain response-size and
 timeout bounds. Test loopback exceptions are explicit and compiled for fixtures,
 not end-user configuration.
 
-The unkeyed legacy path still exists until cutover. It rechecks encryption state
-inside its save transaction, so a late legacy request cannot create plaintext
-after an account becomes protected. This does not constitute removal or complete
-isolation of every legacy route.
+The retained `/api/addons` GET/PATCH/DELETE wrappers preserve their array/record
+metadata shapes, account scope and parent/session policy. GET always redacts
+`manifest_url`; PATCH changes only `enabled`, and DELETE removes an owned entry.
+These metadata operations can inspect, disable or remove archived legacy rows
+without decrypting them; enabling one does not make its credentials usable.
+The retained POST wrapper also requires a keyring before downloading and writes
+only sealed credentials. Its route name is not an unkeyed installation mode.
+These wrappers, plus `/api/catalogs`, `/api/discover` and `/api/meta`, are distinct
+from retired media/setup/organizer namespaces that return `client_update_required`.
 
 ## Storage and runtime behavior
 
@@ -52,7 +64,8 @@ keyring, authenticated against the account, addon ID and `addon` purpose. Names,
 IDs, enabled flags and account ownership remain ordinary metadata: this is not
 whole-database encryption.
 
-With a configured keyring, new account-owned installations use encrypted storage.
+All new account-owned installations require a configured keyring and encrypted
+storage.
 Reinstalling an already encrypted URL preserves its ID, while replacing the
 manifest advances a small configuration revision. Playback checks use that
 revision rather than loading/hashing a potentially large encrypted manifest.
@@ -62,17 +75,21 @@ payload limit. Oversized documents fail rather than falling back to plaintext.
 Normal gateway/provider secrets retain their 256 KiB limit.
 
 Settings responses use `credentials_encrypted:true` and `manifest_url:null` for
-encrypted entries. Internal, account-scoped catalog/source readers decrypt only
-when needed. Clients must adapt URL display/edit flows; the current old UI is not
-claimed to support this contract. Missing keys, wrong owners or damaged/missing
-ciphertext do not fall back to plaintext.
+encrypted entries; compatibility metadata also returns `manifest_url:null` for
+legacy rows. Internal account-scoped catalog/source readers decrypt only when
+needed. Version-zero credentials fail with `source_credentials_migration_required`;
+missing keys, wrong owners or damaged/missing ciphertext fail safely, never
+falling back to stored plaintext. V2 management lists expose per-record safe
+configuration errors; compatibility catalog arrays contain only usable sources
+and preserve their existing shape. See the reviewed client pins rather than the
+historical old-UI checkpoint for adoption evidence.
 
-An account that has enabled encrypted addon storage cannot create new plaintext
-entries by removing the keyring, even after deleting all of its addons. Re-adding
-a legacy plaintext URL does not silently migrate it online: it returns
-`addon_encryption_required`, preserving the backup-first boundary. Compatibility
-unkeyed writes still exist for unmigrated accounts and are pending removal at the
-coordinated cutover; do not claim every installation is encrypted already.
+Removing the keyring cannot reopen plaintext installation, including for an
+unmigrated account or one that deleted every addon. Re-adding a legacy URL does
+not silently migrate it online: strict credential inspection returns the safe
+migration/configuration refusal and preserves the backup-first boundary.
+Encrypted-only runtime behavior does not mean every stored legacy row has been
+migrated or that metadata wrappers must be removed.
 
 V2 discovery rechecks addon ownership/enabled state before publishing late
 results and when returning cached producer events. Revoked entries are redacted
@@ -141,5 +158,8 @@ late/cached source revocation and executable confirmation/keyring gates.
 Additional fixtures cover v2 management roles/cursors, private-address rejection,
 public and cross-origin redirects, loops and downgrade refusal, stale reinstall
 and revoked-session writes, cache trust separation and independent browsing slots.
-These use synthetic data; no production migration or device/UI acceptance is
-claimed. Complete client adoption and the remaining cutover gates are still open.
+These are synthetic checkpoint fixtures, not production migration or physical-
+device/UI acceptance. Subsequent strict-read and legacy-POST refusal evidence is
+recorded in V2_OPERATIONS.md; historical tests of unkeyed behavior do not define
+today's contract. Client pin adoption, production migration/rollback, private-
+network exceptions and key rotation must each retain their own evidence boundary.

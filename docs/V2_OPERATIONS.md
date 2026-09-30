@@ -11,6 +11,13 @@ This is a development-branch contract, not authorization to migrate production.
 Production deployment and migration require separate approval. No viewing UI or
 playlist swap control is introduced by these endpoints.
 
+Current source at `8823114` requires encrypted runtime provider/addon credential
+reads and encrypted new credential writes. Preserved plaintext rows are offline
+migration inputs, not a runtime fallback. `/api/addons` GET/PATCH/DELETE metadata
+wrappers and encrypted-only POST remain for compatible clients; retaining these
+wrappers does not restore retired media/setup/organizer behavior. Historical
+qualification counts and pre-cutover controls below are checkpoint evidence only.
+
 ## Reviewed frontend source checkpoint — 2026-09-30
 
 The dashboard submodule now pins ADM-002 management commit
@@ -56,17 +63,19 @@ query override. Categories reject personal collection filters. Saved references
 outside the current playlist (including retired composites) remain in history/
 favorites; they are not silently remapped. No synchronous total is introduced.
 
-Checkpoint: full backend suite 281 passed/four opt-in fixtures ignored, strict
+Historical pre-retirement checkpoint: full backend suite 281 passed/four opt-in
+fixtures ignored, strict
 all-target Clippy passed. The 13 catalog/ownership fixtures also passed after
 extending exact live selection through native direct v2 admission and release.
 Synthetic tests cover profile-bound saved subsets, default/override isolation,
 hidden foreign/unassigned/composite IDs, parent gates, private source cards and
 credential-proof changes. No real provider, hardware or production state was used.
-Ordinary client guide/catalog cutover and retired-path removal remain pending.
+Guide/catalog adoption and retired runtime removal subsequently reached the
+reviewed source checkpoints above; that does not complete production cutover.
 
 ## Account management API
 
-### Private source headers checkpoint — 2026-09-30
+### Historical private source headers checkpoint — 2026-09-30
 
 Source registration preserves the existing closed request-header allowlist and
 adds only `X-API-Key`, which the existing direct-client and gateway transport
@@ -84,11 +93,12 @@ delivery do not disclose them.
 
 Synthetic registration, discovery-event and v2 direct/gateway lease fixtures:
 205 tests passed, two opt-in tests ignored; strict all-target Clippy passed. These
-checks do not qualify real gateway media playback or hardware. This checkpoint
-does not remove the pre-existing version-zero plaintext credential fallback;
-offline migration/retirement evidence remains a separate operational gate.
+checks did not qualify real gateway media playback or hardware. At that earlier
+checkpoint, version-zero plaintext fallback still existed. The strict runtime
+encryption boundary below supersedes that behavior; offline migration/retirement
+evidence remains a separate operational gate.
 
-### Runtime encryption boundary checkpoint — 2026-09-30
+### Runtime encryption boundary (current behavior; historical validation count)
 
 The subsequent coordinated runtime checkpoint supersedes the plaintext fallback
 caveat above: provider/addon credential readers and opaque-source registration
@@ -106,13 +116,16 @@ per-add-on failures, and the v2 management list exposes configuration errors.
 Compatibility catalog arrays retain their existing shape and list only usable
 encrypted sources when mixed with legacy entries.
 
-Android and Roku still call legacy `/api/addons` and `/api/catalogs` metadata
+Compatibility clients may still call `/api/addons` and `/api/catalogs` metadata
 routes. These routes are retained: metadata never returns stored manifest URLs;
-enable/delete remain account-scoped. Legacy add-on POST now requires a keyring
+GET/PATCH/DELETE wrappers remain account-scoped and do not decrypt legacy secrets.
+Enable/delete can operate on archived owned metadata without granting playback
+access to unmigrated credentials. Legacy add-on POST now requires a keyring
 before fetching and writes only encrypted records. It cannot reinstall a legacy
 source to bypass the reviewed migration. No client contract fields or UI changed.
 
-Validation: 206 tests passed, two opt-in tests ignored; strict all-target Clippy
+Historical validation at the encryption-boundary checkpoint: 206 tests passed,
+two opt-in tests ignored; strict all-target Clippy
 passed. Synthetic fixtures cover plaintext refusal, unchanged legacy bytes,
 healthy encrypted sources, auth/history/raw-index availability and missing-keyring
 POST refusal before network/write. Genuine source/lease fixtures now use encrypted
@@ -211,8 +224,10 @@ Each v2 response is bounded at 64 MiB. This is server-side indexing, not client
 playlist synchronization. Catalog replacement, generation and succeeded status
 commit atomically. Failure keeps the entire prior snapshot; an authenticated,
 valid empty array is a legitimate replacement, not a custom filtering rule.
-Legacy refresh paths reject encrypted sources instead of invoking their old
-pool/lineup logic. Admin/client adoption and legacy removal are still pending.
+The old provider refresh/pool/lineup namespaces are retired in the current
+engine-free runtime and return `client_update_required`, not an alternate refresh
+engine. Reviewed admin/client source adoption is recorded above; production
+migration and client handoff/deployment remain separate gates.
 
 Each handler revalidates the captured account session before querying or writing.
 Selected kids profiles require parent authorization; paired TV/device sessions
@@ -225,9 +240,12 @@ becomes unavailable, the next default read persists the oldest enabled owned
 provider. No enabled sources means catalog_id is null. An explicit foreign or
 disabled selection fails, without changing the existing default.
 
-Legacy management and viewing routes have not yet been removed. The current web
-UI still uses its old matches route until the admin rebuild adopts this contract.
-Do not mistake this checkpoint for complete multi-tenant playback isolation.
+Historical pre-admin/pre-retirement notes about the old matches UI and active
+legacy media controls are superseded by the reviewed frontend/runtime checkpoints
+above. Account/admin now uses the v2 management contracts. Deliberately retained
+addon metadata/Stremio wrappers, authentication, profiles and history are not
+retired media/setup controls. This is still not a blanket claim of production
+or all-device playback qualification.
 
 ## Explicit legacy ownership migration
 
@@ -262,8 +280,9 @@ server/target/debug/provider-owners apply /absolute/path/source.sqlite \
 ```
 
 The final argument is the backend source revision used to build the reviewed
-tool. The executable is also included in future backend image builds; packaging
-was updated, but a new backend image has not been built/deployed at this checkpoint.
+tool. The original ownership checkpoint preceded its image build. The executable
+is now packaged in the reviewed full image; image/browser fixture evidence does
+not authorize deploying it or running it against production data.
 
 The operation holds BEGIN IMMEDIATE while it:
 
@@ -296,8 +315,10 @@ on retry. Check the returned error and use fresh paths after correcting the map.
 
 ## Rollback boundary
 
-There is no automatic restore or destructive cleanup. Invalid maps roll back the
-source transaction, including newly initialized v2 schema; successful assignment
+This ownership command performs no automatic restore or destructive cleanup.
+The separately confirmed retirement command is documented in RUNTIME_RETIREMENT.md.
+Invalid maps roll back the source transaction, including newly initialized v2
+schema; successful assignment
 does not delete accounts, profiles, progress, matches or retired configuration.
 
 Do not replace a live database with an older backup: that can discard later
@@ -309,11 +330,11 @@ Full coordinated rollback remains acceptance work before production cutover.
 ## Offline provider credential encryption
 
 This command is implemented and fixture-tested, **not approved for production
-use yet**. Client cutover and retired-feature
-removal remain incomplete. Migrated connections cannot be managed by legacy
-renew/update/delete/pool operations; those paths reject them with
-`client_update_required`. Legacy family matching and external provider XMLTV
-paths must not be used after this step. Raw v2 catalogs, native Xtream guide
+use yet**. Reviewed client/runtime source adoption supersedes the historical
+pending-cutover note, but production migration is not complete. Legacy provider
+renew/update/delete/pool, family matching and external provider XMLTV namespaces
+are retired for all sources and return `client_update_required`; they are not
+an operational fallback after this command. Raw v2 catalogs, native Xtream guide
 reads and source discovery use the encrypted reader.
 
 After explicit ownership assignment and separately approved downtime, stop all
@@ -355,7 +376,8 @@ paths. Retry validates existing ciphertext without rotating it, compacts the old
 plaintext and rebuilds FTS while retaining both later history writes and source/
 match identity. This is not permission to overwrite current data with the older
 backup, and does not qualify a coordinated old-image/client rollback. The full
-backend suite at this checkpoint passed 210 tests with two opt-in media fixtures
+backend suite at this historical checkpoint passed 210 tests with two opt-in
+media fixtures
 ignored; strict Clippy, formatting and the extraction inventory passed.
 
 Missing/wrong keys, changed ownership and damaged ciphertext fail closed.
@@ -368,8 +390,10 @@ This encrypts the provider credential tuple, not the entire SQLite database.
 The **backup and export intentionally contain plaintext**. Retired configuration,
 external copies, logs, filesystem snapshots and physical storage remnants are not
 securely erased by SQLite compaction. Keep artifacts private and apply the
-operator's retention policy; never commit or upload them. Client adoption,
-operator-managed private-network exceptions, bulk key rotation and cutover are still
-pending, so this is not a complete encrypted-secrets acceptance claim. Addon
+operator's retention policy; never commit or upload them. Reviewed client source
+adoption is separate from the user's outstanding handoff/production deployment.
+Operator-managed private-network exceptions, bulk key rotation, production
+migration and coordinated rollback remain unqualified; this is not a complete
+encrypted-secrets acceptance claim. Addon
 storage and reviewed ownership/encryption commands are now covered by
 [the addon management/migration contract](ADDONS_V2.md).
