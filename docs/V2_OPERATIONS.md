@@ -14,12 +14,15 @@ playlist swap control is introduced by these endpoints.
 ## Reviewed frontend source checkpoint — 2026-09-30
 
 The dashboard submodule now pins ADM-002 management commit
-`6bdbd05b8642ea99976a829b0977f5c437537cf0`; the viewing submodule pins
+`040ce6b96b117d073ca44cc4d751bae3d2a9659d`; the viewing submodule pins
 `ecec4860e2c5940739e2ad2ef6e30eecfd7512b2`. Account management uses the v2
 connection, matches and gateway contracts, while ordinary live viewing uses
 the raw cursor catalog and exact source selection. Retired organizer/setup
 controls are absent from the dashboard. This supersedes the historical notes
 below about the old dashboard matches route and pending client guide adoption.
+The follow-up dashboard pin also rejects repeated/overlapping management pages
+and retains failed-refresh source identity; its 76 unit tests and HTTPS fixture
+evidence remain client-side evidence, separate from backend runtime acceptance.
 Backend legacy runtime removal remains a separate isolated checkpoint.
 
 These are source pins, not deployment evidence. Dashboard acceptance used
