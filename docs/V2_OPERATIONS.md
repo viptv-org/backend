@@ -43,6 +43,19 @@ validation records for incomplete real-gateway and physical-device gates.
 
 ## Exact live playback and personal guide subsets
 
+### Cursor size boundary
+
+Live next/previous tokens are bounded at 4096 characters; unmatched-VOD tokens
+retain their existing 2048-character bound. Encoders now enforce the same limit
+as their respective decoders. If a provider's original identifier makes a token
+too large, the page fails with a safe 502 `catalog_cursor_too_large` reason instead
+of returning a token that will fail on the next request. This does not truncate,
+filter, delete or rewrite stored provider IDs, change import policy, or add a
+playlist-swap UI. Synthetic HTTP fixtures cover both live directions, VOD and
+unchanged raw data; an encoder fixture checks the exact bounds. Full suite:
+213 passing tests, two opt-in fixtures ignored; Clippy/format/inventory pass.
+Actual source observations on physical devices remain separate acceptance.
+
 Viewing clients use POST `/api/v2/iptv/live/:id/source` for one selected raw
 channel. It returns `{source}` with an opaque playback handle, provider identity
 and safe presentation metadata, never a source URL or credentials. It does not

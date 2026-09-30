@@ -21,6 +21,121 @@ fn seeded() -> App {
 }
 
 #[tokio::test]
+async fn oversized_catalog_cursors_fail_safely_without_changing_raw_identifiers() {
+    let app = seeded();
+    let long_id = "category-".to_owned() + &"x".repeat(4096);
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("INSERT INTO provider_live_categories_v2(provider_id,id,name,ordinal) VALUES(1,?1,'Original oversized category',0),(1,'small','Small',1)", [&long_id]).unwrap();
+    }
+    let (status, error) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/iptv/live/categories?limit=1",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(error["error_code"], "catalog_cursor_too_large");
+    assert!(error["error"]
+        .as_str()
+        .unwrap()
+        .contains("identifiers too large"));
+    assert!(!error.to_string().contains(&long_id));
+    // Make the oversized row terminal: its reverse cursor must obey the same
+    // bound, not only next-page tokens. This changes fixture order, not IDs.
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("UPDATE provider_live_categories_v2 SET ordinal=CASE WHEN id=?1 THEN 1 ELSE 0 END WHERE provider_id=1", [&long_id]).unwrap();
+    }
+    let (status, first) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/iptv/live/categories?limit=1",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cursor = first["next_cursor"].as_str().unwrap();
+    assert!(cursor.len() <= 4096);
+    let (status, reverse_error) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("/api/v2/iptv/live/categories?limit=1&cursor={cursor}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(reverse_error["error_code"], "catalog_cursor_too_large");
+    let db = app.db.lock().unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM provider_live_categories_v2 WHERE provider_id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT length(id) FROM provider_live_categories_v2 WHERE id=?1",
+            [&long_id],
+            |r| r.get::<_, usize>(0)
+        )
+        .unwrap(),
+        long_id.len()
+    );
+}
+
+#[tokio::test]
+async fn oversized_match_cursor_fails_before_emitting_an_unusable_token() {
+    let app = seeded();
+    let long_id = "vod:1:0000-".to_owned() + &"x".repeat(2048);
+    {
+        let db = app.db.lock().unwrap();
+        db.execute(
+            "UPDATE provider_vod SET id=?1 WHERE id='vod:1:0000'",
+            [&long_id],
+        )
+        .unwrap();
+    }
+    let (status, error) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/iptv/matches?limit=1",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(error["error_code"], "catalog_cursor_too_large");
+    assert!(!error.to_string().contains(&long_id));
+    let db = app.db.lock().unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM provider_vod WHERE provider_id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        235
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT length(id) FROM provider_vod WHERE id=?1",
+            [&long_id],
+            |r| r.get::<_, usize>(0)
+        )
+        .unwrap(),
+        long_id.len()
+    );
+}
+
+#[tokio::test]
 async fn account_matches_are_paged_and_cursors_cannot_cross_accounts() {
     let app = seeded();
     let (status, first) = request(

@@ -10,6 +10,17 @@ type Result<T> = std::result::Result<T, &'static str>;
 fn db_error(_: rusqlite::Error) -> &'static str {
     "provider_storage_unavailable"
 }
+const MATCH_CURSOR_BYTES: usize = 2048;
+
+/// Never return a token larger than the matching decoder accepts. Original
+/// provider identifiers remain stored unchanged; unsupported pages fail safely.
+pub(super) fn encode_page_cursor<T: Serialize>(value: &T, bound: usize) -> Result<String> {
+    let token = URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).map_err(|_| "invalid_cursor")?);
+    if token.len() > bound {
+        return Err("catalog_cursor_too_large");
+    }
+    Ok(token)
+}
 
 pub(crate) fn init(db: &Connection) -> Result<()> {
     let tx = db.unchecked_transaction().map_err(db_error)?;
@@ -193,7 +204,7 @@ pub(crate) fn matches_page(
         .collect::<Vec<_>>()
         .join(" AND ");
     let (after_provider, after_id) = if let Some(cursor) = cursor {
-        if cursor.len() > 2048 {
+        if cursor.len() > MATCH_CURSOR_BYTES {
             return Err("invalid_cursor");
         }
         let decoded: MatchCursor = serde_json::from_slice(
@@ -224,7 +235,7 @@ pub(crate) fn matches_page(
             provider: last["provider_id"].as_i64().ok_or("invalid_cursor")?,
             id: last["vod_id"].as_str().ok_or("invalid_cursor")?.into(),
         };
-        Some(URL_SAFE_NO_PAD.encode(serde_json::to_vec(&value).map_err(|_| "invalid_cursor")?))
+        Some(encode_page_cursor(&value, MATCH_CURSOR_BYTES)?)
     } else {
         None
     };
@@ -266,6 +277,25 @@ pub(crate) fn override_match(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn page_cursor_encoder_accepts_exact_decoder_bounds_and_refuses_larger_tokens() {
+        for bound in [MATCH_CURSOR_BYTES, 4096] {
+            // A JSON string adds exactly two quote bytes; these bounds are
+            // multiples of four, so base64 without padding fills them exactly.
+            let value = "x".repeat(bound / 4 * 3 - 2);
+            let encoded = encode_page_cursor(&value, bound).unwrap();
+            assert_eq!(encoded.len(), bound);
+            assert_eq!(
+                serde_json::from_slice::<String>(&URL_SAFE_NO_PAD.decode(encoded).unwrap())
+                    .unwrap(),
+                value
+            );
+            assert_eq!(
+                encode_page_cursor(&(value + "x"), bound),
+                Err("catalog_cursor_too_large")
+            );
+        }
+    }
     fn assign_legacy(db: &Connection, owners: &BTreeMap<i64, i64>) -> Result<()> {
         let tx = db.unchecked_transaction().map_err(db_error)?;
         super::assign_legacy(&tx, owners)?;

@@ -3,6 +3,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+const LIVE_CURSOR_BYTES: usize = 4096;
 
 pub(super) fn init(db: &Connection) -> rusqlite::Result<()> {
     let tx = db.unchecked_transaction()?;
@@ -128,7 +129,7 @@ pub(crate) fn page(
     }
     let previous = cursor
         .map(|value| {
-            if value.len() > 4096 {
+            if value.len() > LIVE_CURSOR_BYTES {
                 return Err("invalid_cursor");
             }
             let decoded: Cursor = serde_json::from_slice(
@@ -250,19 +251,20 @@ pub(crate) fn page(
         return Err("catalog_changed");
     }
     let encode = |row: &(i64, String, Value), direction| {
-        serde_json::to_vec(&Cursor {
-            version: 1,
-            account,
-            catalog,
-            generation,
-            kind,
-            filter: filter.clone(),
-            ordinal: row.0,
-            id: row.1.clone(),
-            direction,
-        })
-        .map(|value| URL_SAFE_NO_PAD.encode(value))
-        .map_err(|_| "invalid_cursor")
+        super::v2::encode_page_cursor(
+            &Cursor {
+                version: 1,
+                account,
+                catalog,
+                generation,
+                kind,
+                filter: filter.clone(),
+                ordinal: row.0,
+                id: row.1.clone(),
+                direction,
+            },
+            LIVE_CURSOR_BYTES,
+        )
     };
     let next_cursor = if let Some(last) = rows.last() {
         let has_next = if reverse {
