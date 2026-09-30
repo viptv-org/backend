@@ -184,7 +184,7 @@ fn details(code: &str) -> (StatusCode, &'static str) {
                 StatusCode::BAD_REQUEST,
                 "This page token is no longer valid. Reload the list.",
             ),
-            "catalog_changed" => (StatusCode::CONFLICT, "This playlist changed while you were browsing. Reload it to see the current channels."),
+            "catalog_changed" => (StatusCode::CONFLICT, "This catalog changed while you were browsing. Reload the list to see the current titles or channels."),
             "catalog_cursor_too_large" => (StatusCode::BAD_GATEWAY, "This playlist contains identifiers too large for paging. Ask the provider to use shorter identifiers or choose another playlist. Stored catalog data has not been changed."),
             "invalid_catalog_query" | "invalid_matches_query" => (
                 StatusCode::BAD_REQUEST,

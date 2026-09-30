@@ -1,4 +1,5 @@
 //! Raw account-owned live snapshots: provider order, bounded pages, no lineup rules.
+use super::v2::Direction;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -85,13 +86,6 @@ struct Cursor {
     id: String,
     #[serde(default)]
     direction: Direction,
-}
-#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum Direction {
-    #[default]
-    Next,
-    Previous,
 }
 #[derive(Debug, Serialize)]
 pub(crate) struct Page {

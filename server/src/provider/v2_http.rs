@@ -48,7 +48,7 @@ pub(crate) async fn matches(
             q.cursor.as_deref(),
             q.limit,
         )?;
-        Ok(json!({"items":page.items,"next_cursor":page.next_cursor}))
+        Ok(json!({"items":page.items,"next_cursor":page.next_cursor,"previous_cursor":page.previous_cursor}))
     })
     .await
 }
