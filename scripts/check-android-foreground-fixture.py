@@ -158,8 +158,8 @@ def tls_server(port,handler):
     server=http.server.ThreadingHTTPServer(('127.0.0.1',port),handler); ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(A.certificate,A.key); server.socket=ctx.wrap_socket(server.socket,server_side=True); threading.Thread(target=server.serve_forever,daemon=True).start(); servers.append(server)
 try:
     for argv,name in [(['sudo','--preserve-env=VIPTV_DATABASE,VIPTV_AUTH_ORIGIN,VIPTV_SECRETS_KEYRING,VIPTV_BIND,VIPTV_DASHBOARD_DIST,VIPTV_TV_DIST','nsenter','--target',namespace_pid,'--net','setpriv',f'--reuid={os.getuid()}',f'--regid={os.getgid()}','--clear-groups',str(A.server.resolve())],'backend.log'),(['sudo','nsenter','--target',namespace_pid,'--net','python3',str(pathlib.Path(__file__).resolve()),*sys.argv[1:],'--inner'],'addon-relay.log')]:
-        processes.append(subprocess.Popen(argv,env=env,stdout=(R/name).open('wb'),stderr=subprocess.STDOUT))
-    save('owned.json',{'owner_pid':os.getpid(),'process_pids':[p.pid for p in processes],'gateway_container_id':private['container_id']})
+        processes.append(subprocess.Popen(argv,env=env,stdin=subprocess.DEVNULL,stdout=(R/name).open('wb'),stderr=subprocess.STDOUT,start_new_session=True))
+    save('owned.json',{'owner_pid':os.getpid(),'process_pids':[p.pid for p in processes],'process_groups':[p.pid for p in processes],'gateway_container_id':private['container_id']})
     for _ in range(100):
         try:
             if api('/api/health'): break
@@ -211,7 +211,11 @@ try:
 finally:
     for server in servers: server.shutdown(); server.server_close()
     for process in reversed(processes):
-        process.terminate()
+        # Each owned sudo/nsenter tree has its own session; stop the actual
+        # service/relay too, rather than leaving orphaned grandchildren.
+        subprocess.run(['sudo','-n','kill','-TERM','--',str(-process.pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         try: process.wait(timeout=10)
-        except subprocess.TimeoutExpired: process.kill(); process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            subprocess.run(['sudo','-n','kill','-KILL','--',str(-process.pid)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            process.wait(timeout=5)
     print('Exact owned backend/addon/TLS processes stopped; separate gateway lease remains fixture-owned.',flush=True)

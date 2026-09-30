@@ -88,6 +88,15 @@ database/evidence. Stop the separate gateway fixture with its owner's cleanup
 helper afterward; verify viewer release and restored input/output/viewer
 reservations before claiming complete cleanup.
 
+Each sudo/nsenter process tree runs in its own session, recorded in
+`owned.json`; teardown signals that whole owned process group so an interrupted
+wrapper cannot leave an orphaned addon relay behind. Fresh-start qualification
+uses only loopback TLS listeners and validates synthetic seed/control inputs.
+The delayed-refresh control holds the actual successful rotation response after
+the server has committed it, exposing native cancellation bugs without fake
+authentication responses. Final process-group teardown is checked separately
+after the native acceptance run finishes.
+
 ## Current preflight evidence
 
 The actual candidate binary at backend source `305a8df` passed native login,
