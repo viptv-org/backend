@@ -84,6 +84,7 @@ pub(crate) struct Start {
 }
 #[derive(Clone)]
 struct Proof {
+    live_channel_id: Option<String>,
     lease: ResourceLease,
     producer: String,
     configuration: [u8; 32],
@@ -285,6 +286,18 @@ fn validate_source(db: &Connection, proof: &Proof) -> Result<(), Error> {
     if !allowed {
         return Err(Error::Code("source_not_found"));
     }
+    if let Some(channel) = &proof.live_channel_id {
+        let exists: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM provider_live WHERE id=?1 AND provider_id=?2)",
+                params![channel, id],
+                |row| row.get(0),
+            )
+            .map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        if kind != "iptv" || proof.kind != "live" || !exists {
+            return Err(Error::Code("source_not_found"));
+        }
+    }
     if crate::sources::source_configuration(db, &proof.producer)? != Some(proof.configuration) {
         return Err(Error::Code("source_configuration_changed"));
     }
@@ -305,6 +318,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
                 .ok_or(Error::Code("source_not_found"))?;
             (
                 Proof {
+                    live_channel_id: entry.live_channel_id.clone(),
                     lease: source_lease,
                     producer: entry.producer.clone(),
                     configuration: entry.configuration.ok_or(Error::Code("source_not_found"))?,
@@ -815,14 +829,36 @@ async fn prepare(
         delivery
     };
     validate_entry(&app, &entry).await?;
-    let mut state = entry.state.lock().unwrap();
-    if entry.cancelled.load(Ordering::Acquire) {
-        return Err(Error::Code("playback_expired"));
-    }
-    state.delivery = Some(delivery);
-    state.status = "ready";
-    state.touched = Instant::now();
-    Ok(())
+    tokio::task::spawn_blocking(move || {
+        let db = app.db.lock().map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        let tx = db.unchecked_transaction().map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        entry.lease.validate(&tx)?;
+        validate_source(&tx, &entry.proof)?;
+        let mut state = entry.state.lock().unwrap();
+        if entry.cancelled.load(Ordering::Acquire) || expired(&state) {
+            return Err(Error::Code("playback_expired"));
+        }
+        if state.remote.as_ref().is_some_and(|remote| !gateway_current(&tx, &entry.lease, &remote.target.gateway.id, remote.target.gateway.revision)) {
+            return Err(Error::Code("gateway_not_found"));
+        }
+        // History belongs to the admitted profile and exact provider-qualified
+        // channel. Retry/renewal never repeat this write; old progress survives.
+        if let Some(channel) = &entry.proof.live_channel_id {
+            let crate::auth::Principal::Account { profile_id: Some(profile), .. } = entry.lease.principal else {
+                return Err(ApiError(StatusCode::FORBIDDEN, crate::MSG_PROFILE_REQUIRED.into()).into());
+            };
+            let updated = crate::library::activity_time(&tx, profile)?;
+            tx.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,title_id)
+                SELECT ?1,id,'live',name,logo,0,0,?3,id FROM provider_live WHERE id=?2
+                ON CONFLICT(profile_id,type,id) DO UPDATE SET updated_at=excluded.updated_at",
+                params![profile, channel, updated]).map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        }
+        tx.commit().map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        state.delivery = Some(delivery);
+        state.status = "ready";
+        state.touched = Instant::now();
+        Ok(())
+    }).await.map_err(|_| Error::Code("provider_storage_unavailable"))?
 }
 pub(crate) async fn get(
     State(app): State<App>,

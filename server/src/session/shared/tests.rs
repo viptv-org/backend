@@ -53,6 +53,7 @@ exec sleep 60
         a.streams.lock().unwrap().insert(
             id.into(),
             StreamEntry {
+                live_channel_id: None,
                 producer: "fixture".into(),
                 configuration: None,
                 provider_id: None,

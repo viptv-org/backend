@@ -51,6 +51,260 @@ fn source(app: &App) -> String {
 fn body(source: &str, id: &str, platform: &str) -> Value {
     json!({"request_id":id,"stream_id":source,"client":{"platform":platform,"can_play_direct":true,"max_width":3840,"max_height":2160,"video_codecs":["h264"],"audio_codecs":["aac"]},"position":0})
 }
+async fn live_source_fixture(app: &App) -> String {
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("INSERT INTO providers(id,name,url,username,password,enabled) VALUES(1,'Fixture','http://fixture.invalid','user','password',1)", []).unwrap();
+        db.execute("INSERT INTO provider_ownership VALUES(1,1)", [])
+            .unwrap();
+        db.execute("INSERT INTO provider_live(id,provider_id,stream_id,name,logo) VALUES('iptv:1:7',1,'7','Selected channel','https://logo.fixture.invalid/7.png')", []).unwrap();
+    }
+    let (status, response) = request(
+        app,
+        "member-token-1",
+        "POST",
+        "/api/v2/iptv/live/iptv:1:7/source",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    response["source"]["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn ready_live_admission_records_exact_profile_history_once_for_both_deliveries() {
+    for platform in ["android", "roku"] {
+        let (app, _peer) = setup().await;
+        gateway(&app, "first", 1);
+        let source = live_source_fixture(&app).await;
+        let input = body(&source, "live-history", platform);
+        let (status, start) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/playback",
+            input.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{start}");
+        let id = start["id"].as_str().unwrap();
+        assert_eq!(settled(&app, id).await["status"], "ready");
+        let saved = || {
+            app.db
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT profile_id,id,name,poster,position,duration,updated_at FROM progress",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, f64>(4)?,
+                            row.get::<_, f64>(5)?,
+                            row.get::<_, i64>(6)?,
+                        ))
+                    },
+                )
+                .unwrap()
+        };
+        let first = saved();
+        assert_eq!(
+            (
+                first.0,
+                first.1.as_str(),
+                first.2.as_str(),
+                first.4,
+                first.5
+            ),
+            (1, "iptv:1:7", "Selected channel", 0.0, 0.0)
+        );
+        assert!(first.3.ends_with("/7.png"));
+        request(&app, "member-token-1", "POST", "/api/v2/playback", input).await;
+        request(
+            &app,
+            "member-token-1",
+            "POST",
+            &format!("/api/v2/playback/{id}/heartbeat"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(saved(), first);
+        let (status, recent) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/v2/iptv/live/channels?collection=recent",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{recent}");
+        assert_eq!(recent["items"][0]["id"], "iptv:1:7");
+        request(
+            &app,
+            "member-token-1",
+            "DELETE",
+            &format!("/api/v2/playback/{id}"),
+            Value::Null,
+        )
+        .await;
+        app.db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE progress SET position=12,duration=45,context='{\"fixture\":true}'",
+                [],
+            )
+            .unwrap();
+        let (_, start) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/playback",
+            body(&source, "second-live", platform),
+        )
+        .await;
+        assert_eq!(
+            settled(&app, start["id"].as_str().unwrap()).await["status"],
+            "ready"
+        );
+        let second = saved();
+        assert_eq!((second.4, second.5), (12.0, 45.0));
+        assert!(second.6 > first.6);
+        let db = app.db.lock().unwrap();
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM progress", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row("SELECT context FROM progress", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "{\"fixture\":true}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancelled_or_removed_live_admission_does_not_record_history() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 1);
+    let source = live_source_fixture(&app).await;
+    peer.mode.store(3, Ordering::SeqCst);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        body(&source, "cancel-live", "roku"),
+    )
+    .await;
+    let id = start["id"].as_str().unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while peer.starts.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    request(
+        &app,
+        "member-token-1",
+        "DELETE",
+        &format!("/api/v2/playback/{id}"),
+        Value::Null,
+    )
+    .await;
+    peer.hold.notify_one();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while peer.stops.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        app.db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM progress", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    app.db
+        .lock()
+        .unwrap()
+        .execute("DELETE FROM provider_live", [])
+        .unwrap();
+    let (status, error) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        body(&source, "removed-live", "android"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
+    assert_eq!(error["error_code"], "source_not_found");
+    assert_eq!(
+        app.db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM progress", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn source_revoked_during_live_gateway_start_never_records_recent() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 1);
+    let source = live_source_fixture(&app).await;
+    peer.mode.store(3, Ordering::SeqCst);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        body(&source, "revoke-live", "roku"),
+    )
+    .await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while peer.starts.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    app.db
+        .lock()
+        .unwrap()
+        .execute("DELETE FROM provider_ownership WHERE provider_id=1", [])
+        .unwrap();
+    peer.hold.notify_one();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while peer.stops.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let failed = settled(&app, start["id"].as_str().unwrap()).await;
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["error_code"], "source_not_found");
+    assert_eq!(
+        app.db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM progress", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
 fn remote(id: &str) -> Value {
     json!({"id":id,"job_id":"job_fixture","status":"ready","expires_at":crate::util::now()+60,"error_code":null,"playback":{"id":id,"url":format!("/media/{id}/pgm_fixture/index.m3u8"),"format":"hls","mode":"remux","video_mode":"copy","audio_mode":"copy","position":0,"duration":600,"live":false,"audio_tracks":[],"subtitle_tracks":[],"selected_audio":null,"selected_subtitle":null,"subtitles_supported":false}})
 }

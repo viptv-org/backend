@@ -198,6 +198,7 @@ async fn playback_track_request_is_strict_and_unsupported_selection_never_probes
     a.streams.lock().unwrap().insert(
         "source".into(),
         StreamEntry {
+            live_channel_id: None,
             producer: "fixture".into(),
             configuration: None,
             provider_id: None,

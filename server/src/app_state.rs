@@ -272,6 +272,8 @@ pub(crate) struct JobState {
     pub(crate) pending: usize,
 }
 pub(crate) struct StreamEntry {
+    // Set only by exact, account-authorized raw live-channel resolution.
+    pub(crate) live_channel_id: Option<String>,
     pub(crate) producer: String,
     pub(crate) configuration: Option<[u8; 32]>,
     pub(crate) provider_id: Option<i64>,

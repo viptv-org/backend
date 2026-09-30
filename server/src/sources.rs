@@ -121,6 +121,7 @@ impl App {
             entries.insert(
                 id.clone(),
                 StreamEntry {
+                    live_channel_id: None,
                     producer: source.to_owned(),
                     configuration,
                     provider_id: source.strip_prefix("iptv:").and_then(|s| s.parse().ok()),

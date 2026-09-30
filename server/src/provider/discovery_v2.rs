@@ -207,6 +207,15 @@ pub(crate) async fn live_source(
             }
         }
         let source = cards.pop().ok_or(Error::Code("discovery_capacity"))?;
+        let stream_id = source["id"]
+            .as_str()
+            .ok_or(Error::Code("source_not_found"))?;
+        app.streams
+            .lock()
+            .unwrap()
+            .get_mut(stream_id)
+            .ok_or(Error::Code("source_not_found"))?
+            .live_channel_id = Some(id);
         Ok(axum::Json(json!({"source":source})))
     })
     .await
