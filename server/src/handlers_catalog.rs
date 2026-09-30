@@ -1,43 +1,5 @@
 use super::*;
 
-pub(crate) async fn providers(State(a): State<App>) -> ApiResult {
-    blocking(move || Ok(axum::Json(a.providers.list()?))).await
-}
-pub(crate) async fn add_provider(
-    State(a): State<App>,
-    axum::Json(v): axum::Json<Value>,
-) -> ApiResult {
-    blocking(move || Ok(axum::Json(a.providers.add(v)?))).await
-}
-pub(crate) async fn delete_provider(State(a): State<App>, Path(id): Path<i64>) -> ApiResult {
-    blocking(move || {
-        a.providers.delete(id)?;
-        Ok(axum::Json(json!({"ok":true})))
-    })
-    .await
-}
-pub(crate) async fn update_provider(
-    State(a): State<App>,
-    Path(id): Path<i64>,
-    axum::Json(v): axum::Json<Value>,
-) -> ApiResult {
-    blocking(move || {
-        a.providers
-            .update(id, v)
-            .map(axum::Json)
-            .map_err(|message| {
-                if message == "Stop provider playback before changing max_connections" {
-                    ApiError(StatusCode::CONFLICT, message)
-                } else {
-                    ApiError::from(message)
-                }
-            })
-    })
-    .await
-}
-pub(crate) async fn sync_provider(State(a): State<App>, Path(id): Path<i64>) -> ApiResult {
-    Ok(axum::Json(a.providers.sync(id).await?))
-}
 pub(crate) async fn addons(
     State(a): State<App>,
     Extension(lease): Extension<ResourceLease>,

@@ -31,10 +31,8 @@ RUN if [ "$FRONTENDS" = "0" ]; then mkdir -p dist; exit 0; fi \
 
 FROM debian:bookworm-slim AS runtime
 ARG FRONTENDS
-RUN sed -i 's/Components: main$/Components: main non-free/' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates ffmpeg curl \
-    && if [ "$(dpkg --print-architecture)" = amd64 ]; then apt-get install -y --no-install-recommends intel-media-va-driver-non-free; fi \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 viptv \
     && useradd --uid 10001 --gid viptv --no-create-home --home-dir /data --shell /usr/sbin/nologin viptv \

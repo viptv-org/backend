@@ -1,11 +1,11 @@
 # Account gateway configuration and encrypted keys
 
-This is development-branch functionality, not a completed playback cutover.
-Gateway registration, validation and grants are implemented. The new v2 playback
-routes select authorized gateways, preserve active affinity and forward viewer
-lifecycle operations; existing clients have not adopted those routes yet. Legacy embedded
-playback remains until the coordinated client/server cutover. Do not deploy this
-checkpoint with production secrets or infer public multi-tenant readiness.
+This is implementation-branch functionality, not a production cutover. Gateway
+registration, validation, grants and v2 lifecycle routing are implemented.
+Reviewed client candidates now adopt v2. The isolated cleanup candidate removes
+embedded playback, with coordinated adoption, reviewed database operations and
+deployment approval still outstanding. Source fixtures do not establish public
+multi-tenant readiness or physical TV playback.
 
 ## Operator-managed encryption
 
@@ -32,7 +32,8 @@ Debug output is redacted, and temporary plaintext buffers are zeroized.
 New writes use the active key; older retained keys can still decrypt their
 envelopes. Automatic bulk re-encryption is not implemented. Do not remove an old
 key until every affected record has been deliberately re-encrypted. This change
-does not yet migrate existing provider/addon secrets out of their legacy storage.
+includes backup-first explicit provider/addon encryption tools. They are
+implemented/fixture-tested; no production secret migration is inferred.
 
 ## Management API
 
@@ -113,9 +114,11 @@ Playback lifecycle tests additionally cover native direct policy, mandatory
 Roku/Vizio gateway delivery, capacity/priority selection, active affinity,
 cross-account denial, grant/config revocation and late-start cancellation.
 An isolated container fixture also checks real HLS delivery through the separate
-gateway while the backend's embedded engine remains idle. See PLAYBACK_V2.md.
+gateway. Historical pre-cleanup runs kept the backend engine idle; its removal
+requires a rerun against the exact cleanup revision. See PLAYBACK_V2.md.
 
-These checks do not establish complete DNS-rebinding/TLS deployment qualification,
-provider/addon encryption, client adoption, all failure/restart scenarios or
-process isolation after legacy removal.
-Those remain acceptance work before production deployment.
+Encryption and client candidates have their own source/fixture evidence.
+Remaining gates include production migration/rollback, coordinated rollout,
+public DNS/TLS/redirect checks, failure/restart/stress scenarios and physical
+platform/track/4K qualification. Network-none media evidence qualifies only the
+recorded backend/gateway/container pairing, not real providers or ingress.

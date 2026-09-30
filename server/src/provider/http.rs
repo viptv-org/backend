@@ -46,25 +46,13 @@ impl ProviderService {
             .append_pair("action", action)
             .extend_pairs(extra.iter().copied());
         if protected {
-            if egress::enabled(&*self.lock()?, provider.id) {
+            if egress::enabled(&*self.lock()?, provider.id)? {
                 return Err("source_route_migration_required".into());
             }
             return self.protected_json(url, response_limit).await;
         }
         // Never format reqwest errors: they can contain the credential-bearing URL.
-        let proxy = egress::proxy(&*self.lock()?, provider.id)?;
-        let client = if proxy.is_some() {
-            egress::builder(
-                reqwest::Client::builder()
-                    .connect_timeout(Duration::from_secs(5))
-                    .timeout(Duration::from_secs(30)),
-                proxy.as_deref(),
-            )?
-            .build()
-            .map_err(|_| "Provider route unavailable")?
-        } else {
-            self.client.clone()
-        };
+        let client = self.client.clone();
         let mut response = client
             .get(url)
             .send()

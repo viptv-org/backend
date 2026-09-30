@@ -22,7 +22,7 @@ pub async fn favorites_page(
         let total:i64=db.query_row(&format!("SELECT count(*) FROM favorites WHERE profile_id=?1 AND (?2=0 OR type!='live') AND {allowed}"),params![profile,page.exclude_live.unwrap_or(false)],|r|r.get(0)).map_err(db_error)?;
         let items=db.prepare(&format!("SELECT id,type,name,poster FROM favorites WHERE profile_id=?1 AND (?4=0 OR type!='live') AND {allowed} ORDER BY name COLLATE NOCASE,type,id LIMIT ?2 OFFSET ?3")).map_err(db_error)?
             .query_map(params![profile,limit,offset,page.exclude_live.unwrap_or(false)],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
-        Ok(axum::Json(json!({"items":lineup::references(&db,items).map_err(db_error)?,"offset":offset,"total":total,"next_offset":((offset as i64 + limit as i64)<total).then_some(offset as i64+limit as i64)})))
+        Ok(axum::Json(json!({"items":items,"offset":offset,"total":total,"next_offset":((offset as i64 + limit as i64)<total).then_some(offset as i64+limit as i64)})))
     }).await
 }
 pub async fn toggle(
@@ -33,16 +33,31 @@ pub async fn toggle(
 ) -> ApiResult {
     let app = app.with_lease(lease);
     blocking(move || {
-        let id=text(&item,"id",512)?; let kind=media_type(&item)?; let name=text(&item,"name",512)?;
-        let mut db=app.db.lock().unwrap(); app.require_profile(&db,profile)?;
-        let id=if kind=="live" {lineup::canonical_id(&db,id).map_err(db_error)?}else{id.to_owned()};
-        kids::require_item(&db,&app.identity(),kind,&id)?;
-        let tx=db.transaction().map_err(db_error)?;
-        let removed=tx.execute("DELETE FROM favorites WHERE profile_id=?1 AND type=?2 AND (id=?3 OR (?2='live' AND id IN (SELECT live_id FROM family_aliases WHERE channel_id=?3)))",params![profile,kind,id]).map_err(db_error)?;
-        if removed==0 {tx.execute("INSERT INTO favorites(profile_id,id,type,name,poster) VALUES(?1,?2,?3,?4,?5)",params![profile,id,kind,name,item["poster"].as_str()]).map_err(db_error)?;}
+        let id = text(&item, "id", 512)?;
+        let kind = media_type(&item)?;
+        let name = text(&item, "name", 512)?;
+        let mut db = app.db.lock().unwrap();
+        app.require_profile(&db, profile)?;
+        let id = id.to_owned();
+        kids::require_item(&db, &app.identity(), kind, &id)?;
+        let tx = db.transaction().map_err(db_error)?;
+        let removed = tx
+            .execute(
+                "DELETE FROM favorites WHERE profile_id=?1 AND type=?2 AND id=?3",
+                params![profile, kind, id],
+            )
+            .map_err(db_error)?;
+        if removed == 0 {
+            tx.execute(
+                "INSERT INTO favorites(profile_id,id,type,name,poster) VALUES(?1,?2,?3,?4,?5)",
+                params![profile, id, kind, name, item["poster"].as_str()],
+            )
+            .map_err(db_error)?;
+        }
         tx.commit().map_err(db_error)?;
         Ok(axum::Json(json!({"ok":true,"saved":removed==0})))
-    }).await
+    })
+    .await
 }
 
 pub async fn history_page(

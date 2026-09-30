@@ -1,8 +1,10 @@
 # Playback v2 control contract
 
-Status: implemented on the refactor branch, not deployed or adopted by existing
-clients. Legacy endpoints/embedded execution still exist pending coordinated
-cutover. The v2 path never invokes that embedded engine and never relays media.
+Status: implemented with reviewed client migration candidates; not deployed.
+The isolated cleanup candidate removes embedded execution and refuses retired
+routes with `client_update_required`. Its production binary does not link the
+old engine or relay media. Runtime cutover/offline retirement still require
+separate review; the user's Android UI checkout remains untouched.
 
 ## Start and lifecycle
 
@@ -48,10 +50,12 @@ explicit subtitle track suppress default subtitle-language injection. Preference
 reads revalidate the resource lease and execute off the async runtime thread.
 The caller's original body determines idempotency: changing saved preferences
 does not alter an admitted session or make its retry conflict. A new request ID
-uses the new defaults. The legacy saved quality field is deliberately ignored;
-no profile cap replaces actual decoder dimensions. Router fixtures verify direct
+uses the new defaults. Historical quality values remain archived in private
+storage/export/backup but are absent from active preferences. A quality-only
+write refuses the retired control; no cap replaces actual decoder dimensions.
+Router fixtures verify direct
 metadata, gateway forwarding, overrides, subtitle-off and stable retries. This
-does not complete client activation or actual device track qualification.
+does not establish actual device track qualification.
 
 The initial 202 response includes the backend playback id, status, expires_at
 and renewal interval. Poll GET /api/v2/playback/:id until ready or terminal.
@@ -116,12 +120,20 @@ than loopback exists, then adds a public-classified fixture address solely insid
 that namespace. No public/production network or production egress exception is
 used. With the real gateway executable and FFmpeg, it verifies HLS/segment bytes
 come from the gateway, heartbeat succeeds, stop denies media, and the backend
-embedded engine stays idle. NET_ADMIN is needed only for that isolated fixture,
+embedded engine stayed idle in historical pre-cleanup runs. The cleanup candidate
+removes it altogether and requires its own exact-revision rerun. NET_ADMIN is needed only for that isolated fixture,
 not production operation. Public HTTPS ingress and browser/device rendering are
 not covered by this fixture.
 
-Remaining: consumer adoption; complete account-owned discovery/live catalogs;
-provider/addon secret migration; audio/subtitle preference parity; all transport
-fallback/4K/hardware cases; ambiguous network failure/restart and stress coverage;
-multi-output single-input accounting in the gateway; and removal of legacy routes,
-pooling and embedded code. This is not production cutover approval.
+Account-owned discovery, bounded live catalogs and explicit ownership/provider/
+addon encryption tools are implemented and fixture-tested. Client candidates
+include TV-web `ecec486`, Roku `d46fe66`, Android `c3ebe7b` / quality transport
+evidence `df2e334`; desktop evidence is tracked by the design ledger. Client
+unit/browser fixtures do not establish provider or physical-decoder integration.
+
+Remaining: coordinated merges/builds and downtime approval; production backup/
+ownership/encryption/retirement/recovery; operator private-network exceptions;
+bulk key rotation; public TLS/redirect checks; physical background/foreground,
+4K/audio/subtitles and failure/restart/stress cases; full multi-output/input
+accounting. Root's isolated media evidence applies to its recorded source
+revision, not automatically this cleanup candidate. No production approval.

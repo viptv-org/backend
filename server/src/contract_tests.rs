@@ -96,136 +96,6 @@ fn app(db: Connection) -> App {
 async fn api(app: &App, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
     crate::test_support::request(app, ACCOUNT_TOKEN, method, path, body).await
 }
-#[tokio::test]
-async fn live_categories_route_returns_paginated_shape() {
-    let a = app(Connection::open_in_memory().unwrap());
-    for path in [
-        "/api/live/categories",
-        "/api/live/categories?offset=2&limit=9999",
-    ] {
-        let (status, body) = api(&a, "GET", path, Value::Null).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, json!({"categories":[],"total":0}));
-    }
-    {
-        let db = a.db.lock().unwrap();
-        for id in 1..=4 {
-            db.execute("INSERT INTO providers(id,name,url,username,password) VALUES(?1,'Fixture','https://fixture.invalid','fixture','fixture')",[id]).unwrap();
-        }
-        db.execute("UPDATE providers SET enable_live=0 WHERE id=3", [])
-            .unwrap();
-        db.execute("UPDATE providers SET enabled=0 WHERE id=4", [])
-            .unwrap();
-        for id in 0..101 {
-            db.execute("INSERT INTO provider_live(id,provider_id,stream_id,name,category) VALUES(?1,1,?2,'Channel',?3)",params![format!("iptv:1:{id}"),id.to_string(),format!("Group{id:03}")]).unwrap();
-        }
-        for (provider, stream, category, category_id) in [
-            (1, 1001, Some("News"), Some("7")),
-            (1, 1002, Some(" News "), Some("7")),
-            (2, 1003, Some("News"), Some("91")),
-            (1, 1004, Some("7"), Some("99")),
-            (1, 1005, None, None),
-            (3, 1006, Some("HiddenOnly"), Some("3")),
-            (4, 1007, Some("DisabledOnly"), Some("4")),
-        ] {
-            db.execute("INSERT INTO provider_live(id,provider_id,stream_id,name,category,category_id) VALUES(?1,?2,?3,'Channel',?4,?5)",params![format!("iptv:{provider}:{stream}"),provider,stream.to_string(),category,category_id]).unwrap();
-        }
-    }
-    let (status, first) = api(&a, "GET", "/api/live/categories?limit=9999", Value::Null).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(first["total"], 104);
-    assert_eq!(first["categories"].as_array().unwrap().len(), 100);
-    let (status, next) = api(
-        &a,
-        "GET",
-        "/api/live/categories?offset=100&limit=100",
-        Value::Null,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(next["total"], 104);
-    assert_eq!(next["categories"].as_array().unwrap().len(), 4);
-    let categories: Vec<&Value> = first["categories"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .chain(next["categories"].as_array().unwrap())
-        .collect();
-    let ids: std::collections::HashSet<_> = categories
-        .iter()
-        .map(|row| row["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids.len(), 104);
-    assert!(categories
-        .iter()
-        .all(|row| row.as_object().unwrap().len() == 3
-            && row["name"] != "HiddenOnly"
-            && row["name"] != "DisabledOnly"));
-    let news = categories.iter().find(|row| row["name"] == "News").unwrap();
-    assert_eq!(news["id"], "category:News");
-    assert_eq!(news["count"], 3);
-    for (category, total) in [
-        ("category%3ANews", 3),
-        ("category%3A7", 1),
-        ("category%3A", 1),
-        ("7", 3),
-    ] {
-        let (status, channels) = api(
-            &a,
-            "GET",
-            &format!("/api/live?category={category}&limit=100"),
-            Value::Null,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(channels["total"], total);
-    }
-}
-
-#[tokio::test]
-async fn playback_track_request_is_strict_and_unsupported_selection_never_probes() {
-    assert!(serde_json::from_value::<PlaybackRequest>(json!({"stream_id":"source"})).is_ok());
-    for value in [json!(-1), json!(1.5), json!("2"), json!(4294967296_u64)] {
-        assert!(serde_json::from_value::<PlaybackRequest>(
-            json!({"stream_id":"source","audio_track_index":value})
-        )
-        .is_err());
-    }
-    assert!(
-        serde_json::from_value::<PlaybackRequest>(json!({"allow_unknown_audio":true})).is_err()
-    );
-    let a = app(Connection::open_in_memory().unwrap());
-    a.streams.lock().unwrap().insert(
-        "source".into(),
-        StreamEntry {
-            live_channel_id: None,
-            producer: "fixture".into(),
-            configuration: None,
-            provider_id: None,
-            kind: "movie".into(),
-            live: false,
-            url: "https://source.invalid/private-secret-path".into(),
-            headers: HashMap::new(),
-            created: Instant::now(),
-        },
-    );
-    a.own_resource("stream", "source");
-    for (request, error) in [
-        (
-            json!({"stream_id":"source","subtitle_track_index":65536}),
-            "Requested input subtitle track index is out of range",
-        ),
-        (
-            json!({"stream_id":"source","audio_track_index":65536}),
-            "Requested input audio track index is out of range",
-        ),
-    ] {
-        let (status, body) = api(&a, "POST", "/api/playback", request).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body, json!({"error":error}));
-        assert_eq!(a.playback.active_count().await, 0);
-    }
-}
 
 fn indexed_series(app: &App) {
     let db = app.db.lock().unwrap();
@@ -234,7 +104,9 @@ fn indexed_series(app: &App) {
     db.execute("INSERT INTO provider_cache(provider_id,cache_key,expires_at,payload) VALUES(1,'get_series_info:33',?1,?2)",params![util::now()+3600,json!({"episodes":{"2":[{"id":44,"episode_num":4,"container_extension":"mp4"}]}}).to_string()]).unwrap();
 }
 async fn discover(app: &App, body: Value) -> Value {
-    let (status, job) = api(app, "POST", "/api/streams", body).await;
+    // Explicit synthetic fixture ownership; never production migration inference.
+    app.db.lock().unwrap().execute("INSERT OR IGNORE INTO provider_ownership(provider_id,account_id) SELECT id,1 FROM providers",[]).unwrap();
+    let (status, job) = api(app, "POST", "/api/v2/streams", body).await;
     assert_eq!(status, StatusCode::OK, "{job}");
     let id = job["id"].as_str().unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -252,7 +124,7 @@ async fn discover(app: &App, body: Value) -> Value {
     api(
         app,
         "GET",
-        &format!("/api/streams/{id}?after=0"),
+        &format!("/api/v2/streams/{id}?after=0"),
         Value::Null,
     )
     .await
@@ -368,7 +240,7 @@ async fn invalid_optional_context_rejected_before_save_or_job() {
             "{key}"
         );
         assert_eq!(
-            api(&app, "POST", "/api/streams", body).await.0,
+            api(&app, "POST", "/api/v2/streams", body).await.0,
             StatusCode::BAD_REQUEST,
             "{key}"
         );
@@ -465,19 +337,6 @@ fn enrichment_repairs_blank_names_preserves_ids_and_prefers_valid_context() {
     assert_eq!(request["year"], 2001);
     assert_eq!(request["tmdb_id"], "42");
     assert!(request["imdb_id"].is_null());
-}
-
-fn first_source_id(result: &Value) -> String {
-    result["events"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|event| event["streams"].as_array().unwrap())
-        .next()
-        .expect("registered source")["id"]
-        .as_str()
-        .unwrap()
-        .to_owned()
 }
 
 #[tokio::test]
@@ -669,144 +528,6 @@ async fn registered_headers_and_display_fallback_are_bounded() {
     let title = public[0]["title"].as_str().unwrap();
     assert_eq!(title.len(), 1023);
     assert_eq!(title, "€".repeat(341));
-}
-
-#[tokio::test]
-async fn cached_source_ids_recheck_exact_content_scope_before_probe() {
-    let app = app(Connection::open_in_memory().unwrap());
-    indexed_series(&app);
-    app.db.lock().unwrap().execute_batch("INSERT INTO provider_live(id,provider_id,stream_id,name) VALUES('iptv:1:11',1,'11','Fixture Live');
-        INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,extension) VALUES('fixture-movie',1,'22','movie','Fixture Movie','fixture movie',2001,'mp4');").unwrap();
-    let live = first_source_id(&discover(&app, json!({"type":"live","id":"iptv:1:11"})).await);
-    let movie = first_source_id(
-        &discover(
-            &app,
-            json!({"type":"movie","id":"opaque-movie","name":"Fixture Movie","year":2001}),
-        )
-        .await,
-    );
-    let series = first_source_id(&discover(&app,json!({"type":"series","id":"opaque-episode","name":"Canonical Series","year":2001,"season":2,"episode":4})).await);
-    let cases = [
-        ("live", "enable_live", &live, &movie),
-        ("movie", "enable_movies", &movie, &series),
-        ("series", "enable_series", &series, &live),
-    ];
-    for (kind, scope, source, other) in cases {
-        assert_eq!(
-            api(&app, "PATCH", "/api/providers/1", json!({scope:false}))
-                .await
-                .0,
-            StatusCode::OK
-        );
-        let (status, error) = api(&app, "POST", "/api/playback", json!({"stream_id":source})).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{kind}: {error}");
-        assert_eq!(error["error"], "Provider not found or disabled", "{kind}");
-        // Missing probe executable proves an eligible scope reaches probing without network.
-        let (_, allowed) = api(&app, "POST", "/api/playback", json!({"stream_id":other})).await;
-        assert_eq!(
-            allowed["error"], DELIVERY_ERROR_MESSAGE,
-            "{kind}: {allowed}"
-        );
-        assert_eq!(allowed["error_code"], "delivery_unsupported");
-        if kind == "live" {
-            let (_, direct) = api(
-                &app,
-                "POST",
-                "/api/playback",
-                json!({"channel_id":"iptv:1:11"}),
-            )
-            .await;
-            assert_ne!(direct["error"], allowed["error"]);
-        }
-        assert_eq!(
-            api(&app, "PATCH", "/api/providers/1", json!({scope:true}))
-                .await
-                .0,
-            StatusCode::OK
-        );
-        let (_, reenabled) = api(&app, "POST", "/api/playback", json!({"stream_id":source})).await;
-        assert_eq!(reenabled["error"], DELIVERY_ERROR_MESSAGE);
-        assert_eq!(reenabled["error_code"], "delivery_unsupported");
-    }
-}
-
-#[tokio::test]
-async fn upstream_type_and_source_cannot_override_job_scope_or_addon_ownership() {
-    let app = app(Connection::open_in_memory().unwrap());
-    indexed_series(&app);
-    for (kind, scope, spoofed) in [
-        ("live", "enable_live", "movie"),
-        ("movie", "enable_movies", "series"),
-        ("series", "enable_series", "live"),
-    ] {
-        let job = Job {
-            kind: kind.into(),
-            created: Instant::now(),
-            state: Mutex::new(JobState {
-                events: vec![],
-                pending: 1,
-            }),
-            notify: Notify::new(),
-        };
-        emit(
-            &app,
-            &job,
-            "iptv:1",
-            Ok(vec![
-                json!({"url":"https://provider.invalid/media.mp4","type":spoofed,"live":kind != "live","source":"addon:1"}),
-            ]),
-        );
-        let id = job.state.lock().unwrap().events[0]["streams"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        {
-            let registry = app.streams.lock().unwrap();
-            let source = registry.get(&id).unwrap();
-            assert_eq!(source.kind, kind);
-            assert_eq!(source.live, kind == "live");
-            assert_eq!(source.provider_id, Some(1));
-        }
-        assert_eq!(
-            api(&app, "PATCH", "/api/providers/1", json!({scope:false}))
-                .await
-                .0,
-            StatusCode::OK
-        );
-        let (_, error) = api(&app, "POST", "/api/playback", json!({"stream_id":id})).await;
-        assert_eq!(error["error"], "Provider not found or disabled");
-        assert_eq!(
-            api(&app, "PATCH", "/api/providers/1", json!({scope:true}))
-                .await
-                .0,
-            StatusCode::OK
-        );
-    }
-    let (sources, _) = app.register(
-        "addon:1",
-        vec![json!({"url":"https://addon.invalid/media.mp4","source":"iptv:1","type":"live"})],
-        "movie",
-    );
-    assert_eq!(
-        api(
-            &app,
-            "PATCH",
-            "/api/providers/1",
-            json!({"enable_movies":false})
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    let (_, error) = api(
-        &app,
-        "POST",
-        "/api/playback",
-        json!({"stream_id":sources[0]["id"]}),
-    )
-    .await;
-    assert_eq!(error["error"], DELIVERY_ERROR_MESSAGE);
-    assert_eq!(error["error_code"], "delivery_unsupported");
 }
 
 #[tokio::test]
@@ -1143,7 +864,7 @@ async fn continuation_discovery_scopes_skip_unrelated_producers() {
             .unwrap()
             .extend(fields.as_object().unwrap().clone());
         assert_eq!(
-            api(&app, "POST", "/api/streams", invalid).await.0,
+            api(&app, "POST", "/api/v2/streams", invalid).await.0,
             StatusCode::BAD_REQUEST
         );
     }

@@ -100,6 +100,9 @@ pub(crate) async fn authorize_resources(
         .strip_prefix("/api")
         .unwrap_or(req.uri().path())
         .to_owned();
+    if retired::is_path(&path) {
+        return retired::reject().await.into_response();
+    }
     let result = blocking(move || {
         let segments: Vec<_> = path.trim_matches('/').split('/').collect();
         let media_route = matches!(

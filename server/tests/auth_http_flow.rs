@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use tower::ServiceExt;
 use viptv_server::{auth, router, App};
 
-use common::{application, bearer_request, playback};
+use common::{application, bearer_request};
 
 #[derive(Default)]
 struct Browser {
@@ -36,17 +36,7 @@ fn owner_application() -> (Router, tempfile::TempDir) {
     .unwrap();
     auth::init(&db).unwrap();
     auth::create_owner_offline(&mut db, "owner", "Owner", "secure-owner-password").unwrap();
-    let app = App::new(
-        db,
-        reqwest::Client::new(),
-        playback(
-            root.path(),
-            "missing-test-ffmpeg",
-            "missing-test-ffprobe",
-            2,
-        ),
-    )
-    .unwrap();
+    let app = App::new(db, reqwest::Client::new()).unwrap();
     (router(app, None), root)
 }
 async fn browser_request(

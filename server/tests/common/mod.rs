@@ -7,39 +7,14 @@ use axum::{
     Router,
 };
 use serde_json::Value;
-use std::time::Duration;
 use tower::ServiceExt;
-use viptv_server::{
-    playback::{Config, PlaybackManager},
-    router, App,
-};
-
-pub fn playback(
-    root: &std::path::Path,
-    ffmpeg: impl Into<std::path::PathBuf>,
-    ffprobe: impl Into<std::path::PathBuf>,
-    max_sessions: usize,
-) -> std::sync::Arc<PlaybackManager> {
-    PlaybackManager::new(Config {
-        ffmpeg: ffmpeg.into(),
-        ffprobe: ffprobe.into(),
-        root: root.join("hls"),
-        max_sessions,
-        ttl: Duration::from_secs(30),
-    })
-}
+use viptv_server::{router, App};
 
 pub fn application() -> (Router, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),
-        playback(
-            root.path(),
-            "missing-test-ffmpeg",
-            "missing-test-ffprobe",
-            2,
-        ),
     )
     .unwrap();
     (router(app, None), root)

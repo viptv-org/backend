@@ -1,5 +1,4 @@
 //! Shared in-process fixtures for the `cfg(test)` router test modules.
-use crate::playback::{Config, PlaybackManager};
 use crate::{router, App};
 use axum::{
     body::{to_bytes, Body},
@@ -7,24 +6,12 @@ use axum::{
 };
 use rusqlite::Connection;
 use serde_json::Value;
-use std::time::Duration;
 use tower::ServiceExt;
 
 /// `App` over `db` whose media tools can never run, so playback endpoints
 /// fail fast instead of spawning processes or touching the filesystem.
 pub(crate) fn app_with_db(db: Connection) -> App {
-    App::new(
-        db,
-        reqwest::Client::new(),
-        PlaybackManager::new(Config {
-            ffmpeg: "/nonexistent-viptv-test-tools/ffmpeg".into(),
-            ffprobe: "/nonexistent-viptv-test-tools/ffprobe".into(),
-            root: "unused-test-playback".into(),
-            max_sessions: 1,
-            ttl: Duration::from_secs(30),
-        }),
-    )
-    .unwrap()
+    App::new(db, reqwest::Client::new()).unwrap()
 }
 
 /// In-memory `App` with unavailable media tools.

@@ -63,12 +63,16 @@ const ADVANCED_TABLES: &[&str] = &[
     "provider_credentials_v2",
     "provider_live",
     "provider_routes",
+    "provider_ownership",
+    "playback_preferences",
+    "account_observations",
     "account_pools",
     "provider_pools",
     "family_settings",
     "family_recovery",
     "family_channels",
     "family_candidates",
+    "family_startups",
     "family_aliases",
     "family_matching_settings",
     "family_match_overrides",
@@ -84,11 +88,114 @@ const ADVANCED_TABLES: &[&str] = &[
     "guide_channels",
     "guide_mappings",
     "guide_rejections",
+    "family_programmes",
+    "guide_runs",
     "health_settings",
     "candidate_health",
     "health_accounts",
     "catalog_schedule",
+    "catalog_results",
+    "catalog_runs",
+    "catalog_backoff",
+    "automation_pause",
 ];
+
+/// Static, reviewed deletion set. Auth, profiles, favorites, progress, queue,
+/// addons, provider identities, raw catalogs and manual matches are excluded.
+const RETIRED_TABLES: &[&str] = &[
+    "family_programmes",
+    "guide_rejections",
+    "guide_mappings",
+    "guide_channels",
+    "guide_sources",
+    "guide_runs",
+    "guide_settings",
+    "family_candidates",
+    "family_startups",
+    "family_aliases",
+    "family_match_results",
+    "family_match_overrides",
+    "family_match_aliases",
+    "family_verified_ids",
+    "family_provider_groups",
+    "family_matching_revision",
+    "family_matching_settings",
+    "family_channels",
+    "family_recovery",
+    "family_settings",
+    "candidate_health",
+    "health_accounts",
+    "health_settings",
+    "live_category_rules",
+    "live_policy_settings",
+    "provider_pools",
+    "account_observations",
+    "account_pools",
+    "provider_routes",
+    "catalog_results",
+    "catalog_runs",
+    "catalog_backoff",
+    "catalog_schedule",
+    "automation_pause",
+];
+
+/// Separately confirmed offline cutover; normal startup never calls this.
+pub fn retire(database: &Path, backup: &Path, export: &Path, revision: &str) -> Result<Value> {
+    let vault =
+        crate::secret_store::Vault::from_environment()?.ok_or("secret_store_not_configured")?;
+    retire_with_vault(database, backup, export, revision, &vault)
+}
+fn retire_with_vault(
+    database: &Path,
+    backup: &Path,
+    export: &Path,
+    revision: &str,
+    vault: &crate::secret_store::Vault,
+) -> Result<Value> {
+    migrate(database, backup, export, revision, |tx| {
+        if !v2::inspect_ownership(tx)?.unassigned.is_empty() {
+            return Err("retirement_ownership_required");
+        }
+        let plaintext:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM providers WHERE credentials_version!=1 OR url!='' OR username!='' OR password!='')",[],|row|row.get(0)).map_err(|_|"retirement_encryption_required")?;
+        if plaintext {
+            return Err("retirement_encryption_required");
+        }
+        // Every ciphertext must still unlock under its explicitly assigned owner.
+        // This path cannot assign owners or encrypt previously plaintext rows.
+        if crate::provider::credentials_v2::encrypt_legacy(tx, vault)? != 0 {
+            return Err("retirement_encryption_required");
+        }
+        tx.execute_batch("DROP TRIGGER IF EXISTS kids_family_policy_update; DROP TRIGGER IF EXISTS kids_family_policy_delete;").map_err(|_|"retirement_failed")?;
+        let mut removed = Vec::new();
+        for table in RETIRED_TABLES {
+            let present: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                    [table],
+                    |row| row.get(0),
+                )
+                .map_err(|_| "retirement_failed")?;
+            if present {
+                tx.execute_batch(&format!("DROP TABLE \"{table}\";"))
+                    .map_err(|_| "retirement_dependency_requires_review")?;
+                removed.push(*table);
+            }
+        }
+        let invalid: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| "retirement_integrity_failed")?;
+        if invalid {
+            return Err("retirement_integrity_failed");
+        }
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS retired_features_v2(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL CHECK(version=2),source_revision TEXT NOT NULL,retired_at INTEGER NOT NULL);").map_err(|_|"retirement_failed")?;
+        tx.execute("INSERT INTO retired_features_v2 VALUES(1,2,?1,?2) ON CONFLICT(id) DO UPDATE SET source_revision=excluded.source_revision,retired_at=excluded.retired_at",rusqlite::params![revision,crate::util::now()]).map_err(|_|"retirement_failed")?;
+        Ok(json!({"retirement_version":2,"removed_tables":removed}))
+    })
+}
 
 fn open(path: &Path, writable: bool) -> Result<Connection> {
     let flags = if writable {
@@ -431,6 +538,8 @@ fn migrate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[path = "retirement_tests.rs"]
+    mod retirement_tests;
     const REVISION: &str = "1111111111111111111111111111111111111111";
     #[test]
     fn addon_ownership_and_encryption_preserve_ids_and_require_explicit_mapping() {
@@ -715,6 +824,7 @@ mod tests {
             CREATE TABLE progress(profile_id INTEGER,id TEXT,position REAL); INSERT INTO progress VALUES(71,'tt1234567',123.5);
             CREATE TABLE auth_sessions(id TEXT,access_hash TEXT); INSERT INTO auth_sessions VALUES('private-session','private-auth-hash');").unwrap();
         crate::provider::init(&db).unwrap();
+        db.execute_batch("CREATE TABLE provider_routes(provider_id INTEGER PRIMARY KEY,warp INTEGER NOT NULL DEFAULT 0);").unwrap();
         for id in [1, 2] {
             db.execute("INSERT INTO providers(id,name,url,username,password) VALUES(?1,'Fixture','http://fixture.invalid','fixture-user','fixture-password')", [id]).unwrap();
         }

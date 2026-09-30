@@ -7,14 +7,6 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     CREATE TABLE IF NOT EXISTS kids_media(account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,kind TEXT NOT NULL,id TEXT NOT NULL,parent_id TEXT NOT NULL,metadata TEXT NOT NULL,age INTEGER,conflict INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,kind,id));
     CREATE TABLE IF NOT EXISTS kids_ambiguous(account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,kind TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(account_id,kind,id));
     CREATE TABLE IF NOT EXISTS kids_approvals(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,kind TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(profile_id,kind,id));")?;
-    let family_exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='family_channels')",
-        [],
-        |r| r.get(0),
-    )?;
-    if family_exists {
-        db.execute_batch("CREATE TRIGGER IF NOT EXISTS kids_family_policy_update AFTER UPDATE ON family_channels WHEN json_extract(OLD.data,'$.enabled') IS NOT json_extract(NEW.data,'$.enabled') OR json_extract(OLD.data,'$.category') IS NOT json_extract(NEW.data,'$.category') OR json_extract(OLD.data,'$.country') IS NOT json_extract(NEW.data,'$.country') OR json_extract(OLD.data,'$.language') IS NOT json_extract(NEW.data,'$.language') BEGIN UPDATE kids_profiles SET revision=revision+1 WHERE enabled=1; END; CREATE TRIGGER IF NOT EXISTS kids_family_policy_delete AFTER DELETE ON family_channels BEGIN UPDATE kids_profiles SET revision=revision+1 WHERE enabled=1; END;")?;
-    }
     Ok(())
 }
 pub(super) fn forbidden() -> ApiError {

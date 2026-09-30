@@ -55,26 +55,6 @@ pub(crate) fn filter_items(
     }
     Ok(safe)
 }
-fn live_allowed(db: &Connection, id: &str) -> Result<bool, ApiError> {
-    if !id.starts_with("family:") {
-        return Ok(false);
-    }
-    let metadata: Option<String> = db
-        .query_row("SELECT data FROM family_channels WHERE id=?1", [id], |r| {
-            r.get(0)
-        })
-        .optional()
-        .map_err(db_error)?;
-    let value: Value = metadata
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(Value::Null);
-    Ok(value["enabled"] == true
-        && value["category"]
-            .as_str()
-            .is_some_and(|s| s.eq_ignore_ascii_case("kids"))
-        && value["country"] == "US"
-        && value["language"] == "en")
-}
 
 fn query(req: &Request) -> HashMap<String, String> {
     url::form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
@@ -200,43 +180,7 @@ fn decide_request(
                 }
                 return Ok(PolicyDecision::Respond(json!({"meta":meta})));
             }
-            ["live"] => {
-                let auth::Principal::Account { profile_id, .. } = p;
-                let mut result = live_catalog::browse(
-                    &db,
-                    Some("Kids"),
-                    q.get("search").map(String::as_str),
-                    q.get("collection").map(String::as_str),
-                    profile_id,
-                    0,
-                    500,
-                )?;
-                let rows = result["channels"]
-                    .as_array_mut()
-                    .map(std::mem::take)
-                    .unwrap_or_default();
-                let rows = rows
-                    .into_iter()
-                    .filter(|v| {
-                        v["id"]
-                            .as_str()
-                            .is_some_and(|id| live_allowed(&db, id).unwrap_or(false))
-                    })
-                    .collect::<Vec<_>>();
-                let total = rows.len();
-                let offset = q
-                    .get("offset")
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(0);
-                let limit = q
-                    .get("limit")
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(40)
-                    .clamp(1, 100);
-                return Ok(PolicyDecision::Respond(
-                    json!({"channels":rows.into_iter().skip(offset).take(limit).collect::<Vec<_>>(),"total":total}),
-                ));
-            }
+            ["live"] => return Err(ApiError::from("client_update_required")),
             ["live", "categories"] => {
                 return Ok(PolicyDecision::Respond(
                     json!({"categories":[{"id":"category:Kids","name":"Kids"}],"total":1}),
@@ -490,5 +434,5 @@ fn filter_response_items(
 
 /// SQL counterpart used before pagination; arguments are compile-time column/parameter names.
 pub(crate) fn sql_allowed(kind: &str, id: &str, profile: &str) -> String {
-    format!("(NOT EXISTS(SELECT 1 FROM kids_profiles k0 WHERE k0.profile_id={profile} AND k0.enabled=1) OR EXISTS(SELECT 1 FROM kids_media m JOIN profile_owners o ON o.account_id=m.account_id JOIN kids_profiles k ON k.profile_id=o.profile_id JOIN kids_media root ON root.account_id=m.account_id AND root.kind=m.kind AND root.id=m.parent_id WHERE o.profile_id={profile} AND m.kind={kind} AND m.id={id} AND NOT EXISTS(SELECT 1 FROM kids_ambiguous bad WHERE bad.account_id=m.account_id AND bad.kind=m.kind AND bad.id=m.id) AND COALESCE(m.age,0)<18 AND COALESCE(root.age,0)<18 AND (m.id=m.parent_id OR EXISTS(SELECT 1 FROM json_each(root.metadata,'$.videos') video WHERE json_extract(video.value,'$.id')=m.id)) AND (EXISTS(SELECT 1 FROM kids_approvals a WHERE a.profile_id={profile} AND a.kind=m.kind AND a.id=m.parent_id) OR (m.conflict=0 AND root.conflict=0 AND root.age<=k.max_age AND m.age<=k.max_age))) OR ({kind}='live' AND EXISTS(SELECT 1 FROM family_channels f WHERE f.id={id} AND f.id LIKE 'family:%' AND json_extract(f.data,'$.enabled')=1 AND lower(json_extract(f.data,'$.category'))='kids' AND json_extract(f.data,'$.country')='US' AND json_extract(f.data,'$.language')='en')))")
+    format!("(NOT EXISTS(SELECT 1 FROM kids_profiles k0 WHERE k0.profile_id={profile} AND k0.enabled=1) OR EXISTS(SELECT 1 FROM kids_media m JOIN profile_owners o ON o.account_id=m.account_id JOIN kids_profiles k ON k.profile_id=o.profile_id JOIN kids_media root ON root.account_id=m.account_id AND root.kind=m.kind AND root.id=m.parent_id WHERE o.profile_id={profile} AND m.kind={kind} AND m.id={id} AND NOT EXISTS(SELECT 1 FROM kids_ambiguous bad WHERE bad.account_id=m.account_id AND bad.kind=m.kind AND bad.id=m.id) AND COALESCE(m.age,0)<18 AND COALESCE(root.age,0)<18 AND (m.id=m.parent_id OR EXISTS(SELECT 1 FROM json_each(root.metadata,'$.videos') video WHERE json_extract(video.value,'$.id')=m.id)) AND (EXISTS(SELECT 1 FROM kids_approvals a WHERE a.profile_id={profile} AND a.kind=m.kind AND a.id=m.parent_id) OR (m.conflict=0 AND root.conflict=0 AND root.age<=k.max_age AND m.age<=k.max_age))))")
 }

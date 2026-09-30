@@ -130,26 +130,6 @@ fn overrides_are_authoritative_and_type_checked() {
     .is_empty());
     assert!(s.matches().unwrap().as_array().unwrap().is_empty());
 }
-#[test]
-fn deleting_provider_removes_all_owned_rows() {
-    let s = service();
-    let p = add_provider(&s);
-    let id = insert_candidate(&s, p, "10", "movie");
-    s.override_match(json!({"vod_id":id,"metadata_id":"tt1234567","type":"movie"}))
-        .unwrap();
-    s.delete(p).unwrap();
-    assert_eq!(s.list().unwrap(), json!([]));
-    assert_eq!(s.matches().unwrap(), json!([]));
-    assert_eq!(
-        s.lock()
-            .unwrap()
-            .query_row("SELECT count(*) FROM provider_matches", [], |r| r
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
-    assert!(s.delete(p).is_err());
-}
 
 #[test]
 fn credential_path_segments_are_encoded() {

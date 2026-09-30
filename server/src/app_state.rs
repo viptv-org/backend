@@ -17,7 +17,7 @@ pub struct ApiError(pub StatusCode, pub String);
 // strings, so status codes and client error codes are derived by matching
 // these constants in exactly one place each; never compare a display
 // message inline. The capacity message is single-sourced in the engine.
-pub(crate) use crate::playback::MSG_PLAYBACK_CAPACITY;
+pub(crate) const MSG_PLAYBACK_CAPACITY: &str = "Playback capacity reached";
 pub(crate) const MSG_DELIVERY_REFUSED: &str =
     "Playback could not start; try forced transcoding or another stream";
 pub(crate) const MSG_ENGINE_UNAVAILABLE: &str = "Playback engine unavailable";
@@ -99,7 +99,7 @@ impl IntoResponse for ApiError {
             return account_api::Error::Code(code).into_response();
         }
         let message = match self.api_error_code() {
-            Some("client_update_required") => "This IPTV connection has been migrated. Update the client to manage it with the new account API.",
+            Some("client_update_required") => "Update VIPTV to use this server's current catalog and playback APIs.",
             Some("provider_connection_limit") => "This IPTV provider has reached its connection limit. Stop another stream or choose another provider.",
             Some("playback_capacity") => "The server has reached its playback limit. Stop another stream or try again later.",
             Some("source_expired") => "This stream has expired. Refresh the sources and choose it again.",
@@ -160,7 +160,6 @@ pub struct App {
     pub db: Arc<Mutex<Connection>>,
     pub addons: Addons,
     pub providers: ProviderService,
-    pub playback: Arc<PlaybackManager>,
     pub(crate) secret_vault: Option<Arc<secret_store::Vault>>,
     pub(crate) gateway_client: gateway::client::Client,
     pub(crate) gateway_playbacks: Arc<gateway::playback::Registry>,
@@ -170,15 +169,6 @@ pub struct App {
     pub(crate) principal: Option<auth::Principal>,
     pub(crate) resource_owners: Arc<Mutex<HashMap<String, ResourceOwner>>>,
     pub(crate) lease: Option<ResourceLease>,
-    pub(crate) startup_requests: Arc<Mutex<HashMap<String, session::StartupRequest>>>,
-    pub(crate) family_matching_gate: Arc<Mutex<()>>,
-    pub(crate) automation_life: Arc<()>,
-    pub(crate) catalog_control: Arc<automation::Control>,
-    pub(crate) health_control: Arc<health::Control>,
-    pub(crate) guide_control: Arc<guides::Control>,
-    pub(crate) live_sessions: Arc<Mutex<HashMap<String, Arc<session::LiveSession>>>>,
-    pub(crate) shared_playback: Arc<session::shared::Registry>,
-    pub(crate) playback_audience: Option<String>,
 }
 #[derive(Clone)]
 pub(crate) struct ResourceLease {
@@ -284,11 +274,7 @@ pub(crate) struct StreamEntry {
     pub(crate) created: Instant,
 }
 impl App {
-    pub fn new(
-        db: Connection,
-        client: reqwest::Client,
-        playback: Arc<PlaybackManager>,
-    ) -> Result<Self, String> {
+    pub fn new(db: Connection, client: reqwest::Client) -> Result<Self, String> {
         let secret_vault = secret_store::Vault::from_environment()?.map(Arc::new);
         db.busy_timeout(Duration::from_secs(5))
             .map_err(|_| "Database setup failed")?;
@@ -302,7 +288,6 @@ impl App {
         provider::v2::init(&db).map_err(|_| "Account IPTV schema initialization failed")?;
         provider::refresh_v2::prepare(&db).map_err(|_| "IPTV refresh initialization failed")?;
         gateway::registry::init(&db).map_err(|_| "Gateway schema initialization failed")?;
-        automation::init(&db).map_err(|_| "Automation database initialization failed")?;
         let db = Arc::new(Mutex::new(db));
         let mut addons = Addons::new(db.clone(), client.clone())?;
         addons.vault = secret_vault.clone();
@@ -314,7 +299,6 @@ impl App {
             db,
             addons,
             providers,
-            playback,
             secret_vault,
             gateway_client: Default::default(),
             gateway_playbacks,
@@ -323,15 +307,6 @@ impl App {
             principal: None,
             resource_owners: Default::default(),
             lease: None,
-            startup_requests: Default::default(),
-            family_matching_gate: Default::default(),
-            automation_life: Default::default(),
-            catalog_control: Default::default(),
-            health_control: Default::default(),
-            guide_control: Default::default(),
-            live_sessions: Default::default(),
-            shared_playback: Default::default(),
-            playback_audience: None,
         })
     }
     pub(crate) fn identity(&self) -> auth::Principal {
@@ -420,6 +395,7 @@ impl App {
             Err(ApiError(StatusCode::NOT_FOUND, "Resource not found".into()))
         }
     }
+    #[cfg(test)]
     pub(crate) fn retain_playback_owners(
         &self,
         active: &HashSet<String>,
@@ -432,14 +408,6 @@ impl App {
                 || owner.created >= snapshot_started
                 || active.contains(key.trim_start_matches("playback:"))
         });
-    }
-    pub(crate) async fn prune_playback_owners(&self) {
-        let snapshot_started = Instant::now();
-        let mut active: std::collections::HashSet<String> =
-            self.playback.active_ids().await.into_iter().collect();
-        active.extend(self.live_sessions.lock().unwrap().keys().cloned());
-        active.extend(self.shared_playback.ids());
-        self.retain_playback_owners(&active, snapshot_started);
     }
     pub(crate) fn prune(&self) {
         self.jobs

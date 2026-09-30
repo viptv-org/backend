@@ -2,13 +2,11 @@ use super::*;
 
 #[derive(Clone)]
 enum SyncGuard {
-    Legacy(crate::automation::CatalogLease),
     Account(refresh_v2::Guard),
 }
 impl SyncGuard {
     fn validate(&self, db: &Connection) -> Result<(), String> {
         match self {
-            Self::Legacy(g) => g.validate(db),
             Self::Account(g) => g.validate(db),
         }
     }
@@ -16,16 +14,9 @@ impl SyncGuard {
 
 impl ProviderService {
     /// Fetch everything before starting a transaction: failed syncs preserve the old index.
+    #[cfg(test)]
     pub async fn sync(&self, id: i64) -> Result<Value, String> {
         self.sync_with_guard(id, None).await
-    }
-    pub(crate) async fn sync_catalog(
-        &self,
-        id: i64,
-        guard: crate::automation::CatalogLease,
-    ) -> Result<Value, String> {
-        self.sync_with_guard(id, Some(SyncGuard::Legacy(guard)))
-            .await
     }
     pub(super) async fn sync_account(
         &self,
@@ -47,9 +38,6 @@ impl ProviderService {
             .await?;
         if provider.sealed.is_some() && !matches!(guard.as_ref(), Some(SyncGuard::Account(_))) {
             return Err("client_update_required".into());
-        }
-        if matches!(guard, Some(SyncGuard::Legacy(_))) {
-            accounts::login_report(self,&json!({"url":provider.url,"username":provider.username,"password":provider.password})).await?;
         }
         if matches!(guard.as_ref(), Some(SyncGuard::Account(_))) {
             let credentials = credentials_v2::Credentials {
@@ -73,7 +61,6 @@ impl ProviderService {
         ];
         let enabled = [scopes[0], scopes[0], scopes[1], scopes[2]];
         let automated = guard.is_some();
-        let legacy = matches!(guard.as_ref(), Some(SyncGuard::Legacy(_)));
         let fetch = |i: usize| {
             let provider = &provider;
             let access = guard.clone();
@@ -89,16 +76,7 @@ impl ProviderService {
                 })
                 .await?;
                 let value = self
-                    .api_bounded(
-                        provider,
-                        actions[i],
-                        &[],
-                        if legacy {
-                            16 * 1024 * 1024
-                        } else {
-                            MAX_RESPONSE
-                        },
-                    )
+                    .api_bounded(provider, actions[i], &[], MAX_RESPONSE)
                     .await?;
                 array(&value)?;
                 Ok::<_, String>(value)
@@ -120,17 +98,6 @@ impl ProviderService {
             .await
     }
 
-    #[cfg(test)]
-    pub(super) fn store_index(
-        &self,
-        id: i64,
-        categories: Value,
-        live: Value,
-        movies: Value,
-        series: Value,
-    ) -> Result<Value, String> {
-        self.store_index_guarded(id, [categories, live, movies, series], None, None)
-    }
     fn store_index_guarded(
         &self,
         id: i64,
@@ -154,17 +121,6 @@ impl ProviderService {
             .iter()
             .filter_map(|v| Some((scalar(v.get("category_id")?)?, text(v, "category_name")?)))
             .collect();
-        if matches!(guard, Some(SyncGuard::Legacy(_)))
-            && (category_names.len() != categories.len()
-                || live.iter().any(|v| {
-                    v.get("category_id")
-                        .and_then(scalar)
-                        .filter(|id| !id.is_empty() && id != "0")
-                        .is_some_and(|id| !category_names.contains_key(&id))
-                }))
-        {
-            return Err("Provider index contains invalid entries".into());
-        }
         let mut candidates = Vec::new();
         for (items, kind) in [(movies, "movie"), (series, "series")] {
             for value in items {
@@ -187,31 +143,6 @@ impl ProviderService {
         }
         if let Some(guard) = guard {
             guard.validate(&db)?;
-        }
-        if matches!(guard, Some(SyncGuard::Legacy(_))) {
-            if fetched[0] && categories.is_empty() {
-                let had_categories:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM provider_live WHERE provider_id=?1 AND category_id IS NOT NULL AND category_id NOT IN ('','0'))",[id],|r|r.get(0)).map_err(db_error)?;
-                if had_categories {
-                    return Err(
-                        "Provider returned an empty catalog; previous metadata retained".into(),
-                    );
-                }
-            }
-            for (scope, items) in [("live", live), ("movie", movies), ("series", series)] {
-                let enabled = match scope {
-                    "live" => fetched[0],
-                    "movie" => fetched[1],
-                    _ => fetched[2],
-                };
-                if enabled && items.is_empty() {
-                    let prior:bool=if scope=="live" {db.query_row("SELECT EXISTS(SELECT 1 FROM provider_live WHERE provider_id=?1)",[id],|r|r.get(0))}else{db.query_row("SELECT EXISTS(SELECT 1 FROM provider_vod WHERE provider_id=?1 AND kind=?2)",params![id,scope],|r|r.get(0))}.map_err(db_error)?;
-                    if prior {
-                        return Err(
-                            "Provider returned an empty catalog; previous metadata retained".into(),
-                        );
-                    }
-                }
-            }
         }
         let tx = db.transaction().map_err(db_error)?;
         let exists: bool = tx

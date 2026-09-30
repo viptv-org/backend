@@ -12,8 +12,6 @@ pub struct ProviderService {
     pub(super) playback_gates: Arc<Mutex<HashMap<i64, PlaybackGate>>>,
 }
 pub(super) struct PlaybackGate {
-    pub(super) issued: u64,
-    pub(super) report_generation: u64,
     pub(super) semaphore: Arc<Semaphore>,
 }
 
@@ -78,6 +76,29 @@ pub(super) fn provider_row(
 }
 
 impl ProviderService {
+    #[cfg(test)]
+    pub(crate) fn add(&self, value: Value) -> Result<Value, String> {
+        let db = self.lock()?;
+        db.execute("INSERT INTO providers(name,url,username,password,enabled,max_connections,enable_live,enable_movies,enable_series) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![value["name"].as_str().unwrap_or("Fixture"),value["url"].as_str().unwrap_or("https://fixture.invalid"),value["username"].as_str().unwrap_or("fixture"),value["password"].as_str().unwrap_or("fixture"),value["enabled"].as_bool().unwrap_or(true),value["max_connections"].as_i64().unwrap_or(1),value["enable_live"].as_bool().unwrap_or(true),value["enable_movies"].as_bool().unwrap_or(true),value["enable_series"].as_bool().unwrap_or(true)]).map_err(db_error)?;
+        Ok(json!({"id":db.last_insert_rowid()}))
+    }
+    #[cfg(test)]
+    pub(crate) fn update(&self, id: i64, value: Value) -> Result<Value, String> {
+        let db = self.lock()?;
+        if credentials_v2::sealed(&db, id)? {
+            return Err("client_update_required".into());
+        }
+        for name in ["enabled", "enable_live", "enable_movies", "enable_series"] {
+            if let Some(value) = value[name].as_bool() {
+                db.execute(
+                    &format!("UPDATE providers SET {name}=?2 WHERE id=?1"),
+                    params![id, value],
+                )
+                .map_err(db_error)?;
+            }
+        }
+        Ok(json!({"id":id}))
+    }
     pub fn new(db: Arc<Mutex<Connection>>, client: reqwest::Client) -> Self {
         Self {
             db,
@@ -146,173 +167,5 @@ impl ProviderService {
             return Err("Provider not found or content scope disabled".into());
         }
         provider_row(&db, id, self.vault.as_deref())
-    }
-
-    pub fn list(&self) -> Result<Value, String> {
-        let db = self.lock()?;
-        let mut stmt = db
-            .prepare(
-                "SELECT id,name,url,username,enabled,max_connections,enable_live,enable_movies,enable_series FROM providers ORDER BY id",
-            )
-            .map_err(db_error)?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(json!({
-                    "id":r.get::<_,i64>(0)?, "name":r.get::<_,String>(1)?,
-                    "url":r.get::<_,String>(2)?,
-                    "warp":egress::enabled(&db,r.get(0)?),"enabled":r.get::<_,bool>(4)?, "max_connections":r.get::<_,i64>(5)?,"enable_live":r.get::<_,bool>(6)?,"enable_movies":r.get::<_,bool>(7)?,"enable_series":r.get::<_,bool>(8)?
-                }))
-            })
-            .map_err(db_error)?;
-        Ok(Value::Array(
-            rows.collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(db_error)?,
-        ))
-    }
-
-    pub fn add(&self, value: Value) -> Result<Value, String> {
-        let name = required_string(&value, "name", 200)?;
-        let username = required_string(&value, "username", 512)?;
-        let password = required_string(&value, "password", 2048)?;
-        let raw_url = required_string(&value, "url", 4096)?;
-        let url = base_url(&raw_url)?;
-        let max_connections = match value.get("max_connections") {
-            None => 1,
-            Some(v) => v
-                .as_i64()
-                .filter(|n| (1..=32).contains(n))
-                .ok_or("max_connections must be an integer from 1 to 32")?,
-        };
-        let warp = optional_bool(&value, "warp")?.unwrap_or(false);
-        if warp {
-            egress::configured()?;
-        }
-        let live = optional_bool(&value, "enable_live")?.unwrap_or(true);
-        let movies = optional_bool(&value, "enable_movies")?.unwrap_or(true);
-        let series = optional_bool(&value, "enable_series")?.unwrap_or(true);
-        let db = self.lock()?;
-        if accounts::duplicate(
-            &db,
-            &json!({"url":url.as_str().trim_end_matches('/'),"username":username}),
-            None,
-        )?
-        .is_some()
-        {
-            return Err("Provider login already configured".into());
-        }
-        db.execute(
-            "INSERT INTO providers(name,url,username,password,max_connections,enable_live,enable_movies,enable_series) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![name, url.as_str().trim_end_matches('/'), username, password, max_connections,live,movies,series],
-        )
-        .map_err(db_error)?;
-        let id = db.last_insert_rowid();
-        egress::set(&db, id, warp)?;
-        Ok(json!({"id": id, "name":name,"warp":warp,
-            "url":url.as_str().trim_end_matches('/'),"enabled":true,"max_connections":max_connections,"enable_live":live,"enable_movies":movies,"enable_series":series}))
-    }
-
-    pub fn update(&self, id: i64, patch: Value) -> Result<Value, String> {
-        let object = patch
-            .as_object()
-            .ok_or("Provider patch must be an object")?;
-        if object.is_empty()
-            || object.keys().any(|k| {
-                ![
-                    "enabled",
-                    "warp",
-                    "max_connections",
-                    "enable_live",
-                    "enable_movies",
-                    "enable_series",
-                ]
-                .contains(&k.as_str())
-            })
-        {
-            return Err("Provider patch accepts enabled, max_connections, enable_live, enable_movies, enable_series".into());
-        }
-        let warp = optional_bool(&patch, "warp")?;
-        if warp == Some(true) {
-            egress::configured()?;
-        }
-        let live = optional_bool(&patch, "enable_live")?;
-        let movies = optional_bool(&patch, "enable_movies")?;
-        let series = optional_bool(&patch, "enable_series")?;
-        let enabled = object
-            .get("enabled")
-            .map(|v| v.as_bool().ok_or("enabled must be boolean"))
-            .transpose()?;
-        let limit = object
-            .get("max_connections")
-            .map(|v| {
-                v.as_i64()
-                    .filter(|n| (1..=32).contains(n))
-                    .ok_or("max_connections must be an integer from 1 to 32")
-            })
-            .transpose()?;
-        let mut db = self.lock()?;
-        if credentials_v2::sealed(&db, id)? {
-            return Err("client_update_required".into());
-        }
-        let pool = pools::ensure(&db, id)?;
-        let old_limit: i64 = db
-            .query_row(
-                "SELECT max_connections FROM providers WHERE id=?1",
-                [id],
-                |r| r.get(0),
-            )
-            .map_err(|_| "Provider not found".to_string())?;
-        let gates = self
-            .playback_gates
-            .lock()
-            .map_err(|_| "Provider limiter unavailable")?;
-        if limit.is_some_and(|limit| limit != old_limit) && pools::active(&gates, pool) > 0 {
-            return Err("Stop provider playback before changing max_connections".into());
-        }
-        let tx = db.transaction().map_err(db_error)?;
-        tx.execute("UPDATE providers SET enabled=COALESCE(?2,enabled),max_connections=COALESCE(?3,max_connections),enable_live=COALESCE(?4,enable_live),enable_movies=COALESCE(?5,enable_movies),enable_series=COALESCE(?6,enable_series) WHERE id=?1", params![id,enabled,limit,live,movies,series]).map_err(db_error)?;
-        if let Some(warp) = warp {
-            egress::set(&tx, id, warp)?;
-        }
-        if let Some(limit) = limit {
-            pools::set_limit(&tx, pool, limit)?;
-        }
-        tx.commit().map_err(db_error)?;
-        db.query_row("SELECT id,name,url,username,enabled,max_connections,enable_live,enable_movies,enable_series FROM providers WHERE id=?1", [id], |r| Ok(json!({
-            "id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"url":r.get::<_,String>(2)?,"warp":egress::enabled(&db,id),"enabled":r.get::<_,bool>(4)?,"max_connections":r.get::<_,i64>(5)?,"enable_live":r.get::<_,bool>(6)?,"enable_movies":r.get::<_,bool>(7)?,"enable_series":r.get::<_,bool>(8)?
-        }))).map_err(db_error)
-    }
-
-    pub fn delete(&self, id: i64) -> Result<(), String> {
-        let mut db = self.lock()?;
-        if credentials_v2::sealed(&db, id)? {
-            return Err("client_update_required".into());
-        }
-        let pool = pools::ensure(&db, id)?;
-        let gates = self
-            .playback_gates
-            .lock()
-            .map_err(|_| "Account limiter unavailable")?;
-        if pools::active(&gates, pool) > 0 {
-            return Err("Stop pool playback before deleting an account".into());
-        }
-        let tx = db.transaction().map_err(db_error)?;
-        tx.execute("DELETE FROM provider_pools WHERE provider_id=?1", [id])
-            .map_err(db_error)?;
-        // Explicit cleanup also works when a caller has not enabled SQLite foreign keys.
-        tx.execute("DELETE FROM provider_matches WHERE vod_id IN (SELECT id FROM provider_vod WHERE provider_id=?1)", [id]).map_err(db_error)?;
-        tx.execute("DELETE FROM provider_cache WHERE provider_id=?1", [id])
-            .map_err(db_error)?;
-        tx.execute("DELETE FROM provider_live WHERE provider_id=?1", [id])
-            .map_err(db_error)?;
-        tx.execute("DELETE FROM provider_vod WHERE provider_id=?1", [id])
-            .map_err(db_error)?;
-        let deleted = tx
-            .execute("DELETE FROM providers WHERE id=?1", [id])
-            .map_err(db_error)?;
-        if deleted == 0 {
-            return Err("Provider not found".into());
-        }
-        tx.commit().map_err(db_error)?;
-        Ok(())
     }
 }

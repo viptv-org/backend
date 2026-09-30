@@ -281,8 +281,8 @@ pub(crate) async fn delete(
     account_api::work(app, lease, move |db, account| {
         let tx = db.unchecked_transaction().map_err(storage)?;
         managed(&tx, account, id)?;
-        tx.execute("DELETE FROM provider_pools WHERE provider_id=?1", [id])
-            .map_err(storage)?;
+        let legacy_pool:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='provider_pools')",[],|row|row.get(0)).map_err(storage)?;
+        if legacy_pool {tx.execute("DELETE FROM provider_pools WHERE provider_id=?1", [id]).map_err(storage)?;}
         tx.execute("DELETE FROM providers WHERE id=?1", [id])
             .map_err(storage)?;
         v2::live_catalog(&tx, account, None)?;

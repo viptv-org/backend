@@ -9,7 +9,6 @@ pub(crate) struct Preferences {
     pub subtitles_enabled: bool,
     pub subtitle_size: String,
     pub subtitle_style: String,
-    pub quality: String,
     pub autoplay: bool,
 }
 impl Default for Preferences {
@@ -20,7 +19,6 @@ impl Default for Preferences {
             subtitles_enabled: false,
             subtitle_size: "normal".into(),
             subtitle_style: "system".into(),
-            quality: "auto".into(),
             autoplay: true,
         }
     }
@@ -38,7 +36,13 @@ pub(crate) fn load(db: &Connection, profile: i64) -> Result<Preferences, ApiErro
         .optional()
         .map_err(db_error)?;
     let mut prefs: Preferences = value
-        .map(|v| serde_json::from_str(&v))
+        .map(|v| {
+            let mut value: Value = serde_json::from_str(&v)?;
+            if let Some(object) = value.as_object_mut() {
+                object.remove("quality");
+            }
+            serde_json::from_value(value)
+        })
         .transpose()
         .map_err(|_| "Invalid saved playback preferences")?
         .unwrap_or_default();
@@ -65,7 +69,6 @@ fn validate(p: &Preferences) -> Result<(), ApiError> {
     }
     if !["small", "normal", "large"].contains(&p.subtitle_size.as_str())
         || !["system", "shadow", "opaque"].contains(&p.subtitle_style.as_str())
-        || !["auto", "1080p", "720p", "480p"].contains(&p.quality.as_str())
     {
         return Err("Invalid playback preference".into());
     }
@@ -96,65 +99,17 @@ pub(crate) async fn put(
         let mut merged=json!(load(&tx,profile)?);
         let object=value.as_object().ok_or("Invalid playback preferences")?;
         if object.is_empty() { return Err("Empty playback preferences".into()); }
-        for (key,value) in object { merged[key]=value.clone(); }
+        if object.keys().all(|key|key=="quality"){return Err(ApiError::from("client_update_required"));}
+        for (key,value) in object { if key!="quality" {merged[key]=value.clone();} }
         let prefs:Preferences=serde_json::from_value(merged).map_err(|_| "Invalid playback preferences")?;
         validate(&prefs)?;
-        tx.execute("INSERT INTO playback_preferences(profile_id,value) VALUES(?1,?2) ON CONFLICT(profile_id) DO UPDATE SET value=excluded.value",params![profile,json!(prefs).to_string()]).map_err(db_error)?;
+        let previous:Option<String>=tx.query_row("SELECT value FROM playback_preferences WHERE profile_id=?1",[profile],|row|row.get(0)).optional().map_err(db_error)?;
+        let archived=previous.map(|value|serde_json::from_str::<Value>(&value)).transpose().map_err(|_|"Invalid saved playback preferences")?.and_then(|value|value.get("quality").cloned());
+        let mut stored=json!(prefs);
+        if let Some(quality)=archived {stored["quality"]=quality;}
+        tx.execute("INSERT INTO playback_preferences(profile_id,value) VALUES(?1,?2) ON CONFLICT(profile_id) DO UPDATE SET value=excluded.value",params![profile,stored.to_string()]).map_err(db_error)?;
         tx.execute("INSERT INTO viewing_settings(profile_id,autoplay) VALUES(?1,?2) ON CONFLICT(profile_id) DO UPDATE SET autoplay=excluded.autoplay",params![profile,prefs.autoplay]).map_err(db_error)?;
         tx.commit().map_err(db_error)?;
         Ok(axum::Json(json!(prefs)))
     }).await
-}
-impl Preferences {
-    pub(crate) fn cap(
-        &self,
-        caps: Option<playback::Capabilities>,
-    ) -> Option<playback::Capabilities> {
-        let height = match self.quality.as_str() {
-            "1080p" => 1080,
-            "720p" => 720,
-            "480p" => 480,
-            _ => return caps,
-        };
-        let mut caps = caps.unwrap_or_default();
-        caps.max_height = caps.max_height.min(height);
-        caps.max_width = caps.max_width.min(height * 16 / 9);
-        // An explicit quality ceiling is a media requirement, not a decoder hint.
-        // Keep it on the inspected path until a rendition below the ceiling is known.
-        if let Some(browser) = &mut caps.browser {
-            browser.inspect_original = false;
-        }
-        Some(caps)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn quality_ceiling_never_increases_the_device_capability() {
-        let mut prefs = Preferences {
-            quality: "480p".into(),
-            ..Default::default()
-        };
-        let caps = prefs
-            .cap(Some(playback::Capabilities {
-                max_width: 1920,
-                max_height: 1080,
-                ..Default::default()
-            }))
-            .unwrap();
-        assert_eq!((caps.max_width, caps.max_height), (853, 480));
-        prefs.quality = "1080p".into();
-        let caps = prefs
-            .cap(Some(playback::Capabilities {
-                max_width: 640,
-                max_height: 360,
-                ..Default::default()
-            }))
-            .unwrap();
-        assert_eq!((caps.max_width, caps.max_height), (640, 360));
-        prefs.quality = "auto".into();
-        assert!(prefs.cap(None).is_none());
-    }
 }

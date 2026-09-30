@@ -1,5 +1,12 @@
 # V2 account IPTV operations
 
+The isolated engine-free runtime/guarded offline retirement candidate is described
+in [RUNTIME_RETIREMENT.md](RUNTIME_RETIREMENT.md). Reviewed clients now have v2
+adoption candidates; historical checkpoint paragraphs below do not override that
+source evidence or authorize production migration. The user's Android UI checkout
+still requires the handoff merged. Legacy runtime behavior cannot be retained in
+the cleanup candidate; retired API namespaces return `client_update_required`.
+
 This is a development-branch contract, not authorization to migrate production.
 Production deployment and migration require separate approval. No viewing UI or
 playlist swap control is introduced by these endpoints.

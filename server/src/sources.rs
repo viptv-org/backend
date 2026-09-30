@@ -153,14 +153,62 @@ pub(crate) fn source_configuration(
         return Ok(None);
     };
     let value:Option<String>=match kind {
-        "iptv"=>db.query_row("SELECT json_array(p.url,p.username,p.password,p.enabled,p.enable_live,p.enable_movies,p.enable_series,COALESCE(r.warp,0),o.account_id,p.credentials_version,c.account_id,c.secret) FROM providers p LEFT JOIN provider_routes r ON r.provider_id=p.id LEFT JOIN provider_ownership o ON o.provider_id=p.id LEFT JOIN provider_credentials_v2 c ON c.provider_id=p.id WHERE p.id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
+        "iptv"=>{
+            let (route,join)=if provider::egress::table_exists(db).map_err(ApiError::from)? {("COALESCE(r.warp,0)","LEFT JOIN provider_routes r ON r.provider_id=p.id")}else{("0","")};
+            db.query_row(&format!("SELECT json_array(p.url,p.username,p.password,p.enabled,p.enable_live,p.enable_movies,p.enable_series,{route},o.account_id,p.credentials_version,c.account_id,c.secret) FROM providers p {join} LEFT JOIN provider_ownership o ON o.provider_id=p.id LEFT JOIN provider_credentials_v2 c ON c.provider_id=p.id WHERE p.id=?1"),[id],|row|row.get(0)).optional().map_err(db_error)?
+        },
         "addon"=>db.query_row("SELECT json_array(manifest_url,enabled,account_id,credentials_version,credentials_revision) FROM addons WHERE id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
         _=>None,
     };
     Ok(value.map(|value| Sha256::digest(value.as_bytes()).into()))
 }
 
-use viptv_playback_engine::source_display_text;
+fn source_display_text(
+    text: &str,
+    limit: usize,
+    url: &str,
+    headers: &HashMap<String, String>,
+) -> String {
+    let mut text = text.replace(url, "[link omitted]");
+    // Ordinary negotiation/client-identification values are display text too:
+    // e.g. Accept-Language: en must not erase en/eng or letters inside French.
+    // Origin/Referer links are handled by the URL redaction below.
+    for (_, value) in headers.iter().filter(|(key, value)| {
+        (key.eq_ignore_ascii_case("authorization") || key.eq_ignore_ascii_case("x-csrf-token"))
+            && !value.is_empty()
+    }) {
+        text = text.replace(value, "[private value omitted]");
+        if let Some((scheme, credential)) = value.split_once(' ') {
+            if (scheme.eq_ignore_ascii_case("bearer") || scheme.eq_ignore_ascii_case("basic"))
+                && !credential.is_empty()
+            {
+                text = text.replace(credential, "[private value omitted]");
+            }
+        }
+    }
+    let text = text
+        .lines()
+        .map(|line| {
+            line.split_whitespace()
+                .map(|word| {
+                    if word.contains("://") || word.to_ascii_lowercase().contains("magnet:") {
+                        "[link omitted]".to_owned()
+                    } else {
+                        word.chars().filter(|c| !c.is_control()).collect::<String>()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = text.trim();
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
 
 fn source_card(
     raw: &Value,

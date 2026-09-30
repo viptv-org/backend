@@ -11,10 +11,7 @@ use std::{
 use tokio::sync::Semaphore;
 use url::Url;
 
-pub(crate) mod accounts;
 pub(crate) mod egress;
-pub(crate) mod pools;
-pub(crate) mod selection;
 
 mod candidates;
 pub(crate) mod catalog_v2;
@@ -112,12 +109,5 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
     catalog_v2::init(db)?;
     credentials_v2::init(db)?;
     refresh_v2::init(db)?;
-    egress::init(db)?;
-    crate::live_policy::init(db)?;
-    pools::init(db)?;
-    selection::init(db)?;
-    crate::activity::init(db)?;
-    crate::health::init(db)?;
-    crate::guides::init(db)?;
-    crate::lineup::init(db)
+    Ok(())
 }
