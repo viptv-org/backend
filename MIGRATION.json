@@ -187,8 +187,8 @@
       "source": "server/src/contract_tests.rs",
       "destination": "server/src/contract_tests.rs",
       "sha256": "38a029f8cbbffc92c2771e1a95b5c092727174e9bd055b4788bbc5e66e2fd02d",
-      "extracted_sha256": "e158f3d9fcf72ff04d089be6ad5bec54488a84aa8f748b3989518e9695897bf1",
-      "reason": " BE-002 engine-free runtime, explicit legacy refusal, reflected credential privacy and required-header classification; genuine source fixtures use encrypted credentials/cache under the runtime migration boundary; original extraction hash retained."
+      "extracted_sha256": "28c2901a5786f134697afaf02886d44491ce5be430ed2d010f608e8129649102",
+      "reason": " BE-002 engine-free runtime, explicit legacy refusal, reflected credential privacy and required-header classification; genuine source fixtures use encrypted credentials/cache under the runtime migration boundary; retired engine messages are pinned as unclassified; original extraction hash retained."
     },
     {
       "source": "server/src/country_names.json",
