@@ -38,6 +38,277 @@ pub(crate) fn fixture() -> App {
     a
 }
 #[tokio::test]
+async fn numeric_and_legacy_pairing_codes_support_qr_expiry_and_single_use() {
+    let a = fixture();
+    for (index, user_code) in ["00123456", "AB12CD34EF"].into_iter().enumerate() {
+        let secret = format!("synthetic-device-secret-{index}");
+        a.db.lock().unwrap().execute(
+            "INSERT INTO auth_pairings(code_hash,device_hash,device_name,expires) VALUES(?1,?2,'Fixture TV',?3)",
+            params![auth::hash(user_code), auth::hash(&secret), util::now() + 600],
+        ).unwrap();
+        let qr_path = format!("/api/auth/device/qr?code={user_code}");
+        let qr = router(a.clone(), None)
+            .oneshot(
+                Request::builder()
+                    .uri(&qr_path)
+                    .header(header::HOST, "tv.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(qr.status(), StatusCode::OK);
+        assert_eq!(qr.headers()[header::CONTENT_TYPE], "image/png");
+        assert_eq!(qr.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(to_bytes(qr.into_body(), 1_000_000)
+            .await
+            .unwrap()
+            .starts_with(b"\x89PNG\r\n\x1a\n"));
+        let payload = json!({"user_code":user_code});
+        assert_eq!(
+            request(
+                &a,
+                "invalid-token",
+                "POST",
+                "/api/device/lookup",
+                payload.clone()
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let (status, lookup) = request(
+            &a,
+            "member-token-2",
+            "POST",
+            "/api/device/lookup",
+            payload.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(lookup["user_code"], user_code);
+        assert_eq!(
+            request(
+                &a,
+                "member-token-2",
+                "POST",
+                "/api/device/approve",
+                json!({"user_code":user_code,"account_id":1})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            request(
+                &a,
+                "member-token-2",
+                "POST",
+                "/api/device/approve",
+                payload.clone()
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            request(
+                &a,
+                "",
+                "POST",
+                "/api/device/token",
+                json!({"device_code":user_code})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        let (status, grant) = request(
+            &a,
+            "",
+            "POST",
+            "/api/device/token",
+            json!({"device_code":secret}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(grant["account_id"], 2);
+        assert!(grant["profile_id"].is_null());
+        assert_eq!(
+            request(
+                &a,
+                "",
+                "POST",
+                "/api/device/token",
+                json!({"device_code":secret})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            request(&a, "member-token-2", "POST", "/api/device/approve", payload)
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        let expired_qr = router(a.clone(), None)
+            .oneshot(
+                Request::builder()
+                    .uri(&qr_path)
+                    .header(header::HOST, "tv.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(expired_qr.status(), StatusCode::NOT_FOUND);
+    }
+    a.db.lock().unwrap().execute("INSERT INTO auth_pairings(code_hash,device_hash,device_name,expires) VALUES(?1,?2,'Expired TV',?3)", params![auth::hash("00000002"),auth::hash("expired-secret"),util::now()-1]).unwrap();
+    let expired_qr = router(a.clone(), None)
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/device/qr?code=00000002")
+                .header(header::HOST, "tv.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(expired_qr.status(), StatusCode::NOT_FOUND);
+    for endpoint in ["lookup", "approve"] {
+        assert_eq!(
+            request(
+                &a,
+                "member-token-2",
+                "POST",
+                &format!("/api/device/{endpoint}"),
+                json!({"user_code":"00000002"})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        request(
+            &a,
+            "",
+            "POST",
+            "/api/device/token",
+            json!({"device_code":"expired-secret"})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn numeric_pairing_lookup_guesses_are_rate_limited_per_account() {
+    let a = fixture();
+    for _ in 0..120 {
+        assert_eq!(
+            request(
+                &a,
+                "member-token-2",
+                "POST",
+                "/api/device/lookup",
+                json!({"user_code":"00123456"})
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        request(
+            &a,
+            "member-token-2",
+            "POST",
+            "/api/device/lookup",
+            json!({"user_code":"00000001"})
+        )
+        .await
+        .0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[tokio::test]
+async fn public_pairing_qr_guesses_use_a_global_rate_limit() {
+    let a = fixture();
+    let make_request = || {
+        Request::builder()
+            .uri("/api/auth/device/qr?code=00123456")
+            .header(header::HOST, "tv.example")
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        router(a.clone(), None)
+            .oneshot(make_request())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    {
+        let db = a.db.lock().unwrap();
+        let count: i64 = db
+            .query_row(
+                "SELECT count FROM auth_limits WHERE bucket='auth:global:/auth/device/qr'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        db.execute(
+            "UPDATE auth_limits SET count=600 WHERE bucket='auth:global:/auth/device/qr'",
+            [],
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        router(a.clone(), None)
+            .oneshot(make_request())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    a.db.lock().unwrap().execute("INSERT INTO auth_pairings(code_hash,device_hash,device_name,expires) VALUES(?1,?2,'Valid TV',?3)", params![auth::hash("00000001"),auth::hash("valid-secret"),util::now()+600]).unwrap();
+    let valid_request = Request::builder()
+        .uri("/api/auth/device/qr?code=00000001")
+        .header(header::HOST, "tv.example")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        router(a.clone(), None)
+            .oneshot(valid_request)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    a.db.lock()
+        .unwrap()
+        .execute(
+            "UPDATE auth_limits SET expires=?1 WHERE bucket='auth:global:/auth/device/qr'",
+            [util::now() - 1],
+        )
+        .unwrap();
+    assert_eq!(
+        router(a.clone(), None)
+            .oneshot(make_request())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
 async fn profile_lists_are_filtered_and_new_profiles_are_granted_atomically() {
     let a = fixture();
     let (_, first) = request(&a, "member-token-1", "GET", "/api/profiles", Value::Null).await;

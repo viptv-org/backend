@@ -52,13 +52,11 @@ pub(crate) fn dispatch_devices(
                 )
                 .map_err(crate::db_error)?;
             }
-            let user_code = Uuid::new_v4().simple().to_string()[..10].to_uppercase();
-            let device_code = token();
             let name = v["device_name"].as_str().unwrap_or("TV").trim();
             if name.is_empty() || name.len() > 100 {
                 return Err("Invalid device name".into());
             }
-            db.execute("INSERT INTO auth_pairings(code_hash,device_hash,device_name,expires) VALUES(?1,?2,?3,?4)",params![hash(&user_code),hash(&device_code),name,now()+600]).map_err(crate::db_error)?;
+            let (user_code, device_code) = device_pairing::create_pairing(db, name)?;
             let origin = canonical_origin()?
                 .map(|origin| origin.to_string().trim_end_matches('/').to_owned())
                 .or_else(|| {

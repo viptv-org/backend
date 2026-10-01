@@ -168,8 +168,8 @@
       "source": "server/src/auth_integration_tests.rs",
       "destination": "server/src/auth_integration_tests.rs",
       "sha256": "b04b9dd5f26c06e4660200e9d537c8dc1a19da07739b8cc66f64769ec840e938",
-      "extracted_sha256": "34e7afde97e2ecf59af03cd0c3afa6a2a30aab6432f7de54c63a73a4f6a41b60",
-      "reason": " BE-002 engine-free runtime and explicit legacy refusal; genuine account-source fixtures converted to encrypted credentials for runtime cutover while retaining offline migration cases; original extraction hash retained."
+      "extracted_sha256": "b036277c12e7b83490a45c874072b21b1930a9fedcfdf4ce1929b5e2a9d42f16",
+      "reason": " BE-002 engine-free runtime and explicit legacy refusal; genuine account-source fixtures converted to encrypted credentials for runtime cutover while retaining offline migration cases; integrated eight-digit and legacy pairing expiry/single-use and per-account/global QR admission regressions; original extraction hash retained."
     },
     {
       "source": "server/src/automation.rs",

@@ -661,6 +661,95 @@ fn tab_csrf_tokens_survive_refresh_and_revoke_with_family() {
     assert!(csrf_for_session(&db, &h, sid, &primary).is_err());
 }
 #[test]
+fn human_pairing_code_is_eight_decimal_digits_and_not_the_device_secret() {
+    let db = db();
+    let code = dispatch(
+        &db,
+        "/auth/device/code",
+        None,
+        &headers(),
+        &json!({"device_name":"Numeric TV"}),
+        SESSION_TOKEN,
+    )
+    .unwrap()
+    .0;
+    let user_code = code["user_code"].as_str().unwrap();
+    assert_eq!(user_code.len(), 8);
+    assert!(user_code.bytes().all(|byte| byte.is_ascii_digit()));
+    let device_code = code["device_code"].as_str().unwrap();
+    assert_eq!(device_code.len(), 64);
+    assert!(device_code.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert_ne!(user_code, device_code);
+    assert_eq!(code["expires_in"], 600);
+    assert_eq!(code["interval"], 5);
+    for field in ["verification_uri_complete", "qr_uri"] {
+        assert!(code[field]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("?code={user_code}")));
+    }
+}
+
+#[test]
+fn pairing_code_collisions_retry_without_replacing_existing_devices() {
+    let db = db();
+    let (_, first_secret) =
+        device_pairing::insert_pairing(&db, "First TV", || Ok("00123456".into())).unwrap();
+    let mut codes = ["00123456", "00000001"].into_iter();
+    let (second_code, second_secret) =
+        device_pairing::insert_pairing(&db, "Second TV", || Ok(codes.next().unwrap().into()))
+            .unwrap();
+    assert_eq!(second_code, "00000001");
+    assert_ne!(first_secret, second_secret);
+    let (name, device_hash): (String, String) = db
+        .query_row(
+            "SELECT device_name,device_hash FROM auth_pairings WHERE code_hash=?1",
+            [hash("00123456")],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(name, "First TV");
+    assert_eq!(device_hash, hash(&first_secret));
+    let mut attempts = 0;
+    let error = device_pairing::insert_pairing(&db, "Colliding TV", || {
+        attempts += 1;
+        Ok("00123456".into())
+    })
+    .unwrap_err();
+    assert_eq!(attempts, 10);
+    assert_eq!(error.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(error.1, "Could not reserve pairing code");
+    let count: i64 = db
+        .query_row("SELECT count(*) FROM auth_pairings", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn pairing_code_validation_preserves_leading_zeroes_and_legacy_codes() {
+    assert_eq!(
+        pairing_code(&json!({"user_code":" 00123456 "})).unwrap(),
+        "00123456"
+    );
+    assert_eq!(
+        pairing_code(&json!({"code":" ab12cd34ef "})).unwrap(),
+        "AB12CD34EF"
+    );
+    for invalid in [
+        "",
+        "1234567",
+        "123456789",
+        "AB12CD34",
+        "GG12CD34EF",
+        "１２３４５６７８",
+        "12 345678",
+    ] {
+        assert!(pairing_code(&json!({"user_code":invalid})).is_err());
+    }
+    assert!(pairing_code(&json!({"user_code":12345678})).is_err());
+}
+
+#[test]
 fn member_confirmation_binds_device_to_current_account_only() {
     let db = db();
     claim(&db);

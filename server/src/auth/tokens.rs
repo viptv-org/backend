@@ -76,12 +76,17 @@ pub(crate) fn username(v: &Value) -> Result<String, ApiError> {
 }
 // Accepts either device-flow spelling and normalizes it before hashing.
 pub(crate) fn pairing_code(v: &Value) -> Result<String, ApiError> {
-    Ok(v.get("user_code")
+    let code = v
+        .get("user_code")
         .or_else(|| v.get("code"))
         .and_then(Value::as_str)
         .ok_or("Missing user_code")?
         .trim()
-        .to_uppercase())
+        .to_uppercase();
+    if !device_pairing::valid_user_code(&code) {
+        return Err("Invalid device code".into());
+    }
+    Ok(code)
 }
 pub(crate) fn event(db: &Connection, kind: &str, id: Option<i64>) -> Result<(), ApiError> {
     db.execute(

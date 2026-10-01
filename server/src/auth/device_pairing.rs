@@ -1,5 +1,62 @@
 use super::*;
 use axum::{body::Body, http::HeaderMap};
+use rand_core::{OsRng, RngCore};
+
+const CODE_SPACE: u32 = 100_000_000;
+const RANDOM_LIMIT: u32 = (u32::MAX / CODE_SPACE) * CODE_SPACE;
+const MAX_CODE_ATTEMPTS: usize = 10;
+
+fn format_random_code(value: u32) -> Option<String> {
+    // Reject the incomplete final range rather than biasing codes with modulo.
+    (value < RANDOM_LIMIT).then(|| format!("{:08}", value % CODE_SPACE))
+}
+
+fn random_user_code() -> Result<String, ApiError> {
+    loop {
+        let mut bytes = [0; 4];
+        OsRng.try_fill_bytes(&mut bytes).map_err(|_| {
+            ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not generate pairing code".into(),
+            )
+        })?;
+        if let Some(code) = format_random_code(u32::from_le_bytes(bytes)) {
+            return Ok(code);
+        }
+    }
+}
+
+pub(super) fn valid_user_code(code: &str) -> bool {
+    (code.len() == 8 && code.bytes().all(|byte| byte.is_ascii_digit()))
+        || (code.len() == 10 && code.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+pub(super) fn create_pairing(db: &Connection, name: &str) -> Result<(String, String), ApiError> {
+    insert_pairing(db, name, random_user_code)
+}
+
+pub(super) fn insert_pairing(
+    db: &Connection,
+    name: &str,
+    mut generate: impl FnMut() -> Result<String, ApiError>,
+) -> Result<(String, String), ApiError> {
+    let device_code = token();
+    for _ in 0..MAX_CODE_ATTEMPTS {
+        let user_code = generate()?;
+        // Reserve atomically; never replace another pending or approved TV.
+        let inserted = db.execute(
+            "INSERT INTO auth_pairings(code_hash,device_hash,device_name,expires) VALUES(?1,?2,?3,?4) ON CONFLICT(code_hash) DO NOTHING",
+            params![hash(&user_code), hash(&device_code), name, now() + 600],
+        ).map_err(crate::db_error)?;
+        if inserted == 1 {
+            return Ok((user_code, device_code));
+        }
+    }
+    Err(ApiError(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Could not reserve pairing code".into(),
+    ))
+}
 
 #[derive(Deserialize)]
 pub(crate) struct QrQuery {
@@ -12,13 +69,15 @@ pub(crate) async fn device_qr(
 ) -> Result<Response, ApiError> {
     crate::blocking(move || {
         let code = query.code.trim().to_uppercase();
-        if code.len() != 10 || !code.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        if !valid_user_code(&code) {
             return Err(ApiError(
                 StatusCode::BAD_REQUEST,
                 "Invalid device code".into(),
             ));
         }
         let db = app.db.lock().map_err(|_| unauthorized())?;
+        // The public QR endpoint must not be an unlimited code-existence oracle.
+        rate(&db, "auth:global:/auth/device/qr", 600)?;
         let exists: bool = db
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM auth_pairings WHERE code_hash=?1 AND expires>?2)",
@@ -96,4 +155,21 @@ pub(crate) async fn device_qr(
             })
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decimal_codes_preserve_zeroes_and_reject_biased_random_tail() {
+        assert_eq!(format_random_code(0).as_deref(), Some("00000000"));
+        assert_eq!(format_random_code(123456).as_deref(), Some("00123456"));
+        assert_eq!(
+            format_random_code(RANDOM_LIMIT - 1).as_deref(),
+            Some("99999999")
+        );
+        assert_eq!(format_random_code(RANDOM_LIMIT), None);
+        assert_eq!(format_random_code(u32::MAX), None);
+    }
 }
