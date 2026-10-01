@@ -24,28 +24,35 @@ impl ProviderService {
             .map_err(|_| "Provider service is shutting down".to_string())?;
         let id = provider.id;
         let kind = action_kind(action);
-        self.blocking(move |s| s.provider_for_kind(id, kind))
-            .await?;
-        let mut url = endpoint(&provider.url, "player_api.php")?;
+        let snapshot = provider.clone();
+        self.blocking(move |s| {
+            s.provider_for_kind(id, kind)?;
+            let db = s.lock()?;
+            s.require_owner(&db, id)?;
+            snapshot.ensure_current(&db)
+        })
+        .await?;
+        let protected = provider.sealed.is_some() || self.account.is_some();
+        let mut url = if protected {
+            transport_v2::base(&provider.url, self.fixture_transport())?
+                .join("player_api.php")
+                .map_err(|_| "invalid_provider_endpoint")?
+        } else {
+            endpoint(&provider.url, "player_api.php")?
+        };
         url.query_pairs_mut()
             .append_pair("username", &provider.username)
             .append_pair("password", &provider.password)
             .append_pair("action", action)
             .extend_pairs(extra.iter().copied());
+        if protected {
+            if egress::enabled(&*self.lock()?, provider.id)? {
+                return Err("source_route_migration_required".into());
+            }
+            return self.protected_json(url, response_limit).await;
+        }
         // Never format reqwest errors: they can contain the credential-bearing URL.
-        let proxy = egress::proxy(&*self.lock()?, provider.id)?;
-        let client = if proxy.is_some() {
-            egress::builder(
-                reqwest::Client::builder()
-                    .connect_timeout(Duration::from_secs(5))
-                    .timeout(Duration::from_secs(30)),
-                proxy.as_deref(),
-            )?
-            .build()
-            .map_err(|_| "Provider route unavailable")?
-        } else {
-            self.client.clone()
-        };
+        let client = self.client.clone();
         let mut response = client
             .get(url)
             .send()
@@ -97,12 +104,18 @@ impl ProviderService {
         let cached = self.blocking(move |s| {
             s.provider_for_kind(provider_id, kind)?;
             let db=s.lock()?;
+            s.require_owner(&db, provider_id)?;
             snapshot.ensure_current(&db)?;
             let cached: Option<String> = db.query_row(
                 "SELECT payload FROM provider_cache WHERE provider_id=?1 AND cache_key=?2 AND expires_at>?3",
                 params![provider_id,cache_key,now], |r|r.get(0)
             ).optional().map_err(db_error)?;
-            Ok(cached.and_then(|body| serde_json::from_str::<Value>(&body).ok()))
+            Ok(cached.and_then(|body| {
+                if let Some((account,_))=&snapshot.sealed {
+                    let plain=s.vault.as_ref()?.open(*account,"xtream-cache",&credentials_v2::cache_record(provider_id,&cache_key),&body).ok()?;
+                    serde_json::from_slice::<Value>(plain.expose()).ok()
+                } else {serde_json::from_str::<Value>(&body).ok()}
+            }))
         }).await?;
         if let Some(value) = cached {
             return Ok(value);
@@ -130,10 +143,14 @@ impl ProviderService {
         // cannot be resurrected by an in-flight fetch, even with foreign keys disabled.
         self.blocking(move |s| {
             s.provider_for_kind(provider_id, kind)?;
-            let payload = value.to_string();
+            let plain=zeroize::Zeroizing::new(value.to_string());
+            let payload=if let Some((account,_))=&snapshot.sealed {
+                s.vault.as_ref().and_then(|vault|vault.seal(*account,"xtream-cache",&credentials_v2::cache_record(provider_id,&key),plain.as_bytes()).ok())
+            } else {Some(plain.to_string())};
             let db=s.lock()?;
+            s.require_owner(&db, provider_id)?;
             snapshot.ensure_current(&db)?;
-            {
+            if let Some(payload)=payload {
                 let _ = db.execute("DELETE FROM provider_cache WHERE expires_at<=?1", [now]);
                 let _=db.execute("INSERT INTO provider_cache(provider_id,cache_key,expires_at,payload)
                     SELECT ?1,?2,?3,?4 WHERE EXISTS(SELECT 1 FROM providers WHERE id=?1 AND enabled=1 AND CASE ?5 WHEN 'live' THEN enable_live WHEN 'movie' THEN enable_movies WHEN 'series' THEN enable_series ELSE 0 END=1)

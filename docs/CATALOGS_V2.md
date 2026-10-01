@@ -1,0 +1,156 @@
+# Account-owned live catalog pages
+
+Implements part of [BE-002](https://github.com/viptv-org/design/blob/25322b50df6511d6f8fd0de67522017b9ae388e1/BACKEND_V2.md).
+These routes coexist with legacy routes on the v2 branch; clients have not cut
+over and this is not a deployment claim.
+
+## Viewing routes
+
+- `GET /api/v2/iptv/live/channels`
+- `GET /api/v2/iptv/live/categories`
+
+Both require a valid account session and selected, authorized profile. Paired
+devices can browse. Raw catalogs cannot bypass a restricted profile's parent
+unlock: provider category names do not establish child suitability. Migration
+of the child live policy away from retired family-lineup rules remains open.
+
+Optional queries: `catalog_id`, `search`, `cursor`, `limit` (default 50, 1–200).
+Channels additionally accept `category_id` using the original provider category
+ID. Unknown parameters and invalid limits fail with `invalid_catalog_query`.
+Search is a literal substring (SQLite's built-in case folding), not wildcard
+syntax or linguistic/tokenized matching.
+
+Response: `{catalog_id, generation, items, next_cursor, previous_cursor}`. Channel items contain
+`id`, `name`, `logo`, `category_id`, `category`, `epg_channel_id`. Category items
+contain `id`, `name`. Nullable provider fields stay nullable. No whole-library
+count, provider credentials, stream URLs, or implicit global catalog is returned.
+An account without a live provider receives empty items and null metadata.
+
+The default is persisted independently of per-request overrides. Explicitly
+unavailable, disabled, foreign and nonexistent catalog IDs have the same 404
+response. The channel list never merges providers or applies legacy family,
+region, pool or channel-repair rules. Responses retain original logos, including
+HTTP URLs; browser artwork transport still requires client adoption/verification.
+
+Opaque page tokens bind account, requested catalog/filter, route kind, resolved
+catalog and snapshot generation. They are positions, not authorization grants;
+every request rechecks ownership and enabled state. Changing filters or using a
+token from another account/route yields `invalid_cursor`. A refresh or changed
+default yields 409 `catalog_changed`; clients must discard the old list/token and
+restart. Changing the page size is supported. There is no silent mixed-snapshot
+continuation.
+
+Both cursors carry direction and bind the same account/filter/snapshot scope.
+Backward reads use a descending keyset query, then return items in original
+provider order. Adjacent existence checks use bounded limit-one reads; neither
+direction uses offsets or whole-playlist counts. An empty continuation page is
+`catalog_changed`, not a silently truncated guide. Forward cursor compatibility
+is retained for already-issued version-one tokens.
+
+## Storage and refresh
+
+An additive schema records per-channel ordinals, category IDs/order and a live
+generation. Existing rows retain their insertion order until the next provider
+refresh; absent historical category ordering cannot be reconstructed exactly.
+Fresh imports preserve stream-array and category-array order. Unlisted category
+IDs referenced by channels are retained after the supplied category list.
+
+Network fetches finish before replacement. Channel rows, category rows and the
+generation increment commit in one transaction. Failure rolls all three back;
+unfetched/disabled scopes retain their previous snapshot. Empty successful
+snapshots still increment the generation. Page queries hold a single database
+transaction, filter before `LIMIT + 1`, and use `(ordinal,id)` keyset positions.
+Only a bounded result is materialized, without an offset or count query.
+
+## Evidence and remaining work
+
+In-process route fixtures cover account isolation, default/override/fallback,
+235-channel traversal without duplicates, page bounds, original HTTP logos,
+category order, changed-snapshot refusal, devices, selected-profile checks and
+restricted-profile protection. Storage fixtures cover repeatable additive schema,
+provider ordering, successful/empty refresh generations, and rollback after a
+duplicate stream causes an insert failure following deletion.
+
+2026-09-29 backward paging checkpoint: exact previous-page order, first-page
+termination and authorization checks pass. Full backend suite: 281 passed,
+four opt-in tests ignored; strict all-target Clippy passes. React/Solid client
+cutover is in progress; this is not production or physical-device qualification.
+
+## Source discovery and native Xtream guide
+
+- `POST /api/v2/streams` starts an incremental discovery job using the existing
+  Stremio-style movie/series/live request and returns `{id}`.
+- `GET /api/v2/streams/:id?after=N` returns `{events,done}`. Events retain their
+  monotonic `seq`, producer and sanitized stream cards with backend-issued IDs.
+  Producer failures include readable `error` and stable `error_code`; successful
+  HTTP polling does not imply every producer succeeded. See [v2 errors](ERRORS_V2.md).
+  The same exact account/profile/session owns the job. V2 currently uses polling;
+  no new SSE endpoint is claimed.
+- `GET /api/v2/iptv/guide/:channel_id` returns bounded Xtream-native programs for
+  an owned raw channel. Foreign, absent, disabled and retired family-channel IDs
+  receive the same `source_not_found` response.
+
+These routes require a selected profile. Approved children's VOD titles and
+exact episodes use the existing profile policy without a parent unlock; supplied
+title/provider hints cannot bypass that policy. Policy changes invalidate the
+discovery job. Raw live catalogs and guide still require a parent unlock for
+restricted profiles until the live-policy migration is complete.
+Source discovery considers all
+enabled providers owned by the account, never just its default live catalog.
+`only_provider_id` narrows that set but cannot grant access. Addons use the
+existing account-scoped addon service. Source IDs feed the v2 playback API.
+
+Candidate and sparse-detail SQL apply ownership before materialization; sparse
+detail limits cannot be consumed by other tenants. Queued detail requests check
+ownership, scope and credential freshness before fetching. Cached reads/writes
+and late publication recheck ownership. Polling redacts a revoked provider's
+previously published event while retaining its sequence position. Scoped live
+lookup bypasses family-lineup mapping and uses the provider-qualified channel.
+
+An in-process HTTP fixture verifies movies and exact episodes from three owned
+providers with a different live default, while a foreign and an unassigned
+provider receive no detail requests. It checks opaque source cards and original
+HTTP episode URLs internally, cross-account job denial, and cached-result
+redaction after revocation. A controlled in-flight revocation fixture verifies
+that late series results neither publish streams nor enter the detail cache.
+Additional fixtures cover sparse limits and owned raw guide reads.
+
+This does not finish account-owned Xtream: child-policy migration, detailed
+upstream error parity, client adoption and
+removal of legacy routes remain pending. Legacy global routes still exist until
+coordinated cutover; these v2 checks are not a claim that old clients are isolated.
+No production database or live IPTV subscription was used for these fixtures.
+
+An offline provider-tuple encryption migration and reader are now implemented;
+see [V2 operations](V2_OPERATIONS.md). The migration is not approved for
+production use yet. Account-owned connection CRUD is implemented as documented
+there. Durable account-owned initial/periodic refresh is also implemented;
+[addon encryption, protected public transport and guarded management](ADDONS_V2.md)
+are implemented; client adoption and remaining cutover gates are still open.
+## Account VOD matching pages
+
+`GET /api/v2/iptv/matches` accepts `provider_id`, `kind` (movie/series),
+`search`, `cursor` and `limit` (default 50, 1–200). It returns
+`{items, next_cursor, previous_cursor}`. Rows retain raw `vod_id` and
+`provider_id` values and are always ordered ascending by provider ID and VOD ID,
+including reverse responses. The first page has a null previous cursor; the
+terminal page has a null next cursor. Cursors select adjacent rows exclusively
+before the first row or after the last row; consumers must treat them as opaque.
+Each query collects at most limit + 1 rows and uses bounded adjacency probes,
+without an exact count or full-catalog snapshot.
+
+Tokens bind the account, filters, direction and account catalog revision.
+Changing ownership, provider availability, VOD rows or metadata mappings
+invalidates existing tokens with HTTP 409 `catalog_changed`; clients explicitly
+reload the list. This includes saving a match because mapped rows leave the
+unmatched result set. Foreign-account mutations do not invalidate owned pages.
+Reads use one SQLite transaction for ownership, revision and rows. Revisions
+are additive scalar state maintained by transactional triggers; initialization
+is idempotent and preserves all existing provider, source and mapping identities.
+
+Tokens remain capped at the existing 2048-byte VOD bound (within the 4096-byte
+catalog ceiling), for both directions. Oversized raw identifiers cause
+`catalog_cursor_too_large` without changing stored identities. Previous
+version-1 forward tokens lack snapshot scope and are rejected as invalid; reload
+to obtain version-2 tokens. Approved contract:
+[ADM-002-VOD-WINDOW](https://github.com/viptv-org/design/blob/deaf1f7bfcb6fe904ca7329b9ecd7d8300637e9a/ADMIN_V2.md#adm-002-vod-window--bounded-bidirectional-browsing).

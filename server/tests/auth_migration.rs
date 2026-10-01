@@ -4,13 +4,8 @@ mod common;
 use rusqlite::Connection;
 use viptv_server::App;
 
-fn initialize(db: Connection, root: &std::path::Path) -> App {
-    App::new(
-        db,
-        reqwest::Client::new(),
-        common::playback(root, "missing-test-ffmpeg", "missing-test-ffprobe", 2),
-    )
-    .unwrap()
+fn initialize(db: Connection, _root: &std::path::Path) -> App {
+    App::new(db, reqwest::Client::new()).unwrap()
 }
 
 #[tokio::test]
@@ -95,7 +90,6 @@ async fn additive_auth_upgrade_preserves_existing_profile_history_and_favorites(
                 "ok"
             );
         }
-        app.playback.shutdown().await;
     }
 }
 

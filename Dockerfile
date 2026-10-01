@@ -31,16 +31,15 @@ RUN if [ "$FRONTENDS" = "0" ]; then mkdir -p dist; exit 0; fi \
 
 FROM debian:bookworm-slim AS runtime
 ARG FRONTENDS
-RUN sed -i 's/Components: main$/Components: main non-free/' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates ffmpeg curl \
-    && if [ "$(dpkg --print-architecture)" = amd64 ]; then apt-get install -y --no-install-recommends intel-media-va-driver-non-free; fi \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 viptv \
     && useradd --uid 10001 --gid viptv --no-create-home --home-dir /data --shell /usr/sbin/nologin viptv \
-    && install -d -o viptv -g viptv -m 0700 /data /cache \
+    && install -d -o viptv -g viptv -m 0700 /data \
     && install -d -m 0755 /app/dashboard /app/tv
 COPY --from=server-build /src/server/target/release/viptv-server /usr/local/bin/viptv-server
+COPY --from=server-build /src/server/target/release/provider-owners /usr/local/bin/provider-owners
 COPY --from=dashboard-build /src/dashboard/dist/ /app/dashboard/
 COPY --from=tv-build /src/tv/dist/ /app/tv/
 # Build artifacts can inherit a restrictive host/build umask. These are public files.
@@ -48,7 +47,6 @@ RUN chmod -R a+rX /app/dashboard /app/tv
 WORKDIR /app
 ENV VIPTV_BIND=0.0.0.0:8080 \
     VIPTV_DATABASE=/data/viptv.sqlite \
-    VIPTV_MEDIA_DIR=/cache/hls \
     VIPTV_DASHBOARD_DIST=/app/dashboard \
     VIPTV_TV_DIST=/app/tv
 USER 10001:10001

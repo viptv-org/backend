@@ -17,23 +17,19 @@ services:
       - "${VIPTV_PUBLISH_IP:-0.0.0.0}:${VIPTV_PORT:-8080}:8080"
     environment:
       # Required exact public HTTPS dashboard origin; Compose stops if it is unset/empty.
-      VIPTV_AUTH_ORIGIN: "${VIPTV_AUTH_ORIGIN:?Set VIPTV_AUTH_ORIGIN to the public HTTPS origin (comma-separated; first entry canonical)}"
+      VIPTV_AUTH_ORIGIN: "${VIPTV_AUTH_ORIGIN:?Set VIPTV_AUTH_ORIGIN to one exact public HTTPS origin}"
       VIPTV_BIND: "0.0.0.0:8080"
       VIPTV_DATABASE: /data/viptv.sqlite
-      VIPTV_MEDIA_DIR: /cache/hls
       VIPTV_DASHBOARD_DIST: /app/dashboard
       VIPTV_TV_DIST: /app/tv
-      VIPTV_MAX_SESSIONS: "${VIPTV_MAX_SESSIONS:-2}"
-      VIPTV_SESSION_TTL: "${VIPTV_SESSION_TTL:-120}"
-      VIPTV_DIRECT_PLAY: "${VIPTV_DIRECT_PLAY:-1}"
-      VIPTV_BROWSER_PREPARATION: "${VIPTV_BROWSER_PREPARATION:-0}"
+      # Optional bare mapping: an absent keyring is omitted, never an empty JSON
+      # value. Configured host/project values pass through without public defaults.
+      VIPTV_SECRETS_KEYRING:
     volumes:
       - viptv_data:/data
-    # Ephemeral generated media; the tmpfs size bounds generated cache storage, not CPU/worker throughput.
+    # Temporary control-plane files only; media storage belongs to the gateway.
     tmpfs:
-      - /cache:rw,noexec,nosuid,nodev,size=512m,uid=10001,gid=10001,mode=0700
       - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700
-    # No CPU, memory, swap, or PID quota: FFmpeg may use every host core/thread.
     stop_grace_period: 30s
     logging:
       driver: json-file

@@ -42,28 +42,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-stream"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
-dependencies = [
- "async-stream-impl",
- "futures-core",
- "pin-project-lite",
-]
-
-[[package]]
-name = "async-stream-impl"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1018,15 +996,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
-name = "quick-xml"
-version = "0.42.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
-dependencies = [
- "memchr",
-]
-
-[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1811,24 +1780,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "viptv-playback-engine"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "axum",
- "futures",
- "libc",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "viptv-provider"
 version = "0.1.0"
 dependencies = [
@@ -1844,17 +1795,17 @@ name = "viptv-server"
 version = "0.1.0"
 dependencies = [
  "argon2",
- "async-stream",
  "axum",
  "base64",
  "chrono",
  "chrono-tz",
  "futures",
+ "libc",
  "png",
  "qrcode",
- "quick-xml",
  "rand_core 0.6.4",
  "reqwest",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",
@@ -1868,8 +1819,8 @@ dependencies = [
  "unicode-normalization",
  "url",
  "uuid",
- "viptv-playback-engine",
  "viptv-provider",
+ "zeroize",
 ]
 
 [[package]]

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Loopback HTTPS fixture origin with byte ranges; serves only one explicit directory."""
+"""Historical generic HTTPS byte-range fixture; no backend runtime/packaging hook.
+
+Retained by gateway-owner coordination for possible progressive-reader diagnostics.
+It serves one explicitly supplied directory; real certificates/keys stay private.
+"""
 import argparse
 import http.server
 import pathlib

@@ -39,7 +39,8 @@ impl ProviderService {
         let title = request.and_then(|r| r.normalized.as_deref());
         let year = request.and_then(|r| r.year);
         // Each UNION arm uses its lookup index, avoiding materializing entire IPTV libraries.
-        let mut stmt = db.prepare("SELECT v.id,v.provider_id,v.stream_id,v.kind,v.name,v.normalized,v.year,v.imdb_id,v.tmdb_id,v.extension,v.poster,m.metadata_id
+        let owner = self.ownership_predicate();
+        let mut stmt = db.prepare(&format!("SELECT v.id,v.provider_id,v.stream_id,v.kind,v.name,v.normalized,v.year,v.imdb_id,v.tmdb_id,v.extension,v.poster,m.metadata_id
             FROM provider_vod v JOIN providers p ON p.id=v.provider_id
             LEFT JOIN provider_matches m ON m.vod_id=v.id AND m.kind=v.kind
             WHERE p.enabled=1 AND ((v.kind='movie' AND p.enable_movies=1) OR (v.kind='series' AND p.enable_series=1)) AND (?1 IS NULL OR v.kind=?1) AND (?2 IS NULL OR v.id IN (
@@ -47,7 +48,7 @@ impl ProviderService {
                 UNION SELECT id FROM provider_vod WHERE tmdb_id IN (SELECT value FROM json_each(?2))
                 UNION SELECT vod_id FROM provider_matches WHERE metadata_id IN (SELECT value FROM json_each(?2))
                 UNION SELECT id FROM provider_vod WHERE kind=?1 AND normalized=?3 AND year=?4
-            )) ORDER BY v.provider_id,v.id").map_err(db_error)?;
+            )) {owner} ORDER BY v.provider_id,v.id")).map_err(db_error)?;
         let rows = stmt
             .query_map(params![kind, ids, title, year], |r| {
                 candidate_row(r, r.get(11)?)
@@ -67,13 +68,14 @@ impl ProviderService {
         };
         let db = self.lock()?;
         // Indexed exact title lookup, bounded before materialization. Never use a LIKE scan.
-        let mut stmt = db.prepare("SELECT v.id,v.provider_id,v.stream_id,v.kind,v.name,v.normalized,v.year,v.imdb_id,v.tmdb_id,v.extension,v.poster
+        let owner = self.ownership_predicate();
+        let mut stmt = db.prepare(&format!("SELECT v.id,v.provider_id,v.stream_id,v.kind,v.name,v.normalized,v.year,v.imdb_id,v.tmdb_id,v.extension,v.poster
             FROM provider_vod v JOIN providers p ON p.id=v.provider_id
             WHERE v.kind=?1 AND v.normalized=?2 AND p.enabled=1 AND ((v.kind='movie' AND p.enable_movies=1) OR (v.kind='series' AND p.enable_series=1))
             AND (v.year IS NULL OR (?3 IS NULL AND (v.imdb_id IS NULL OR v.tmdb_id IS NULL)))
             AND NOT EXISTS(SELECT 1 FROM provider_matches m WHERE m.vod_id=v.id)
             AND (?5 IS NULL OR v.provider_id=?5)
-            LIMIT ?4").map_err(db_error)?;
+            {owner} ORDER BY v.provider_id,v.id LIMIT ?4")).map_err(db_error)?;
         let rows = stmt
             .query_map(
                 params![
@@ -111,8 +113,9 @@ impl ProviderService {
         };
         self.blocking(move |s| {
             // Compare-and-set: do not overwrite a concurrent sync, edit, or manual mapping.
-            let changed = s
-                .lock()?
+            let db = s.lock()?;
+            s.require_owner(&db, provider_id)?;
+            let changed = db
                 .execute(
                     "UPDATE provider_vod SET year=?1,imdb_id=?2,tmdb_id=?3
                 WHERE id=?4 AND normalized=?5 AND year IS ?6 AND imdb_id IS ?7 AND tmdb_id IS ?8

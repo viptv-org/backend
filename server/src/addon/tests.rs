@@ -20,11 +20,7 @@ async fn catalog_cache_and_protocol_without_skip() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
-    let addons = Addons::new(
-        Arc::new(Mutex::new(Connection::open_in_memory().unwrap())),
-        reqwest::Client::builder().no_proxy().build().unwrap(),
-    )
-    .unwrap();
+    let addons = test_addons();
     let saved = addons
         .add(&format!("http://{address}/manifest.json"))
         .await
@@ -44,11 +40,15 @@ async fn catalog_cache_and_protocol_without_skip() {
     task.abort();
 }
 fn test_addons() -> Addons {
-    let addons = Addons::new(
+    let mut addons = Addons::new(
         Arc::new(Mutex::new(Connection::open_in_memory().unwrap())),
-        reqwest::Client::builder().no_proxy().build().unwrap(),
+        reqwest::Client::new(),
     )
     .unwrap();
+    addons.db.lock().unwrap().execute_batch("CREATE TABLE auth_accounts(id INTEGER PRIMARY KEY,disabled INTEGER NOT NULL DEFAULT 0); INSERT INTO auth_accounts VALUES(1,0)").unwrap();
+    addons.account_id = 1;
+    addons.vault = Some(crate::test_support::vault());
+    addons.allow_test_loopback = true;
     addons.delete(1).unwrap();
     addons
 }
@@ -156,11 +156,28 @@ async fn complete_episode_art_does_not_wait_for_slow_secondary_metadata() {
 fn insert(addons: &Addons, name: &str, url: &str, manifest: Value, priority: i64) -> i64 {
     let db = addons.db.lock().unwrap();
     db.execute(
-        "INSERT INTO addons(name,manifest_url,manifest,priority) VALUES(?1,?2,?3,?4)",
-        params![name, url, manifest.to_string(), priority],
+        "INSERT INTO addons(name,manifest_url,manifest,priority,account_id) VALUES(?1,?2,?3,?4,?5)",
+        params![name, url, manifest.to_string(), priority, addons.account_id],
     )
     .unwrap();
-    db.last_insert_rowid()
+    let id = db.last_insert_rowid();
+    let vault = addons.vault.as_ref().unwrap();
+    let secret = vault
+        .seal_addon(
+            addons.account_id,
+            &id.to_string(),
+            json!({"url":url,"manifest":manifest})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+    db.execute(
+        "INSERT INTO addon_credentials_v2 VALUES(?1,?2,?3)",
+        params![id, addons.account_id, secret],
+    )
+    .unwrap();
+    db.execute("UPDATE addons SET manifest_url=?2,manifest='{}',credentials_version=1,credentials_revision='fixture' WHERE id=?1",params![id,format!("sealed:addon:{id}")]).unwrap();
+    id
 }
 #[test]
 fn seed_migration_and_restarts_never_restore_deleted_addons() {
@@ -394,11 +411,10 @@ async fn bounded_search_and_raw_count_before_truncation() {
         let metas: Vec<_> = (0..210)
             .map(|j| json!({"id":format!("{i}-{j}"),"type":"movie"}))
             .collect();
-        addons
-            .cache
-            .lock()
-            .unwrap()
-            .insert(endpoint, (now() + 300, json!({"metas":metas}), 1));
+        addons.cache.lock().unwrap().insert(
+            addons.cache_key(&endpoint),
+            (now() + 300, json!({"metas":metas}), 1),
+        );
     }
     let search = addons
         .discover("movie".into(), None, Some(id), 0, Some("x".into()), None)
@@ -411,11 +427,10 @@ async fn bounded_search_and_raw_count_before_truncation() {
     let endpoint =
         viptv_provider::discover::addon_extra_endpoint(base, "movie", "c0", "skip=0").unwrap();
     let metas: Vec<_> = (0..250).map(|j| json!({"id":j,"type":"movie"})).collect();
-    addons
-        .cache
-        .lock()
-        .unwrap()
-        .insert(endpoint, (now() + 300, json!({"metas":metas}), 1));
+    addons.cache.lock().unwrap().insert(
+        addons.cache_key(&endpoint),
+        (now() + 300, json!({"metas":metas}), 1),
+    );
     let page = addons
         .discover("movie".into(), None, None, 0, None, None)
         .await
@@ -510,7 +525,7 @@ async fn genre_discover_requires_advertisement_validates_options_and_encodes_pat
     )
     .unwrap();
     addons.cache.lock().unwrap().insert(
-        endpoint,
+        addons.cache_key(&endpoint),
         (
             now() + 300,
             json!({"metas":[{"id":"tt-kids","type":"movie","name":"Kids"}]}),
@@ -599,7 +614,7 @@ async fn metadata_falls_back_in_priority_order() {
             .cache
             .lock()
             .unwrap()
-            .insert(endpoint, (now() + 300, response, 1));
+            .insert(addons.cache_key(&endpoint), (now() + 300, response, 1));
     }
     assert_eq!(
         addons.meta("movie", "tt1").await.unwrap()["meta"]["name"],
@@ -684,7 +699,7 @@ async fn custom_catalog_types_options_and_explicit_search_pages_work() {
     )
     .unwrap();
     addons.cache.lock().unwrap().insert(
-        endpoint,
+        addons.cache_key(&endpoint),
         (
             now() + 300,
             json!({"metas":[{"id":"tt0409591","type":"series"}]}),
@@ -721,11 +736,10 @@ async fn custom_catalog_types_options_and_explicit_search_pages_work() {
         "calendarVideosIds=tt123%3A1%3A2%26x",
     )
     .unwrap();
-    addons
-        .cache
-        .lock()
-        .unwrap()
-        .insert(endpoint, (now() + 300, json!({"metas":[]}), 1));
+    addons.cache.lock().unwrap().insert(
+        addons.cache_key(&endpoint),
+        (now() + 300, json!({"metas":[]}), 1),
+    );
     let result = addons
         .discover_with_options(request(HashMap::from([(
             "calendarVideosIds".into(),

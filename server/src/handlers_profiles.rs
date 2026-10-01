@@ -1,24 +1,6 @@
 use super::*;
 
 // Authenticated wrappers attach the validated request lease to handler state.
-pub(crate) async fn poll_streams_authenticated(
-    State(mut app): State<App>,
-    Extension(lease): Extension<ResourceLease>,
-    path: Path<String>,
-    query: Query<Cursor>,
-) -> ApiResult {
-    app.lease = Some(lease);
-    poll_streams(State(app), path, query).await
-}
-pub(crate) async fn stream_events_authenticated(
-    State(mut app): State<App>,
-    Extension(lease): Extension<ResourceLease>,
-    path: Path<String>,
-    query: Query<Cursor>,
-) -> Result<impl IntoResponse, ApiError> {
-    app.lease = Some(lease);
-    stream_events(State(app), path, query).await
-}
 pub(crate) async fn profiles_authenticated(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -79,8 +61,8 @@ pub(crate) async fn delete_profile_authenticated(
         Ok(())
     })
     .await?;
-    // Captured leases retain the old profile identity and cannot serve media after deletion.
-    // Release only affected clients; shared workers used by another profile survive.
+    // Gateway leases independently revalidate deleted-profile authority and expire
+    // within their bounded sweeper interval. Cancel this profile's discovery data.
     let resources: Vec<String> = app
         .resource_owners
         .lock()
@@ -92,9 +74,6 @@ pub(crate) async fn delete_profile_authenticated(
         })
         .collect();
     for resource in resources {
-        if let Some(session) = resource.strip_prefix("playback:") {
-            session::stop_owned(&app, session).await;
-        }
         if let Some(job) = resource.strip_prefix("job:") {
             app.jobs.lock().unwrap().remove(job);
         }
@@ -141,26 +120,6 @@ pub(crate) async fn save_progress_authenticated(
     value: axum::Json<Value>,
 ) -> ApiResult {
     save_progress(State(app.with_lease(lease)), path, value).await
-}
-pub(crate) async fn start_streams_authenticated(
-    State(mut app): State<App>,
-    Extension(p): Extension<auth::Principal>,
-    Extension(lease): Extension<ResourceLease>,
-    value: axum::Json<Value>,
-) -> ApiResult {
-    app.principal = Some(p);
-    app = app.with_lease(lease);
-    start_streams(State(app), value).await
-}
-pub(crate) async fn start_playback_authenticated(
-    State(mut app): State<App>,
-    Extension(p): Extension<auth::Principal>,
-    Extension(lease): Extension<ResourceLease>,
-    value: axum::Json<PlaybackRequest>,
-) -> ApiResult {
-    app.principal = Some(p);
-    app = app.with_lease(lease);
-    start_playback(State(app), value).await
 }
 pub(crate) fn text<'a>(v: &'a Value, key: &str, max: usize) -> Result<&'a str, ApiError> {
     let s = v[key]
@@ -227,7 +186,7 @@ pub(crate) async fn favorites(State(a): State<App>, Path(id): Path<i64>) -> ApiR
     a.require_profile(&db, id)?;
     let mut q=db.prepare("SELECT id,type,name,poster FROM favorites WHERE profile_id=?1 ORDER BY name LIMIT 5000").map_err(db_error)?;
     let r=q.query_map([id],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
-    Ok(axum::Json(json!(lineup::references(&db,r).map_err(db_error)?)))
+    Ok(axum::Json(json!(r)))
     }).await
 }
 pub(crate) async fn save_favorite(
@@ -253,8 +212,8 @@ pub(crate) async fn delete_favorite(
         let db = a.db.lock().unwrap();
         a.require_profile(&db, profile)?;
         db.execute(
-            "DELETE FROM favorites WHERE profile_id=?1 AND type=?2 AND (id=?3 OR (?2='live' AND id IN (SELECT live_id FROM family_aliases WHERE channel_id=?3)))",
-            params![profile, kind, if kind == "live" { lineup::canonical_id(&db,&id).map_err(db_error)? } else { id }],
+            "DELETE FROM favorites WHERE profile_id=?1 AND type=?2 AND id=?3",
+            params![profile, kind, id],
         )
         .map_err(db_error)?;
         Ok(axum::Json(json!({"ok":true})))
@@ -275,7 +234,7 @@ pub(crate) async fn progress(State(a): State<App>, Path(id): Path<i64>) -> ApiRe
         }
         Ok(item)
     }).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
-    Ok(axum::Json(json!(lineup::references(&db,r).map_err(db_error)?)))
+    Ok(axum::Json(json!(r)))
     }).await
 }
 
@@ -313,32 +272,4 @@ pub(crate) async fn save_progress(
     db.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster,position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,context=json_remove(json_patch(progress.context,excluded.context),'$.watched_override'),title_id=CASE WHEN json_extract(excluded.context,'$.series_id') IS NULL AND json_extract(progress.context,'$.series_id') IS NOT NULL THEN json_extract(progress.context,'$.series_id') ELSE excluded.title_id END",params![profile,id,kind,name,v["poster"].as_str(),p,d,library::activity_time(&db,profile)?,context.to_string(),continuation::title_id(&v)]).map_err(db_error)?;
     Ok(axum::Json(json!({"ok":true})))
     }).await
-}
-pub(crate) async fn status(
-    State(a): State<App>,
-    Extension(lease): Extension<ResourceLease>,
-) -> ApiResult {
-    let a = a.with_lease(lease);
-    a.prune_playback_owners().await;
-    let db_app = a.clone();
-    let (providers, addons, profiles) = blocking(move || {
-        let providers = db_app
-            .providers
-            .list()?
-            .as_array()
-            .map(Vec::len)
-            .unwrap_or(0);
-        let addons = db_app.addons.entries()?.len();
-        let profiles: i64 = db_app
-            .db
-            .lock()
-            .unwrap()
-            .query_row("SELECT count(*) FROM profiles", [], |r| r.get(0))
-            .map_err(db_error)?;
-        Ok((providers, addons, profiles))
-    })
-    .await?;
-    Ok(axum::Json(
-        json!({"providers":providers,"addons":addons,"profiles":profiles,"active_sessions":a.playback.active_count().await,"shared_playback":session::shared::diagnostics(&a),"ffmpeg_available":a.playback.ffmpeg_available().await,"video_acceleration":a.playback.acceleration_status(),"hdr_tone_mapping":a.playback.tone_mapping_status()}),
-    ))
 }

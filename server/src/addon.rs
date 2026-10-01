@@ -9,8 +9,12 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
+pub(crate) mod credentials_v2;
 mod discover;
 mod extras;
+pub(crate) mod http_v2;
+#[cfg(test)]
+mod http_v2_tests;
 #[cfg(test)]
 mod tests;
 
@@ -33,7 +37,12 @@ pub struct Addons {
     cache: CachedResponses,
     flights: Arc<Mutex<HashMap<String, Weak<FetchFlight>>>>,
     gate: Arc<Semaphore>,
+    manifest_gate: Arc<Semaphore>,
     account_id: i64,
+    pub(crate) vault: Option<Arc<crate::secret_store::Vault>>,
+    protected_fetch: bool,
+    #[cfg(test)]
+    pub(crate) allow_test_loopback: bool,
 }
 impl Addons {
     pub fn new(db: Arc<Mutex<Connection>>, client: reqwest::Client) -> Result<Self, String> {
@@ -69,21 +78,12 @@ impl Addons {
                 let manifest = json!({"id":"com.linvo.cinemeta","name":"Cinemeta","resources":["catalog","meta"],"types":["movie","series"],"catalogs":[{"type":"movie","id":"top","name":"Popular movies","extra":[{"name":"search"},{"name":"skip"}]},{"type":"series","id":"top","name":"Popular series","extra":[{"name":"search"},{"name":"skip"}]}]});
                 tx.execute("INSERT INTO addons(name,manifest_url,manifest) VALUES('Cinemeta','https://v3-cinemeta.strem.io/manifest.json',?1)", [manifest.to_string()]).map_err(|_| "Database initialization failed")?;
             }
-            // Preserve legacy addon IDs/configuration for the owner, once only.
+            // Preserve legacy IDs/configuration without inferring an owner.
             let scoped: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('addons') WHERE name='account_id')", [], |r| r.get(0)).map_err(|_| "Database initialization failed")?;
             if !scoped {
-                tx.execute_batch("ALTER TABLE addons RENAME TO addons_legacy; CREATE TABLE addons(id INTEGER PRIMARY KEY,name TEXT NOT NULL,manifest_url TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,manifest TEXT NOT NULL,priority INTEGER NOT NULL DEFAULT 0,account_id INTEGER NOT NULL DEFAULT 0,UNIQUE(account_id,manifest_url)); INSERT INTO addons(id,name,manifest_url,enabled,manifest,priority) SELECT id,name,manifest_url,enabled,manifest,priority FROM addons_legacy; DROP TABLE addons_legacy;").map_err(|_| "Addon account migration failed")?;
-                let auth_exists: bool = tx
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='auth_accounts')",
-                        [],
-                        |r| r.get(0),
-                    )
-                    .map_err(|_| "Database initialization failed")?;
-                if auth_exists {
-                    tx.execute("UPDATE addons SET account_id=COALESCE((SELECT id FROM auth_accounts WHERE role='owner' ORDER BY id LIMIT 1),0)", []).map_err(|_| "Addon ownership migration failed")?;
-                }
+                credentials_v2::scope_legacy(&tx)?;
             }
+            credentials_v2::init(&tx)?;
             tx.commit().map_err(|_| "Database initialization failed")?;
         }
         Ok(Self {
@@ -92,40 +92,154 @@ impl Addons {
             cache: Default::default(),
             flights: Default::default(),
             gate: Arc::new(Semaphore::new(12)),
+            manifest_gate: Arc::new(Semaphore::new(2)),
             account_id: 0,
+            vault: None,
+            protected_fetch: false,
+            #[cfg(test)]
+            allow_test_loopback: false,
         })
     }
     pub fn for_account(mut self, account_id: i64) -> Self {
         self.account_id = account_id;
         self
     }
+    pub(crate) fn with_protected_fetch(mut self) -> Self {
+        self.protected_fetch = true;
+        self
+    }
+    fn protected(&self) -> bool {
+        self.protected_fetch || self.vault.is_some()
+    }
+    fn fixture_transport(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.allow_test_loopback
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+    fn cache_key(&self, url: &str) -> String {
+        if self.protected() {
+            format!("secure:{}:{url}", self.account_id)
+        } else {
+            url.to_owned()
+        }
+    }
+    fn checked_url(&self, raw: &str) -> Result<url::Url, String> {
+        if raw.chars().any(char::is_control) {
+            return Err("invalid_addon_endpoint".into());
+        }
+        let url = validate_url(raw).map_err(|_| "invalid_addon_endpoint")?;
+        if self.protected() {
+            crate::source_http::validate(&url, self.fixture_transport())
+                .map_err(|e| e.addon_code())?;
+        }
+        Ok(url)
+    }
+    fn manifest_url(&self, url: &str) -> Result<url::Url, String> {
+        if url.len() > 4096 {
+            return Err("invalid_addon_endpoint".into());
+        }
+        let url = self.checked_url(url)?;
+        if !url.path().ends_with("/manifest.json") || url.fragment().is_some() {
+            return Err("invalid_addon_endpoint".into());
+        }
+        Ok(url)
+    }
+    pub(super) async fn prepare_manifest(&self, url: &str) -> Result<(String, Value), String> {
+        let url = self.manifest_url(url)?;
+        // Management refresh must not share an older manifest flight/cache result.
+        let _permit = self
+            .manifest_gate
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| "addon_checks_busy")?;
+        let manifest = if self.protected() {
+            crate::source_http::json(
+                url.clone(),
+                32 * 1024 * 1024,
+                Duration::from_secs(25),
+                self.fixture_transport(),
+                true,
+            )
+            .await
+            .map_err(|e| e.addon_code().to_owned())?
+        } else {
+            tokio::time::timeout(
+                Duration::from_secs(25),
+                json_get(&self.client, url.as_str()),
+            )
+            .await
+            .map_err(|_| "Upstream timed out")??
+        };
+        if !manifest["name"]
+            .as_str()
+            .is_some_and(|n| !n.trim().is_empty() && n.len() <= 256)
+            || !manifest["id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty() && id.len() <= 256)
+            || !manifest["resources"].is_array()
+        {
+            return Err("Invalid addon manifest".into());
+        }
+        Ok((url.to_string(), manifest))
+    }
     pub fn entries(&self) -> Result<Vec<(i64, String, Value)>, String> {
+        let (entries, errors) = self.entries_with_errors()?;
+        if entries.is_empty() {
+            if let Some((_, error)) = errors.into_iter().next() {
+                return Err(error);
+            }
+        }
+        Ok(entries)
+    }
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn entries_with_errors(
+        &self,
+    ) -> Result<(Vec<(i64, String, Value)>, Vec<(i64, String)>), String> {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
         let mut q = db
             .prepare(
-                "SELECT id,manifest_url,manifest FROM addons WHERE enabled=1 AND account_id=?1 ORDER BY id",
+                "SELECT id,manifest_url,manifest,credentials_version FROM addons WHERE enabled=1 AND account_id=?1 ORDER BY id",
             )
             .map_err(|_| "Database query failed")?;
         let rows = q
             .query_map([self.account_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get::<_, String>(2)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
             })
             .map_err(|_| "Database query failed")?;
-        rows.map(|r| {
-            let (i, u, m) = r.map_err(|_| "Database query failed")?;
-            Ok((
+        let mut entries = vec![];
+        let mut errors = vec![];
+        for r in rows {
+            let (i, u, m, version) = r.map_err(|_| "Database query failed")?;
+            match credentials_v2::read(
+                &db,
+                self.vault.as_deref(),
+                self.account_id,
                 i,
                 u,
-                serde_json::from_str(&m).map_err(|_| "Invalid stored manifest")?,
-            ))
-        })
-        .collect()
+                m,
+                version,
+            ) {
+                Ok((u, m)) => entries.push((i, u, m)),
+                Err(error) => errors.push((i, error.into())),
+            }
+        }
+        Ok((entries, errors))
     }
     pub fn list(&self) -> Result<Value, String> {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
         let mut stmt = db
             .prepare(
-                "SELECT id,name,manifest_url,enabled,priority FROM addons WHERE account_id=?1 ORDER BY id",
+                "SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE account_id=?1 ORDER BY id",
             )
             .map_err(|_| "Database query failed")?;
         let rows = stmt
@@ -138,7 +252,7 @@ impl Addons {
     }
     fn config_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         Ok(
-            json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"manifest_url":r.get::<_,String>(2)?,"enabled":r.get::<_,bool>(3)?}),
+            json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"manifest_url":null,"enabled":r.get::<_,bool>(3)?,"credentials_encrypted":r.get::<_,i64>(5)?==1}),
         )
     }
     /// Patch only enabled, preserving omitted fields. The complete saved
@@ -163,7 +277,7 @@ impl Addons {
             return Err("Addon not found".into());
         }
         db.query_row(
-            "SELECT id,name,manifest_url,enabled,priority FROM addons WHERE id=?1 AND account_id=?2",
+            "SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE id=?1 AND account_id=?2",
             [id,self.account_id],
             Self::config_row,
         )
@@ -176,37 +290,28 @@ impl Addons {
             .map_err(|_| "Database task failed")?
     }
     pub async fn add(&self, url: &str) -> Result<Value, String> {
-        validate_url(url)?;
-        if !url
-            .split('?')
-            .next()
-            .unwrap_or("")
-            .ends_with("/manifest.json")
-        {
-            return Err("Manifest URL must end in /manifest.json".into());
-        }
-        self.cache.lock().unwrap().remove(url);
-        let m = self.fetch(url, 300).await?;
-        if !m["name"].is_string() || !m["id"].is_string() || !m["resources"].is_array() {
-            return Err("Invalid addon manifest".into());
-        }
+        let vault = self.vault.clone().ok_or("secret_store_not_configured")?;
+        let (url, m) = self.prepare_manifest(url).await?;
+        self.cache.lock().unwrap().remove(&self.cache_key(&url));
         let this = self.clone();
-        let url = url.to_owned();
         tokio::task::spawn_blocking(move || {
             let db = this.db.lock().map_err(|_| "Database unavailable")?;
-            db.execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES(?1,?2,?3,?4) ON CONFLICT(account_id,manifest_url) DO UPDATE SET name=excluded.name,manifest=excluded.manifest",params![m["name"].as_str(),url,m.to_string(),this.account_id]).map_err(|_|"Could not save addon")?;
-            db.query_row("SELECT id,name,manifest_url,enabled,priority FROM addons WHERE manifest_url=?1 AND account_id=?2", params![url,this.account_id], Self::config_row).map_err(|_| "Database query failed".into())
+            let id=credentials_v2::store(&db,&vault,this.account_id,&url,&m)?;
+            db.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE id=?1 AND account_id=?2",params![id,this.account_id],Self::config_row).map_err(|_|"Database query failed".into())
         }).await.map_err(|_| "Database task failed")?
     }
     pub fn delete(&self, id: i64) -> Result<(), String> {
-        self.db
-            .lock()
-            .map_err(|_| "Database unavailable")?
-            .execute(
-                "DELETE FROM addons WHERE id=?1 AND account_id=?2",
-                [id, self.account_id],
-            )
+        let db = self.db.lock().map_err(|_| "Database unavailable")?;
+        let tx = db
+            .unchecked_transaction()
             .map_err(|_| "Database update failed")?;
+        tx.execute("DELETE FROM addon_credentials_v2 WHERE addon_id IN (SELECT id FROM addons WHERE id=?1 AND account_id=?2)",[id,self.account_id]).map_err(|_|"Database update failed")?;
+        tx.execute(
+            "DELETE FROM addons WHERE id=?1 AND account_id=?2",
+            [id, self.account_id],
+        )
+        .map_err(|_| "Database update failed")?;
+        tx.commit().map_err(|_| "Database update failed")?;
         Ok(())
     }
     pub fn catalogs(&self) -> Result<Value, String> {
@@ -245,8 +350,20 @@ impl Addons {
         }
         Ok(Value::Array(out))
     }
+    pub(crate) fn available(db: &Connection, account: i64, id: i64) -> bool {
+        db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM addons WHERE id=?1 AND account_id=?2 AND enabled=1)",
+            params![id, account],
+            |r| r.get::<_, bool>(0),
+        )
+        .unwrap_or(false)
+    }
     async fn fetch(&self, url: &str, ttl: i64) -> Result<Value, String> {
-        if let Some((expiry, v, _)) = self.cache.lock().unwrap().get(url) {
+        if self.protected() {
+            self.checked_url(url)?;
+        }
+        let key = self.cache_key(url);
+        if let Some((expiry, v, _)) = self.cache.lock().unwrap().get(&key) {
             if *expiry > now() {
                 return Ok(v.clone());
             }
@@ -257,32 +374,44 @@ impl Addons {
         let flight = {
             let mut flights = self.flights.lock().unwrap();
             flights.retain(|_, flight| flight.strong_count() > 0);
-            match flights.get(url).and_then(Weak::upgrade) {
+            match flights.get(&key).and_then(Weak::upgrade) {
                 Some(flight) => flight,
                 None => {
                     let flight = Arc::new(FetchFlight::new());
-                    flights.insert(url.into(), Arc::downgrade(&flight));
+                    flights.insert(key.clone(), Arc::downgrade(&flight));
                     flight
                 }
             }
         };
         flight
-            .get_or_init(|| self.fetch_uncached(url, ttl))
+            .get_or_init(|| self.fetch_uncached(url, ttl, &key))
             .await
             .clone()
     }
-    async fn fetch_uncached(&self, url: &str, ttl: i64) -> Result<Value, String> {
+    async fn fetch_uncached(&self, url: &str, ttl: i64, key: &str) -> Result<Value, String> {
         let _permit = self.gate.acquire().await.map_err(|_| "Service stopping")?;
         // A previous flight may have populated the cache while this request
         // waited for a slot (or between its initial lookup and flight creation).
-        if let Some((expiry, value, _)) = self.cache.lock().unwrap().get(url) {
+        if let Some((expiry, value, _)) = self.cache.lock().unwrap().get(key) {
             if *expiry > now() {
                 return Ok(value.clone());
             }
         }
-        let v = tokio::time::timeout(Duration::from_secs(25), json_get(&self.client, url))
+        let v = if self.protected() {
+            crate::source_http::json(
+                self.checked_url(url)?,
+                32 * 1024 * 1024,
+                Duration::from_secs(25),
+                self.fixture_transport(),
+                true,
+            )
             .await
-            .map_err(|_| "Upstream timed out")??;
+            .map_err(|e| e.addon_code().to_owned())?
+        } else {
+            tokio::time::timeout(Duration::from_secs(25), json_get(&self.client, url))
+                .await
+                .map_err(|_| "Upstream timed out")??
+        };
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|_, (e, _, _)| *e > now());
         let size = v.to_string().len();
@@ -299,7 +428,7 @@ impl Addons {
                 bytes -= removed;
             }
         }
-        cache.insert(url.into(), (now() + ttl, v.clone(), size));
+        cache.insert(key.into(), (now() + ttl, v.clone(), size));
         Ok(v)
     }
     pub fn endpoint(base: &str, parts: &[&str]) -> Result<String, String> {

@@ -1,21 +1,18 @@
-mod activity;
+mod account_api;
 pub mod addon;
 pub mod auth;
-mod automation;
 mod continuation;
-mod guides;
-mod health;
+#[cfg(test)]
+mod discovery_error_tests;
+mod gateway;
 mod kids;
 mod library;
-mod lineup;
-mod live_catalog;
-mod live_policy;
-mod media_access;
-pub mod playback;
+pub mod migration_v2;
 mod preferences;
 pub mod provider;
-mod service_health;
-mod session;
+mod secret_store;
+mod service_errors;
+mod source_http;
 pub mod util;
 
 mod app_state;
@@ -24,35 +21,30 @@ mod handlers_media;
 mod handlers_profiles;
 mod http_middleware;
 mod matching_context;
+mod retired;
 mod routes;
 mod sources;
 
-pub(crate) use crate::{addon::Addons, playback::PlaybackManager, provider::ProviderService};
+pub(crate) use crate::{addon::Addons, provider::ProviderService};
 pub(crate) use axum::{
     extract::{Path, Query, Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        IntoResponse, Response,
-    },
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Extension, Router,
 };
 pub(crate) use rusqlite::{params, Connection, OptionalExtension};
 pub(crate) use serde::Deserialize;
 pub(crate) use serde_json::{json, Value};
-pub(crate) use session::{heartbeat, media, start_playback, stop_playback, PlaybackRequest};
 pub(crate) use sha2::{Digest, Sha256};
 pub(crate) use std::{
     collections::{HashMap, HashSet},
-    convert::Infallible,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 pub(crate) use tokio::sync::Notify;
-pub(crate) use tower_http::cors::CorsLayer;
 pub(crate) use uuid::Uuid;
 
 #[cfg(test)]

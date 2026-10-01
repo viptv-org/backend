@@ -11,21 +11,30 @@ use std::{
 use tokio::sync::Semaphore;
 use url::Url;
 
-pub(crate) mod accounts;
 pub(crate) mod egress;
-pub(crate) mod pools;
-pub(crate) mod selection;
 
 mod candidates;
+pub(crate) mod catalog_v2;
+pub(crate) mod connections_v2;
+pub(crate) mod credentials_v2;
+pub(crate) mod discovery_v2;
 mod http;
 mod live;
 mod normalize;
+pub(crate) mod refresh_v2;
 mod service;
 mod streams;
 mod sync;
+mod transport_v2;
+pub(crate) mod v2;
+pub(crate) mod v2_http;
 
 #[cfg(test)]
+mod connections_v2_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod v2_http_tests;
 
 pub use self::service::ProviderService;
 use candidates::*;
@@ -97,12 +106,8 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
             ))?;
         }
     }
-    egress::init(db)?;
-    crate::live_policy::init(db)?;
-    pools::init(db)?;
-    selection::init(db)?;
-    crate::activity::init(db)?;
-    crate::health::init(db)?;
-    crate::guides::init(db)?;
-    crate::lineup::init(db)
+    catalog_v2::init(db)?;
+    credentials_v2::init(db)?;
+    refresh_v2::init(db)?;
+    Ok(())
 }

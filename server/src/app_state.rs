@@ -13,16 +13,9 @@ pub(crate) async fn blocking<T: Send + 'static>(
 }
 #[derive(Debug)]
 pub struct ApiError(pub StatusCode, pub String);
-// Messages that control wire behavior. The playback engine reports plain
-// strings, so status codes and client error codes are derived by matching
-// these constants in exactly one place each; never compare a display
-// message inline. The capacity message is single-sourced in the engine.
-pub(crate) use crate::playback::MSG_PLAYBACK_CAPACITY;
-pub(crate) const MSG_DELIVERY_REFUSED: &str =
-    "Playback could not start; try forced transcoding or another stream";
-pub(crate) const MSG_ENGINE_UNAVAILABLE: &str = "Playback engine unavailable";
-pub(crate) const MSG_PROBE_UNSAFE: &str =
-    "Could not inspect source video safely; try another stream";
+// Messages that control wire behavior. Status codes and client error codes
+// are derived by matching these constants in exactly one place each; never
+// compare a display message inline.
 pub(crate) const MSG_PROFILE_REQUIRED: &str = "Profile selection required";
 pub(crate) const MSG_PARENT_REQUIRED: &str = "Parent PIN required";
 pub(crate) const MSG_PARENT_PIN_INVALID: &str = "Incorrect parent PIN";
@@ -31,47 +24,21 @@ impl ApiError {
     /// Stable recovery reasons shared by all platform clients.
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
+            "client_update_required" => Some("client_update_required"),
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),
             MSG_PARENT_PIN_INVALID => Some("parent_pin_invalid"),
             MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
-            "Provider connection limit reached"
-            | "All available connections are busy. Try this channel again shortly." => {
-                Some("provider_connection_limit")
-            }
-            MSG_PLAYBACK_CAPACITY => Some("playback_capacity"),
-            "Stream expired; discover again"
-            | "Media origin HTTP 404"
-            | "Media origin HTTP 410" => Some("source_expired"),
-            "Media origin HTTP 401" | "Media origin HTTP 403" => Some("source_access_denied"),
-            "Media origin unavailable" => Some("source_unavailable"),
-            MSG_DELIVERY_REFUSED | MSG_ENGINE_UNAVAILABLE | MSG_PROBE_UNSAFE => {
-                Some("delivery_unsupported")
-            }
+            "Provider connection limit reached" => Some("provider_connection_limit"),
             _ => None,
         }
     }
 }
 impl From<String> for ApiError {
     fn from(s: String) -> Self {
-        // Interruption and capacity conditions are not client mistakes. Reporting
-        // them as 400 makes the client show a generic failure, and reporting
-        // capacity as 429 tells the viewer to retry something that will never
-        // succeed until they stop a session.
         let status = match s.as_str() {
-            MSG_PLAYBACK_CAPACITY => StatusCode::SERVICE_UNAVAILABLE,
+            "client_update_required" => StatusCode::CONFLICT,
             "Provider connection limit reached" => StatusCode::TOO_MANY_REQUESTS,
-            "Media origin HTTP 401" | "Media origin HTTP 403" => StatusCode::FORBIDDEN,
-            "Media origin HTTP 404" | "Media origin HTTP 410" => StatusCode::GONE,
-            "Media origin unavailable" => StatusCode::BAD_GATEWAY,
-            "Cross-origin proxy media requires managed playback" => StatusCode::NOT_ACCEPTABLE,
-            // Delivery refusals say this client/server pair cannot deliver this
-            // source; the request itself was well formed. A 400 invites the
-            // client to retry with escalating transports (each re-preparing and
-            // re-probing the source), so they are terminal 406s instead.
-            MSG_DELIVERY_REFUSED | MSG_ENGINE_UNAVAILABLE | MSG_PROBE_UNSAFE => {
-                StatusCode::NOT_ACCEPTABLE
-            }
             _ => StatusCode::BAD_REQUEST,
         };
         Self(status, s)
@@ -84,13 +51,24 @@ impl From<&str> for ApiError {
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let secret_code = match self.1.as_str() {
+            "secret_store_not_configured" => Some("secret_store_not_configured"),
+            "secret_key_unavailable" => Some("secret_key_unavailable"),
+            "secret_authentication_failed" => Some("secret_authentication_failed"),
+            "invalid_secret_envelope" => Some("invalid_secret_envelope"),
+            "addon_encryption_required" => Some("addon_encryption_required"),
+            "source_credentials_migration_required" => {
+                Some("source_credentials_migration_required")
+            }
+            "addon_storage_unavailable" => Some("addon_storage_unavailable"),
+            _ => None,
+        };
+        if let Some(code) = secret_code {
+            return account_api::Error::Code(code).into_response();
+        }
         let message = match self.api_error_code() {
+            Some("client_update_required") => "Update VIPTV to use this server's current catalog and playback APIs.",
             Some("provider_connection_limit") => "This IPTV provider has reached its connection limit. Stop another stream or choose another provider.",
-            Some("playback_capacity") => "The server has reached its playback limit. Stop another stream or try again later.",
-            Some("source_expired") => "This stream has expired. Refresh the sources and choose it again.",
-            Some("source_access_denied") => "The provider rejected access to this stream. Check the provider account or choose another source.",
-            Some("source_unavailable") => "The provider could not be reached. Try again or choose another source.",
-            Some("delivery_unsupported") => "This source cannot be played with the current playback configuration. Choose another source.",
             _ => &self.1,
         };
         let mut body = json!({"error":message});
@@ -106,28 +84,17 @@ mod display_error_tests {
     use super::*;
     #[tokio::test]
     async fn capacity_errors_explain_recovery_without_conflating_rate_limits() {
-        for (message, code) in [
-            (
-                "Provider connection limit reached",
-                "provider_connection_limit",
-            ),
-            (
-                "All available connections are busy. Try this channel again shortly.",
-                "provider_connection_limit",
-            ),
-            (MSG_PLAYBACK_CAPACITY, "playback_capacity"),
-        ] {
-            let response = ApiError(StatusCode::TOO_MANY_REQUESTS, message.into()).into_response();
-            let bytes = axum::body::to_bytes(response.into_body(), 4096)
-                .await
-                .unwrap();
-            let body: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(body["error_code"], code);
-            assert!(body["error"]
-                .as_str()
-                .unwrap()
-                .contains("Stop another stream"));
-        }
+        let response = ApiError::from("Provider connection limit reached").into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error_code"], "provider_connection_limit");
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("Stop another stream"));
         assert_eq!(
             ApiError(StatusCode::TOO_MANY_REQUESTS, "Too many requests".into()).api_error_code(),
             None
@@ -145,22 +112,15 @@ pub struct App {
     pub db: Arc<Mutex<Connection>>,
     pub addons: Addons,
     pub providers: ProviderService,
-    pub playback: Arc<PlaybackManager>,
+    pub(crate) secret_vault: Option<Arc<secret_store::Vault>>,
+    pub(crate) gateway_client: gateway::client::Client,
+    pub(crate) gateway_playbacks: Arc<gateway::playback::Registry>,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
     // Request-local identity travels with discovery producers; ownership is never upstream-authored.
     pub(crate) principal: Option<auth::Principal>,
     pub(crate) resource_owners: Arc<Mutex<HashMap<String, ResourceOwner>>>,
     pub(crate) lease: Option<ResourceLease>,
-    pub(crate) startup_requests: Arc<Mutex<HashMap<String, session::StartupRequest>>>,
-    pub(crate) family_matching_gate: Arc<Mutex<()>>,
-    pub(crate) automation_life: Arc<()>,
-    pub(crate) catalog_control: Arc<automation::Control>,
-    pub(crate) health_control: Arc<health::Control>,
-    pub(crate) guide_control: Arc<guides::Control>,
-    pub(crate) live_sessions: Arc<Mutex<HashMap<String, Arc<session::LiveSession>>>>,
-    pub(crate) shared_playback: Arc<session::shared::Registry>,
-    pub(crate) playback_audience: Option<String>,
 }
 #[derive(Clone)]
 pub(crate) struct ResourceLease {
@@ -254,6 +214,10 @@ pub(crate) struct JobState {
     pub(crate) pending: usize,
 }
 pub(crate) struct StreamEntry {
+    // Set only by exact, account-authorized raw live-channel resolution.
+    pub(crate) live_channel_id: Option<String>,
+    pub(crate) producer: String,
+    pub(crate) configuration: Option<[u8; 32]>,
     pub(crate) provider_id: Option<i64>,
     pub(crate) kind: String,
     pub(crate) live: bool,
@@ -262,11 +226,8 @@ pub(crate) struct StreamEntry {
     pub(crate) created: Instant,
 }
 impl App {
-    pub fn new(
-        db: Connection,
-        client: reqwest::Client,
-        playback: Arc<PlaybackManager>,
-    ) -> Result<Self, String> {
+    pub fn new(db: Connection, client: reqwest::Client) -> Result<Self, String> {
+        let secret_vault = secret_store::Vault::from_environment()?.map(Arc::new);
         db.busy_timeout(Duration::from_secs(5))
             .map_err(|_| "Database setup failed")?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS profiles(id INTEGER PRIMARY KEY,name TEXT NOT NULL); CREATE TABLE IF NOT EXISTS favorites(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,id TEXT NOT NULL,type TEXT NOT NULL,name TEXT NOT NULL,poster TEXT,PRIMARY KEY(profile_id,type,id)); CREATE TABLE IF NOT EXISTS progress(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,id TEXT NOT NULL,type TEXT NOT NULL,name TEXT NOT NULL,poster TEXT,position REAL NOT NULL,duration REAL NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(profile_id,type,id));").map_err(|_|"Database initialization failed")?;
@@ -276,29 +237,28 @@ impl App {
         continuation::init(&db).map_err(|_| "Viewing queue migration failed")?;
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
-        automation::init(&db).map_err(|_| "Automation database initialization failed")?;
+        provider::v2::init(&db).map_err(|_| "Account IPTV schema initialization failed")?;
+        provider::refresh_v2::prepare(&db).map_err(|_| "IPTV refresh initialization failed")?;
+        gateway::registry::init(&db).map_err(|_| "Gateway schema initialization failed")?;
         let db = Arc::new(Mutex::new(db));
-        let addons = Addons::new(db.clone(), client.clone())?;
-        let providers = ProviderService::new(db.clone(), client);
+        let mut addons = Addons::new(db.clone(), client.clone())?;
+        addons.vault = secret_vault.clone();
+        let mut providers = ProviderService::new(db.clone(), client);
+        providers.vault = secret_vault.clone();
+        provider::refresh_v2::start(&providers);
+        let gateway_playbacks = gateway::playback::Registry::new(db.clone());
         Ok(Self {
             db,
             addons,
             providers,
-            playback,
+            secret_vault,
+            gateway_client: Default::default(),
+            gateway_playbacks,
             jobs: Default::default(),
             streams: Default::default(),
             principal: None,
             resource_owners: Default::default(),
             lease: None,
-            startup_requests: Default::default(),
-            family_matching_gate: Default::default(),
-            automation_life: Default::default(),
-            catalog_control: Default::default(),
-            health_control: Default::default(),
-            guide_control: Default::default(),
-            live_sessions: Default::default(),
-            shared_playback: Default::default(),
-            playback_audience: None,
         })
     }
     pub(crate) fn identity(&self) -> auth::Principal {
@@ -387,6 +347,7 @@ impl App {
             Err(ApiError(StatusCode::NOT_FOUND, "Resource not found".into()))
         }
     }
+    #[cfg(test)]
     pub(crate) fn retain_playback_owners(
         &self,
         active: &HashSet<String>,
@@ -399,14 +360,6 @@ impl App {
                 || owner.created >= snapshot_started
                 || active.contains(key.trim_start_matches("playback:"))
         });
-    }
-    pub(crate) async fn prune_playback_owners(&self) {
-        let snapshot_started = Instant::now();
-        let mut active: std::collections::HashSet<String> =
-            self.playback.active_ids().await.into_iter().collect();
-        active.extend(self.live_sessions.lock().unwrap().keys().cloned());
-        active.extend(self.shared_playback.ids());
-        self.retain_playback_owners(&active, snapshot_started);
     }
     pub(crate) fn prune(&self) {
         self.jobs

@@ -14,7 +14,7 @@ server/Cargo.toml --all-targets -- -D warnings` passed. Added tests assert 16
 concurrent callers produce one upstream hit, cancellation permits recovery, and
 complete primary metadata returns without waiting for a two-second secondary.
 
-The user-reported temporary tunnel returns HTTP 530. Its original cold-cache
+The previously reported temporary tunnel returns HTTP 530. Its original cold-cache
 600ms versus 6–7s addon timings could not be reproduced; no external-addon
 latency guarantee or production deployment claim is made. These changes were
 kept separate from the existing playback/server working-tree edits.

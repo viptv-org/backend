@@ -9,8 +9,9 @@ use tower::ServiceExt;
 
 use crate::test_support::request;
 
-fn fixture() -> App {
-    let a = crate::test_support::app();
+pub(crate) fn fixture() -> App {
+    let mut a = crate::test_support::app();
+    crate::test_support::configure_vault(&mut a);
     {
         let db = a.db.lock().unwrap();
         db.execute("DELETE FROM addons", []).unwrap();
@@ -205,7 +206,7 @@ async fn members_cannot_administer_providers_addons_or_other_resources() {
             let status = request(&a, "member-token-1", method, path, json!({}))
                 .await
                 .0;
-            assert!(status == StatusCode::FORBIDDEN || status == StatusCode::METHOD_NOT_ALLOWED);
+            assert_eq!(status, StatusCode::CONFLICT);
         }
     }
     let mut owned = a.clone();
@@ -223,8 +224,8 @@ async fn members_cannot_administer_providers_addons_or_other_resources() {
     owned.own_resource("job", "private-job");
     owned.own_resource("playback", "private-session");
     for (method, path) in [
-        ("GET", "/api/streams/private-job"),
-        ("GET", "/api/streams/private-job/events"),
+        ("GET", "/api/v2/streams/private-job"),
+        ("GET", "/api/v2/streams/private-job/events"),
         ("POST", "/api/playback/private-session/heartbeat"),
         ("DELETE", "/api/playback/private-session"),
     ] {
@@ -232,7 +233,11 @@ async fn members_cannot_administer_providers_addons_or_other_resources() {
             request(&a, "member-token-2", method, path, Value::Null)
                 .await
                 .0,
-            StatusCode::NOT_FOUND
+            if retired::is_path(path) {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::NOT_FOUND
+            }
         );
     }
     assert_eq!(
@@ -245,7 +250,7 @@ async fn members_cannot_administer_providers_addons_or_other_resources() {
         )
         .await
         .0,
-        StatusCode::OK
+        StatusCode::CONFLICT
     );
     let (cards, _) = owned.register(
         "addon:1",
@@ -261,7 +266,7 @@ async fn members_cannot_administer_providers_addons_or_other_resources() {
     )
     .await
     .0;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::CONFLICT);
 }
 #[tokio::test]
 async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immediate() {
@@ -318,7 +323,7 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
             &a,
             "member-token-1",
             "GET",
-            "/api/streams/profile-job",
+            "/api/v2/streams/profile-job",
             Value::Null
         )
         .await
@@ -333,10 +338,10 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
         )
         .unwrap();
     for (method, path) in [
-        ("GET", "/api/streams/profile-job"),
-        ("GET", "/api/streams/profile-job/events"),
-        ("POST", "/api/playback/profile-playback/heartbeat"),
-        ("DELETE", "/api/playback/profile-playback"),
+        ("GET", "/api/v2/streams/profile-job"),
+        ("GET", "/api/v2/streams/profile-job/events"),
+        ("POST", "/api/v2/playback/profile-playback/heartbeat"),
+        ("DELETE", "/api/v2/playback/profile-playback"),
     ] {
         assert_eq!(
             request(&a, "member-token-1", method, path, Value::Null)
@@ -350,8 +355,8 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
             &a,
             "member-token-1",
             "POST",
-            "/api/playback",
-            json!({"stream_id":cards[0]["id"]})
+            "/api/v2/playback",
+            json!({"request_id":"private-scope","stream_id":cards[0]["id"],"client":{"platform":"android","can_play_direct":true,"max_width":1280,"max_height":720,"video_codecs":["h264"],"audio_codecs":["aac"]}})
         )
         .await
         .0,
@@ -372,7 +377,7 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
         )
         .unwrap();
     for path in [
-        "/api/streams/profile-job",
+        "/api/v2/streams/profile-job",
         "/api/profiles/1/favorites",
         "/api/profiles/1/progress",
     ] {
@@ -409,7 +414,11 @@ async fn owner_paired_device_has_no_administration_privileges() {
             request(&a, "member-token-1", "GET", path, Value::Null)
                 .await
                 .0,
-            StatusCode::FORBIDDEN
+            if retired::is_path(path) {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::FORBIDDEN
+            }
         );
     }
     assert_eq!(
@@ -478,85 +487,6 @@ async fn owner_paired_device_has_no_administration_privileges() {
             .1["can_create_profile"],
         true
     );
-}
-#[tokio::test]
-async fn revoked_resource_lease_denies_bearerless_media_and_closes_open_sse() {
-    use futures::StreamExt;
-    let a = fixture();
-    a.db.lock()
-        .unwrap()
-        .execute(
-            "UPDATE auth_sessions SET profile_id=1 WHERE account_id=1",
-            [],
-        )
-        .unwrap();
-    let mut owned = a.clone();
-    owned.principal = Some(auth::Principal::Account {
-        account_id: 1,
-        role: "member".into(),
-        profile_id: Some(1),
-        session_id: Some("s1".into()),
-    });
-    owned.lease = Some(ResourceLease {
-        policy_revision: 0,
-        principal: owned.identity(),
-        session_id: Some("s1".into()),
-    });
-    owned.own_resource("job", "revocable-job");
-    owned.own_resource("playback", "revocable-playback");
-    a.jobs.lock().unwrap().insert(
-        "revocable-job".into(),
-        Arc::new(Job {
-            kind: "movie".into(),
-            created: Instant::now(),
-            state: Mutex::new(JobState {
-                events: vec![json!({"seq":1,"streams":[]})],
-                pending: 1,
-            }),
-            notify: Notify::new(),
-        }),
-    );
-    let response = router(a.clone(), None)
-        .oneshot(
-            Request::builder()
-                .uri("/api/streams/revocable-job/events")
-                .header("authorization", "Bearer member-token-1")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let mut body = response.into_body().into_data_stream();
-    assert!(body
-        .next()
-        .await
-        .unwrap()
-        .unwrap()
-        .windows(7)
-        .any(|w| w == b"streams"));
-    a.db.lock()
-        .unwrap()
-        .execute("DELETE FROM auth_sessions WHERE id='s1'", [])
-        .unwrap();
-    assert!(tokio::time::timeout(Duration::from_secs(2), body.next())
-        .await
-        .unwrap()
-        .is_none());
-    let lease = a.resource_lease("playback", "revocable-playback").unwrap();
-    assert!(lease.validate(&a.db.lock().unwrap()).is_err());
-    let response = router(a.clone(), None)
-        .oneshot(
-            Request::builder()
-                .uri("/media/revocable-playback/old-capability/index.m3u8")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    // The revoked lease took the stop-and-deny branch, not merely a missing file path.
-    assert!(a.resource_lease("playback", "revocable-playback").is_none());
 }
 #[tokio::test]
 async fn media_resource_lease_rechecks_grants_account_state_and_session_expiry() {
@@ -740,10 +670,10 @@ async fn same_account_and_profile_other_session_cannot_reuse_owned_resources() {
     owner.own_resource("job", "family-job");
     owner.own_resource("playback", "family-playback");
     for (method, path) in [
-        ("GET", "/api/streams/family-job"),
-        ("GET", "/api/streams/family-job/events"),
-        ("POST", "/api/playback/family-playback/heartbeat"),
-        ("DELETE", "/api/playback/family-playback"),
+        ("GET", "/api/v2/streams/family-job"),
+        ("GET", "/api/v2/streams/family-job/events"),
+        ("POST", "/api/v2/playback/family-playback/heartbeat"),
+        ("DELETE", "/api/v2/playback/family-playback"),
     ] {
         assert_eq!(
             request(&a, "other-session-token", method, path, Value::Null)
@@ -762,8 +692,8 @@ async fn same_account_and_profile_other_session_cannot_reuse_owned_resources() {
             &a,
             "other-session-token",
             "POST",
-            "/api/playback",
-            json!({"stream_id":cards[0]["id"]})
+            "/api/v2/playback",
+            json!({"request_id":"private-scope","stream_id":cards[0]["id"],"client":{"platform":"android","can_play_direct":true,"max_width":1280,"max_height":720,"video_codecs":["h264"],"audio_codecs":["aac"]}})
         )
         .await
         .0,
@@ -784,8 +714,8 @@ async fn account_media_requires_selected_profile_and_ignores_profile_header() {
         ("GET", "/api/catalogs"),
         ("GET", "/api/discover"),
         ("GET", "/api/meta/movie/tt1"),
-        ("POST", "/api/streams"),
-        ("GET", "/api/streams/job"),
+        ("POST", "/api/v2/streams"),
+        ("GET", "/api/v2/streams/job"),
         ("GET", "/api/live"),
         ("GET", "/api/guide/channel"),
         ("POST", "/api/playback"),
@@ -805,10 +735,26 @@ async fn account_media_requires_selected_profile_and_ignores_profile_header() {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(
+            response.status(),
+            if retired::is_path(path) {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::FORBIDDEN
+            },
+            "{path}"
+        );
         let value: Value =
             serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
-        assert_eq!(value["error_code"], "profile_required", "{path}");
+        assert_eq!(
+            value["error_code"],
+            if retired::is_path(path) {
+                "client_update_required"
+            } else {
+                "profile_required"
+            },
+            "{path}"
+        );
     }
     assert_eq!(
         request(&a, "member-token-1", "GET", "/api/profiles", Value::Null)
@@ -873,6 +819,7 @@ async fn addons_are_account_shared_and_cross_account_mutations_are_isolated() {
             db.execute("INSERT INTO addons(id,account_id,name,manifest_url,manifest) VALUES(?1,?1,?2,'https://example.com/manifest.json',?3)",params![owner,format!("Account {owner}"),json!({"name":format!("Account {owner}"),"catalogs":[{"id":"top","type":"movie"}]}).to_string()]).unwrap();
         }
     }
+    crate::test_support::encrypt_fixture_sources(&a);
     for owner in 1..=2 {
         let (status, list) = request(
             &a,
@@ -1062,7 +1009,7 @@ async fn playback_preferences_are_scoped_validated_and_share_autoplay_setting() 
         )
         .await
         .0,
-        StatusCode::BAD_REQUEST
+        StatusCode::CONFLICT
     );
     assert_eq!(
         request(
@@ -1075,152 +1022,6 @@ async fn playback_preferences_are_scoped_validated_and_share_autoplay_setting() 
         .await
         .1,
         saved
-    );
-}
-
-#[tokio::test]
-async fn service_health_is_owner_only_bounded_and_credential_free() {
-    let a = fixture();
-    assert_eq!(
-        request(
-            &a,
-            "member-token-1",
-            "GET",
-            "/api/service-health",
-            Value::Null
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
-    {
-        let db = a.db.lock().unwrap();
-        db.execute("UPDATE auth_accounts SET role='owner' WHERE id=1", [])
-            .unwrap();
-        for id in 1..=23 {
-            db.execute("INSERT INTO providers(id,name,url,username,password,enabled,max_connections) VALUES(?1,?2,'http://127.0.0.1:9','secret-user','secret-password',0,4)",params![id,format!("Provider {id}")]).unwrap();
-        }
-    }
-    let (status, first) = request(
-        &a,
-        "member-token-1",
-        "GET",
-        "/api/service-health",
-        Value::Null,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(first["providers"]["total"], 23);
-    assert_eq!(first["providers"]["items"].as_array().unwrap().len(), 20);
-    assert_eq!(first["providers"]["next_offset"], 20);
-    assert_eq!(first["providers"]["items"][0]["enabled"], false);
-    assert_eq!(
-        first["providers"]["items"][0]["last_catalog_at"],
-        Value::Null
-    );
-    assert!(!first.to_string().contains("secret-"));
-    assert!(!first.to_string().contains("127.0.0.1"));
-    let (_, second) = request(
-        &a,
-        "member-token-1",
-        "GET",
-        "/api/service-health?offset=20",
-        Value::Null,
-    )
-    .await;
-    assert_eq!(second["providers"]["items"].as_array().unwrap().len(), 3);
-    assert_eq!(second["providers"]["next_offset"], Value::Null);
-    {
-        let db = a.db.lock().unwrap();
-        db.execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
-            .unwrap();
-        db.execute(
-            "INSERT INTO auth_device_profiles(session_id,profile_id) VALUES('s1',1)",
-            [],
-        )
-        .unwrap();
-    }
-    assert_eq!(
-        request(
-            &a,
-            "member-token-1",
-            "GET",
-            "/api/service-health",
-            Value::Null
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
-}
-
-#[tokio::test]
-async fn service_health_uses_valid_guide_mappings_and_shared_capacity() {
-    let a = fixture();
-    let now = util::now();
-    {
-        let db = a.db.lock().unwrap();
-        db.execute("UPDATE auth_accounts SET role='owner' WHERE id=1", [])
-            .unwrap();
-        db.execute("INSERT INTO providers(id,name,url,username,password,enabled,max_connections) VALUES(1,'Family','http://127.0.0.1:9','user','password',0,4)",[]).unwrap();
-        db.execute("INSERT INTO account_pools(id,name,configured_limit,external_reserve) VALUES(1,'Shared',4,1)",[]).unwrap();
-        db.execute(
-            "INSERT INTO provider_pools(provider_id,pool_id) VALUES(1,1)",
-            [],
-        )
-        .unwrap();
-        db.execute("INSERT INTO account_observations(pool_id,reported_limit,limit_at,reported_usage,usage_at,external_estimate) VALUES(1,4,?1,2,?1,2)",[now-120]).unwrap();
-        for id in ["family:valid", "family:changed"] {
-            db.execute(
-                "INSERT INTO family_channels(id,data) VALUES(?1,?2)",
-                params![id, json!({"name":id,"enabled":true}).to_string()],
-            )
-            .unwrap();
-            db.execute("INSERT INTO guide_mappings(channel_id,source_id,guide_id,observed_name) VALUES(?1,1,?1,'Verified')",[id]).unwrap();
-            db.execute(
-                "INSERT INTO guide_channels(source_id,guide_id,name) VALUES(1,?1,?2)",
-                params![
-                    id,
-                    if id == "family:valid" {
-                        "Verified"
-                    } else {
-                        "Changed feed"
-                    }
-                ],
-            )
-            .unwrap();
-            db.execute("INSERT INTO family_programmes(channel_id,source_id,guide_id,start,end,data) VALUES(?1,1,?1,?2,?3,'{}')",params![id,now-60,now+3600]).unwrap();
-        }
-        db.execute(
-            "INSERT INTO guide_sources(id,name,enabled,updated_at) VALUES(1,'Guide',1,?1)",
-            [now - 30],
-        )
-        .unwrap();
-        db.execute("INSERT INTO catalog_runs(id,state,owner_id,policy,created_at,started_at,finished_at) VALUES('finished','completed',1,'{}',?1,?1,?2)",params![now-120,now-60]).unwrap();
-        db.execute("INSERT INTO catalog_results(run_id,provider_id,status) VALUES('finished',1,'completed')",[]).unwrap();
-    }
-    let (status, snapshot) = request(
-        &a,
-        "member-token-1",
-        "GET",
-        "/api/service-health",
-        Value::Null,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(snapshot["guides"]["enabled_channels"], 2);
-    assert_eq!(snapshot["guides"]["current_channels"], 1);
-    assert_eq!(
-        snapshot["providers"]["items"][0]["pool"]["estimated_free"],
-        2
-    );
-    assert_eq!(
-        snapshot["providers"]["items"][0]["pool"]["confidence"],
-        "stale"
-    );
-    assert_eq!(
-        snapshot["providers"]["items"][0]["last_catalog_at"],
-        now - 60
     );
 }
 
@@ -1289,7 +1090,7 @@ async fn kids_policy_requires_parent_pin_and_blocks_unknown_content_and_exit() {
             &a,
             "member-token-1",
             "POST",
-            "/api/streams",
+            "/api/v2/streams",
             json!({"type":"movie","id":"adult","name":"Kids cartoon","contentRating":"G"})
         )
         .await
@@ -1649,7 +1450,8 @@ async fn playback_after_a_correction_becomes_the_current_episode_immediately() {
 }
 
 async fn kids_metadata_fixture() -> (App, tokio::task::JoinHandle<()>) {
-    let a = fixture();
+    let mut a = fixture();
+    a.addons.allow_test_loopback = true;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let service = Router::new().route(
@@ -1696,6 +1498,7 @@ async fn kids_metadata_fixture() -> (App, tokio::task::JoinHandle<()>) {
         let hash = format!("{:x}", Sha256::digest(b"parent-token"));
         db.execute("INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,profile_id,kind,device_name,access_expires,refresh_expires,created_at) VALUES('parent',1,?1,'parent-refresh','unused',1,'browser','parent',?2,?2,0)",params![hash,util::now()+3600]).unwrap();
     }
+    crate::test_support::encrypt_fixture_sources(&a);
     (a, task)
 }
 #[tokio::test]
@@ -1802,11 +1605,11 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
     assert!(favorites["next_offset"].is_null());
     for (path, body) in [
         (
-            "/api/streams".to_string(),
+            "/api/v2/streams".to_string(),
             json!({"id":"adult","type":"movie","name":"safe","contentRating":"TV-Y"}),
         ),
         (
-            "/api/streams".to_string(),
+            "/api/v2/streams".to_string(),
             json!({"id":"unknown-episode","type":"series","series_id":"series","season":1,"episode":1,"name":"safe"}),
         ),
         (
@@ -1911,7 +1714,7 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
         &a,
         "member-token-1",
         "POST",
-        "/api/streams",
+        "/api/v2/streams",
         json!({"id":"episode-one","type":"series"}),
     )
     .await;
@@ -1934,7 +1737,10 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
             &a,
             "member-token-1",
             "GET",
-            &format!("/api/streams/{}?after=0", old_job["id"].as_str().unwrap()),
+            &format!(
+                "/api/v2/streams/{}?after=0",
+                old_job["id"].as_str().unwrap()
+            ),
             Value::Null
         )
         .await
@@ -1946,7 +1752,7 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
             &a,
             "member-token-1",
             "POST",
-            "/api/streams",
+            "/api/v2/streams",
             json!({"id":"episode-one","type":"series"})
         )
         .await
@@ -2053,7 +1859,7 @@ async fn parent_pin_rotation_invalidates_grants_and_attempts_are_rate_limited() 
     );
 }
 #[tokio::test]
-async fn kids_policy_and_family_changes_revoke_already_issued_resources() {
+async fn kids_policy_changes_revoke_already_issued_resources() {
     let (a, task) = kids_metadata_fixture().await;
     let (_, child) = request(
         &a,
@@ -2100,7 +1906,7 @@ async fn kids_policy_and_family_changes_revoke_already_issued_resources() {
         &a,
         "member-token-1",
         "POST",
-        "/api/streams",
+        "/api/v2/streams",
         json!({"type":"movie","id":"safe"}),
     )
     .await;
@@ -2119,62 +1925,12 @@ async fn kids_policy_and_family_changes_revoke_already_issued_resources() {
             &a,
             "member-token-1",
             "GET",
-            &format!("/api/streams/{job_id}?after=0"),
+            &format!("/api/v2/streams/{job_id}?after=0"),
             Value::Null
         )
         .await
         .1["error_code"],
         "profile_policy_changed"
-    );
-    let (_, job) = request(
-        &a,
-        "member-token-1",
-        "POST",
-        "/api/streams",
-        json!({"type":"movie","id":"safe"}),
-    )
-    .await;
-    let job_id = job["id"].as_str().unwrap();
-    {
-        let db = a.db.lock().unwrap();
-        db.execute("INSERT INTO family_channels(id,data) VALUES('family:kids',?1)",[json!({"id":"family:kids","enabled":true,"country":"US","language":"en","category":"Kids"}).to_string()]).unwrap();
-        db.execute("UPDATE family_channels SET data=json_set(data,'$.category','Movies') WHERE id='family:kids'",[]).unwrap();
-    }
-    assert_eq!(
-        request(
-            &a,
-            "member-token-1",
-            "GET",
-            &format!("/api/streams/{job_id}?after=0"),
-            Value::Null
-        )
-        .await
-        .1["error_code"],
-        "profile_policy_changed"
-    );
-    assert_eq!(
-        request(
-            &a,
-            "member-token-1",
-            "GET",
-            "/api/guide/family%3Akids",
-            Value::Null
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        request(
-            &a,
-            "member-token-1",
-            "POST",
-            "/api/playback",
-            json!({"channel_id":"iptv:1:1"})
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
     );
     task.abort();
 }
@@ -2403,7 +2159,7 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
                 &a,
                 "member-token-1",
                 "POST",
-                "/api/streams",
+                "/api/v2/streams",
                 json!({"type":"series","id":episode,"series_id":"mixed"})
             )
             .await
@@ -2557,7 +2313,11 @@ async fn device_profile_management_preserves_pairing_and_household_boundaries() 
             request(&a, "member-token-1", "GET", path, Value::Null)
                 .await
                 .0,
-            StatusCode::FORBIDDEN
+            if retired::is_path(path) {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::FORBIDDEN
+            }
         );
     }
     assert_eq!(

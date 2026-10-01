@@ -1,22 +1,32 @@
 use super::*;
 
+#[derive(Clone)]
+enum SyncGuard {
+    Account(refresh_v2::Guard),
+}
+impl SyncGuard {
+    fn validate(&self, db: &Connection) -> Result<(), String> {
+        match self {
+            Self::Account(g) => g.validate(db),
+        }
+    }
+}
+
 impl ProviderService {
     /// Fetch everything before starting a transaction: failed syncs preserve the old index.
+    #[cfg(test)]
     pub async fn sync(&self, id: i64) -> Result<Value, String> {
         self.sync_with_guard(id, None).await
     }
-    pub(crate) async fn sync_catalog(
+    pub(super) async fn sync_account(
         &self,
         id: i64,
-        guard: crate::automation::CatalogLease,
+        guard: refresh_v2::Guard,
     ) -> Result<Value, String> {
-        self.sync_with_guard(id, Some(guard)).await
+        self.sync_with_guard(id, Some(SyncGuard::Account(guard)))
+            .await
     }
-    async fn sync_with_guard(
-        &self,
-        id: i64,
-        guard: Option<crate::automation::CatalogLease>,
-    ) -> Result<Value, String> {
+    async fn sync_with_guard(&self, id: i64, guard: Option<SyncGuard>) -> Result<Value, String> {
         let access = guard.clone();
         let provider = self
             .blocking(move |s| {
@@ -26,8 +36,21 @@ impl ProviderService {
                 s.provider(id)
             })
             .await?;
-        if guard.is_some() {
-            accounts::login_report(self,&json!({"url":provider.url,"username":provider.username,"password":provider.password})).await?;
+        if provider.sealed.is_some() && !matches!(guard.as_ref(), Some(SyncGuard::Account(_))) {
+            return Err("client_update_required".into());
+        }
+        if matches!(guard.as_ref(), Some(SyncGuard::Account(_))) {
+            let credentials = credentials_v2::Credentials {
+                url: provider.url.clone(),
+                username: provider.username.clone(),
+                password: provider.password.clone(),
+            };
+            connections_v2::login(self, &credentials)
+                .await
+                .map_err(|error| match error {
+                    crate::account_api::Error::Code(code) => code.to_owned(),
+                    crate::account_api::Error::Auth(_) => "provider_refresh_cancelled".to_owned(),
+                })?;
         }
         let scopes = self.blocking(move |s| s.scopes(id)).await?;
         let actions = [
@@ -40,21 +63,20 @@ impl ProviderService {
         let automated = guard.is_some();
         let fetch = |i: usize| {
             let provider = &provider;
+            let access = guard.clone();
             async move {
                 if !enabled[i] {
                     return Ok(Value::Null);
                 }
+                self.blocking(move |s| {
+                    if let Some(guard) = access {
+                        guard.validate(&*s.lock()?)?;
+                    }
+                    Ok(())
+                })
+                .await?;
                 let value = self
-                    .api_bounded(
-                        provider,
-                        actions[i],
-                        &[],
-                        if automated {
-                            16 * 1024 * 1024
-                        } else {
-                            MAX_RESPONSE
-                        },
-                    )
+                    .api_bounded(provider, actions[i], &[], MAX_RESPONSE)
                     .await?;
                 array(&value)?;
                 Ok::<_, String>(value)
@@ -76,23 +98,12 @@ impl ProviderService {
             .await
     }
 
-    #[cfg(test)]
-    pub(super) fn store_index(
-        &self,
-        id: i64,
-        categories: Value,
-        live: Value,
-        movies: Value,
-        series: Value,
-    ) -> Result<Value, String> {
-        self.store_index_guarded(id, [categories, live, movies, series], None, None)
-    }
     fn store_index_guarded(
         &self,
         id: i64,
         index: [Value; 4],
         expected: Option<&Provider>,
-        guard: Option<&crate::automation::CatalogLease>,
+        guard: Option<&SyncGuard>,
     ) -> Result<Value, String> {
         let [categories, live, movies, series] = index;
         // Null means deliberately not fetched, not an empty index. Preserve that scope.
@@ -110,17 +121,6 @@ impl ProviderService {
             .iter()
             .filter_map(|v| Some((scalar(v.get("category_id")?)?, text(v, "category_name")?)))
             .collect();
-        if guard.is_some()
-            && (category_names.len() != categories.len()
-                || live.iter().any(|v| {
-                    v.get("category_id")
-                        .and_then(scalar)
-                        .filter(|id| !id.is_empty() && id != "0")
-                        .is_some_and(|id| !category_names.contains_key(&id))
-                }))
-        {
-            return Err("Provider index contains invalid entries".into());
-        }
         let mut candidates = Vec::new();
         for (items, kind) in [(movies, "movie"), (series, "series")] {
             for value in items {
@@ -143,29 +143,6 @@ impl ProviderService {
         }
         if let Some(guard) = guard {
             guard.validate(&db)?;
-            if fetched[0] && categories.is_empty() {
-                let had_categories:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM provider_live WHERE provider_id=?1 AND category_id IS NOT NULL AND category_id NOT IN ('','0'))",[id],|r|r.get(0)).map_err(db_error)?;
-                if had_categories {
-                    return Err(
-                        "Provider returned an empty catalog; previous metadata retained".into(),
-                    );
-                }
-            }
-            for (scope, items) in [("live", live), ("movie", movies), ("series", series)] {
-                let enabled = match scope {
-                    "live" => fetched[0],
-                    "movie" => fetched[1],
-                    _ => fetched[2],
-                };
-                if enabled && items.is_empty() {
-                    let prior:bool=if scope=="live" {db.query_row("SELECT EXISTS(SELECT 1 FROM provider_live WHERE provider_id=?1)",[id],|r|r.get(0))}else{db.query_row("SELECT EXISTS(SELECT 1 FROM provider_vod WHERE provider_id=?1 AND kind=?2)",params![id,scope],|r|r.get(0))}.map_err(db_error)?;
-                    if prior {
-                        return Err(
-                            "Provider returned an empty catalog; previous metadata retained".into(),
-                        );
-                    }
-                }
-            }
         }
         let tx = db.transaction().map_err(db_error)?;
         let exists: bool = tx
@@ -194,8 +171,8 @@ impl ProviderService {
         if active[0] {
             tx.execute("DELETE FROM provider_live WHERE provider_id=?1", [id])
                 .map_err(db_error)?;
-            let mut stmt = tx.prepare("INSERT INTO provider_live(id,provider_id,stream_id,name,logo,category,category_id,epg_channel_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").map_err(db_error)?;
-            for value in live {
+            let mut stmt = tx.prepare("INSERT INTO provider_live(id,provider_id,stream_id,name,logo,category,category_id,epg_channel_id,ordinal) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)").map_err(db_error)?;
+            for (ordinal, value) in live.iter().enumerate() {
                 let stream = stream_id(value, "stream_id").ok_or("Invalid live stream ID")?;
                 let category_id = value.get("category_id").and_then(scalar);
                 let category = category_id
@@ -211,10 +188,13 @@ impl ProviderService {
                     text(value, "stream_icon"),
                     category,
                     category_id,
-                    text(value, "epg_channel_id")
+                    text(value, "epg_channel_id"),
+                    ordinal as i64
                 ])
                 .map_err(db_error)?;
             }
+            catalog_v2::replace_categories(&tx, id, categories).map_err(db_error)?;
+            tx.execute("INSERT INTO provider_live_generations(provider_id,generation) VALUES(?1,1) ON CONFLICT(provider_id) DO UPDATE SET generation=generation+1", [id]).map_err(db_error)?;
         }
         // UPSERT instead of REPLACE preserves manual overrides for stable candidate IDs.
         let mut current = HashSet::new();
@@ -271,9 +251,11 @@ impl ProviderService {
         if let Some(guard) = guard {
             guard.validate(&tx)?;
         }
+        let counts = json!({"provider_id":id,"live":if active[0] {live.len()} else {0},"vod":if active[1] {movies.len()} else {0},"series":if active[2] {series.len()} else {0}});
+        if let Some(SyncGuard::Account(guard)) = guard {
+            guard.complete(&tx, &counts)?;
+        }
         tx.commit().map_err(db_error)?;
-        Ok(
-            json!({"provider_id":id,"live":if active[0] {live.len()} else {0},"vod":if active[1] {movies.len()} else {0},"series":if active[2] {series.len()} else {0}}),
-        )
+        Ok(counts)
     }
 }

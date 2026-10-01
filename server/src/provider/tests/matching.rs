@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn unspecified_episode_containers_use_transport_route_not_live_kind() {
-    let s = service();
+    let mut s = service();
     let p = add_provider(&s);
     let id = insert_candidate(&s, p, "9562", "series");
     s.override_match(json!({"vod_id":id,"type":"series","metadata_id":"opaque:series:bb"}))
@@ -18,6 +18,35 @@ async fn unspecified_episode_containers_use_transport_route_not_live_kind() {
     ]}});
     s.lock().unwrap().execute("INSERT INTO provider_cache(provider_id,cache_key,expires_at,payload) VALUES(?1,'get_series_info:9562',?2,?3)",params![p,crate::util::now()+300,info.to_string()]).unwrap();
     s.update(p, json!({"enable_live":false})).unwrap();
+    let vault = crate::test_support::vault();
+    {
+        let db = s.lock().unwrap();
+        db.execute_batch("CREATE TABLE provider_ownership(provider_id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL)").unwrap();
+        db.execute("INSERT INTO provider_ownership VALUES(?1,1)", [p])
+            .unwrap();
+        let secret = vault.seal(1,"xtream",&p.to_string(),json!({"url":"https://example.com/base/","username":"user","password":"SUPER_SECRET"}).to_string().as_bytes()).unwrap();
+        db.execute(
+            "INSERT INTO provider_credentials_v2 VALUES(?1,1,?2)",
+            params![p, secret],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE providers SET url='',username='',password='',credentials_version=1 WHERE id=?1",
+            [p],
+        )
+        .unwrap();
+        use sha2::{Digest, Sha256};
+        let record = format!("{p}:{:x}", Sha256::digest(b"get_series_info:9562"));
+        let payload = vault
+            .seal(1, "xtream-cache", &record, info.to_string().as_bytes())
+            .unwrap();
+        db.execute(
+            "UPDATE provider_cache SET payload=?2 WHERE provider_id=?1",
+            params![p, payload],
+        )
+        .unwrap();
+    }
+    s.vault = Some(vault);
     for (episode, stream, ext) in [
         (1, "2008185", "ts"),
         (2, "2008186", "ts"),
@@ -42,7 +71,12 @@ async fn unspecified_episode_containers_use_transport_route_not_live_kind() {
         .as_str()
         .unwrap()
         .ends_with("/movie/user/SUPER_SECRET/2318.mp4"));
-    s.update(p, json!({"enable_live":true,"enable_series":false}))
+    s.lock()
+        .unwrap()
+        .execute(
+            "UPDATE providers SET enable_live=1,enable_series=0 WHERE id=?1",
+            [p],
+        )
         .unwrap();
     assert!(s
         .streams(json!({"type":"series","id":"opaque:series:bb:1:1"}))
@@ -130,26 +164,6 @@ fn overrides_are_authoritative_and_type_checked() {
     .is_empty());
     assert!(s.matches().unwrap().as_array().unwrap().is_empty());
 }
-#[test]
-fn deleting_provider_removes_all_owned_rows() {
-    let s = service();
-    let p = add_provider(&s);
-    let id = insert_candidate(&s, p, "10", "movie");
-    s.override_match(json!({"vod_id":id,"metadata_id":"tt1234567","type":"movie"}))
-        .unwrap();
-    s.delete(p).unwrap();
-    assert_eq!(s.list().unwrap(), json!([]));
-    assert_eq!(s.matches().unwrap(), json!([]));
-    assert_eq!(
-        s.lock()
-            .unwrap()
-            .query_row("SELECT count(*) FROM provider_matches", [], |r| r
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
-    assert!(s.delete(p).is_err());
-}
 
 #[test]
 fn credential_path_segments_are_encoded() {
@@ -159,6 +173,7 @@ fn credential_path_segments_are_encoded() {
         url: "https://example.com/prefix/player_api.php".into(),
         username: "a/b".into(),
         password: "p?# /".into(),
+        sealed: None,
     };
     let url = media_url(&p.url, &p.username, &p.password, "movie", "12", "mkv").unwrap();
     assert_eq!(

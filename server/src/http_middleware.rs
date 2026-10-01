@@ -1,6 +1,14 @@
 use super::*;
 
+pub(crate) async fn private_api_response(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    response
+}
+
 pub(crate) async fn json_errors(req: Request, next: Next) -> Response {
+    let v2 = req.uri().path().starts_with("/v2/") || req.uri().path().starts_with("/api/v2/");
     let response = next.run(req).await;
     if response.status().is_client_error()
         && !response
@@ -10,6 +18,13 @@ pub(crate) async fn json_errors(req: Request, next: Next) -> Response {
             .is_some_and(|s| s.starts_with("application/json"))
     {
         let status = response.status();
+        if v2 {
+            // Framework rejections can contain a submitted value or parser
+            // diagnostic. Preserve their HTTP status, never their body.
+            let mut response = account_api::Error::Code("invalid_v2_request").into_response();
+            *response.status_mut() = status;
+            return response;
+        }
         return ApiError(
             status,
             status
@@ -85,6 +100,9 @@ pub(crate) async fn authorize_resources(
         .strip_prefix("/api")
         .unwrap_or(req.uri().path())
         .to_owned();
+    if retired::is_path(&path) {
+        return retired::reject().await.into_response();
+    }
     let result = blocking(move || {
         let segments: Vec<_> = path.trim_matches('/').split('/').collect();
         let media_route = matches!(
@@ -165,4 +183,132 @@ pub(crate) async fn authorize_resources(
     }
     let response = next.run(req).await;
     kids::after(&app, &policy_path, response).await
+}
+
+#[cfg(test)]
+mod v2_error_tests {
+    use crate::{auth_integration_tests::fixture, router, test_support::request};
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn v2_framework_rejections_have_safe_codes_without_changing_legacy_or_auth() {
+        let app = fixture();
+        for (method, path) in [
+            ("DELETE", "/api/v2/addons/private-sentinel"),
+            ("DELETE", "/api/v2/iptv/connections/private-sentinel"),
+            ("GET", "/api/v2/iptv/connections/private-sentinel/refresh"),
+            (
+                "PUT",
+                "/api/v2/iptv/connections/private-sentinel/credentials",
+            ),
+            ("GET", "/api/v2/streams/%FF"),
+            ("GET", "/api/v2/playback/%FF"),
+            ("GET", "/api/v2/iptv/guide/%FF"),
+            ("POST", "/api/v2/gateways/%FF/check"),
+        ] {
+            let (status, body) = request(&app, "member-token-1", method, path, json!({})).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {body}");
+            assert_eq!(body["error_code"], "invalid_v2_request", "{path}: {body}");
+            assert!(!body.to_string().contains("private-sentinel"));
+        }
+        let (status, error) = request(
+            &app,
+            "invalid-token",
+            "DELETE",
+            "/api/v2/addons/private-sentinel",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{error}");
+        assert_ne!(error["error_code"], "invalid_v2_request");
+        let (_, legacy) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/meta/%FF/item",
+            Value::Null,
+        )
+        .await;
+        assert_ne!(legacy["error_code"], "invalid_v2_request");
+        app.db
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO kids_profiles(profile_id,enabled) VALUES(1,1)",
+                [],
+            )
+            .unwrap();
+        let (status, error) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/v2/iptv/live/channels",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(error["error_code"], "parent_required");
+    }
+
+    #[tokio::test]
+    async fn v2_query_and_json_rejections_keep_route_specific_safe_codes() {
+        let app = fixture();
+        for (path, expected) in [
+            (
+                "/api/v2/addons?limit=private-sentinel",
+                "invalid_catalog_query",
+            ),
+            (
+                "/api/v2/iptv/connections?limit=private-sentinel",
+                "invalid_catalog_query",
+            ),
+            (
+                "/api/v2/iptv/live/channels?limit=private-sentinel",
+                "invalid_catalog_query",
+            ),
+            (
+                "/api/v2/iptv/matches?limit=private-sentinel",
+                "invalid_matches_query",
+            ),
+            (
+                "/api/v2/streams/job?after=private-sentinel",
+                "invalid_discovery_cursor",
+            ),
+        ] {
+            let (status, body) = request(&app, "member-token-1", "GET", path, Value::Null).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(body["error_code"], expected);
+            assert!(!body.to_string().contains("private-sentinel"));
+        }
+        for (path, expected) in [
+            ("/api/v2/addons", "invalid_addon_endpoint"),
+            ("/api/v2/iptv/connections", "invalid_provider_configuration"),
+            ("/api/v2/gateways", "invalid_gateway_configuration"),
+            ("/api/v2/playback", "invalid_playback_request"),
+            ("/api/v2/streams", "invalid_discovery_request"),
+        ] {
+            let response = router(app.clone(), None)
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("authorization", "Bearer member-token-1")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{private-sentinel"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(body["error_code"], expected);
+            assert!(!body.to_string().contains("private-sentinel"));
+        }
+    }
 }

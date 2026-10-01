@@ -8,7 +8,7 @@ Thanks for your interest. VIPTV is a multi-repository product; this repository o
 2. Search this repository's GitHub Issues before opening a new one; use the needs-triage, needs-info, ready-for-agent, ready-for-human and wontfix labels.
 3. The shared `viptv-provider` crate is vendored from [viptv-org/core](https://github.com/viptv-org/core) into `server/provider`. Edit it in core, then run `scripts/sync-provider.sh sync ../core`; CI rejects direct edits to the vendored copy.
 4. Never commit credentials, tokens, provider URLs or private topology. Production migrations must preserve the named `viptv_viptv_data` volume.
-5. Validate before pushing (from `server/`): `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked -- --include-ignored --test-threads=2` (set `VIPTV_TEST_FFMPEG`/`VIPTV_TEST_FFPROBE` for the real-media tests), plus the Docker build and `scripts/container-check.sh` for packaging changes.
+5. Validate before pushing (from `server/`): `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`. For packaging use `node tests/validate_deployment.cjs`, `python3 tests/test_host_check.py` and the server-only Docker build. Real media runs only through `bash scripts/container-check.sh LOCAL_GATEWAY_IMAGE` in the disposable network-none harness; it does not run all ignored tests against a normal host or production.
 
 ## License
 

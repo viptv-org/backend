@@ -9,8 +9,6 @@ use axum::{
 use tower::ServiceExt;
 use viptv_server::{router, router_with_tv, App};
 
-use common::playback;
-
 // Both fixtures keep one session and unavailable media tools; only the mount differs.
 fn application() -> (Router, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
@@ -22,12 +20,6 @@ fn application() -> (Router, tempfile::TempDir) {
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),
-        playback(
-            root.path(),
-            "missing-test-ffmpeg",
-            "missing-test-ffprobe",
-            1,
-        ),
     )
     .unwrap();
     (router(app, Some(root.path().to_path_buf())), root)
@@ -46,7 +38,6 @@ fn tv_application() -> (Router, tempfile::TempDir, tempfile::TempDir) {
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),
-        playback(dashboard.path(), "missing", "missing", 1),
     )
     .unwrap();
     (

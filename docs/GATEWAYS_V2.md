@@ -1,0 +1,124 @@
+# Account gateway configuration and encrypted keys
+
+This is implementation-branch functionality, not a production cutover. Gateway
+registration, validation, grants and v2 lifecycle routing are implemented.
+Reviewed client candidates now adopt v2. The isolated cleanup candidate removes
+embedded playback, with coordinated adoption, reviewed database operations and
+deployment approval still outstanding. Source fixtures do not establish public
+multi-tenant readiness or physical TV playback.
+
+## Operator-managed encryption
+
+VIPTV_SECRETS_KEYRING is a JSON object with an active key ID and up to eight
+named keys. Each value is the standard-Base64 encoding of 32 random bytes:
+
+```json
+{"active":"master_2026","keys":{"master_2026":"BASE64_ENCODED_32_BYTE_KEY"}}
+```
+
+The example is a placeholder, not a usable key. Supply real material through
+private deployment-secret configuration, never a repository or public response.
+Malformed configuration stops backend startup. Leaving it unset does not create
+an insecure default: saving gateway keys fails with secret_store_not_configured.
+Keep the keyring separately from database backups. Losing it makes saved
+credentials unrecoverable unless the correct keys are restored.
+
+Secrets use AES-256-GCM with a fresh OS-random 96-bit nonce. Authenticated context
+includes format version, key ID, account ID, purpose and record ID. Moving or
+altering ciphertext across records/accounts fails authentication. The database
+contains a versioned key-ID/nonce/ciphertext envelope, not the integration key.
+Debug output is redacted, and temporary plaintext buffers are zeroized.
+
+New writes use the active key; older retained keys can still decrypt their
+envelopes. Automatic bulk re-encryption is not implemented. Do not remove an old
+key until every affected record has been deliberately re-encrypted. This change
+includes backup-first explicit provider/addon encryption tools. They are
+implemented/fixture-tested; no production secret migration is inferred.
+
+## Management API
+
+All endpoints require a full account session and parent authorization when a
+selected kids profile is locked. Paired-device sessions cannot manage settings.
+
+- GET /api/v2/gateways: permitted gateway metadata and encryption-configuration
+  status. No integration keys or ciphertext are returned.
+- POST /api/v2/gateways: name, endpoint, namespace, integration_key, optional
+  priority (default 100). The endpoint/key/scopes are checked before saving.
+- PATCH /api/v2/gateways/:id: change name, priority and/or enabled. Cosmetic or
+  ranking changes do not change the credential revision.
+- PUT /api/v2/gateways/:id: replace connection configuration with an explicitly
+  supplied key, preserving the gateway ID and incrementing its revision. An
+  existing hidden key is never silently sent to a newly entered endpoint.
+- POST /api/v2/gateways/:id/check: verify the saved credential and namespace.
+  Returns `ready`, `version` and additive `available` capacity hints
+  (`inputs`, `outputs`, `viewers`), or `null` when the gateway omits hints. These
+  describe the authorized integration key's capacity at check time, not a
+  reservation or a server-wide account/job directory. Granted recipients may
+  check capacity but cannot manage the registration or list its recipients.
+- DELETE /api/v2/gateways/:id: idempotent owner-only removal.
+- PUT /api/v2/gateways/:id/grants: account_id plus enabled, for a server operator
+  explicitly granting/revoking access to its own gateway.
+- GET /api/v2/gateways/:id/grants: the same operator/registration-owner boundary.
+  Query `limit` defaults to 50 and permits 1–200; `cursor` is opaque and bound to
+  that operator account and gateway. Returns `{items, next_cursor}` with only
+  `account_id` and `enabled: true` per recipient. Revocation deletes the grant,
+  so revoked recipients are absent. No account names, keys or ciphertext appear.
+
+The server operator role is named `owner` in the authentication contract.
+Owning a gateway registration alone does not confer this role. Both recipient
+list reads and grant writes require the role and registration ownership, a full
+account session and the existing parent authorization. The role never permits
+inspection of another account's private gateway or grants.
+
+A registered gateway is private to its owning account. There is no implicit
+global/family default and no public grant. A grant permits use/checking, not
+editing another account's connection. Operator role does not bypass ownership.
+Recipients never receive the integration key. Users may also register their own
+connection using a URL and scoped key supplied to them directly.
+
+Use an integration key beginning with pgk_, not the gateway's bootstrap API_KEY.
+The key must authorize the selected namespace and capabilities/create/read/renew/
+release operations. The gateway's capability response must report these scopes.
+Wrong gateway credentials return a configuration error, not a backend-login 401.
+
+Endpoint URLs must be public HTTPS base URLs and cannot contain userinfo, query
+parameters or fragments. A reverse-proxy path prefix is supported. This rule is
+for gateway control endpoints; IPTV source URLs may still use HTTP. Private
+gateway destinations and operator allowlists are not implemented in this slice.
+
+Each control request resolves, validates and pins destination addresses while
+retaining the original TLS hostname. Redirects and inherited proxies are
+disabled. DNS/connect/body time and response size are bounded; at most four
+gateway checks run concurrently. Registration rejects missing scopes, unready
+services, incompatible responses and duplicate endpoint/namespace records.
+
+Limits are 16 owned and 64 total authorized connections per account. Authenticated
+API responses use no-store. Existing sessions and grants are revalidated before
+the result of an in-flight connection check is returned.
+
+## Evidence and remaining work
+
+Tests cover ciphertext randomization, tampering, account/purpose/record binding,
+old-key decryption, no plaintext fallback, redacted output, explicit grants,
+operator-role boundaries, missing/wrong keyrings, private/reserved destinations,
+redirect rejection, scope failures and bounded capability responses. Network
+fixtures use a test-only loopback override, never a production configuration flag.
+
+An opt-in interoperability test starts the independent gateway executable, issues
+a real scoped integration key through its API, then registers and checks it through
+the backend router. Run it with VIPTV_TEST_GATEWAY_BINARY, VIPTV_TEST_FFMPEG and
+VIPTV_TEST_FFPROBE set. This verifies the HTTP credential/capability contract,
+not playback-session forwarding or a public HTTPS deployment.
+
+Playback lifecycle tests additionally cover native direct policy, mandatory
+Roku/Vizio gateway delivery, capacity/priority selection, active affinity,
+cross-account denial, grant/config revocation and late-start cancellation.
+An isolated container fixture also checks real HLS delivery through the separate
+gateway. Historical pre-cleanup runs kept the backend engine idle; its removal
+requires a rerun against the exact cleanup revision. See PLAYBACK_V2.md.
+
+Encryption and client candidates have their own source/fixture evidence.
+Remaining gates include production migration/rollback, coordinated rollout,
+public DNS/TLS/redirect checks, failure/restart/stress scenarios and physical
+platform/track/4K qualification. Network-none media evidence qualifies only the
+recorded backend/gateway/container pairing, not real providers or ingress.

@@ -1,43 +1,5 @@
 use super::*;
 
-pub(crate) async fn providers(State(a): State<App>) -> ApiResult {
-    blocking(move || Ok(axum::Json(a.providers.list()?))).await
-}
-pub(crate) async fn add_provider(
-    State(a): State<App>,
-    axum::Json(v): axum::Json<Value>,
-) -> ApiResult {
-    blocking(move || Ok(axum::Json(a.providers.add(v)?))).await
-}
-pub(crate) async fn delete_provider(State(a): State<App>, Path(id): Path<i64>) -> ApiResult {
-    blocking(move || {
-        a.providers.delete(id)?;
-        Ok(axum::Json(json!({"ok":true})))
-    })
-    .await
-}
-pub(crate) async fn update_provider(
-    State(a): State<App>,
-    Path(id): Path<i64>,
-    axum::Json(v): axum::Json<Value>,
-) -> ApiResult {
-    blocking(move || {
-        a.providers
-            .update(id, v)
-            .map(axum::Json)
-            .map_err(|message| {
-                if message == "Stop provider playback before changing max_connections" {
-                    ApiError(StatusCode::CONFLICT, message)
-                } else {
-                    ApiError::from(message)
-                }
-            })
-    })
-    .await
-}
-pub(crate) async fn sync_provider(State(a): State<App>, Path(id): Path<i64>) -> ApiResult {
-    Ok(axum::Json(a.providers.sync(id).await?))
-}
 pub(crate) async fn addons(
     State(a): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -172,8 +134,9 @@ pub(crate) async fn start_streams(
     let id = text(&v, "id", 512)?.to_string();
     a.prune();
     let addons = a.addons.clone();
-    let sources = blocking(move || Ok(addons.entries()?))
-        .await?
+    let (sources, source_errors) = blocking(move || Ok(addons.entries_with_errors()?)).await?;
+    let source_errors = source_errors.into_iter().take(32).collect::<Vec<_>>();
+    let sources = sources
         .into_iter()
         .filter(|(_, _, m)| only_provider.is_none() && addon::supports(m, "stream", &kind, &id))
         .take(32)
@@ -184,7 +147,13 @@ pub(crate) async fn start_streams(
         created: Instant::now(),
         state: Mutex::new(JobState {
             events: vec![],
-            pending: sources.len() + usize::from(!only_addons),
+            pending: sources.len()
+                + usize::from(!only_addons)
+                + if only_provider.is_none() {
+                    source_errors.len()
+                } else {
+                    0
+                },
         }),
         notify: Notify::new(),
     });
@@ -199,6 +168,11 @@ pub(crate) async fn start_streams(
         }
         jobs.insert(jid.clone(), job.clone());
         a.own_resource("job", &jid);
+    }
+    if only_provider.is_none() {
+        for (id, error) in source_errors {
+            emit(&a, &job, &format!("addon:{id}"), Err(error));
+        }
     }
     for (aid, u, _) in sources {
         let a = a.clone();

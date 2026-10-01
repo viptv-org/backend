@@ -93,5 +93,5 @@ if (( failed )); then
   printf '\nPreflight failed. No containers or configuration files were changed.\n'
   exit 1
 fi
-printf '\nPreflight passed. This does NOT prove image build, GPU support, throughput, provider access, or Roku playback.\n'
+printf '\nPreflight passed. This does NOT prove image build, gateway/provider access or device playback.\n'
 printf 'Next: build/start using README.md, verify /api/health from the Roku LAN, then configure real sources privately.\n'
