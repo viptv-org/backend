@@ -20,8 +20,10 @@ qualification counts and pre-cutover controls below are checkpoint evidence only
 
 ## Reviewed frontend source checkpoint — 2026-09-30
 
-The dashboard submodule now pins ADM-002 management commit
-`93c93164ab6fc97b5d40ed6b8702628d82f987ed`; the viewing submodule pins
+The dashboard submodule pins web main
+`a6eca85f2bd0dcfaa9e31ab352300bbeccbaab98`, which merges ADM-002 management
+(`93c9316`) and bounded VOD browsing (`048651e`, see
+[BOUNDED_VOD_ACCEPTANCE.md](BOUNDED_VOD_ACCEPTANCE.md)); the viewing submodule pins
 `db9c5ab2da35867e83d970763f53a10628924501`. Account management uses the v2
 connection, matches and gateway contracts, while ordinary live viewing uses
 the raw cursor catalog and exact source selection. Retired organizer/setup
