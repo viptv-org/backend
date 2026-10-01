@@ -1,6 +1,6 @@
 # Delivery and migration
 
-Owner policy: backend has no automatic image publication, release or deployment
+Delivery policy (2026-09-27): backend has no automatic image publication, release or deployment
 workflow. Retain local Rust, frontend, static configuration and isolated gateway
 checks. Android/desktop/Roku/TV-web owning repositories provide their build artifacts.
 

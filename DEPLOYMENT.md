@@ -24,7 +24,7 @@ profiles and histories must not be reseeded or replaced.
 ## Separately approved upgrade checklist
 
 1. Review exact backend/gateway/frontend/client revisions and confirm every
-   ordinary media/catalog client has adopted v2, including the user's Android
+   ordinary media/catalog client has adopted v2, including the Android
    handoff. Retired endpoints explicitly require a client update.
 2. Coordinate downtime and inspect authenticated v2 viewer state/known clients;
    the removed /api/status is not an admission or maintenance oracle.

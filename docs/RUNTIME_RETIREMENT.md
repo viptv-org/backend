@@ -1,7 +1,7 @@
 # Engine-free runtime and offline retirement — 2026-09-30
 
-This is an isolated source candidate, not a production operation. The user's
-Android UI checkout still needs its reviewed handoff merged; do not deploy this
+This is an isolated source candidate, not a production operation. The Android
+v2 handoff is merged in source (viptv-org/android#6); still do not deploy this
 server under old media/catalog clients.
 
 The backend no longer links `viptv-playback-engine`, configures FFmpeg/GPU/media

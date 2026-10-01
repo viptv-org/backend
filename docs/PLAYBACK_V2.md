@@ -4,7 +4,7 @@ Status: implemented with reviewed client migration candidates; not deployed.
 The isolated cleanup candidate removes embedded execution and refuses retired
 routes with `client_update_required`. Its production binary does not link the
 old engine or relay media. Runtime cutover/offline retirement still require
-separate review; the user's Android UI checkout remains untouched.
+separate review.
 
 ## Start and lifecycle
 

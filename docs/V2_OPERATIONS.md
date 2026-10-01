@@ -3,8 +3,8 @@
 The development engine-free runtime/guarded offline retirement is described
 in [RUNTIME_RETIREMENT.md](RUNTIME_RETIREMENT.md). Reviewed clients now have v2
 adoption candidates; historical checkpoint paragraphs below do not override that
-source evidence or authorize production migration. The user's Android UI checkout
-still requires the handoff merged. Legacy runtime behavior cannot be retained in
+source evidence or authorize production migration. The Android v2 handoff is
+merged in source (viptv-org/android#6). Legacy runtime behavior cannot be retained in
 the cleanup candidate; retired API namespaces return `client_update_required`.
 
 This is a development-branch contract, not authorization to migrate production.
@@ -404,7 +404,7 @@ The **backup and export intentionally contain plaintext**. Retired configuration
 external copies, logs, filesystem snapshots and physical storage remnants are not
 securely erased by SQLite compaction. Keep artifacts private and apply the
 operator's retention policy; never commit or upload them. Reviewed client source
-adoption is separate from the user's outstanding handoff/production deployment.
+adoption is separate from production deployment.
 Operator-managed private-network exceptions, bulk key rotation, production
 migration and coordinated rollback remain unqualified; this is not a complete
 encrypted-secrets acceptance claim. Addon

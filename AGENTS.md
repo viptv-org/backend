@@ -1,6 +1,6 @@
 # viptv development
 
-Delivery policy (owner approved 2026-09-27): only Android, desktop, Roku and TV-web
+Delivery policy (2026-09-27): only Android, desktop, Roku and TV-web
 build workflows remain, triggered by main pushes and manual dispatch. No PR
 gates, automatic releases, image publishing or deployment. Retain local checks.
 This supersedes older automation/release-gate instructions below.

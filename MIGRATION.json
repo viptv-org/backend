@@ -20,7 +20,7 @@
       "source": "DEPLOYMENT.md",
       "destination": "DEPLOYMENT.md",
       "sha256": "98cd9bbe715ecb7cfe7321e75810601ad5e4bcc9d8a812cab22c725277491606",
-      "extracted_sha256": "db9b9dffab628c6473e5a0fdee8d1d60da0686b10bb7d5ffb82b0bd873c3964d",
+      "extracted_sha256": "2217207d6bba1cf8db4d10c042981d5f159a21c140a864a04edba0b38084336f",
       "reason": " BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained. BE-002 engine-free public packaging/docs/helper checkpoint; original extraction hash retained."
     },
     {
