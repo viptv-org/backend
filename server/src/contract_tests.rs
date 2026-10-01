@@ -1,58 +1,30 @@
 //! Entirely in-process contract tests: no listeners, provider requests or temp files.
 use super::*;
 use axum::body::to_bytes;
-const DELIVERY_ERROR_MESSAGE: &str =
-    "This source cannot be played with the current playback configuration. Choose another source.";
 
+/// Retired embedded-engine diagnostics are no longer classified: they pass
+/// through as plain 400s without a recovery code, so no client can be steered by
+/// a message the current runtime never produces.
 #[tokio::test]
-async fn playback_errors_are_closed_and_leave_expiry_unchanged() {
-    for (status, message, display, code) in [
-        (
-            StatusCode::BAD_REQUEST,
-            "Stream expired; discover again",
-            "This stream has expired. Refresh the sources and choose it again.",
-            Some("source_expired"),
-        ),
-        (
-            StatusCode::BAD_REQUEST,
-            "Requested input audio track is unavailable",
-            "Requested input audio track is unavailable",
-            None::<&str>,
-        ),
-        (
-            StatusCode::BAD_REQUEST,
-            "Playback failed with an upstream error",
-            "Playback failed with an upstream error",
-            None::<&str>,
-        ),
-        (
-            StatusCode::NOT_ACCEPTABLE,
-            "Playback engine unavailable",
-            DELIVERY_ERROR_MESSAGE,
-            Some("delivery_unsupported"),
-        ),
-        (
-            StatusCode::NOT_ACCEPTABLE,
-            "Playback could not start; try forced transcoding or another stream",
-            DELIVERY_ERROR_MESSAGE,
-            Some("delivery_unsupported"),
-        ),
-        (
-            StatusCode::NOT_ACCEPTABLE,
-            "Could not inspect source video safely; try another stream",
-            DELIVERY_ERROR_MESSAGE,
-            Some("delivery_unsupported"),
-        ),
+async fn retired_engine_messages_are_not_classified() {
+    for message in [
+        "Stream expired; discover again",
+        "Playback capacity reached",
+        "Playback engine unavailable",
+        "Playback could not start; try forced transcoding or another stream",
+        "Could not inspect source video safely; try another stream",
+        "Media origin HTTP 404",
+        "Media origin unavailable",
+        "Cross-origin proxy media requires managed playback",
+        "All available connections are busy. Try this channel again shortly.",
     ] {
-        let response = ApiError(status, message.into()).into_response();
-        assert_eq!(response.status(), status);
+        let error = ApiError::from(message);
+        assert_eq!(error.api_error_code(), None, "{message}");
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{message}");
         let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
         let value: Value = serde_json::from_slice(&bytes).unwrap();
-        let expected = match code {
-            Some(code) => json!({"error":display,"error_code":code}),
-            None => json!({"error":display}),
-        };
-        assert_eq!(value, expected);
+        assert_eq!(value, json!({"error":message}));
     }
 }
 

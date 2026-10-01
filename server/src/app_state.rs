@@ -13,16 +13,9 @@ pub(crate) async fn blocking<T: Send + 'static>(
 }
 #[derive(Debug)]
 pub struct ApiError(pub StatusCode, pub String);
-// Messages that control wire behavior. The playback engine reports plain
-// strings, so status codes and client error codes are derived by matching
-// these constants in exactly one place each; never compare a display
-// message inline. The capacity message is single-sourced in the engine.
-pub(crate) const MSG_PLAYBACK_CAPACITY: &str = "Playback capacity reached";
-pub(crate) const MSG_DELIVERY_REFUSED: &str =
-    "Playback could not start; try forced transcoding or another stream";
-pub(crate) const MSG_ENGINE_UNAVAILABLE: &str = "Playback engine unavailable";
-pub(crate) const MSG_PROBE_UNSAFE: &str =
-    "Could not inspect source video safely; try another stream";
+// Messages that control wire behavior. Status codes and client error codes
+// are derived by matching these constants in exactly one place each; never
+// compare a display message inline.
 pub(crate) const MSG_PROFILE_REQUIRED: &str = "Profile selection required";
 pub(crate) const MSG_PARENT_REQUIRED: &str = "Parent PIN required";
 pub(crate) const MSG_PARENT_PIN_INVALID: &str = "Incorrect parent PIN";
@@ -36,44 +29,16 @@ impl ApiError {
             MSG_PARENT_REQUIRED => Some("parent_required"),
             MSG_PARENT_PIN_INVALID => Some("parent_pin_invalid"),
             MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
-            "Provider connection limit reached"
-            | "All available connections are busy. Try this channel again shortly." => {
-                Some("provider_connection_limit")
-            }
-            MSG_PLAYBACK_CAPACITY => Some("playback_capacity"),
-            "Stream expired; discover again"
-            | "Media origin HTTP 404"
-            | "Media origin HTTP 410" => Some("source_expired"),
-            "Media origin HTTP 401" | "Media origin HTTP 403" => Some("source_access_denied"),
-            "Media origin unavailable" => Some("source_unavailable"),
-            MSG_DELIVERY_REFUSED | MSG_ENGINE_UNAVAILABLE | MSG_PROBE_UNSAFE => {
-                Some("delivery_unsupported")
-            }
+            "Provider connection limit reached" => Some("provider_connection_limit"),
             _ => None,
         }
     }
 }
 impl From<String> for ApiError {
     fn from(s: String) -> Self {
-        // Interruption and capacity conditions are not client mistakes. Reporting
-        // them as 400 makes the client show a generic failure, and reporting
-        // capacity as 429 tells the viewer to retry something that will never
-        // succeed until they stop a session.
         let status = match s.as_str() {
             "client_update_required" => StatusCode::CONFLICT,
-            MSG_PLAYBACK_CAPACITY => StatusCode::SERVICE_UNAVAILABLE,
             "Provider connection limit reached" => StatusCode::TOO_MANY_REQUESTS,
-            "Media origin HTTP 401" | "Media origin HTTP 403" => StatusCode::FORBIDDEN,
-            "Media origin HTTP 404" | "Media origin HTTP 410" => StatusCode::GONE,
-            "Media origin unavailable" => StatusCode::BAD_GATEWAY,
-            "Cross-origin proxy media requires managed playback" => StatusCode::NOT_ACCEPTABLE,
-            // Delivery refusals say this client/server pair cannot deliver this
-            // source; the request itself was well formed. A 400 invites the
-            // client to retry with escalating transports (each re-preparing and
-            // re-probing the source), so they are terminal 406s instead.
-            MSG_DELIVERY_REFUSED | MSG_ENGINE_UNAVAILABLE | MSG_PROBE_UNSAFE => {
-                StatusCode::NOT_ACCEPTABLE
-            }
             _ => StatusCode::BAD_REQUEST,
         };
         Self(status, s)
@@ -104,11 +69,6 @@ impl IntoResponse for ApiError {
         let message = match self.api_error_code() {
             Some("client_update_required") => "Update VIPTV to use this server's current catalog and playback APIs.",
             Some("provider_connection_limit") => "This IPTV provider has reached its connection limit. Stop another stream or choose another provider.",
-            Some("playback_capacity") => "The server has reached its playback limit. Stop another stream or try again later.",
-            Some("source_expired") => "This stream has expired. Refresh the sources and choose it again.",
-            Some("source_access_denied") => "The provider rejected access to this stream. Check the provider account or choose another source.",
-            Some("source_unavailable") => "The provider could not be reached. Try again or choose another source.",
-            Some("delivery_unsupported") => "This source cannot be played with the current playback configuration. Choose another source.",
             _ => &self.1,
         };
         let mut body = json!({"error":message});
@@ -124,28 +84,17 @@ mod display_error_tests {
     use super::*;
     #[tokio::test]
     async fn capacity_errors_explain_recovery_without_conflating_rate_limits() {
-        for (message, code) in [
-            (
-                "Provider connection limit reached",
-                "provider_connection_limit",
-            ),
-            (
-                "All available connections are busy. Try this channel again shortly.",
-                "provider_connection_limit",
-            ),
-            (MSG_PLAYBACK_CAPACITY, "playback_capacity"),
-        ] {
-            let response = ApiError(StatusCode::TOO_MANY_REQUESTS, message.into()).into_response();
-            let bytes = axum::body::to_bytes(response.into_body(), 4096)
-                .await
-                .unwrap();
-            let body: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_eq!(body["error_code"], code);
-            assert!(body["error"]
-                .as_str()
-                .unwrap()
-                .contains("Stop another stream"));
-        }
+        let response = ApiError::from("Provider connection limit reached").into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error_code"], "provider_connection_limit");
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("Stop another stream"));
         assert_eq!(
             ApiError(StatusCode::TOO_MANY_REQUESTS, "Too many requests".into()).api_error_code(),
             None
