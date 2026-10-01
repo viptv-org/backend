@@ -51,6 +51,8 @@ pub(crate) fn init_in_transaction(tx: &rusqlite::Transaction<'_>) -> Result<()> 
         )
         .map_err(db_error)?;
     }
+    tx.execute_batch(include_str!("match_revisions_v2.sql"))
+        .map_err(db_error)?;
     Ok(())
 }
 
@@ -174,11 +176,21 @@ struct MatchCursor {
     filter: MatchFilter,
     provider: i64,
     id: String,
+    revision: i64,
+    direction: Direction,
+}
+#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Direction {
+    #[default]
+    Next,
+    Previous,
 }
 #[derive(Debug, Serialize)]
 pub(crate) struct MatchPage {
     pub items: Vec<Value>,
     pub next_cursor: Option<String>,
+    pub previous_cursor: Option<String>,
 }
 
 pub(crate) fn matches_page(
@@ -203,7 +215,7 @@ pub(crate) fn matches_page(
         .map(|word| format!("\"{}\"*", word.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(" AND ");
-    let (after_provider, after_id) = if let Some(cursor) = cursor {
+    let previous = if let Some(cursor) = cursor {
         if cursor.len() > MATCH_CURSOR_BYTES {
             return Err("invalid_cursor");
         }
@@ -213,33 +225,114 @@ pub(crate) fn matches_page(
                 .map_err(|_| "invalid_cursor")?,
         )
         .map_err(|_| "invalid_cursor")?;
-        if decoded.version != 1 || decoded.account != account || decoded.filter != filter {
+        if decoded.version != 2 || decoded.account != account || decoded.filter != filter {
             return Err("invalid_cursor");
         }
-        (decoded.provider, decoded.id)
-    } else {
-        (0, String::new())
-    };
-    let mut query = db
-        .prepare(include_str!("matches_page_v2.sql"))
-        .map_err(db_error)?;
-    let mut items=query.query_map(params![account,filter.provider_id,filter.kind,after_provider,after_id,search,limit+1],|row|Ok(json!({"vod_id":row.get::<_,String>(0)?,"provider_id":row.get::<_,i64>(1)?,"type":row.get::<_,String>(2)?,"name":row.get::<_,String>(3)?,"year":row.get::<_,Option<i64>>(4)?,"poster":row.get::<_,Option<String>>(5)?}))).map_err(db_error)?.collect::<std::result::Result<Vec<_>,_>>().map_err(db_error)?;
-    let more = items.len() > limit;
-    items.truncate(limit);
-    let next_cursor = if more {
-        let last = items.last().ok_or("invalid_cursor")?;
-        let value = MatchCursor {
-            version: 1,
-            account,
-            filter,
-            provider: last["provider_id"].as_i64().ok_or("invalid_cursor")?,
-            id: last["vod_id"].as_str().ok_or("invalid_cursor")?.into(),
-        };
-        Some(encode_page_cursor(&value, MATCH_CURSOR_BYTES)?)
+        Some(decoded)
     } else {
         None
     };
-    Ok(MatchPage { items, next_cursor })
+    // Ownership, revision and rows must come from one read snapshot.
+    let tx = db.unchecked_transaction().map_err(db_error)?;
+    let revision = tx
+        .query_row(
+            "SELECT revision FROM provider_match_revisions_v2 WHERE account_id=?1",
+            [account],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(db_error)?
+        .unwrap_or(0);
+    if previous
+        .as_ref()
+        .is_some_and(|cursor| cursor.revision != revision)
+    {
+        return Err("catalog_changed");
+    }
+    let read = |provider: i64, id: &str, reverse: bool, bound: usize| -> Result<Vec<Value>> {
+        let sql = include_str!("matches_page_v2.sql");
+        let sql = if reverse {
+            sql.replace(">(?4,?5)", "<(?4,?5)").replace(
+                "ORDER BY v.provider_id,v.id",
+                "ORDER BY v.provider_id DESC,v.id DESC",
+            )
+        } else {
+            sql.to_owned()
+        };
+        tx.prepare(&sql).map_err(db_error)?
+            .query_map(params![account,filter.provider_id,filter.kind,provider,id,search,bound],|row|Ok(json!({"vod_id":row.get::<_,String>(0)?,"provider_id":row.get::<_,i64>(1)?,"type":row.get::<_,String>(2)?,"name":row.get::<_,String>(3)?,"year":row.get::<_,Option<i64>>(4)?,"poster":row.get::<_,Option<String>>(5)?})))
+            .map_err(db_error)?.collect::<std::result::Result<Vec<_>,_>>().map_err(db_error)
+    };
+    let reverse = previous
+        .as_ref()
+        .is_some_and(|cursor| cursor.direction == Direction::Previous);
+    let mut items = read(
+        previous.as_ref().map_or(0, |cursor| cursor.provider),
+        previous.as_ref().map_or("", |cursor| cursor.id.as_str()),
+        reverse,
+        limit + 1,
+    )?;
+    let more = items.len() > limit;
+    items.truncate(limit);
+    if reverse {
+        items.reverse();
+    }
+    if items.is_empty() && previous.is_some() {
+        return Err("catalog_changed");
+    }
+    let encode = |row: &Value, direction| {
+        let value = MatchCursor {
+            version: 2,
+            account,
+            filter: filter.clone(),
+            provider: row["provider_id"].as_i64().ok_or("invalid_cursor")?,
+            id: row["vod_id"].as_str().ok_or("invalid_cursor")?.into(),
+            revision,
+            direction,
+        };
+        encode_page_cursor(&value, MATCH_CURSOR_BYTES)
+    };
+    let has_adjacent = |row: &Value, reverse| -> Result<bool> {
+        Ok(!read(
+            row["provider_id"].as_i64().ok_or("invalid_cursor")?,
+            row["vod_id"].as_str().ok_or("invalid_cursor")?,
+            reverse,
+            1,
+        )?
+        .is_empty())
+    };
+    let next_cursor = if let Some(last) = items.last() {
+        if if reverse {
+            has_adjacent(last, false)?
+        } else {
+            more
+        } {
+            Some(encode(last, Direction::Next)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let previous_cursor = if let Some(first) = items.first() {
+        if if reverse {
+            more
+        } else {
+            has_adjacent(first, true)?
+        } {
+            Some(encode(first, Direction::Previous)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    tx.commit().map_err(db_error)?;
+    Ok(MatchPage {
+        items,
+        next_cursor,
+        previous_cursor,
+    })
 }
 
 pub(crate) fn override_match(

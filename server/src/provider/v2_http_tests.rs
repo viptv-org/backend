@@ -114,6 +114,38 @@ async fn oversized_match_cursor_fails_before_emitting_an_unusable_token() {
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert_eq!(error["error_code"], "catalog_cursor_too_large");
     assert!(!error.to_string().contains(&long_id));
+    {
+        let db = app.db.lock().unwrap();
+        // Isolate a terminal oversized identity to exercise reverse encoding.
+        db.execute(
+            "DELETE FROM provider_vod WHERE provider_id=1 AND id<>?1",
+            [&long_id],
+        )
+        .unwrap();
+        db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,extension) VALUES('aaa',1,'first','movie','First','fixture','mp4')", []).unwrap();
+    }
+    let (status, first) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/iptv/matches?limit=1",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, error) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!(
+            "/api/v2/iptv/matches?limit=1&cursor={}",
+            first["next_cursor"].as_str().unwrap()
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(error["error_code"], "catalog_cursor_too_large");
     let db = app.db.lock().unwrap();
     assert_eq!(
         db.query_row(
@@ -122,7 +154,7 @@ async fn oversized_match_cursor_fails_before_emitting_an_unusable_token() {
             |r| r.get::<_, i64>(0)
         )
         .unwrap(),
-        235
+        2
     );
     assert_eq!(
         db.query_row(
@@ -202,8 +234,165 @@ async fn account_matches_are_paged_and_cursors_cannot_cross_accounts() {
 }
 
 #[tokio::test]
+async fn matches_traverse_both_directions_across_owned_providers_and_filters() {
+    let app = seeded();
+    {
+        let db = app.db.lock().unwrap();
+        for index in 0..39 {
+            db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,extension) VALUES(?1,2,?2,'series',?3,'fixture','mp4')", params![format!("raw:second:{index:04}"),index.to_string(),format!("Fixture series {index}")]).unwrap();
+        }
+    }
+    for filter in [
+        "",
+        "&kind=movie",
+        "&provider_id=2&kind=series&search=Fixture",
+    ] {
+        let base = format!("/api/v2/iptv/matches?limit=17{filter}");
+        let mut page = request(&app, "member-token-1", "GET", &base, Value::Null)
+            .await
+            .1;
+        assert!(page["previous_cursor"].is_null());
+        let first = page["items"].clone();
+        let mut forward = Vec::new();
+        loop {
+            forward.extend(
+                page["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["vod_id"].as_str().unwrap().to_owned()),
+            );
+            let Some(cursor) = page["next_cursor"].as_str() else {
+                break;
+            };
+            assert!(cursor.len() <= 2048);
+            let (status, next) = request(
+                &app,
+                "member-token-1",
+                "GET",
+                &format!("{base}&cursor={cursor}"),
+                Value::Null,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            page = next;
+        }
+        let mut backward = page["items"].as_array().unwrap().clone();
+        while let Some(cursor) = page["previous_cursor"].as_str() {
+            assert!(cursor.len() <= 2048);
+            let (status, previous) = request(
+                &app,
+                "member-token-1",
+                "GET",
+                &format!("{base}&cursor={cursor}"),
+                Value::Null,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let mut rows = previous["items"].as_array().unwrap().clone();
+            rows.extend(backward);
+            backward = rows;
+            page = previous;
+        }
+        assert_eq!(
+            page["items"].as_array().unwrap(),
+            &first.as_array().unwrap()[..page["items"].as_array().unwrap().len()]
+        );
+        assert_eq!(
+            forward,
+            backward
+                .iter()
+                .map(|row| row["vod_id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        );
+        let unique = forward.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), forward.len());
+        assert_eq!(
+            forward.len(),
+            match filter {
+                "" => 274,
+                "&kind=movie" => 235,
+                _ => 39,
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn match_cursors_reject_stale_owned_catalogs_but_ignore_foreign_mutations() {
+    for mutation in [
+        "UPDATE provider_vod SET name='Changed' WHERE id='vod:1:0200'",
+        "DELETE FROM provider_vod WHERE id='vod:1:0200'",
+        "UPDATE providers SET enable_movies=0 WHERE id=1",
+        "UPDATE provider_ownership SET account_id=2 WHERE provider_id=1",
+        "INSERT INTO provider_matches VALUES('vod:1:0200','tt1234567','movie')",
+    ] {
+        let app = seeded();
+        let (_, first) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/v2/iptv/matches?limit=17",
+            Value::Null,
+        )
+        .await;
+        let next = first["next_cursor"].as_str().unwrap();
+        let next_path = format!("/api/v2/iptv/matches?limit=17&cursor={next}");
+        let (status, second) =
+            request(&app, "member-token-1", "GET", &next_path, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{second}");
+        let reverse_path = format!(
+            "/api/v2/iptv/matches?limit=17&cursor={}",
+            second["previous_cursor"].as_str().unwrap()
+        );
+        {
+            let db = app.db.lock().unwrap();
+            db.execute(
+                "UPDATE provider_vod SET name='Foreign change' WHERE provider_id=3",
+                [],
+            )
+            .unwrap();
+            super::v2::init(&db).unwrap();
+            super::v2::init(&db).unwrap();
+        }
+        assert_eq!(
+            request(&app, "member-token-1", "GET", &next_path, Value::Null)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            request(
+                &app,
+                "member-token-1",
+                "GET",
+                &format!("{next_path}&kind=series"),
+                Value::Null
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        app.db.lock().unwrap().execute_batch(mutation).unwrap();
+        for path in [&next_path, &reverse_path] {
+            let (status, error) = request(&app, "member-token-1", "GET", path, Value::Null).await;
+            assert_eq!(status, StatusCode::CONFLICT, "{mutation}");
+            assert_eq!(error["error_code"], "catalog_changed");
+        }
+    }
+}
+
+#[tokio::test]
 async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
     let app = seeded();
+    let (_, before) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/iptv/matches",
+        Value::Null,
+    )
+    .await;
     let body = json!({"vod_id":"vod:1:0000","metadata_id":"tt1234567","type":"movie"});
     assert_eq!(
         request(&app, "member-token-1", "PUT", "/api/v2/iptv/matches", body)
@@ -211,6 +400,19 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
             .0,
         StatusCode::OK
     );
+    let (status, stale) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!(
+            "/api/v2/iptv/matches?cursor={}",
+            before["next_cursor"].as_str().unwrap()
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(stale["error_code"], "catalog_changed");
     let (_, first) = request(
         &app,
         "member-token-1",

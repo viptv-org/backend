@@ -127,3 +127,30 @@ production use yet. Account-owned connection CRUD is implemented as documented
 there. Durable account-owned initial/periodic refresh is also implemented;
 [addon encryption, protected public transport and guarded management](ADDONS_V2.md)
 are implemented; client adoption and remaining cutover gates are still open.
+## Account VOD matching pages
+
+`GET /api/v2/iptv/matches` accepts `provider_id`, `kind` (movie/series),
+`search`, `cursor` and `limit` (default 50, 1–200). It returns
+`{items, next_cursor, previous_cursor}`. Rows retain raw `vod_id` and
+`provider_id` values and are always ordered ascending by provider ID and VOD ID,
+including reverse responses. The first page has a null previous cursor; the
+terminal page has a null next cursor. Cursors select adjacent rows exclusively
+before the first row or after the last row; consumers must treat them as opaque.
+Each query collects at most limit + 1 rows and uses bounded adjacency probes,
+without an exact count or full-catalog snapshot.
+
+Tokens bind the account, filters, direction and account catalog revision.
+Changing ownership, provider availability, VOD rows or metadata mappings
+invalidates existing tokens with HTTP 409 `catalog_changed`; clients explicitly
+reload the list. This includes saving a match because mapped rows leave the
+unmatched result set. Foreign-account mutations do not invalidate owned pages.
+Reads use one SQLite transaction for ownership, revision and rows. Revisions
+are additive scalar state maintained by transactional triggers; initialization
+is idempotent and preserves all existing provider, source and mapping identities.
+
+Tokens remain capped at the existing 2048-byte VOD bound (within the 4096-byte
+catalog ceiling), for both directions. Oversized raw identifiers cause
+`catalog_cursor_too_large` without changing stored identities. Previous
+version-1 forward tokens lack snapshot scope and are rejected as invalid; reload
+to obtain version-2 tokens. Approved contract:
+[ADM-002-VOD-WINDOW](https://github.com/viptv-org/design/blob/deaf1f7bfcb6fe904ca7329b9ecd7d8300637e9a/ADMIN_V2.md#adm-002-vod-window--bounded-bidirectional-browsing).
