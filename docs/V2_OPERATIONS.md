@@ -24,10 +24,12 @@ The dashboard submodule pins web main
 `a6eca85f2bd0dcfaa9e31ab352300bbeccbaab98`, which merges ADM-002 management
 (`93c9316`) and bounded VOD browsing (`048651e`, see
 [BOUNDED_VOD_ACCEPTANCE.md](BOUNDED_VOD_ACCEPTANCE.md)); the viewing submodule pins
-tv-web main `4ffc7485512e42e92daaa0b1eca29ffe456b9d53`, which adopts Core
-`1f8483e` and video `514a332`, offers only plugin-reported desktop engines and
-ranks continuation sources against measured device capabilities (242 unit
-tests, build and targeted single-worker browser specs passed). Account management uses the v2
+tv-web main `e5789ab30361fba5816e0322bf3df98401604d75`, which labels both
+responsive player timeline ends as clocks (desktop parity, design#3) on top of
+`4ffc748`; that earlier pin adopts Core `1f8483e` and video `514a332`, offers
+only plugin-reported desktop engines and ranks continuation sources against
+measured device capabilities (242 unit tests, build and targeted single-worker
+browser specs passed at both pins). Account management uses the v2
 connection, matches and gateway contracts, while ordinary live viewing uses
 the raw cursor catalog and exact source selection. Retired organizer/setup
 controls are absent from the dashboard. This supersedes the historical notes
