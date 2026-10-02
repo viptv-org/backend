@@ -133,9 +133,18 @@ impl App {
                 json!([source, public["name"], public["title"]])
             };
             if input.requires_gateway {
-                // File selection is part of continuation identity even when
-                // the add-on uses identical display metadata for each file.
-                identity = json!([identity, input.file_index]);
+                // Public continuation identity is opaque and derived from
+                // private payload context, never an add-on's display label.
+                // Configuration includes producer account ownership/revision.
+                let canonical_headers: std::collections::BTreeMap<_, _> = headers.iter().collect();
+                identity = json!([
+                    source,
+                    configuration,
+                    url,
+                    canonical_headers,
+                    kind == "live",
+                    input.file_index
+                ]);
             }
             if source.starts_with("addon:") || source.starts_with("iptv:") {
                 public["source_addon_id"] = json!(source);

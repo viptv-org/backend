@@ -110,6 +110,12 @@ impl Input {
                 private_values.push(hint.into());
             }
         }
+        let url = if torrent || archive {
+            private_values.push(url.clone());
+            canonical_url(&url)?
+        } else {
+            url
+        };
         Some(Self {
             url,
             file_index,
@@ -117,6 +123,23 @@ impl Input {
             private_values,
         })
     }
+}
+
+fn canonical_url(value: &str) -> Option<String> {
+    let mut url = Url::parse(value).ok()?;
+    if url.scheme() == "magnet" {
+        let mut pairs: Vec<_> = url.query_pairs().into_owned().collect();
+        for (key, value) in &mut pairs {
+            if key == "xt" {
+                *value = value.to_ascii_lowercase();
+            } else if key == "tr" {
+                *value = Url::parse(value).ok()?.to_string();
+            }
+        }
+        pairs.sort();
+        url.query_pairs_mut().clear().extend_pairs(pairs);
+    }
+    Some(url.to_string())
 }
 
 fn validate_tracker(value: &str) -> Option<()> {

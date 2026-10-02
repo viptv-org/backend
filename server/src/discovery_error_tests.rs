@@ -123,6 +123,60 @@ use axum::{response::IntoResponse, routing::get, Router};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[tokio::test]
+async fn torrent_source_fingerprints_match_private_payload_and_stay_stable_on_rediscovery() {
+    let mut app = fixture();
+    app.addons.allow_test_loopback = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/stream/movie/:id", get(|| async {
+            axum::Json(json!({"streams":[
+                {"infoHash":"A".repeat(40),"fileIdx":2,"name":"Fixture","title":"Same label"},
+                {"infoHash":"b".repeat(40),"fileIdx":2,"name":"Fixture","title":"Same label"},
+                {"url":format!("magnet:?xt=urn:btih:{}", "a".repeat(40)),"fileIdx":2,"name":"Fixture","title":"Same label"}
+            ]}))
+        }))).await.unwrap();
+    });
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Fixture',?1,?2,1)",params![format!("{endpoint}/manifest.json"),json!({"id":"fixture","name":"Fixture","resources":["stream"],"types":["movie"]}).to_string()]).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
+    let first = discover(
+        &app,
+        json!({"type":"movie","id":"fixture","only_addons":true}),
+    )
+    .await;
+    let second = discover(
+        &app,
+        json!({"type":"movie","id":"fixture","only_addons":true}),
+    )
+    .await;
+    let first_rows = first["events"][0]["streams"].as_array().unwrap();
+    let second_rows = second["events"][0]["streams"].as_array().unwrap();
+    assert_eq!(first_rows.len(), 3);
+    assert_ne!(
+        first_rows[0]["source_fingerprint"],
+        first_rows[1]["source_fingerprint"]
+    );
+    assert_eq!(
+        first_rows[0]["source_fingerprint"],
+        first_rows[2]["source_fingerprint"]
+    );
+    for (first, second) in first_rows.iter().zip(second_rows) {
+        assert_eq!(first["source_fingerprint"], second["source_fingerprint"]);
+        assert_ne!(first["id"], second["id"]);
+    }
+    for private in [
+        "A".repeat(40),
+        "a".repeat(40),
+        "b".repeat(40),
+        "magnet:".into(),
+    ] {
+        assert!(!first.to_string().contains(&private));
+        assert!(!second.to_string().contains(&private));
+    }
+    task.abort();
+}
+
+#[tokio::test]
 async fn addon_torrent_discovery_retains_an_opaque_source_and_requires_gateway_on_android() {
     let mut app = fixture();
     app.addons.allow_test_loopback = true;
