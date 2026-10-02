@@ -18,7 +18,7 @@ for port in [8444,18444,18445,18446]:
  with socket.socket() as check:
   check.bind(('127.0.0.1',port))
 PYPORT
-id='' bridge_pid='' backend_pid='' caddy_pid='' 
+id='' bridge_pid='' backend_pid='' caddy_pid=''
 cleanup() {
  for pid in "$caddy_pid" "$backend_pid" "$bridge_pid"; do [[ -z "$pid" ]] || kill "$pid" 2>/dev/null || true; done
  [[ -z "$id" ]] || docker logs "$id" > "$q/gateway.log" 2>&1 || true
