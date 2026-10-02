@@ -52,9 +52,10 @@ namespace; that driver is separate from the production all-capabilities-dropped
 container envelope. The backend-to-gateway control hop intentionally uses its
 existing local HTTP cfg(test) override. Production HTTPS/DNS egress behavior,
 standalone backend startup configuration and real pairing are separate gates.
-This case covers approved HTTP metainfo inputs; infoHash/magnet metadata
-bootstrap, native desktop/Android Media3 torrent-output playback, managed
-alternate tracks, physical hardware and larger/repeated peer workloads remain
+The original case covers approved HTTP metainfo inputs. Controlled magnet and
+bounded repeated peer cases and Android managed input selection are recorded
+below. Native desktop torrent-output playback, audible alternate-language
+content, physical hardware and larger or hostile public peer workloads remain
 separate acceptance. It authorizes no deployment or production data access.
 
 `TORRENT_BROWSER_SERVE_ONLY=true` keeps the same real API/media stack available
@@ -102,3 +103,42 @@ inputs2/outputs2/viewers4 and full runner exit0 with cache/peer retirement.
 Actual delivered audio tags are eng then und. This is selected-input and
 managed playback proof, not audible Spanish sample identification. Native
 helper/source pins and screenshots remain in the Android qualification record.
+
+## Approved infoHash bootstrap and bounded multi-peer cases
+
+`PLAYBACK_TEST_MAGNET=true` makes the generated addon return infoHash/fileIdx
+rather than an HTTP metainfo URL. The real backend approves that opaque Source
+and sends magnet input to the unchanged enabled service. Controlled BEP5 DHT
+responders discover outbound BEP10/BEP9 metadata peers inside Docker network
+none. Container-only bootstrap DNS aliases never change host/production policy.
+`PLAYBACK_TEST_SWARM_PEERS=1..4` bounds peers and requires at least two actual
+payload contributors when more than one peer is advertised. Optional
+`TORRENT_BROWSER_TLS_PORT` and `TORRENT_BROWSER_BASE_PORT` reserve an independent
+lane (base, base+1, base+2); default native fixture ports remain unchanged.
+The runner copies each compiler executable into its private case before
+launching, so later builds cannot replace an active binary.
+
+Real backend/browser results using the same runtime image:
+
+| Case | Advertised/contributing peers | Metadata bytes | DHT queries | Delivered payload bytes / elapsed ms |
+| --- | --- | --- | --- | --- |
+| Single magnet | 1/1 | 4,990 | 16 | 4,014,795 / 19,996 |
+| Multi-peer first case | 3/2 | 9,980 | 18 | 4,014,631 / 25,863 |
+| Separate fresh cycle | 3/3 | 9,980 | 14 | 6,832,456 / 34,664 |
+| Copied executable fresh cycle | 3/3 | 16,350 | 20 | 5,601,160 / 29,731 |
+
+The final fresh cycle passes in 70.09 seconds with TV-web
+`ea1733497e0b8e0911fdc842aa597d2bfda32288`, Coref66 and video
+`550ab3503a670080a5c6f5e3ff619446c8fcd9e5`; its driver source is gateway
+`fbaac48c4628c918e4788250055d4562fd3b1270`. Earlier magnet cases used the
+previous TV29e/Coref66/video0eb pins. All cases exercise decoded three-second
+seek, actual renewals/releases, all2/2/4 admission reclamation, prompt idle cache
+eviction, peer transport retirement and owned shutdown. Final RGB MSE24.42494
+versus zero-origin3814.37458; two renewals and two releases. Byte counts include
+repeated block requests. These are bounded fresh-process repetitions; they do
+not qualify long-duration public swarms, arbitrary peer implementations or
+audible alternate-language content.
+
+Protocol references: [BEP5](https://www.bittorrent.org/beps/bep_0005.html),
+[BEP9](https://www.bittorrent.org/beps/bep_0009.html),
+[BEP10](https://www.bittorrent.org/beps/bep_0010.html).
