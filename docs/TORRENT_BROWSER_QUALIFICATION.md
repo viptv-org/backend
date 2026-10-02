@@ -92,3 +92,13 @@ the actual encoded HLS reports AAC/und. Identical silent source samples cannot
 prove audible language. This observer proves the actual selected input map;
 native decode, track-menu selection, Back, seek and release must still be
 verified through the app. The helper alone does not claim that acceptance.
+
+The independent fresh Android case executes this observer at source
+`31b2dc8551bc682cb9b60a0984b9b979308c31e4`: selector2, one matching observed
+output process and served-output digest match pass. The native lane separately
+reports immediate Audio selection/Back returning Spanish Current, a managed
+seek with decoded burned-in82.920, four lease DELETE200 responses, reclaimed
+inputs2/outputs2/viewers4 and full runner exit0 with cache/peer retirement.
+Actual delivered audio tags are eng then und. This is selected-input and
+managed playback proof, not audible Spanish sample identification. Native
+helper/source pins and screenshots remain in the Android qualification record.
