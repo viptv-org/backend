@@ -96,6 +96,7 @@ print('Gateway fixture: one passed; peer bytes='+metric[1]+' elapsed_ms='+metric
 result=q/'actual-browser-result.json'
 if result.exists():
  data=json.loads(result.read_text())
+ assert all(type(data[k]) in (int,float) for k in ['soughtMse','firstMse']), 'numeric browser metrics required'
  sought=float(data['soughtMse']); baseline=float(data['firstMse'])
  assert math.isfinite(sought) and math.isfinite(baseline)
  print(f'Actual backend browser: decoded seek MSE={sought:.5f} zero-origin MSE={baseline:.5f}')
