@@ -31,7 +31,7 @@ CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR="${BACKEND_TARGET_DIR:-$root/server/target}"
 artifact() { python3 -c 'import json,sys;r=[json.loads(l) for l in open(sys.argv[1])];a=[x["executable"] for x in r if x.get("reason")=="compiler-artifact" and x.get("target",{}).get("name")==sys.argv[2] and x.get("executable")];assert len(a)==1;print(a[0])' "$1" "$2"; }
 gateway_binary=$(artifact "$q/gateway-compile.json" torrent_browser)
 backend_binary=$(artifact "$q/backend-compile.json" viptv_server)
-id=$(docker run --detach --pull=never --init --network none --read-only --no-healthcheck --cap-drop ALL --cap-add NET_ADMIN --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add DAC_OVERRIDE --cap-add KILL --security-opt no-new-privileges --memory 1g --memory-swap 1g --pids-limit 256 --cpus 2 --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 --user 0:0 --env PLAYBACK_TEST_ISOLATED_NETWORK=container --env PLAYBACK_TEST_SERVICE_BINARY=/usr/local/bin/playback-gateway --env PLAYBACK_TEST_FFMPEG=/opt/ffmpeg/bin/ffmpeg --env PLAYBACK_TEST_FFPROBE=/opt/ffmpeg/bin/ffprobe --mount "type=bind,source=$gateway_binary,target=/fixtures/browser-fixture,readonly" --mount "type=bind,source=$q,target=/qualification" --entrypoint /fixtures/browser-fixture "$image" standalone_torrent_browser_uid10001 --ignored --exact --nocapture --test-threads=1)
+id=$(docker run --detach --pull=never --init --network none --read-only --no-healthcheck --cap-drop ALL --cap-add NET_ADMIN --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add DAC_OVERRIDE --cap-add KILL --security-opt no-new-privileges --memory 1g --memory-swap 1g --pids-limit 256 --cpus 2 --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 --user 0:0 --env PLAYBACK_TEST_DUAL_AUDIO="${PLAYBACK_TEST_DUAL_AUDIO:-false}" --env PLAYBACK_TEST_ISOLATED_NETWORK=container --env PLAYBACK_TEST_SERVICE_BINARY=/usr/local/bin/playback-gateway --env PLAYBACK_TEST_FFMPEG=/opt/ffmpeg/bin/ffmpeg --env PLAYBACK_TEST_FFPROBE=/opt/ffmpeg/bin/ffprobe --mount "type=bind,source=$gateway_binary,target=/fixtures/browser-fixture,readonly" --mount "type=bind,source=$q,target=/qualification" --entrypoint /fixtures/browser-fixture "$image" standalone_torrent_browser_uid10001 --ignored --exact --nocapture --test-threads=1)
 for _ in {1..200}; do [[ ! -f "$q/fixture.json" ]] || break; sleep .1; done
 [[ -f "$q/fixture.json" ]]
 setsid node "$root/scripts/torrent-browser-bridge.mjs" > "$q/bridge.log" 2>&1 </dev/null & bridge_pid=$!
@@ -66,7 +66,14 @@ CADDY
 setsid caddy run --config "$q/Caddyfile" > "$q/caddy.log" 2>&1 </dev/null & caddy_pid=$!
 for _ in {1..50}; do if curl -sS -o /dev/null "$VIPTV_TEST_BROWSER_ORIGIN/tv/" 2>/dev/null; then break; fi; sleep .1; done
 [[ $(curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}' "$VIPTV_TEST_BROWSER_ORIGIN/tv/") == '200 0' ]]
-timeout --signal=TERM --kill-after=5s 180s node "$root/scripts/torrent-browser-check.mjs" > "$q/browser.log" 2>&1
+if [[ "${TORRENT_BROWSER_SERVE_ONLY:-false}" == true ]]; then
+ printf 'Real synthetic backend/gateway fixture ready. Private configuration: %s\n' "$q"
+ # Native acceptance writes its completion marker after explicit lease release.
+ for _ in {1..2400}; do [[ ! -f "$q/native-complete" ]] || break; sleep .25; done
+ [[ -f "$q/native-complete" ]]
+else
+ timeout --signal=TERM --kill-after=5s 180s node "$root/scripts/torrent-browser-check.mjs" > "$q/browser.log" 2>&1
+fi
 node --input-type=module - <<'JS'
 import http from 'node:http';import{readFileSync,writeFileSync}from'node:fs';
 const q=process.env.QUALIFICATION_DIR+'/';const c=JSON.parse(readFileSync(q+'fixture.json'));
@@ -76,5 +83,6 @@ JS
 result=$(timeout 15s docker wait "$id")
 docker logs "$id" > "$q/gateway.log" 2>&1
 [[ "$result" == 0 ]]
-cat "$q/browser.log" "$q/gateway.log"
+[[ ! -f "$q/browser.log" ]] || cat "$q/browser.log"
+cat "$q/gateway.log"
 printf 'Actual backend/gateway browser proof passed. Private artifacts: %s\n' "$q"

@@ -55,3 +55,13 @@ This case covers approved HTTP metainfo inputs; infoHash/magnet metadata
 bootstrap, native desktop/Android Media3 torrent-output playback, managed
 alternate tracks, physical hardware and larger/repeated peer workloads remain
 separate acceptance. It authorizes no deployment or production data access.
+
+`TORRENT_BROWSER_SERVE_ONLY=true` keeps the same real API/media stack available
+for native acceptance, bounded to ten minutes. Write `native-complete` inside its
+printed private artifact directory only after explicit native lease release;
+the runner then verifies gateway admission/cache/peer cleanup. A gateway driver
+with `PLAYBACK_TEST_DUAL_AUDIO=true` supplies two mapped silent AAC inputs tagged
+eng/spa for managed track selection. That option is fixture generation, not
+native playback acceptance. Emulator ingress may translate delivery origins
+while retaining real API/lease/source/media state; never weaken the production
+private-endpoint validator to accept an emulator literal address.
