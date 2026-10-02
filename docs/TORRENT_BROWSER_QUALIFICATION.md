@@ -66,3 +66,25 @@ eng/spa for managed track selection. That option is fixture generation, not
 native playback acceptance. Emulator ingress may translate delivery origins
 while retaining real API/lease/source/media state; never weaken the production
 private-endpoint validator to accept an emulator literal address.
+
+## Native selected-input observation
+
+`scripts/observe-native-torrent-map.py PRIVATE_CASE_DIRECTORY 2` reads only the
+container whose `/qualification` mount matches that private directory. Within
+a bounded 20-second observation, it requires a ready native delivery selecting
+input index 2, then matches the delivery's media job to a real FFmpeg output
+path and verifies that process maps `0:2`. Old output jobs and non-FFmpeg
+processes cannot provide this proof. The script changes no service, lease or
+media state. Docker access is required.
+
+Raw process arguments may contain source/capability values; they are saved only
+as mode0600 `native-ffmpeg-argv.bin` inside the already-private directory and
+never printed. `native-audio-map.json` and stdout contain only the numeric
+selector, matching process count and a ready-output-match boolean.
+
+The qualified runtime labels tagged English HLS audio `eng` and other selected
+input languages `und`; native input index2 may therefore describe Spanish while
+the actual encoded HLS reports AAC/und. Identical silent source samples cannot
+prove audible language. This observer proves the actual selected input map;
+native decode, track-menu selection, Back, seek and release must still be
+verified through the app. The helper alone does not claim that acceptance.
