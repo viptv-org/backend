@@ -64,6 +64,8 @@ impl Default for Client {
 pub(crate) struct Capabilities {
     pub version: u32,
     pub ready: bool,
+    #[serde(default)]
+    pub torrent: bool,
     pub protocols: Vec<String>,
     pub namespaces: Vec<String>,
     #[serde(default)]

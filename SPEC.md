@@ -10,6 +10,13 @@ provider ownership, and move media execution into the independent gateway.
 HTTP and HTTPS IPTV sources remain supported. Account/admin UI adoption and
 client protocol updates are tracked separately; this branch is not deployed.
 
+Add-on torrent/archive source adoption follows reviewed design contract
+[`SRC-TORRENT-GATEWAY-001`](https://github.com/viptv-org/design/blob/1742afa2b50d30638fa46f3abc8c1a76638a51e1/specs/behavior/torrent-gateway-sources.md):
+private validated input and file selection retain opaque source handles and
+always use account-authorized gateway HLS on web, desktop and Android. Native
+torrent delivery and progressive integration remain deferred. The visual/assets
+DESIGN_REF below remains unchanged; this is explicit non-visual contract adoption.
+
 DESIGN_REF intentionally remains the baseline visual/asset pin while this
 non-visual backend adoption is in progress. No visual parity or completed
 cross-platform adoption is claimed. See docs/V2_OPERATIONS.md and the design

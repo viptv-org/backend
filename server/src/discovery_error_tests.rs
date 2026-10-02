@@ -123,6 +123,125 @@ use axum::{response::IntoResponse, routing::get, Router};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[tokio::test]
+async fn addon_torrent_discovery_retains_an_opaque_source_and_requires_gateway_on_android() {
+    let mut app = fixture();
+    app.addons.allow_test_loopback = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let hash = "1".repeat(40);
+    let reflected = hash.clone();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/stream/movie/:id", get(move || {
+            let hash = reflected.clone();
+            async move { axum::Json(json!({"streams":[{"infoHash":hash,"fileIdx":2,"name":"Fixture","title":hash}]})) }
+        }))).await.unwrap();
+    });
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Fixture',?1,?2,1)",params![format!("{endpoint}/manifest.json"),json!({"id":"fixture","name":"Fixture","resources":["stream"],"types":["movie"]}).to_string()]).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
+    let events = discover(
+        &app,
+        json!({"type":"movie","id":"fixture","only_addons":true}),
+    )
+    .await;
+    let rows = events["events"][0]["streams"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    let id = rows[0]["id"].as_str().unwrap();
+    assert!(
+        !events.to_string().contains(&hash),
+        "private torrent identity must stay off discovery wire"
+    );
+    assert!(rows[0].get("url").is_none());
+    assert!(rows[0].get("infoHash").is_none());
+    let (status, refused) = request(&app,"member-token-1","POST","/api/v2/playback",json!({"request_id":"torrent-fixture","stream_id":id,"client":{"platform":"android","can_play_direct":true,"max_width":1920,"max_height":1080,"video_codecs":["h264"],"audio_codecs":["aac"]}})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(refused["error_code"], "gateway_required");
+    task.abort();
+}
+
+#[tokio::test]
+async fn mixed_addon_torrent_sources_validate_private_input_without_losing_http_siblings() {
+    let mut app = fixture();
+    app.addons.allow_test_loopback = true;
+    let hash = "aB".repeat(20);
+    let source_url = "https://fixture.invalid/private-source.torrent?credential=fixture-private";
+    let raw = json!([
+        {"url":"https://fixture.invalid/movie.mp4","name":"HTTP"},
+        {"infoHash":hash,"fileIdx":2,"name":"Hash","sources":[format!("dht:{hash}"),"tracker:udp://tracker.fixture.invalid:80"]},
+        {"url":format!("magnet:?xt=urn:btih:{hash}"),"name":"Magnet","description":hash,"behaviorHints":{"filename":format!("{hash}.mkv"),"bingeGroup":hash}},
+        {"url":source_url,"name":"Metainfo","fileIdx":0,"title":source_url,"behaviorHints":{"proxyHeaders":{"request":{"Authorization":"Bearer fixture-private"}}}},
+        {"url":"https://fixture.invalid/movie.RAR?key=fixture-private","name":"Archive"},
+        {"infoHash":"bad","name":"Bad hash"},
+        {"infoHash":hash,"url":"https://fixture.invalid/movie.mp4","name":"Ambiguous"},
+        {"infoHash":hash,"fileIdx":65536,"name":"Bad index"},
+        {"url":"https://fixture.invalid/movie.mp4","fileIdx":0,"name":"HTTP index"},
+        {"infoHash":hash,"sources":["peer:127.0.0.1:1"],"name":"Peer"},
+        {"infoHash":hash,"sources":["tracker:https://user:secret@fixture.invalid/"],"name":"Tracker credentials"},
+        {"url":format!("magnet:?xt=urn:btih:{hash}&x.pe=127.0.0.1:1"),"name":"Magnet peer"},
+        {"url":"https://fixture.invalid/movie.mp4","rarUrls":[],"name":"Archive array"}
+    ]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/stream/movie/:id",
+                get(move || {
+                    let raw = raw.clone();
+                    async move { axum::Json(json!({"streams":raw})) }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Fixture',?1,?2,1)",params![format!("{endpoint}/manifest.json"),json!({"id":"fixture","name":"Fixture","resources":["stream"],"types":["movie"]}).to_string()]).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
+    let result = discover(
+        &app,
+        json!({"type":"movie","id":"fixture","only_addons":true}),
+    )
+    .await;
+    let rows = result["events"][0]["streams"].as_array().unwrap();
+    assert_eq!(rows.len(), 5);
+    assert_eq!(
+        result["events"][0]["error_code"],
+        "source_format_unsupported"
+    );
+    for value in [&hash, source_url, "fixture-private", "magnet:", "127.0.0.1"] {
+        assert!(
+            !result.to_string().contains(value),
+            "private source context must stay off discovery wire"
+        );
+    }
+    let (status, cross_account) = request(&app,"member-token-2","POST","/api/v2/playback",json!({"request_id":"private-torrent","stream_id":rows[1]["id"],"client":{"platform":"android","can_play_direct":true,"max_width":1920,"max_height":1080,"video_codecs":["h264"],"audio_codecs":["aac"]}})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(cross_account.get("delivery").is_none());
+    let (_, ordinary) = request(&app,"member-token-1","POST","/api/v2/playback",json!({"request_id":"ordinary-http","stream_id":rows[0]["id"],"client":{"platform":"android","can_play_direct":true,"max_width":1920,"max_height":1080,"video_codecs":["h264"],"audio_codecs":["aac"]}})).await;
+    let playback_id = ordinary["id"].as_str().unwrap();
+    let ready = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (_, state) = request(
+                &app,
+                "member-token-1",
+                "GET",
+                &format!("/api/v2/playback/{playback_id}"),
+                Value::Null,
+            )
+            .await;
+            if state["status"] != "starting" {
+                break state;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(ready["delivery"]["kind"], "direct");
+    task.abort();
+}
+
+#[tokio::test]
 async fn unsupported_required_header_events_are_safe_and_keep_healthy_siblings() {
     let app = fixture();
     app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(7,'Fixture','https://addon.fixture.invalid/manifest.json','{}',1)",[]).unwrap();
