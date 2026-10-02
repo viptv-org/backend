@@ -21,6 +21,22 @@ pub fn router_with_tv(
             "/profiles/:id",
             axum::routing::patch(update_profile_authenticated).delete(delete_profile_authenticated),
         )
+        .route(
+            "/profiles/:id/imports/stremio/preview",
+            post(stremio_import::preview),
+        )
+        .route(
+            "/profiles/:id/imports/stremio/:preview_id/review",
+            post(stremio_import::review),
+        )
+        .route(
+            "/profiles/:id/imports/stremio/:preview_id/apply",
+            post(stremio_import::apply),
+        )
+        .route(
+            "/profiles/:id/imports/stremio/:preview_id",
+            delete(stremio_import::cancel),
+        )
         .route("/addons", get(addons).post(add_addon))
         .route("/addons/:id", delete(delete_addon).patch(update_addon))
         .route("/catalogs", get(catalogs))

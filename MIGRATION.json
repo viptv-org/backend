@@ -154,7 +154,7 @@
       "source": "server/src/addon.rs",
       "destination": "server/src/addon.rs",
       "sha256": "2544d3bd448b2db521d055e866c1dab45e56c5e0529739dcdef9d6756bfd281e",
-      "extracted_sha256": "1a7f4cf55d8358a433219734f3f6051ec0db3e8caeb6c27c9cdf0e6e210c633f",
+      "extracted_sha256": "0bb172c708e1ef5d5ced590fe6a0ab3d26428eb27b2a698fe0166c62a4b5c48a",
       "reason": " BE-002 engine-free runtime and explicit legacy refusal; coordinated runtime encryption boundary with encrypted-only addon writes and healthy-source isolation; original extraction hash retained."
     },
     {
@@ -220,8 +220,8 @@
       "source": "server/src/lib.rs",
       "destination": "server/src/lib.rs",
       "sha256": "d87ec5dd27e107bc193bd4551dda6399ecee52a7bc3b4f990875dd655be1450d",
-      "extracted_sha256": "9ca01ecc2ca77f2034bb0bc3b0c2c39e266843ec68be66a92aa0efa8c6231aec",
-      "reason": "cleanup 48bbfa2 (html_page and auth::unauthorized dedup, spare clone removed) on top of af35a6a/39c1b3e TV route and transport changes BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained."
+      "extracted_sha256": "82ff2eab61476ae8b79daff9ec663592b5b7ec6a39e773ec31e97c0214d58c7d",
+      "reason": "cleanup 48bbfa2 (html_page and auth::unauthorized dedup, spare clone removed) on top of af35a6a/39c1b3e TV route and transport changes BE-002 engine-free runtime, explicit legacy refusal and backup-first retirement/preservation fixtures; original extraction hash retained. Bounded Stremio profile import module registration; original source hash retained."
     },
     {
       "source": "server/src/library.rs",

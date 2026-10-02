@@ -111,7 +111,7 @@ impl Addons {
     fn protected(&self) -> bool {
         self.protected_fetch || self.vault.is_some()
     }
-    fn fixture_transport(&self) -> bool {
+    pub(crate) fn fixture_transport(&self) -> bool {
         #[cfg(test)]
         {
             self.allow_test_loopback
@@ -149,7 +149,7 @@ impl Addons {
         }
         Ok(url)
     }
-    pub(super) async fn prepare_manifest(&self, url: &str) -> Result<(String, Value), String> {
+    pub(crate) async fn prepare_manifest(&self, url: &str) -> Result<(String, Value), String> {
         let url = self.manifest_url(url)?;
         // Management refresh must not share an older manifest flight/cache result.
         let _permit = self
@@ -430,6 +430,15 @@ impl Addons {
         }
         cache.insert(key.into(), (now() + ttl, v.clone(), size));
         Ok(v)
+    }
+    pub(crate) async fn metadata_from(
+        &self,
+        manifest_url: &str,
+        kind: &str,
+        id: &str,
+    ) -> Result<Value, String> {
+        let endpoint = Self::endpoint(manifest_url, &["meta", kind, &format!("{id}.json")])?;
+        self.fetch(&endpoint, 0).await
     }
     pub fn endpoint(base: &str, parts: &[&str]) -> Result<String, String> {
         viptv_provider::discover::addon_endpoint(base, parts)

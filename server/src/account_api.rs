@@ -106,6 +106,18 @@ pub(crate) fn description(code: &str) -> &'static str {
 }
 fn details(code: &str) -> (StatusCode, &'static str) {
     match code {
+        "stremio_invalid_request" => (StatusCode::BAD_REQUEST,"Check the import credentials, options and confirmation."),
+        "stremio_confirmation_required" => (StatusCode::BAD_REQUEST,"Review the preview and explicitly confirm before importing."),
+        "stremio_credentials_invalid" => (StatusCode::UNPROCESSABLE_ENTITY,"Stremio rejected these credentials. Check them and try again."),
+        "stremio_source_unavailable" => (StatusCode::BAD_GATEWAY,"Stremio returned an unavailable, invalid or oversized response. Try again later."),
+        "stremio_addon_unavailable" => (StatusCode::BAD_GATEWAY,"A selected addon could not be safely verified or saved. Review a fresh preview."),
+        "stremio_restricted_profile" => (StatusCode::FORBIDDEN,"Import is not available for restricted profiles. Choose your personal profile."),
+        "stremio_preview_not_found" => (StatusCode::NOT_FOUND,"This preview is unavailable in this session. Create another preview."),
+        "stremio_preview_expired" => (StatusCode::GONE,"This preview expired. Create another preview before importing."),
+        "stremio_preview_stale" => (StatusCode::CONFLICT,"Your profile changed after this preview. Review a fresh preview before importing."),
+        "stremio_import_busy" => (StatusCode::TOO_MANY_REQUESTS,"Too many imports are pending. Cancel a preview or try again shortly."),
+        "stremio_backup_failed" => (StatusCode::SERVICE_UNAVAILABLE,"The safety backup could not be completed. Nothing was imported. Contact the server operator."),
+        "stremio_storage_unavailable" => (StatusCode::SERVICE_UNAVAILABLE,"Import storage is temporarily unavailable. Try again."),
         "invalid_v2_request" => (StatusCode::BAD_REQUEST,"This request is invalid. Check its path, query and body, then try again."),
         "secret_too_large" => (StatusCode::PAYLOAD_TOO_LARGE,"This source configuration exceeds the server's storage limit. Use a smaller configuration."),
         "invalid_addon_endpoint" => (StatusCode::BAD_REQUEST,"Use a valid HTTP or HTTPS addon manifest URL without embedded user credentials or fragments."),

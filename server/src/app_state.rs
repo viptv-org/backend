@@ -115,6 +115,7 @@ pub struct App {
     pub(crate) secret_vault: Option<Arc<secret_store::Vault>>,
     pub(crate) gateway_client: gateway::client::Client,
     pub(crate) gateway_playbacks: Arc<gateway::playback::Registry>,
+    pub(crate) stremio_import: Arc<stremio_import::Service>,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
     // Request-local identity travels with discovery producers; ownership is never upstream-authored.
@@ -240,6 +241,8 @@ impl App {
         provider::v2::init(&db).map_err(|_| "Account IPTV schema initialization failed")?;
         provider::refresh_v2::prepare(&db).map_err(|_| "IPTV refresh initialization failed")?;
         gateway::registry::init(&db).map_err(|_| "Gateway schema initialization failed")?;
+        stremio_import::init(&db).map_err(|_| "Import schema initialization failed")?;
+        let stremio_import = stremio_import::Service::new()?;
         let db = Arc::new(Mutex::new(db));
         let mut addons = Addons::new(db.clone(), client.clone())?;
         addons.vault = secret_vault.clone();
@@ -254,6 +257,7 @@ impl App {
             secret_vault,
             gateway_client: Default::default(),
             gateway_playbacks,
+            stremio_import,
             jobs: Default::default(),
             streams: Default::default(),
             principal: None,

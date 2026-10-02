@@ -173,8 +173,8 @@ pub(super) fn store(
 ) -> Result<i64, &'static str> {
     store_inner(db, vault, account, url, manifest, None)
 }
-pub(super) type Snapshot = Option<(i64, String)>;
-pub(super) fn snapshot(
+pub(crate) type Snapshot = Option<(i64, String)>;
+pub(crate) fn snapshot(
     db: &Connection,
     vault: &Vault,
     account: i64,
@@ -200,7 +200,7 @@ pub(super) fn snapshot(
     }
     Ok(None)
 }
-pub(super) fn store_checked(
+pub(crate) fn store_checked(
     db: &Connection,
     vault: &Vault,
     account: i64,
@@ -210,8 +210,31 @@ pub(super) fn store_checked(
 ) -> Result<i64, &'static str> {
     store_inner(db, vault, account, url, manifest, Some(expected))
 }
+pub(crate) fn store_checked_tx(
+    db: &Connection,
+    vault: &Vault,
+    account: i64,
+    url: &str,
+    manifest: &Value,
+    expected: &Snapshot,
+) -> Result<i64, &'static str> {
+    store_rows(db, vault, account, url, manifest, Some(expected))
+}
 fn store_inner(
     db: &Connection,
+    vault: &Vault,
+    account: i64,
+    url: &str,
+    manifest: &Value,
+    expected: Option<&Snapshot>,
+) -> Result<i64, &'static str> {
+    let tx = db.unchecked_transaction().map_err(storage)?;
+    let id = store_rows(&tx, vault, account, url, manifest, expected)?;
+    tx.commit().map_err(storage)?;
+    Ok(id)
+}
+fn store_rows(
+    tx: &Connection,
     vault: &Vault,
     account: i64,
     url: &str,
@@ -221,7 +244,6 @@ fn store_inner(
     if account <= 0 {
         return Err("account_session_required");
     }
-    let tx = db.unchecked_transaction().map_err(storage)?;
     let active: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM auth_accounts WHERE id=?1 AND disabled=0)",
@@ -232,7 +254,7 @@ fn store_inner(
     if !active {
         return Err("account_session_required");
     }
-    let current = snapshot(&tx, vault, account, url)?;
+    let current = snapshot(tx, vault, account, url)?;
     if expected.is_some_and(|expected| expected != &current) {
         return Err("addon_configuration_changed");
     }
@@ -267,7 +289,7 @@ fn store_inner(
         [account],
     )
     .map_err(storage)?;
-    tx.commit().map_err(storage)?;
+    // The caller commits the encompassing transaction.
     Ok(id)
 }
 pub(crate) fn encrypt_legacy(
