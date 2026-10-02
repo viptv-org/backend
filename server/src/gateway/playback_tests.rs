@@ -343,13 +343,15 @@ async fn setup() -> (App, Peer) {
     let routes=Router::new().route("/v1/capabilities",axum::routing::get(move|headers:axum::http::HeaderMap|{let mode=capacity_mode.clone();async move{
         let first=headers.get("authorization").and_then(|value|value.to_str().ok()).is_some_and(|value|value.ends_with('a'));
         let capacity=if mode.load(Ordering::SeqCst)==4 && first{0}else{2};
-        Json(json!({"version":1,"ready":true,"protocols":["hls"],"namespaces":["first","second"],"scopes":["capabilities","create","read","renew","release"],"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
+        let scopes=if mode.load(Ordering::SeqCst)==6 {json!(["capabilities","create"])}else{json!(["capabilities","create","read","renew","release"])};
+        Json(json!({"version":1,"ready":true,"torrent":mode.load(Ordering::SeqCst)!=5,"protocols":["hls"],"namespaces":["first","second"],"scopes":scopes,"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
     }}))
         .route("/v1/sessions",axum::routing::post(move|Json(value):Json<Value>|{let created=created.clone();let state=state.clone();let waiting=waiting.clone();let outputs=received_outputs.clone();let inputs=received_inputs.clone();async move{
             inputs.lock().unwrap().push(value["input"].clone());
             outputs.lock().unwrap().push(value["output"].clone());
             let id={let mut created=created.lock().unwrap();created.push(value["namespace"].as_str().unwrap().into());format!("viewer_{}",created.len())};
             if state.load(Ordering::SeqCst)==2 {return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":{"code":"source_connection_limit","message":"never expose provider-private-credential"}})));}
+            if state.load(Ordering::SeqCst)==7 {return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":{"code":"torrent_cache_capacity","message":"never expose private torrent state"}})));}
             if state.load(Ordering::SeqCst)==3 {waiting.notified().await;}
             let mut value=remote(&id);if state.load(Ordering::SeqCst)==1 {value["playback"]["url"]=json!("https://foreign.invalid/private-path");}
             (StatusCode::CREATED,Json(value))
@@ -385,6 +387,115 @@ fn gateway(app: &App, namespace: &str, priority: i64) -> String {
 }
 async fn settled(app: &App, id: &str) -> Value {
     settled_for(app, "member-token-1", id).await
+}
+
+#[tokio::test]
+async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_affinity() {
+    let (mut app, peer) = setup().await;
+    gateway(&app, "first", 1);
+    app.addons.allow_test_loopback = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let addon = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/stream/movie/:id", axum::routing::get(|| async {
+            Json(json!({"streams":[{"infoHash":"1".repeat(40),"fileIdx":2,"name":"Fixture"},{"infoHash":"1".repeat(40),"fileIdx":3,"name":"Fixture"}]}))
+        }))).await.unwrap();
+    });
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Fixture',?1,?2,1)",rusqlite::params![format!("{endpoint}/manifest.json"),json!({"id":"fixture","name":"Fixture","resources":["stream"],"types":["movie"]}).to_string()]).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/streams",
+        json!({"type":"movie","id":"fixture","only_addons":true}),
+    )
+    .await;
+    let discovery = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let (_, result) = request(
+                &app,
+                "member-token-1",
+                "GET",
+                &format!("/api/v2/streams/{}", start["id"].as_str().unwrap()),
+                Value::Null,
+            )
+            .await;
+            if result["done"] == true {
+                break result;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let first = discovery["events"][0]["streams"][0]["id"].as_str().unwrap();
+    let second = discovery["events"][0]["streams"][1]["id"].as_str().unwrap();
+    assert_ne!(
+        discovery["events"][0]["streams"][0]["source_fingerprint"],
+        discovery["events"][0]["streams"][1]["source_fingerprint"]
+    );
+    for platform in ["android", "desktop", "web"] {
+        let (status, start) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/playback",
+            body(first, &format!("torrent-{platform}"), platform),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let ready = settled(&app, start["id"].as_str().unwrap()).await;
+        assert_eq!(ready["status"], "ready");
+        assert_eq!(ready["delivery"]["kind"], "gateway");
+        assert_eq!(peer.inputs.lock().unwrap().last().unwrap()["file_index"], 2);
+    }
+    // Removing capability/scope support cannot be bypassed by a ready source's affinity.
+    for (mode, expected) in [(5, "delivery_unsupported"), (6, "gateway_scope_missing")] {
+        peer.mode.store(mode, Ordering::SeqCst);
+        let before = peer.inputs.lock().unwrap().len();
+        let (_, start) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/playback",
+            body(first, &format!("torrent-refused-{mode}"), "android"),
+        )
+        .await;
+        let refused = settled(&app, start["id"].as_str().unwrap()).await;
+        assert_eq!(refused["error_code"], expected);
+        assert_eq!(peer.inputs.lock().unwrap().len(), before);
+    }
+    // A distinct selected file is a distinct affinity identity.
+    peer.mode.store(4, Ordering::SeqCst);
+    gateway(&app, "second", 2);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        body(second, "torrent-other-file", "android"),
+    )
+    .await;
+    assert_eq!(
+        settled(&app, start["id"].as_str().unwrap()).await["status"],
+        "ready"
+    );
+    assert_eq!(peer.starts.lock().unwrap().last().unwrap(), "second");
+    assert_eq!(peer.inputs.lock().unwrap().last().unwrap()["file_index"], 3);
+    peer.mode.store(7, Ordering::SeqCst);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        body(first, "torrent-cache-full", "android"),
+    )
+    .await;
+    let refused = settled(&app, start["id"].as_str().unwrap()).await;
+    assert_eq!(refused["error_code"], "gateway_capacity");
+    assert!(!refused.to_string().contains("private torrent"));
+    addon.abort();
 }
 async fn settled_for(app: &App, token: &str, id: &str) -> Value {
     tokio::time::timeout(Duration::from_secs(5), async {

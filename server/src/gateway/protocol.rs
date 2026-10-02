@@ -10,9 +10,11 @@ pub(crate) fn failure_code(code: Option<&str>) -> Option<&'static str> {
     Some(match code? {
         "unauthorized" => "gateway_key_rejected",
         "forbidden" => "gateway_scope_missing",
-        "viewer_capacity" | "input_capacity" | "output_capacity" | "session_capacity" => {
-            "gateway_capacity"
-        }
+        "viewer_capacity"
+        | "input_capacity"
+        | "output_capacity"
+        | "session_capacity"
+        | "torrent_cache_capacity" => "gateway_capacity",
         "input_cleanup_pending" => "gateway_cleanup_pending",
         "processing_failed" => "gateway_processing_failed",
         "source_connection_limit" => "provider_connection_limit",

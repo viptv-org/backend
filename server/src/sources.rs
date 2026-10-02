@@ -1,4 +1,5 @@
 use super::*;
+mod input;
 
 impl App {
     pub(crate) fn register(
@@ -61,14 +62,12 @@ impl App {
         let mut unsupported_headers = false;
         let mut entries = self.streams.lock().unwrap();
         for r in raw.into_iter().take(100) {
-            let Some(url) = r["url"].as_str() else {
+            let Some(input) = input::Input::parse(&r, source.starts_with("addon:"), kind == "live")
+            else {
                 unsupported += 1;
                 continue;
             };
-            if util::validate_url(url).is_err() {
-                unsupported += 1;
-                continue;
-            }
+            let url = input.url.as_str();
             if entries.len() >= 20000 {
                 break;
             }
@@ -119,16 +118,34 @@ impl App {
                 }
             }
             headers.extend(routing.clone());
-            let mut public = source_card(&r, source, &id, url, &headers);
+            if url.starts_with("magnet:") && !headers.is_empty() {
+                unsupported_headers = true;
+                continue;
+            }
+            let mut public = source_card(&r, source, &id, url, &headers, &input.private_values);
             // IDs/ownership are server-authored; upstream metadata cannot replace them.
             public["id"] = json!(id);
             public["source"] = json!(source);
             // Stable across rediscovery, without persisting expiring playback URLs.
-            let identity = if public["filename"].as_str().is_some_and(|v| !v.is_empty()) {
+            let mut identity = if public["filename"].as_str().is_some_and(|v| !v.is_empty()) {
                 json!([source, public["name"], public["filename"]])
             } else {
                 json!([source, public["name"], public["title"]])
             };
+            if input.requires_gateway {
+                // Public continuation identity is opaque and derived from
+                // private payload context, never an add-on's display label.
+                // Configuration includes producer account ownership/revision.
+                let canonical_headers: std::collections::BTreeMap<_, _> = headers.iter().collect();
+                identity = json!([
+                    source,
+                    configuration,
+                    url,
+                    canonical_headers,
+                    kind == "live",
+                    input.file_index
+                ]);
+            }
             if source.starts_with("addon:") || source.starts_with("iptv:") {
                 public["source_addon_id"] = json!(source);
             }
@@ -136,7 +153,13 @@ impl App {
                 "{:x}",
                 Sha256::digest(identity.to_string().as_bytes())
             ));
-            public["source_name"] = json!(source_display_text(&source_name, 256, url, &headers));
+            public["source_name"] = json!(source_display_text(
+                &source_name,
+                256,
+                url,
+                &headers,
+                &input.private_values
+            ));
             entries.insert(
                 id.clone(),
                 StreamEntry {
@@ -147,6 +170,8 @@ impl App {
                     kind: kind.to_owned(),
                     live: kind == "live",
                     url: url.into(),
+                    file_index: input.file_index,
+                    requires_torrent_gateway: input.requires_gateway,
                     headers,
                     created: Instant::now(),
                 },
@@ -157,7 +182,7 @@ impl App {
         let error = if unsupported_headers {
             Some("source_headers_unsupported".into())
         } else {
-            (unsupported>0).then(||format!("{unsupported} source(s) unsupported: torrent, external-player, or non-HTTP streams require an external resolver"))
+            (unsupported > 0).then(|| "source_format_unsupported".into())
         };
         (out, error)
     }
@@ -212,8 +237,12 @@ fn source_display_text(
     limit: usize,
     url: &str,
     headers: &HashMap<String, String>,
+    private_values: &[String],
 ) -> String {
     let mut text = text.replace(url, "[link omitted]");
+    for value in private_values {
+        text = redact_private_value(&text, value);
+    }
     // Ordinary negotiation/client-identification values are display text too:
     // e.g. Accept-Language: en must not erase en/eng or letters inside French.
     // Origin/Referer links are handled by the URL redaction below.
@@ -297,8 +326,9 @@ fn source_card(
     id: &str,
     url: &str,
     headers: &HashMap<String, String>,
+    private_values: &[String],
 ) -> Value {
-    let clean = |text: &str, limit| source_display_text(text, limit, url, headers);
+    let clean = |text: &str, limit| source_display_text(text, limit, url, headers, private_values);
     let description = clean(raw["description"].as_str().unwrap_or(""), 2048);
     let title = ["title", "description"]
         .into_iter()

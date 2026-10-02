@@ -223,6 +223,8 @@ pub(crate) struct StreamEntry {
     pub(crate) kind: String,
     pub(crate) live: bool,
     pub(crate) url: String,
+    pub(crate) file_index: Option<u32>,
+    pub(crate) requires_torrent_gateway: bool,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) created: Instant,
 }

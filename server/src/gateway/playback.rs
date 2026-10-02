@@ -93,6 +93,8 @@ struct Proof {
 struct Source {
     proof: Proof,
     url: String,
+    file_index: Option<u32>,
+    requires_torrent_gateway: bool,
     headers: BTreeMap<String, String>,
     live: bool,
     provider_id: Option<i64>,
@@ -310,7 +312,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
         let source_lease = app
             .resource_lease("stream", &id)
             .ok_or(Error::Code("source_not_found"))?;
-        let (proof, url, headers, live, provider_id) = {
+        let (proof, url, file_index, requires_torrent_gateway, headers, live, provider_id) = {
             let streams = app.streams.lock().unwrap();
             let entry = streams
                 .get(&id)
@@ -325,6 +327,8 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
                     kind: entry.kind.clone(),
                 },
                 entry.url.clone(),
+                entry.file_index,
+                entry.requires_torrent_gateway,
                 entry
                     .headers
                     .iter()
@@ -344,7 +348,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
             return Err(Error::Code("source_route_migration_required"));
         }
         let identity = Sha256::digest(
-            json!([account(&proof.lease), url, headers, live])
+            json!([account(&proof.lease), url, headers, live, file_index])
                 .to_string()
                 .as_bytes(),
         )
@@ -352,6 +356,8 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
         Ok(Source {
             proof,
             url,
+            file_index,
+            requires_torrent_gateway,
             headers,
             live,
             provider_id,
@@ -434,6 +440,7 @@ async fn choose(
     app: App,
     lease: ResourceLease,
     identity: [u8; 32],
+    requires_torrent: bool,
 ) -> Result<Arc<AuthorizedGateway>, Error> {
     let actor = account(&lease);
     let vault = app
@@ -457,18 +464,35 @@ async fn choose(
     if candidates.is_empty() {
         return Err(Error::Code("gateway_required"));
     }
+    let mut affinity_error = None;
     if let Some((id, revision)) = app.gateway_playbacks.affinity(actor, identity) {
         if let Some(target) = candidates
             .iter()
             .filter_map(|candidate| candidate.as_ref().ok())
             .find(|candidate| candidate.gateway.id == id && candidate.gateway.revision == revision)
         {
-            return Ok(target.clone());
+            // Joining an existing output does not require fresh input capacity,
+            // but still requires current support, namespace and all scopes.
+            match app
+                .gateway_client
+                .capabilities(
+                    &target.gateway.endpoint,
+                    target.key.expose(),
+                    &target.gateway.namespace,
+                )
+                .await
+            {
+                Ok(capabilities) if !requires_torrent || capabilities.torrent => {
+                    return Ok(target.clone())
+                }
+                Ok(_) => affinity_error = Some("delivery_unsupported"),
+                Err(reason) => affinity_error = Some(reason),
+            }
         }
     }
     let client = app.gateway_client.clone();
     let mut valid = Vec::new();
-    let mut prior_error = "gateway_unavailable";
+    let mut prior_error = affinity_error.unwrap_or("gateway_unavailable");
     for candidate in candidates {
         match candidate {
             Ok(candidate) => valid.push(candidate),
@@ -487,6 +511,9 @@ async fn choose(
                             &candidate.gateway.namespace,
                         )
                         .await?;
+                    if requires_torrent && !capabilities.torrent {
+                        return Err("delivery_unsupported");
+                    }
                     let available = capabilities.available.ok_or("gateway_protocol_invalid")?;
                     if available.inputs == 0 || available.outputs == 0 || available.viewers == 0 {
                         return Err("gateway_capacity");
@@ -610,7 +637,8 @@ pub(crate) async fn start(
     if input.live && request.position != 0.0 {
         return Err(Error::Code("invalid_playback_request"));
     }
-    let native = request.client.can_play_direct
+    let native = !input.requires_torrent_gateway
+        && request.client.can_play_direct
         && !matches!(request.client.platform, Platform::Roku | Platform::Vizio)
         && (!matches!(request.client.platform, Platform::Web | Platform::Webos)
             || (input.url.starts_with("https://") && input.headers.is_empty()));
@@ -759,9 +787,19 @@ async fn prepare(
         {
             return Err(Error::Code("delivery_unsupported"));
         }
-        let target = choose(app.clone(), entry.lease.clone(), source.identity).await?;
+        let target = choose(
+            app.clone(),
+            entry.lease.clone(),
+            source.identity,
+            source.requires_torrent_gateway,
+        )
+        .await?;
         validate_entry(&app, &entry).await?;
-        let body = json!({"namespace":target.gateway.namespace,"input":{"url":source.url,"headers":source.headers,"live":source.live},"output":{"protocol":"hls","video_codecs":request.client.video_codecs,"audio_codecs":request.client.audio_codecs,"max_width":request.client.max_width,"max_height":request.client.max_height,"audio_track":request.audio_track,"subtitle_track":request.subtitle_track,"conversion":request.conversion,"audio_language":request.audio_language,"preferred_audio_language":request.preferred_audio_language,"preferred_subtitle_language":request.preferred_subtitle_language,"subtitles_off":request.subtitles_off},"position_seconds":request.position});
+        let mut input = json!({"url":source.url,"headers":source.headers,"live":source.live});
+        if let Some(file_index) = source.file_index {
+            input["file_index"] = json!(file_index);
+        }
+        let body = json!({"namespace":target.gateway.namespace,"input":input,"output":{"protocol":"hls","video_codecs":request.client.video_codecs,"audio_codecs":request.client.audio_codecs,"max_width":request.client.max_width,"max_height":request.client.max_height,"audio_track":request.audio_track,"subtitle_track":request.subtitle_track,"conversion":request.conversion,"audio_language":request.audio_language,"preferred_audio_language":request.preferred_audio_language,"preferred_subtitle_language":request.preferred_subtitle_language,"subtitles_off":request.subtitles_off},"position_seconds":request.position});
         let value = app
             .gateway_client
             .request(
