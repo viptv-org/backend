@@ -48,6 +48,7 @@ cat > "$q/Caddyfile" <<CADDY
  }
 }
 $VIPTV_TEST_BROWSER_ORIGIN {
+ bind 127.0.0.1
  tls $cert_dir/viptv.local.test.crt $cert_dir/viptv.local.test.key
  handle /api/* {
   reverse_proxy 127.0.0.1:18444
@@ -83,6 +84,21 @@ JS
 result=$(timeout 15s docker wait "$id")
 docker logs "$id" > "$q/gateway.log" 2>&1
 [[ "$result" == 0 ]]
-[[ ! -f "$q/browser.log" ]] || cat "$q/browser.log"
-cat "$q/gateway.log"
+python3 - "$q" <<'PYSAFE'
+from pathlib import Path
+import json, math, re, sys
+q=Path(sys.argv[1])
+log=(q/'gateway.log').read_text()
+assert 'test result: ok. 1 passed; 0 failed; 0 ignored;' in log
+metric=re.search(r'^Bounded deterministic peer delivered (\d+) bytes over (\d+) milliseconds\.$',log,re.M)
+assert metric, 'fixed gateway metric missing'
+print('Gateway fixture: one passed; peer bytes='+metric[1]+' elapsed_ms='+metric[2])
+result=q/'actual-browser-result.json'
+if result.exists():
+ data=json.loads(result.read_text())
+ sought=float(data['soughtMse']); baseline=float(data['firstMse'])
+ assert math.isfinite(sought) and math.isfinite(baseline)
+ print(f'Actual backend browser: decoded seek MSE={sought:.5f} zero-origin MSE={baseline:.5f}')
+ print('Lifecycle: renewals='+str(sum(r['op']=='renew' for r in data['requests']))+' releases='+str(sum(r['op']=='release' for r in data['requests'])))
+PYSAFE
 printf 'Actual backend/gateway qualification cleanup passed. Private artifacts: %s\n' "$q"

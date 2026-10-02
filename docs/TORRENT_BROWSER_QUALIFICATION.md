@@ -44,7 +44,8 @@ ports 8444/18444/18445/18446 first. Optional `GATEWAY_TARGET_DIR` and
 `BACKEND_TARGET_DIR` reuse dependency caches without copying runtime data. All
 media, temporary credentials/configuration and results stay in private ignored
 `target/qualification/backend-torrent-browser-*` directories. Caddy output is
-discarded; cleanup targets only the runner's own processes/container/socket.
+discarded; raw gateway/browser stderr stays private and only finite safe metrics
+are printed. HTTPS binds host loopback explicitly; cleanup targets only the runner's own processes/container/socket.
 
 The gateway driver uses privileged setup only in a guarded network-none
 namespace; that driver is separate from the production all-capabilities-dropped
