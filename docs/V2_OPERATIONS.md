@@ -18,6 +18,25 @@ wrappers and encrypted-only POST remain for compatible clients; retaining these
 wrappers does not restore retired media/setup/organizer behavior. Historical
 qualification counts and pre-cutover controls below are checkpoint evidence only.
 
+## Responsive restoration recovery adoption — 2026-10-02
+
+The viewing gitlink adopts reviewed TV-web source
+`a2c53afaa3696243b25cf742383bf1ddf6fe40dc` (PR11). Failed Next/restoration
+offers one recovery dialog, the responsive Retry icon, exact outgoing
+source/position Retry and manual source/Back actions. Obsolete failure callbacks
+and busy cleanup are fenced to their originating navigation/request; an owned
+same-navigation deadline still offers recovery. TV layout, Core `f66c87e`, Video
+`550ab350`, and the dashboard gitlink
+`2a6094067e44b6e2b8ab58b012a971c4ab7fad38` are unchanged.
+
+The consumer's fresh viewing build passes design/Core/video integrity and all
+TypeScript groups. TV-web's exact source passed267 app tests, two public-stage
+ownership regressions (cancelled failure red/green), three full UI/HTTP/adapter
+recovery cases and private trusted-HTTPS DeskPlayerRestore inspection.
+Existing backend/runtime/native media evidence retains its recorded source
+pins; this frontend adoption does not requalify installed/physical consumers,
+move a database, change API/media policy or deploy anything.
+
 ## Reviewed frontend source checkpoint — 2026-09-30
 
 The dashboard submodule pins web main
