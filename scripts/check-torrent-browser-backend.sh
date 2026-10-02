@@ -85,4 +85,4 @@ docker logs "$id" > "$q/gateway.log" 2>&1
 [[ "$result" == 0 ]]
 [[ ! -f "$q/browser.log" ]] || cat "$q/browser.log"
 cat "$q/gateway.log"
-printf 'Actual backend/gateway browser proof passed. Private artifacts: %s\n' "$q"
+printf 'Actual backend/gateway qualification cleanup passed. Private artifacts: %s\n' "$q"
