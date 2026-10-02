@@ -7,3 +7,6 @@ pub(crate) mod protocol;
 pub(crate) mod registry;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod torrent_browser_acceptance;
