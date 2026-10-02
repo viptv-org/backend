@@ -59,6 +59,7 @@ pub fn parse_owner_map(data: &[u8]) -> Result<BTreeMap<i64, i64>> {
 const ADVANCED_TABLES: &[&str] = &[
     "addons",
     "addon_credentials_v2",
+    "addon_config_revisions",
     "providers",
     "provider_credentials_v2",
     "provider_live",

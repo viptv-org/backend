@@ -87,6 +87,48 @@ pub(crate) fn init(db: &Connection) -> Result<(), &'static str> {
         [],
     )
     .map_err(storage)?;
+    // Keep the token outside addons so removing the final row cannot reset it.
+    // Triggers run in the writer's transaction, including Stremio's addon/data apply.
+    db.execute_batch("CREATE TABLE IF NOT EXISTS addon_config_revisions(
+            account_id INTEGER PRIMARY KEY, revision TEXT NOT NULL CHECK(length(revision)=32));
+        CREATE TRIGGER IF NOT EXISTS addon_config_insert AFTER INSERT ON addons BEGIN
+            INSERT INTO addon_config_revisions(account_id,revision) VALUES(NEW.account_id,lower(hex(randomblob(16))))
+            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision;
+        END;
+        CREATE TRIGGER IF NOT EXISTS addon_config_delete AFTER DELETE ON addons BEGIN
+            INSERT INTO addon_config_revisions(account_id,revision) VALUES(OLD.account_id,lower(hex(randomblob(16))))
+            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision;
+        END;
+        CREATE TRIGGER IF NOT EXISTS addon_config_update AFTER UPDATE ON addons
+        WHEN OLD.name IS NOT NEW.name OR OLD.manifest_url IS NOT NEW.manifest_url
+          OR OLD.enabled IS NOT NEW.enabled OR OLD.manifest IS NOT NEW.manifest
+          OR OLD.priority IS NOT NEW.priority OR OLD.account_id IS NOT NEW.account_id
+          OR OLD.credentials_version IS NOT NEW.credentials_version
+          OR OLD.credentials_revision IS NOT NEW.credentials_revision BEGIN
+            INSERT INTO addon_config_revisions(account_id,revision) VALUES(OLD.account_id,lower(hex(randomblob(16))))
+            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision;
+            INSERT INTO addon_config_revisions(account_id,revision)
+                SELECT NEW.account_id,lower(hex(randomblob(16))) WHERE NEW.account_id IS NOT OLD.account_id
+            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision;
+        END;
+        CREATE TRIGGER IF NOT EXISTS addon_secret_insert AFTER INSERT ON addon_credentials_v2 BEGIN
+            INSERT INTO addon_config_revisions(account_id,revision) VALUES(NEW.account_id,lower(hex(randomblob(16))))
+            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision;
+        END;
+        CREATE TRIGGER IF NOT EXISTS addon_secret_delete AFTER DELETE ON addon_credentials_v2 BEGIN
+            INSERT INTO addon_config_revisions(account_id,revision) VALUES(OLD.account_id,lower(hex(randomblob(16))))
+            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision;
+        END;
+        CREATE TRIGGER IF NOT EXISTS addon_secret_update AFTER UPDATE ON addon_credentials_v2
+        WHEN OLD.addon_id IS NOT NEW.addon_id OR OLD.account_id IS NOT NEW.account_id
+          OR OLD.secret IS NOT NEW.secret BEGIN
+            INSERT INTO addon_config_revisions(account_id,revision) VALUES(OLD.account_id,lower(hex(randomblob(16))))
+            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision;
+            INSERT INTO addon_config_revisions(account_id,revision)
+                SELECT NEW.account_id,lower(hex(randomblob(16))) WHERE NEW.account_id IS NOT OLD.account_id
+            ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision;
+        END;")
+        .map_err(storage)?;
     Ok(())
 }
 pub(super) fn read(

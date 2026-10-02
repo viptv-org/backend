@@ -122,6 +122,11 @@ fn decide_request(
                     json!([{"addon_id":0,"id":"kids-movies","type":"movie","name":"Family movies","supports_search":true,"supports_skip":true,"extra":[],"genres":[]},{"addon_id":0,"id":"kids-series","type":"series","name":"Family series","supports_search":true,"supports_skip":true,"extra":[],"genres":[]}]),
                 ))
             }
+            ["catalogs", "revision"] => {
+                return Ok(PolicyDecision::Respond(
+                    json!({"revision":"00000000000000000000000000000000"}),
+                ))
+            }
             ["discover"] => {
                 let kind = q.get("type").map(String::as_str).unwrap_or("movie");
                 let search = q

@@ -45,6 +45,13 @@ pub(crate) async fn catalogs(
     let a = a.with_lease(lease);
     blocking(move || Ok(axum::Json(a.addons.catalogs()?))).await
 }
+pub(crate) async fn catalogs_revision(
+    State(a): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+) -> ApiResult {
+    let a = a.with_lease(lease);
+    blocking(move || Ok(axum::Json(json!({"revision":a.addons.revision()?})))).await
+}
 #[derive(Deserialize)]
 pub(crate) struct Discover {
     #[serde(rename = "type", default = "movie")]

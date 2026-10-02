@@ -121,11 +121,24 @@ impl Addons {
             false
         }
     }
-    fn cache_key(&self, url: &str) -> String {
+    pub(crate) fn revision(&self) -> Result<String, String> {
+        let db = self.db.lock().map_err(|_| "Database unavailable")?;
+        let revision: String = db.query_row(
+            "SELECT COALESCE((SELECT revision FROM addon_config_revisions WHERE account_id=?1),'00000000000000000000000000000000')",
+            [self.account_id],
+            |row| row.get(0),
+        ).map_err(|_| "Database query failed")?;
+        Ok(revision)
+    }
+    fn cache_key(&self, url: &str) -> Result<String, String> {
         if self.protected() {
-            format!("secure:{}:{url}", self.account_id)
+            Ok(format!(
+                "secure:{}:{}:{url}",
+                self.account_id,
+                self.revision()?
+            ))
         } else {
-            url.to_owned()
+            Ok(url.to_owned())
         }
     }
     fn checked_url(&self, raw: &str) -> Result<url::Url, String> {
@@ -292,7 +305,8 @@ impl Addons {
     pub async fn add(&self, url: &str) -> Result<Value, String> {
         let vault = self.vault.clone().ok_or("secret_store_not_configured")?;
         let (url, m) = self.prepare_manifest(url).await?;
-        self.cache.lock().unwrap().remove(&self.cache_key(&url));
+        let cache_key = self.cache_key(&url)?;
+        self.cache.lock().unwrap().remove(&cache_key);
         let this = self.clone();
         tokio::task::spawn_blocking(move || {
             let db = this.db.lock().map_err(|_| "Database unavailable")?;
@@ -362,7 +376,7 @@ impl Addons {
         if self.protected() {
             self.checked_url(url)?;
         }
-        let key = self.cache_key(url);
+        let key = self.cache_key(url)?;
         if let Some((expiry, v, _)) = self.cache.lock().unwrap().get(&key) {
             if *expiry > now() {
                 return Ok(v.clone());

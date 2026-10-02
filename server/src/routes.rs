@@ -40,6 +40,7 @@ pub fn router_with_tv(
         .route("/addons", get(addons).post(add_addon))
         .route("/addons/:id", delete(delete_addon).patch(update_addon))
         .route("/catalogs", get(catalogs))
+        .route("/catalogs/revision", get(catalogs_revision))
         .route("/discover", get(discover))
         .route("/meta/:kind/:id", get(meta))
         .route("/v2/streams", post(provider::discovery_v2::start))

@@ -154,7 +154,7 @@
       "source": "server/src/addon.rs",
       "destination": "server/src/addon.rs",
       "sha256": "2544d3bd448b2db521d055e866c1dab45e56c5e0529739dcdef9d6756bfd281e",
-      "extracted_sha256": "0bb172c708e1ef5d5ced590fe6a0ab3d26428eb27b2a698fe0166c62a4b5c48a",
+      "extracted_sha256": "e9a25e99bd05b2dcdd15c42b13e8eccca82b5dfebca768fc62008ff911db3b7c",
       "reason": " BE-002 engine-free runtime and explicit legacy refusal; coordinated runtime encryption boundary with encrypted-only addon writes and healthy-source isolation; original extraction hash retained."
     },
     {
@@ -168,7 +168,7 @@
       "source": "server/src/auth_integration_tests.rs",
       "destination": "server/src/auth_integration_tests.rs",
       "sha256": "b04b9dd5f26c06e4660200e9d537c8dc1a19da07739b8cc66f64769ec840e938",
-      "extracted_sha256": "b036277c12e7b83490a45c874072b21b1930a9fedcfdf4ce1929b5e2a9d42f16",
+      "extracted_sha256": "d8b94eb027d6b2342cc107caf8cfccb0b74f33be465b96e2c177fbce91e729ff",
       "reason": " BE-002 engine-free runtime and explicit legacy refusal; genuine account-source fixtures converted to encrypted credentials for runtime cutover while retaining offline migration cases; integrated eight-digit and legacy pairing expiry/single-use and per-account/global QR admission regressions; original extraction hash retained."
     },
     {

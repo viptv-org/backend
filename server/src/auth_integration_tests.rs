@@ -1082,6 +1082,53 @@ async fn auth_routes_receive_authentication_but_status_is_public() {
 }
 
 #[tokio::test]
+async fn catalog_revision_is_private_profile_guarded_and_account_scoped() {
+    let a = fixture();
+    let path = "/api/catalogs/revision";
+    assert_eq!(
+        request(&a, "invalid", "GET", path, Value::Null).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(&a, "member-token-2", "GET", path, Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let response = router(a.clone(), None)
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("authorization", "Bearer member-token-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let baseline = body["revision"].as_str().unwrap();
+    assert_eq!(baseline.len(), 32);
+    assert!(baseline.bytes().all(|b| b.is_ascii_hexdigit()));
+    a.db.lock().unwrap().execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES('Other','https://other.invalid/manifest.json','{}',2)", []).unwrap();
+    assert_eq!(
+        request(&a, "member-token-1", "GET", path, Value::Null)
+            .await
+            .1["revision"],
+        baseline
+    );
+    a.db.lock().unwrap().execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES('Mine','https://mine.invalid/manifest.json','{}',1)", []).unwrap();
+    assert_ne!(
+        request(&a, "member-token-1", "GET", path, Value::Null)
+            .await
+            .1["revision"],
+        baseline
+    );
+}
+
+#[tokio::test]
 async fn addons_are_account_shared_and_cross_account_mutations_are_isolated() {
     let a = fixture();
     {

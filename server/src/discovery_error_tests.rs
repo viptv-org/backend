@@ -441,6 +441,8 @@ async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
     assert_eq!(late["events"][0]["error_code"], "source_not_found");
     assert!(app.streams.lock().unwrap().is_empty());
     owned.update(addon, json!({"enabled":true})).unwrap();
+    // The changed configuration uses a fresh response cache key and fetches again.
+    release.notify_one();
     let (_, started) = request(
         &app,
         "member-token-1",

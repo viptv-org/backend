@@ -1,5 +1,92 @@
 use super::*;
 #[test]
+fn account_revision_tracks_only_committed_addon_changes() {
+    let addons = test_addons();
+    let account2 = addons.clone().for_account(2);
+    let initial = addons.revision().unwrap();
+    let cache_before = addons
+        .cache_key("https://a.invalid/catalog/movie/top.json")
+        .unwrap();
+    let other_initial = account2.revision().unwrap();
+    {
+        let db = addons.db.lock().unwrap();
+        db.execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES('A','https://a.invalid/manifest.json','{}',1)", []).unwrap();
+        let added = db.last_insert_rowid();
+        drop(db);
+        assert_ne!(addons.revision().unwrap(), initial);
+        assert_ne!(
+            addons
+                .cache_key("https://a.invalid/catalog/movie/top.json")
+                .unwrap(),
+            cache_before
+        );
+        assert_eq!(account2.revision().unwrap(), other_initial);
+        let after_insert = addons.revision().unwrap();
+        let db = addons.db.lock().unwrap();
+        db.execute("UPDATE addons SET name=name,enabled=enabled,manifest=manifest,priority=priority,credentials_revision=credentials_revision WHERE id=?1", [added]).unwrap();
+        drop(db);
+        assert_eq!(addons.revision().unwrap(), after_insert);
+        let db = addons.db.lock().unwrap();
+        db.execute("UPDATE addons SET enabled=0 WHERE id=?1", [added])
+            .unwrap();
+        drop(db);
+        let after_disable = addons.revision().unwrap();
+        assert_ne!(after_disable, after_insert);
+        let db = addons.db.lock().unwrap();
+        db.execute("INSERT INTO addon_credentials_v2(addon_id,account_id,secret) VALUES(?1,1,'sealed-one')", [added]).unwrap();
+        drop(db);
+        let after_secret = addons.revision().unwrap();
+        assert_ne!(after_secret, after_disable);
+        let db = addons.db.lock().unwrap();
+        db.execute(
+            "UPDATE addon_credentials_v2 SET secret=secret WHERE addon_id=?1",
+            [added],
+        )
+        .unwrap();
+        drop(db);
+        assert_eq!(addons.revision().unwrap(), after_secret);
+        let mut db = addons.db.lock().unwrap();
+        let tx = db.transaction().unwrap();
+        tx.execute(
+            "UPDATE addon_credentials_v2 SET secret='sealed-two' WHERE addon_id=?1",
+            [added],
+        )
+        .unwrap();
+        tx.execute("DELETE FROM addons WHERE id=?1", [added])
+            .unwrap();
+        tx.rollback().unwrap();
+        drop(db);
+        assert_eq!(addons.revision().unwrap(), after_secret);
+        let db = addons.db.lock().unwrap();
+        db.execute(
+            "DELETE FROM addon_credentials_v2 WHERE addon_id=?1",
+            [added],
+        )
+        .unwrap();
+        db.execute("DELETE FROM addons WHERE id=?1", [added])
+            .unwrap();
+        drop(db);
+        assert_ne!(addons.revision().unwrap(), after_secret);
+        assert_eq!(account2.revision().unwrap(), other_initial);
+    }
+    // A later add does not reuse the token from before the final deletion.
+    let before_readd = addons.revision().unwrap();
+    let db = addons.db.lock().unwrap();
+    db.execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES('B','https://b.invalid/manifest.json','{}',1)", []).unwrap();
+    let moved = db.last_insert_rowid();
+    drop(db);
+    assert_ne!(addons.revision().unwrap(), before_readd);
+    let owner_before_move = addons.revision().unwrap();
+    addons
+        .db
+        .lock()
+        .unwrap()
+        .execute("UPDATE addons SET account_id=2 WHERE id=?1", [moved])
+        .unwrap();
+    assert_ne!(addons.revision().unwrap(), owner_before_move);
+    assert_ne!(account2.revision().unwrap(), other_initial);
+}
+#[test]
 fn endpoint_encodes_untrusted_ids() {
     let u = Addons::endpoint(
         "https://host/key/manifest.json",
@@ -198,14 +285,23 @@ fn seed_migration_and_restarts_never_restore_deleted_addons() {
     };
     let addons = open();
     assert_eq!(addons.list().unwrap().as_array().unwrap().len(), 1);
+    let baseline = addons.revision().unwrap();
     addons.update(1, json!({"enabled":false})).unwrap();
+    let disabled_revision = addons.revision().unwrap();
+    assert_ne!(disabled_revision, baseline);
     drop(addons);
     let addons = open();
+    assert_eq!(addons.revision().unwrap(), disabled_revision);
     assert_eq!(addons.list().unwrap()[0]["enabled"], false);
     assert!(addons.list().unwrap()[0]["priority"].is_null());
     addons.delete(1).unwrap();
+    let deleted_revision = addons.revision().unwrap();
+    assert_ne!(deleted_revision, disabled_revision);
     drop(addons);
-    assert_eq!(open().list().unwrap(), json!([]));
+    let reopened = open();
+    assert_eq!(reopened.list().unwrap(), json!([]));
+    assert_eq!(reopened.revision().unwrap(), deleted_revision);
+    drop(reopened);
     std::fs::remove_file(&path).unwrap();
     // Both empty and populated pre-priority schemas are already initialized.
     for populated in [false, true] {
@@ -222,6 +318,7 @@ fn seed_migration_and_restarts_never_restore_deleted_addons() {
         for _ in 0..2 {
             let addons = Addons::new(db.clone(), reqwest::Client::new()).unwrap();
             let list = addons.list().unwrap();
+            assert_eq!(addons.revision().unwrap().len(), 32);
             assert_eq!(list.as_array().unwrap().len(), usize::from(populated));
             if populated {
                 assert!(list[0]["priority"].is_null());
@@ -412,7 +509,7 @@ async fn bounded_search_and_raw_count_before_truncation() {
             .map(|j| json!({"id":format!("{i}-{j}"),"type":"movie"}))
             .collect();
         addons.cache.lock().unwrap().insert(
-            addons.cache_key(&endpoint),
+            addons.cache_key(&endpoint).unwrap(),
             (now() + 300, json!({"metas":metas}), 1),
         );
     }
@@ -428,7 +525,7 @@ async fn bounded_search_and_raw_count_before_truncation() {
         viptv_provider::discover::addon_extra_endpoint(base, "movie", "c0", "skip=0").unwrap();
     let metas: Vec<_> = (0..250).map(|j| json!({"id":j,"type":"movie"})).collect();
     addons.cache.lock().unwrap().insert(
-        addons.cache_key(&endpoint),
+        addons.cache_key(&endpoint).unwrap(),
         (now() + 300, json!({"metas":metas}), 1),
     );
     let page = addons
@@ -525,7 +622,7 @@ async fn genre_discover_requires_advertisement_validates_options_and_encodes_pat
     )
     .unwrap();
     addons.cache.lock().unwrap().insert(
-        addons.cache_key(&endpoint),
+        addons.cache_key(&endpoint).unwrap(),
         (
             now() + 300,
             json!({"metas":[{"id":"tt-kids","type":"movie","name":"Kids"}]}),
@@ -593,6 +690,7 @@ async fn genre_discover_requires_advertisement_validates_options_and_encodes_pat
 #[tokio::test]
 async fn metadata_falls_back_in_priority_order() {
     let addons = test_addons();
+    let mut cached = Vec::new();
     for (i, response) in [
         json!({"meta":null}),
         json!({"meta":{"name":"second"}}),
@@ -610,11 +708,13 @@ async fn metadata_falls_back_in_priority_order() {
             i as i64,
         );
         let endpoint = Addons::endpoint(&base, &["meta", "movie", "tt1.json"]).unwrap();
-        addons
-            .cache
-            .lock()
-            .unwrap()
-            .insert(addons.cache_key(&endpoint), (now() + 300, response, 1));
+        cached.push((endpoint, response));
+    }
+    for (endpoint, response) in cached {
+        addons.cache.lock().unwrap().insert(
+            addons.cache_key(&endpoint).unwrap(),
+            (now() + 300, response, 1),
+        );
     }
     assert_eq!(
         addons.meta("movie", "tt1").await.unwrap()["meta"]["name"],
@@ -699,7 +799,7 @@ async fn custom_catalog_types_options_and_explicit_search_pages_work() {
     )
     .unwrap();
     addons.cache.lock().unwrap().insert(
-        addons.cache_key(&endpoint),
+        addons.cache_key(&endpoint).unwrap(),
         (
             now() + 300,
             json!({"metas":[{"id":"tt0409591","type":"series"}]}),
@@ -737,7 +837,7 @@ async fn custom_catalog_types_options_and_explicit_search_pages_work() {
     )
     .unwrap();
     addons.cache.lock().unwrap().insert(
-        addons.cache_key(&endpoint),
+        addons.cache_key(&endpoint).unwrap(),
         (now() + 300, json!({"metas":[]}), 1),
     );
     let result = addons

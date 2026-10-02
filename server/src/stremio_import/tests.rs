@@ -670,6 +670,7 @@ async fn selected_addon_applies_encrypted_only_after_confirmation_and_addon_only
     }))).await.unwrap();
     });
     *f.addon_response.lock().unwrap() = json!({"addons":[{"manifest":{"id":"synthetic.meta","name":"Verified addon","resources":["meta"]},"transportUrl":url}]});
+    let revision_before = f.app.addons.clone().for_account(1).revision().unwrap();
     let preview = staged_preview(&f.app).await;
     assert_eq!(preview["addons"][0]["status"], "add", "{preview}");
     assert!(!preview.to_string().contains("secret-token"));
@@ -679,6 +680,10 @@ async fn selected_addon_applies_encrypted_only_after_confirmation_and_addon_only
     assert_eq!(review["addons_to_add"], 1);
     assert!(!review.to_string().contains("secret-token"));
     assert_eq!(counts(&f.app), (0, 0, 0));
+    assert_eq!(
+        f.app.addons.clone().for_account(1).revision().unwrap(),
+        revision_before
+    );
     let rows = review["review_items"].as_array().unwrap();
     let path = format!(
         "/api/profiles/1/imports/stremio/{}/apply",
@@ -694,6 +699,10 @@ async fn selected_addon_applies_encrypted_only_after_confirmation_and_addon_only
     .await;
     assert_eq!(status, StatusCode::OK, "{result}");
     assert_eq!(result["addons_added"], 1);
+    assert_ne!(
+        f.app.addons.clone().for_account(1).revision().unwrap(),
+        revision_before
+    );
     assert_eq!(counts(&f.app), (0, 0, 0));
     let db = f.app.db.lock().unwrap();
     let secret: String = db
@@ -877,6 +886,7 @@ fn mapper_cleared_removed_temp_unsupported_duplicates_and_options() {
 #[tokio::test]
 async fn preview_is_read_only_confirmation_backup_apply_replay_and_removed_favorite() {
     let f = fixture(vec![movie("tt0000001")], login()).await;
+    let revision_before = f.app.addons.clone().for_account(1).revision().unwrap();
     let p = get_preview(&f.app).await;
     assert_eq!(counts(&f.app), (0, 0, 0));
     assert_eq!(p["summary"]["favorites_to_add"], 1);
@@ -902,6 +912,10 @@ async fn preview_is_read_only_confirmation_backup_apply_replay_and_removed_favor
     }
     let (status, result) = apply_preview(&f.app, &p).await;
     assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(
+        f.app.addons.clone().for_account(1).revision().unwrap(),
+        revision_before
+    );
     assert_eq!(result["summary"]["favorites_added"], 1);
     assert_eq!(result["summary"]["progress_added"], 1);
     assert_eq!(counts(&f.app), (1, 1, 1));
