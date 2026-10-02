@@ -16,6 +16,10 @@ private validated input and file selection retain opaque source handles and
 always use account-authorized gateway HLS on web, desktop and Android. Native
 torrent delivery and progressive integration remain deferred. The visual/assets
 DESIGN_REF below remains unchanged; this is explicit non-visual contract adoption.
+The bundled viewing client adopts the corresponding reviewed source-picker copy
+and Core/design behavior pins at TV-web `b576a383ec261dd4799f52e52456be065a943a39`
+([PR8](https://github.com/viptv-org/tv-web/pull/8)); this does not establish layout
+or installed-device parity.
 
 DESIGN_REF intentionally remains the baseline visual/asset pin while this
 non-visual backend adoption is in progress. No visual parity or completed
