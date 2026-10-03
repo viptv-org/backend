@@ -21,17 +21,23 @@ qualification counts and pre-cutover controls below are checkpoint evidence only
 ## Responsive restoration recovery adoption — 2026-10-02
 
 The viewing gitlink adopts reviewed TV-web source
-`e7683b098b9abf1941632b69d04f2340cb7b1b9c` (PR11/PR12). Failed Next/restoration
+`c797ad081e41f3ee2c3e1d0eaf7f2ae5e91f83e6` (PR11/PR12/PR13). Failed Next/restoration
 offers one recovery dialog, the responsive Retry icon, exact outgoing
 source/position Retry and manual source/Back actions. Obsolete failure callbacks
 and busy cleanup are fenced to their originating navigation/request; an owned
-same-navigation deadline still offers recovery. TV layout, Core `f66c87e`, Video
-`550ab350`, and the dashboard gitlink
+same-navigation deadline still offers recovery. TV layout, Core `f66c87e`, and the dashboard gitlink
 `2a6094067e44b6e2b8ab58b012a971c4ab7fad38` are unchanged. Populated responsive
 source lists also retain their existing100px desktop/108px phone row sizes,
 without flex shrink clipping Best match or description content. The twelve-row
 390/1440 geometry regressions are red before/green after; existing focused
 filename/reduced-motion acceptance passes. This restores existing CSS sizes.
+
+Video source `2038c0f` also preserves selected VOD Resume intent while native
+startup metadata is incomplete; an initial duration0/live=true snapshot no
+longer suppresses a requested seek. The two public adapter/IPC regressions are
+red before/green after, with128 Video tests/typecheck/build passing. Renderer
+policy is unchanged. Actual native replay and the reported controls/sidebar
+flicker remain separate; this adoption does not claim a rendering fix.
 
 The consumer's fresh viewing build passes design/Core/video integrity and all
 TypeScript groups. TV-web's recovery source `a2c53af` passed267 app tests, two public-stage
