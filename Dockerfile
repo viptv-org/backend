@@ -15,7 +15,7 @@ COPY dashboard/ ./
 # server-only image answers / with its identity instead of a dashboard.
 RUN if [ "$FRONTENDS" = "0" ]; then mkdir -p dist; exit 0; fi \
     && npm ci --no-audit --no-fund \
-    && npm test \
+    && npm test -- --pool=forks --poolOptions.forks.singleFork \
     && npm run build
 
 FROM node:22-bookworm-slim AS tv-build
