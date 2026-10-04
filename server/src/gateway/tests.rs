@@ -138,6 +138,8 @@ async fn setup() -> (App, Peer) {
                 1=>StatusCode::UNAUTHORIZED.into_response(),
                 2=>(StatusCode::FOUND,[("location","/must-not-follow")]).into_response(),
                 3=>(StatusCode::OK,"x".repeat(65537)).into_response(),
+                8=>(StatusCode::BAD_GATEWAY,"error code: 502").into_response(),
+                9=>(StatusCode::OK,"not a gateway response").into_response(),
                 mode=>Json(json!({"version":1,"ready":mode!=5,"protocols":["hls","progressive"],"namespaces":["fixture"],"scopes":if mode==4 {vec!["capabilities"]}else{vec!["capabilities","create","read","renew","release"]},"available":if matches!(mode,6|7) {Some(json!({"inputs":0,"outputs":2,"viewers":3}))}else{None}})).into_response(),
             }
         }
@@ -285,6 +287,31 @@ async fn grant_recipient_pages_require_operator_and_own_registration() {
     let (status, error) = request(&app, "member-token-1", "GET", &root, Value::Null).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(error["error_code"], "account_session_required");
+}
+
+#[tokio::test]
+async fn ingress_text_error_is_transport_failure_not_invalid_gateway_protocol() {
+    let (app, peer) = setup().await;
+    peer.mode.store(8, Ordering::SeqCst);
+    let outcome = app
+        .gateway_client
+        .capabilities(
+            "https://gateway.fixture.invalid",
+            key().as_bytes(),
+            "fixture",
+        )
+        .await;
+    assert_eq!(outcome.err(), Some("gateway_unavailable"));
+    peer.mode.store(9, Ordering::SeqCst);
+    let outcome = app
+        .gateway_client
+        .capabilities(
+            "https://gateway.fixture.invalid",
+            key().as_bytes(),
+            "fixture",
+        )
+        .await;
+    assert_eq!(outcome.err(), Some("gateway_protocol_invalid"));
 }
 
 #[tokio::test]
