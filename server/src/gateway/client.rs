@@ -191,7 +191,12 @@ impl Client {
             let value: serde_json::Value = if data.is_empty() && !(200..300).contains(&status) {
                 serde_json::Value::Null
             } else {
-                serde_json::from_slice(&data).map_err(|_| "gateway_protocol_invalid")?
+                match serde_json::from_slice(&data) {
+                    Ok(value) => value,
+                    // HTTPS ingress may replace an origin error with plain text.
+                    Err(_) if !(200..300).contains(&status) => serde_json::Value::Null,
+                    Err(_) => return Err("gateway_protocol_invalid"),
+                }
             };
             if !(200..300).contains(&status) {
                 return Err(super::protocol::failure_code(
