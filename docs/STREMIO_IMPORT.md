@@ -1,6 +1,6 @@
 # Stremio account import — guided development implementation
 
-The initial importer is in `server/src/stremio_import.rs` and the account dashboard's `src/StremioImport.tsx`. The uncommitted dev-only IMP-001 proposal is in `../design/specs/behavior/stremio-import.md`; existing design pins remain unchanged. Keep credentials, tokens, raw exports, title names/IDs, viewing dates and personal statistics out of Git. No personal import has been applied by this implementation task.
+The importer is in `server/src/stremio_import.rs` and the account dashboard's `src/StremioImport.tsx`. The uncommitted dev-only IMP-001 proposal is in `../design/specs/behavior/stremio-import.md`; existing design pins remain unchanged. Keep credentials, tokens, raw exports, title names/IDs, viewing dates and personal statistics out of Git. Personal repair requires the authorization and preservation checks described below.
 
 ## Account dashboard flow
 
@@ -10,9 +10,46 @@ Back and Next let you revisit choices before confirmation. Returning from confir
 
 Viewing data and add-on configuration are not written until you check the destination confirmation and press **Confirm import** on the final recap. Selected new add-ons are saved to encrypted account-owned storage and become available to the account's profiles. Skipping an add-on never removes existing configuration. Cancel discards the preview. Passwords are cleared after submit, scope replacement or cancellation and are not persisted in browser storage or server import records. The Windows Android checkout's ignored `.env` contains privately saved credentials for later manual use; those values do not auto-fill this screen or enter the web/Android bundles.
 
-Initial scope: saved IMDb movie/series titles, supported movie history/resume and exact episode resume. Milliseconds become seconds and trustworthy source timestamps are retained. Full series watched-bitfield expansion, unsupported identities, ambiguous episode state and likes/loves are not imported. This is not an event-by-event history export.
+Supported scope: saved IMDb/metadata-verified titles, movie history/resume, exact episode resume, and metadata-verified episode watched bitfields. Milliseconds become seconds and trustworthy activity timestamps are retained. Unknown individual episode watch dates are not invented. Unverified identities/bitfields, ambiguous episode state and likes/loves remain for review. This is not an event-by-event history export.
+
+Guided review verifies metadata without requiring add-on installation: account-owned sources take precedence, followed by selected verified add-ons, then fixed public Cinemeta for IMDb movie/series IDs only. Flagged series are checked first. Verification is limited to eight concurrent identity lookups, a 30-second batch deadline and 16 MiB of retained metadata; successful results survive a timeout, while unresolved identities remain for review. The batch deadline leaves room for add-on verification and publication within the dashboard's 45-second request timeout.
 
 Previews are bounded, session/profile-bound, and expire after ten minutes or server restart. Paired devices and restricted profiles cannot import. Apply revalidates the destination, creates a private consistent backup, and merges in one transaction. Existing favorites are not overwritten; newer/equal progress and manual corrections are preserved. Persistent profile-scoped receipts prevent replays from resurrecting imported favorites removed locally. Queue hiding is not reset. A stale preview must be recreated. An interrupted apply may have committed; retry the same preview rather than assuming rollback.
+
+## Tagged watched completion (Plan 2)
+
+The owner-approved extension is recorded in `../design/specs/behavior/stremio-import.md`.
+It retains the existing `progress` table, with explicit import provenance and a
+completion-only marker. Synthetic ancient ordering values are implementation
+sorting values, not watch dates. History puts real activity first and labels
+undated completion-only records **Imported — date unknown**. Such records are
+excluded before Continue Watching selects the most recent activity for each title.
+
+`watched`, `resume_active`, `completion_only` and `watch_date_known` are authoritative
+backend facts. Previously watched movies/episodes can retain a real active rewatch;
+position, duration, actual activity timestamp and source context are not replaced
+by an imported completion. The review and history show **Watched · Rewatch in
+progress** when both facts are present. Shared core gives active resume precedence
+in episode selection. Playback establishes activity without discarding earlier
+completion; explicit local corrections take precedence over imported assertions.
+
+For the owner-approved import-only continuation adjustment, a verified watched
+partial episode with later verified watched episodes keeps its saved position,
+runtime and activity timestamp. An internal import marker makes Continue Watching
+use the highest verified watched episode in the same regular/special episode
+sequence as its continuation anchor. Undated completion records remain undated;
+queue ordering retains the original series activity date. Normal playback and
+next-episode resolution are unchanged. Newer playback, manual corrections and
+missing/excluded target records take precedence over the marker. Legacy receipts
+allow one context-only anchor repair of an unchanged import-owned resume; replay
+cannot repeatedly reset its continuation.
+
+Receipt versioning allows missing completions from the older importer to be
+reevaluated at the same source timestamp. Repair remains idempotent and preserves
+removed imported favorites, manual decisions and hidden queue titles. Personal
+repair requires explicit owner authorization, a uniquely verified destination,
+a read-only preview, a private consistent backup, and post-apply comparisons.
+It never targets production or impersonates another account.
 
 Routes, under `/api`:
 - `POST /profiles/{profile}/imports/stremio/preview` with `{email,password,import_library,import_progress}`.
@@ -21,7 +58,7 @@ Routes, under `/api`:
 - Guided confirmation also sends `excluded_items` and the finalized `review_revision`; completed retries must use exactly the same selection and revision.
 - `DELETE /profiles/{profile}/imports/stremio/{preview}` to discard.
 
-Run `cargo test --manifest-path server/Cargo.toml stremio_import`, and dashboard `npm test -- --run` / `npm run build`. Synthetic tests and browser rendering do not establish real credential validity or prove a personal import. Test a separate synthetic profile first; never impersonate a personal account or apply a personal merge without the owner's explicit destination/preview confirmation.
+Run `cargo test --locked --manifest-path server/Cargo.toml --lib stremio_import`, and dashboard `npm test -- --run` / `npm run build`. Synthetic tests and browser rendering do not establish real credential validity or prove a personal import. Test a separate synthetic profile first; never impersonate a personal account or apply a personal merge without the owner's explicit destination/preview authorization.
 
 ## Existing read-only command-line preview
 

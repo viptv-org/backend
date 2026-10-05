@@ -144,53 +144,166 @@ pub(super) async fn verify(
         .collect()
 }
 
+fn checked_meta(response: Value, kind: &str, id: &str) -> Option<Value> {
+    let meta = response.get("meta")?.clone();
+    (meta["id"] == id
+        && meta["type"] == kind
+        && serde_json::to_vec(&meta).is_ok_and(|v| v.len() <= 256_000)
+        && meta["videos"].as_array().is_none_or(|v| v.len() <= 2000))
+    .then_some(meta)
+}
+
+fn imdb(id: &str) -> bool {
+    id.strip_prefix("tt").is_some_and(|digits| {
+        (5..=12).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+const MAX_RETAINED_METADATA_BYTES: usize = 16 * 1024 * 1024;
+
+fn retain_metadata(
+    found: &mut HashMap<(String, String), Value>,
+    remaining: &mut usize,
+    identity: (String, String),
+    meta: Value,
+) -> bool {
+    let Ok(bytes) = serde_json::to_vec(&meta) else {
+        return false;
+    };
+    let Some(next) = remaining.checked_sub(bytes.len()) else {
+        return false;
+    };
+    *remaining = next;
+    found.insert(identity, meta);
+    true
+}
 pub(super) async fn metadata(
     app: &App,
     items: &[Value],
     selected: &[VerifiedAddon],
 ) -> HashMap<(String, String), Value> {
+    use futures::{stream, StreamExt};
     let mut found = HashMap::new();
+    let mut remaining = MAX_RETAINED_METADATA_BYTES;
     let mut seen = std::collections::HashSet::new();
-    for item in items {
-        let (Some(kind), Some(id)) = (item["type"].as_str(), item["_id"].as_str()) else {
-            continue;
-        };
-        if !seen.insert((kind, id)) {
-            continue;
-        }
-        let from_owned = app
-            .addons
-            .clone()
-            .for_account(app.identity().account_id().unwrap_or_default())
-            .with_protected_fetch()
-            .meta(kind, id)
-            .await
-            .ok();
-        let mut response = from_owned;
-        if response.as_ref().is_none_or(|r| r["meta"]["id"] != id) {
-            response = None;
-            for addon in selected
-                .iter()
-                .filter(|a| crate::addon::supports(&a.manifest, "meta", kind, id))
-                .take(8)
-            {
-                if let Ok(value) = app.addons.metadata_from(&addon.url, kind, id).await {
-                    if value["meta"]["id"] == id {
-                        response = Some(value);
-                        break;
+    let identities: Vec<_> = items
+        .iter()
+        .filter_map(|item| {
+            let (kind, id) = (item["type"].as_str()?, item["_id"].as_str()?);
+            seen.insert((kind, id))
+                .then(|| (kind.to_owned(), id.to_owned()))
+        })
+        .collect();
+    #[cfg(test)]
+    let duration = app
+        .stremio_import
+        .metadata_deadline
+        .unwrap_or(Duration::from_secs(30));
+    #[cfg(not(test))]
+    // Leave room for add-on verification and publication within the dashboard's
+    // 45-second request timeout. Completed metadata survives this earlier cutoff.
+    let duration = Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + duration;
+    let mut pending = stream::iter(identities)
+        .map(|(kind, id)| async move {
+            let (kind, id) = (kind.as_str(), id.as_str());
+            let from_owned = app
+                .addons
+                .clone()
+                .for_account(app.identity().account_id().unwrap_or_default())
+                .with_protected_fetch()
+                .meta(kind, id)
+                .await
+                .ok();
+            let mut meta = from_owned.and_then(|r| checked_meta(r, kind, id));
+            if meta.is_none() {
+                for addon in selected
+                    .iter()
+                    .filter(|a| crate::addon::supports(&a.manifest, "meta", kind, id))
+                    .take(8)
+                {
+                    if let Ok(value) = app.addons.metadata_from(&addon.url, kind, id).await {
+                        meta = checked_meta(value, kind, id);
+                        if meta.is_some() {
+                            break;
+                        }
                     }
                 }
             }
-        }
-        if let Some(meta) = response.and_then(|r| r.get("meta").cloned()) {
-            if meta["id"] == id
-                && meta["type"] == kind
-                && serde_json::to_vec(&meta).is_ok_and(|v| v.len() <= 256_000)
-                && meta["videos"].as_array().is_none_or(|v| v.len() <= 2000)
-            {
-                found.insert((kind.to_owned(), id.to_owned()), meta);
+            if meta.is_none() && matches!(kind, "movie" | "series") && imdb(id) {
+                #[cfg(test)]
+                let base = app
+                    .stremio_import
+                    .public_metadata_endpoint
+                    .as_deref()
+                    .unwrap_or("https://v3-cinemeta.strem.io");
+                #[cfg(not(test))]
+                let base = "https://v3-cinemeta.strem.io";
+                if let Ok(url) = url::Url::parse(&format!("{base}/meta/{kind}/{id}.json")) {
+                    if let Ok(value) = crate::source_http::json(
+                        url,
+                        256_000,
+                        Duration::from_secs(8),
+                        app.addons.fixture_transport(),
+                        false,
+                    )
+                    .await
+                    {
+                        meta = checked_meta(value, kind, id);
+                    }
+                }
+            }
+            meta.map(|meta| ((kind.to_owned(), id.to_owned()), meta))
+        })
+        .buffer_unordered(8);
+    // Retain completed results within both the time and total byte budgets.
+    // Dropping unfinished work leaves its identities review-only, never guessed.
+    while let Ok(Some(result)) = tokio::time::timeout_at(deadline, pending.next()).await {
+        if let Some((identity, meta)) = result {
+            if !retain_metadata(&mut found, &mut remaining, identity, meta) {
+                break;
             }
         }
     }
     found
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn retained_metadata_has_an_aggregate_byte_bound() {
+        let mut found = HashMap::new();
+        let mut remaining = MAX_RETAINED_METADATA_BYTES;
+        let mut stopped = false;
+        for index in 0..100 {
+            let id = format!("tt{:07}", index);
+            let meta = json!({"id":id,"type":"series","description":"x".repeat(240_000)});
+            assert!(serde_json::to_vec(&meta).unwrap().len() < 256_000);
+            if !retain_metadata(
+                &mut found,
+                &mut remaining,
+                ("series".into(), id.clone()),
+                meta,
+            ) {
+                assert!(!found.contains_key(&("series".into(), id)));
+                stopped = true;
+                break;
+            }
+        }
+        assert!(
+            stopped,
+            "metadata beyond the batch budget must stay unresolved"
+        );
+        let retained: usize = found
+            .values()
+            .map(|v| serde_json::to_vec(v).unwrap().len())
+            .sum();
+        assert!(retained <= MAX_RETAINED_METADATA_BYTES);
+        assert_eq!(retained + remaining, MAX_RETAINED_METADATA_BYTES);
+        assert!(
+            found.len() > 16,
+            "the budget must not restore the old 16-title cap"
+        );
+    }
 }

@@ -1,5 +1,82 @@
 use super::*;
 
+use base64::{engine::general_purpose::STANDARD, Engine};
+use flate2::read::ZlibDecoder;
+use std::{collections::HashSet, io::Read};
+
+// Stremio stores {last_watched_video_id}:{one_based_index}:{zlib(base64(bitset))}.
+// A metadata change can shift the anchor, but cannot justify guessing missing IDs.
+fn verified_episodes(field: &str, title: &str, meta: &Value) -> Option<Vec<(String, i64, i64)>> {
+    let (prefix, encoded) = field.rsplit_once(':')?;
+    let (anchor, count) = prefix.rsplit_once(':')?;
+    let count = count.parse::<usize>().ok()?;
+    let videos = meta["videos"]
+        .as_array()
+        .filter(|v| !v.is_empty() && v.len() <= 2000)?;
+    let mut ids = HashSet::new();
+    let mut coordinates = HashSet::new();
+    let mut ordered = Vec::with_capacity(videos.len());
+    let mut previous = None;
+    for video in videos {
+        let id = video["id"]
+            .as_str()
+            .filter(|s| !s.is_empty() && s.len() <= 512)?;
+        let season = video["season"]
+            .as_i64()
+            .filter(|n| (0..=100000).contains(n))?;
+        let episode_number = video["episode"]
+            .as_i64()
+            .filter(|n| (0..=100000).contains(n))?;
+        if !ids.insert(id)
+            || !coordinates.insert((season, episode_number))
+            || (imdb(title) && episode(id, title) != Some((season, episode_number)))
+        {
+            return None;
+        }
+        if previous.is_some_and(|coordinate| coordinate >= (season, episode_number)) {
+            return None;
+        }
+        if let Some((prior_season, prior_episode)) = previous {
+            if prior_season == season && episode_number != prior_episode + 1 {
+                return None;
+            }
+            if prior_season != season && episode_number != 1 {
+                return None;
+            }
+        } else if episode_number != 1 && !(season == 0 && episode_number == 0) {
+            return None;
+        }
+        previous = Some((season, episode_number));
+        ordered.push((id.to_owned(), season, episode_number));
+    }
+    let anchor_index = ordered.iter().position(|(id, _, _)| id == anchor)?;
+    // A shifted anchor could indicate added or missing episodes before it; without the
+    // original video list the historical flags cannot be attributed safely.
+    if count == 0 || count > 2000 || count != anchor_index + 1 {
+        return None;
+    }
+    let compressed = STANDARD.decode(encoded).ok().filter(|v| v.len() <= 4096)?;
+    let decoder = ZlibDecoder::new(compressed.as_slice());
+    let mut bytes = Vec::new();
+    decoder.take(251).read_to_end(&mut bytes).ok()?;
+    if bytes.is_empty() || bytes.len() > 250 || bytes.len() * 8 < count {
+        return None;
+    }
+    let offset = anchor_index + 1 - count;
+    let mut result = Vec::new();
+    for (index, byte) in bytes.iter().enumerate() {
+        for bit in 0..8 {
+            if byte & (1 << bit) != 0 {
+                let at = index * 8 + bit;
+                if at >= count || offset + at >= ordered.len() {
+                    return None;
+                }
+                result.push(ordered[offset + at].clone());
+            }
+        }
+    }
+    (result.iter().any(|(id, _, _)| id == anchor)).then_some(result)
+}
 #[derive(Clone)]
 pub(super) struct Candidate {
     pub kind: String,
@@ -85,6 +162,10 @@ pub(super) fn map_verified(
             summary.skipped_items += 1;
             continue;
         }
+        if result.len() + 2 > 20_000 {
+            summary.needs_review += 1;
+            continue;
+        }
         let removed = item["removed"].as_bool().unwrap_or(false);
         let temp = item["temp"].as_bool().unwrap_or(false);
         let offset = milliseconds(&state["timeOffset"]);
@@ -122,15 +203,59 @@ pub(super) fn map_verified(
             progress: None,
         };
         if history {
-            if kind == "series" && bitfield {
+            let completed = if kind == "series" && bitfield {
+                metadata
+                    .get(&(kind.to_owned(), id.to_owned()))
+                    .and_then(|meta| {
+                        state["watched"]
+                            .as_str()
+                            .and_then(|field| verified_episodes(field, id, meta))
+                    })
+            } else {
+                None
+            };
+            if kind == "series" && bitfield && completed.is_none() {
                 summary.needs_review += 1;
+            }
+            if completed
+                .as_ref()
+                .is_some_and(|episodes| episodes.len() + result.len() + 2 > 20_000)
+            {
+                summary.needs_review += 1;
+                continue;
             }
             let resume =
                 matches!((offset, duration), (Some(p), Some(d)) if p > 0.0 && d > 0.0 && p <= d);
+            let time = timestamp(&state["lastWatched"], now);
+            if let Some(episodes) = &completed {
+                for (video, season, episode_number) in episodes {
+                    if state["video_id"] == *video && resume && time.is_some() {
+                        continue;
+                    }
+                    let mut context = json!({"series_id":id,"season":season,"episode":episode_number,
+                        "watched_override":true,"stremio_import_watched":true,
+                        "stremio_completion_only":true,"stremio_watch_date_unknown":true});
+                    if imdb(id) {
+                        context["imdb_id"] = json!(id);
+                    }
+                    result.push(Candidate {
+                        kind: kind.into(),
+                        id: video.clone(),
+                        title: id.into(),
+                        name: name.into(),
+                        favorite: false,
+                        progress: Some(Progress {
+                            position: 0.0,
+                            duration: 0.0,
+                            timestamp: 0,
+                            context,
+                        }),
+                    });
+                }
+            }
             // A rewatch resume wins over timesWatched. Counts alone never identify an episode.
             let movie_completed = kind == "movie" && watched && offset == Some(0.0);
             if resume || movie_completed {
-                let time = timestamp(&state["lastWatched"], now);
                 let identity = if kind == "series" {
                     state["video_id"].as_str().and_then(|video| {
                         (if imdb(id) { episode(video, id) } else { None })
@@ -168,6 +293,34 @@ pub(super) fn map_verified(
                     ))
                 };
                 if let (Some(time), Some((progress_id, mut context))) = (time, identity) {
+                    if (kind == "movie" && watched)
+                        || (kind == "series"
+                            && completed.as_ref().is_some_and(|episodes| {
+                                episodes.iter().any(|(video, _, _)| video == &progress_id)
+                            }))
+                    {
+                        context["stremio_import_watched"] = json!(true);
+                    }
+                    // A watched imported offset may be stale, not evidence of a new rewatch.
+                    // Keep it intact, but anchor this import's queue at the last verified
+                    // watched episode in the same regular/special sequence.
+                    if kind == "series" && resume {
+                        if let Some(episodes) = &completed {
+                            if let Some((_, season, episode_number)) =
+                                episodes.iter().find(|(video, _, _)| video == &progress_id)
+                            {
+                                if let Some((last, _, _)) =
+                                    episodes.iter().rev().find(|(_, s, e)| {
+                                        (*s == 0) == (*season == 0)
+                                            && (*s, *e) > (*season, *episode_number)
+                                    })
+                                {
+                                    context["stremio_continuation"] =
+                                        json!({"id":last,"activity_at":time});
+                                }
+                            }
+                        }
+                    }
                     let d = duration.unwrap_or(0.0);
                     let p = if resume {
                         offset.unwrap()
@@ -196,11 +349,30 @@ pub(super) fn map_verified(
                         timestamp: time,
                         context,
                     });
-                } else {
+                } else if !(movie_completed && time.is_none()) {
                     summary.needs_review += 1;
                 }
-            } else if offset.unwrap_or(0.0) > 0.0 || watched {
+            } else if offset.unwrap_or(0.0) > 0.0 || (watched && kind == "movie") {
                 summary.needs_review += 1;
+            }
+            if kind == "movie" && watched && candidate.progress.is_none() {
+                // The watched counter is a fact even when the rewatch activity cannot
+                // be placed on a timeline; lastWatched may belong to that failed resume.
+                let mut context = if imdb(id) {
+                    json!({"imdb_id":id})
+                } else {
+                    json!({})
+                };
+                context["watched_override"] = json!(true);
+                context["stremio_import_watched"] = json!(true);
+                context["stremio_completion_only"] = json!(true);
+                context["stremio_watch_date_unknown"] = json!(true);
+                candidate.progress = Some(Progress {
+                    position: 0.0,
+                    duration: 0.0,
+                    timestamp: 0,
+                    context,
+                });
             }
         }
         if candidate.favorite || candidate.progress.is_some() {

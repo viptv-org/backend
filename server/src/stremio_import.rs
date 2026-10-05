@@ -17,6 +17,7 @@ mod tests;
 
 const TTL: i64 = 600;
 const MAX_ITEMS: usize = 10_000;
+const MAX_REVIEW_ROWS: usize = 20_000;
 const MAX_BYTES: usize = 8_000_000;
 const UNAVAILABLE: &str = "stremio_source_unavailable";
 const STORAGE: &str = "stremio_storage_unavailable";
@@ -124,6 +125,10 @@ pub(crate) struct Service {
     #[cfg(test)]
     endpoint: Option<String>,
     #[cfg(test)]
+    public_metadata_endpoint: Option<String>,
+    #[cfg(test)]
+    metadata_deadline: Option<Duration>,
+    #[cfg(test)]
     backup_directory: Option<PathBuf>,
 }
 impl Service {
@@ -140,6 +145,10 @@ impl Service {
                 .map_err(|_| UNAVAILABLE)?,
             #[cfg(test)]
             endpoint: None,
+            #[cfg(test)]
+            public_metadata_endpoint: None,
+            #[cfg(test)]
+            metadata_deadline: None,
             #[cfg(test)]
             backup_directory: None,
         }))
@@ -348,7 +357,17 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
         source_account TEXT NOT NULL, type TEXT NOT NULL, id TEXT NOT NULL,
         favorite INTEGER NOT NULL DEFAULT 0, progress_timestamp INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY(profile_id,source_account,type,id));",
-    )
+    )?;
+    let versioned = db
+        .prepare("PRAGMA table_info(stremio_import_receipts)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == "completion_version");
+    if !versioned {
+        db.execute_batch("ALTER TABLE stremio_import_receipts ADD COLUMN completion_version INTEGER NOT NULL DEFAULT 0")?;
+    }
+    Ok(())
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -434,19 +453,36 @@ pub(crate) async fn preview(
     let pending_metadata: Vec<Value> = if inspect_addons {
         items
             .iter()
+            // Verified completion candidates take priority over optional identity review.
+            .filter(|item| {
+                item["type"] == "series"
+                    && item["state"]["watched"]
+                        .as_str()
+                        .is_some_and(|s| !s.is_empty())
+            })
+            .chain(items.iter().filter(|item| {
+                !(item["type"] == "series"
+                    && item["state"]["watched"]
+                        .as_str()
+                        .is_some_and(|s| !s.is_empty()))
+            }))
             .filter(|item| {
                 let kind = item["type"].as_str().unwrap_or("");
                 let id = item["_id"].as_str().unwrap_or("");
                 matches!(kind, "movie" | "series")
                     && id.len() <= 128
-                    && !id.starts_with("tt")
+                    && (!id.starts_with("tt")
+                        || (kind == "series"
+                            && item["state"]["watched"]
+                                .as_str()
+                                .is_some_and(|s| !s.is_empty())))
                     && !id.is_empty()
                     && id
                         .bytes()
                         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'-' | b'_'))
                     && serde_json::to_vec(item).is_ok_and(|v| v.len() <= 16_384)
             })
-            .take(16)
+            .take(MAX_ITEMS)
             .cloned()
             .collect()
     } else {
@@ -473,7 +509,7 @@ pub(crate) async fn preview(
                         .as_str()
                         .is_some_and(|s| !s.is_empty())
                 {
-                    "watch_date_unknown"
+                    "unverified_episode_bitfield"
                 } else if !id.starts_with("tt") {
                     "unmatched_identity"
                 } else {
@@ -616,12 +652,7 @@ pub(crate) async fn review(
     )
     .await
     .map_err(|_| UNAVAILABLE)??;
-    let metadata = tokio::time::timeout(
-        Duration::from_secs(8),
-        addon_review::metadata(&app, &pending_metadata, &verified),
-    )
-    .await
-    .unwrap_or_default();
+    let metadata = addon_review::metadata(&app, &pending_metadata, &verified).await;
     let worker = app.clone();
     account_api::run(app.clone(), app.request_lease(), move |db, _| {
         authorize(db, &worker, profile)?;
@@ -638,6 +669,9 @@ pub(crate) async fn review(
             .or_insert_with(|| Uuid::new_v4().simple().to_string()).clone()).collect();
         let mut rows = review_rows(db, profile, &preview.source, &candidates, &row_ids)?;
         for item in &preview.review_only {
+            if rows.len() >= MAX_REVIEW_ROWS { break; }
+            if candidates.iter().any(|c| c.kind == item.kind && c.progress.is_some() &&
+                (c.id == item.id || c.title == item.id)) { continue; }
             if item.reason == "unmatched_identity" && candidates.iter().any(|c|
                 c.kind == item.kind && (c.id == item.id || c.title == item.id)) { continue; }
             rows.push(json!({"item_id":item.item_id,"name":item.name,"type":item.kind,
@@ -676,11 +710,38 @@ fn review_rows(
         let status = if matches!(favorite_action, "add") || matches!(progress_action, "add" | "update") { "ready" } else { "preserved" };
         let (season, episode) = c.progress.as_ref().map(|p| (&p.context["season"], &p.context["episode"]))
             .unwrap_or((&Value::Null, &Value::Null));
+        let mut projected = c.progress.as_ref().map(|p| {
+            let mut item = json!({"position":p.position,"duration":p.duration});
+            library::add_watch_fields(&mut item, &p.context);
+            item
+        });
+        if let Some(p) = &c.progress {
+            let unchanged = counts.progress_to_add == 0 && counts.progress_to_update == 0;
+            let completion_repair = counts.progress_to_update > 0 && p.context["stremio_completion_only"] == true;
+            if unchanged || completion_repair {
+                let existing: Option<(f64,f64,String)> = db.query_row(
+                    "SELECT position,duration,context FROM progress WHERE profile_id=?1 AND type=?2 AND id=?3",
+                    params![profile,c.kind,c.id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))
+                    .optional().map_err(|_| STORAGE)?;
+                if let Some((position,duration,raw)) = existing {
+                    if let Ok(mut context) = serde_json::from_str::<Value>(&raw) {
+                        if completion_repair && context.is_object() {
+                            context["stremio_import_watched"] = json!(true);
+                        }
+                        let mut item = json!({"position":position,"duration":duration});
+                        library::add_watch_fields(&mut item, &context);
+                        projected = Some(item);
+                    }
+                }
+            }
+        }
         Ok(json!({"item_id":item_id,"name":c.name,"type":c.kind,"favorite_action":favorite_action,
             "progress_action":progress_action,"status":status,"season":season,"episode":episode,
-            "position":c.progress.as_ref().map(|p| p.position),"duration":c.progress.as_ref().map(|p| p.duration),
-            "watched":c.progress.as_ref().map(|p| p.context["watched_override"] == true),
-            "watch_date_known":c.progress.as_ref().map(|_| true),"counts":{
+            "position":projected.as_ref().map(|p| &p["position"]),"duration":projected.as_ref().map(|p| &p["duration"]),
+            "watched":projected.as_ref().map(|p| &p["watched"]),
+            "resume_active":projected.as_ref().map(|p| &p["resume_active"]),
+            "completion_only":projected.as_ref().map(|p| &p["completion_only"]),
+            "watch_date_known":projected.as_ref().map(|p| &p["watch_date_known"]),"counts":{
                 "favorites_to_add":counts.favorites_to_add,"progress_to_add":counts.progress_to_add,
                 "progress_to_update":counts.progress_to_update,"existing_preserved":counts.existing_preserved,
                 "already_imported":counts.already_imported},"selectable":true}))
@@ -717,7 +778,7 @@ pub(crate) async fn apply(
 ) -> Result<Json<Value>, Error> {
     let app = app.with_lease(lease);
     let Json(confirmation) = body.map_err(|_| "stremio_invalid_request")?;
-    if confirmation.excluded_items.len() > MAX_ITEMS
+    if confirmation.excluded_items.len() > MAX_REVIEW_ROWS
         || confirmation.excluded_items.iter().any(|s| s.len() > 64)
     {
         return Err("stremio_invalid_request".into());
@@ -867,6 +928,78 @@ fn snapshot(db: &Connection, profile: i64) -> Result<[u8; 32], Error> {
     }
     Ok(hash.finalize().into())
 }
+/// Project an import-owned continuation without changing either episode's playback row.
+/// Ordinary playback invalidates the marker by advancing the original activity timestamp.
+pub(crate) fn continuation_item(
+    db: &Connection,
+    profile: i64,
+    current: &Value,
+) -> Result<Option<Value>, ApiError> {
+    if current["type"] != "series" {
+        return Ok(None);
+    }
+    let raw: Option<String> = db
+        .query_row(
+            "SELECT context FROM progress WHERE profile_id=?1 AND type='series' AND id=?2",
+            params![profile, current["id"].as_str()],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some(context) = raw.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()) else {
+        return Ok(None);
+    };
+    let marker = &context["stremio_continuation"];
+    if context["stremio_import_watched"] != true
+        || context["progress_corrected"] == true
+        || context["watched_override"] == false
+        || marker["activity_at"].as_i64().is_none()
+        || marker["activity_at"] != current["updated_at"]
+    {
+        return Ok(None);
+    }
+    let Some(target_id) = marker["id"]
+        .as_str()
+        .filter(|id| !id.is_empty() && id.len() <= 512)
+    else {
+        return Ok(None);
+    };
+    let title = continuation::title_id(current);
+    let target: Option<(String, Option<String>, f64, f64, String)> = db.query_row(
+        "SELECT name,poster,position,duration,context FROM progress WHERE profile_id=?1 AND type='series' AND id=?2 AND title_id=?3",
+        params![profile, target_id, title],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    ).optional().map_err(db_error)?;
+    let Some((name, poster, position, duration, raw)) = target else {
+        return Ok(None);
+    };
+    let Ok(context) = serde_json::from_str::<Value>(&raw) else {
+        return Ok(None);
+    };
+    let coordinate = |v: &Value| Some((v["season"].as_u64()?, v["episode"].as_u64()?));
+    let (Some(from), Some(to)) = (coordinate(current), coordinate(&context)) else {
+        return Ok(None);
+    };
+    if context["progress_corrected"] == true
+        || context["stremio_import_watched"] != true
+        || (from.0 == 0) != (to.0 == 0)
+        || to <= from
+    {
+        return Ok(None);
+    }
+    let mut item = json!({"id":target_id,"type":"series","name":name,"poster":poster,
+        "position":position,"duration":duration,"updated_at":current["updated_at"],
+        "queue_title_id":current["queue_title_id"]});
+    if !library::watched(&item, &context) {
+        return Ok(None);
+    }
+    library::add_watch_fields(&mut item, &context);
+    item.as_object_mut()
+        .unwrap()
+        .extend(matching_context(&context)?.as_object().unwrap().clone());
+    Ok(Some(item))
+}
+
 fn merge(
     db: &Connection,
     profile: i64,
@@ -876,9 +1009,10 @@ fn merge(
     write: bool,
 ) -> Result<Summary, Error> {
     for c in candidates {
-        let (favorite_receipt, progress_receipt): (bool,i64) = db.query_row(
-            "SELECT favorite,progress_timestamp FROM stremio_import_receipts WHERE profile_id=?1 AND source_account=?2 AND type=?3 AND id=?4",
-            params![profile, source, c.kind, c.id], |r| Ok((r.get(0)?, r.get(1)?))).optional().map_err(|_| STORAGE)?.unwrap_or((false,0));
+        let (favorite_receipt, progress_receipt, completion_version): (bool,i64,i64) = db.query_row(
+            "SELECT favorite,progress_timestamp,completion_version FROM stremio_import_receipts WHERE profile_id=?1 AND source_account=?2 AND type=?3 AND id=?4",
+            params![profile,source,c.kind,c.id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))
+            .optional().map_err(|_| STORAGE)?.unwrap_or((false,0,0));
         if c.favorite {
             let existing: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM favorites WHERE profile_id=?1 AND type=?2 AND id=?3)", params![profile,c.kind,c.id], |r| r.get(0)).map_err(|_| STORAGE)?;
             if favorite_receipt {
@@ -893,50 +1027,103 @@ fn merge(
             }
         }
         if let Some(p) = &c.progress {
-            let existing: Option<(i64,String,f64)> = db.query_row("SELECT updated_at,context,duration FROM progress WHERE profile_id=?1 AND type=?2 AND id=?3", params![profile,c.kind,c.id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_| STORAGE)?;
-            let preserve = existing.as_ref().is_some_and(|(time, context, _)| {
-                *time >= p.timestamp
-                    || serde_json::from_str::<Value>(context).map_or(true, |v| {
-                        !v.is_object()
-                            || v["progress_corrected"] == true
-                            // Only an explicit import-owned completion may be replaced.
-                            // Manual corrections remain authoritative even if they retain this marker.
-                            || (v.get("watched_override").is_some()
-                                && !(v["watched_override"] == true
-                                    && v["stremio_import_watched"] == true))
-                    })
-            });
-            if p.timestamp <= progress_receipt {
-                summary.already_imported += 1;
-            } else if preserve {
+            let existing: Option<(i64,String,f64)> = db.query_row("SELECT updated_at,context,duration FROM progress WHERE profile_id=?1 AND type=?2 AND id=?3",params![profile,c.kind,c.id],|r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_| STORAGE)?;
+            let completion = p.context["stremio_import_watched"] == true;
+            let local = existing
+                .as_ref()
+                .and_then(|(_, raw, _)| serde_json::from_str::<Value>(raw).ok());
+            let protected = existing.is_some()
+                && local.as_ref().is_none_or(|v| {
+                    !v.is_object()
+                        || v["progress_corrected"] == true
+                        || (v.get("watched_override").is_some()
+                            && !(v["watched_override"] == true
+                                && v["stremio_import_watched"] == true))
+                });
+            let add_fact = completion
+                && completion_version < 1
+                && existing.is_some()
+                && !protected
+                && local
+                    .as_ref()
+                    .is_some_and(|v| v["stremio_import_watched"] != true);
+            // Version 2 repairs only the unchanged, receipt-owned imported resume.
+            // A watched assertion alone is not proof that local playback belongs to import.
+            let add_anchor = completion_version < 2
+                && p.context["stremio_continuation"].is_object()
+                && progress_receipt == p.timestamp
+                && existing
+                    .as_ref()
+                    .is_some_and(|(time, _, _)| *time == p.timestamp)
+                && !protected
+                && local.as_ref().is_some_and(|v| {
+                    (v["stremio_import_watched"] == true || add_fact)
+                        && v["stremio_continuation"] != p.context["stremio_continuation"]
+                });
+            let newer = existing
+                .as_ref()
+                .is_some_and(|(time, _, _)| *time >= p.timestamp);
+            let replayed =
+                p.timestamp <= progress_receipt && !(completion && completion_version < 1);
+            if protected || (replayed && !add_fact && !add_anchor) {
+                if replayed {
+                    summary.already_imported += 1;
+                } else {
+                    summary.existing_preserved += 1;
+                }
+            } else if newer && !add_fact && !add_anchor {
                 summary.existing_preserved += 1;
             } else if write {
-                if let Some((_, local_context, local_duration)) = &existing {
-                    // Preserve metadata, identity and all local source context. An explicit
-                    // imported movie completion adds only the internal watched assertion.
-                    let mut context: Value =
-                        serde_json::from_str(local_context).map_err(|_| STORAGE)?;
-                    let mut position = p.position;
-                    let mut duration = p.duration;
-                    if p.context["watched_override"] == true
-                        && duration == 0.0
-                        && local_duration.is_finite()
-                        && *local_duration > 0.0
-                    {
-                        // Reuse a known runtime; an unknown source runtime must not erase it.
-                        duration = *local_duration;
-                        position = duration;
-                    }
-                    if p.context["watched_override"] == true {
-                        context["watched_override"] = json!(true);
+                if let Some((_, _, local_duration)) = &existing {
+                    let mut context = local.unwrap();
+                    if completion {
                         context["stremio_import_watched"] = json!(true);
-                    } else {
-                        // A newer resume replaces the imported assertion, not the local source context.
-                        let fields = context.as_object_mut().ok_or(STORAGE)?;
-                        fields.remove("watched_override");
-                        fields.remove("stremio_import_watched");
                     }
-                    db.execute("UPDATE progress SET position=?4,duration=?5,updated_at=?6,context=?7 WHERE profile_id=?1 AND type=?2 AND id=?3",params![profile,c.kind,c.id,position,duration,p.timestamp,context.to_string()]).map_err(|_| STORAGE)?;
+                    if add_fact || add_anchor {
+                        if add_anchor {
+                            context["stremio_continuation"] =
+                                p.context["stremio_continuation"].clone();
+                        }
+                        db.execute("UPDATE progress SET context=?4 WHERE profile_id=?1 AND type=?2 AND id=?3",params![profile,c.kind,c.id,context.to_string()]).map_err(|_| STORAGE)?;
+                    } else {
+                        context
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("stremio_continuation");
+                        if p.context["stremio_continuation"].is_object() {
+                            context["stremio_continuation"] =
+                                p.context["stremio_continuation"].clone();
+                        }
+                        let mut position = p.position;
+                        let mut duration = p.duration;
+                        if p.context["watched_override"] == true
+                            && duration == 0.0
+                            && local_duration.is_finite()
+                            && *local_duration > 0.0
+                        {
+                            duration = *local_duration;
+                            position = duration;
+                        }
+                        if p.context["watched_override"] == true {
+                            context["watched_override"] = json!(true);
+                        } else {
+                            context.as_object_mut().unwrap().remove("watched_override");
+                        }
+                        if p.context["stremio_completion_only"] == true {
+                            context["stremio_completion_only"] = json!(true);
+                            context["stremio_watch_date_unknown"] = json!(true);
+                        } else {
+                            context
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("stremio_completion_only");
+                            context
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("stremio_watch_date_unknown");
+                        }
+                        db.execute("UPDATE progress SET position=?4,duration=?5,updated_at=?6,context=?7 WHERE profile_id=?1 AND type=?2 AND id=?3",params![profile,c.kind,c.id,position,duration,p.timestamp,context.to_string()]).map_err(|_| STORAGE)?;
+                    }
                     summary.progress_updated += 1;
                 } else {
                     db.execute("INSERT INTO progress(profile_id,type,id,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,NULL,?5,?6,?7,?8,?9)",params![profile,c.kind,c.id,c.name,p.position,p.duration,p.timestamp,p.context.to_string(),c.title]).map_err(|_| STORAGE)?;
@@ -949,7 +1136,14 @@ fn merge(
             }
         }
         if write {
-            db.execute("INSERT INTO stremio_import_receipts(profile_id,source_account,type,id,favorite,progress_timestamp) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(profile_id,source_account,type,id) DO UPDATE SET favorite=MAX(favorite,excluded.favorite),progress_timestamp=MAX(progress_timestamp,excluded.progress_timestamp)",params![profile,source,c.kind,c.id,c.favorite,c.progress.as_ref().map(|p| p.timestamp).unwrap_or(0)]).map_err(|_| STORAGE)?;
+            let completion_version = c.progress.as_ref().map_or(0, |p| {
+                if p.context["stremio_continuation"].is_object() {
+                    2
+                } else {
+                    i64::from(p.context["stremio_import_watched"] == true)
+                }
+            });
+            db.execute("INSERT INTO stremio_import_receipts(profile_id,source_account,type,id,favorite,progress_timestamp,completion_version) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(profile_id,source_account,type,id) DO UPDATE SET favorite=MAX(favorite,excluded.favorite),progress_timestamp=MAX(progress_timestamp,excluded.progress_timestamp),completion_version=MAX(completion_version,excluded.completion_version)",params![profile,source,c.kind,c.id,c.favorite,c.progress.as_ref().map(|p| p.timestamp).unwrap_or(0),completion_version]).map_err(|_| STORAGE)?;
         }
     }
     Ok(summary)

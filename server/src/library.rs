@@ -75,7 +75,7 @@ pub async fn history_page(
         let items=db.prepare(&format!("SELECT id,type,name,poster,position,duration,updated_at,context FROM progress WHERE profile_id=?1 AND type!='live' AND {allowed} ORDER BY updated_at DESC,rowid DESC LIMIT ?2 OFFSET ?3")).map_err(db_error)?
             .query_map(params![profile,limit,offset],|r|{
                 let mut item=json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"position":r.get::<_,f64>(4)?,"duration":r.get::<_,f64>(5)?,"updated_at":r.get::<_,i64>(6)?});
-                if let Ok(raw)=serde_json::from_str::<Value>(&r.get::<_,String>(7)?){item["watched"]=json!(watched(&item,&raw));if let Ok(context)=matching_context(&raw){item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());}}
+                if let Ok(raw)=serde_json::from_str::<Value>(&r.get::<_,String>(7)?){add_watch_fields(&mut item,&raw);if let Ok(context)=matching_context(&raw){item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());}}
                 Ok(item)
             }).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
         Ok(axum::Json(json!({"items":items,"offset":offset,"total":total,"next_offset":((offset as i64+limit as i64)<total).then_some(offset as i64+limit as i64)})))
@@ -112,6 +112,9 @@ pub async fn correct(
         merged.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());
         merged["progress_corrected"]=json!(true);
         merged["watched_override"]=if action=="watched" {json!(true)}else{Value::Null};
+        merged.as_object_mut().unwrap().remove("stremio_import_watched");
+        merged.as_object_mut().unwrap().remove("stremio_completion_only");
+        merged.as_object_mut().unwrap().remove("stremio_watch_date_unknown");
         let mut identity=merged.clone(); identity["id"]=json!(id); identity["type"]=json!(kind);
         let title=continuation::title_id(&identity);
         // A correction made in the same second must become the series' newest activity.
@@ -120,7 +123,9 @@ pub async fn correct(
         tx.execute("DELETE FROM queue_hidden WHERE profile_id=?1 AND type=?2 AND title_id=?3",params![profile,kind,title]).map_err(db_error)?;
         tx.execute("DELETE FROM continuation_cache WHERE profile_id=?1 AND series_id=?2",params![profile,title]).map_err(db_error)?;
         tx.commit().map_err(db_error)?;
-        Ok(axum::Json(json!({"ok":true,"position":position,"duration":duration})))
+        let mut response = json!({"ok":true,"position":position,"duration":duration});
+        add_watch_fields(&mut response, &merged);
+        Ok(axum::Json(response))
     }).await
 }
 
@@ -143,7 +148,7 @@ pub async fn series_history(
         let items=db.prepare("SELECT id,position,duration,updated_at,context FROM progress WHERE profile_id=?1 AND type='series' AND title_id=?2 ORDER BY updated_at DESC,rowid DESC LIMIT 2000").map_err(db_error)?
             .query_map(params![profile,query.series_id],|r|{
                 let mut item=json!({"id":r.get::<_,String>(0)?,"type":"series","position":r.get::<_,f64>(1)?,"duration":r.get::<_,f64>(2)?,"updated_at":r.get::<_,i64>(3)?});
-                if let Ok(raw)=serde_json::from_str::<Value>(&r.get::<_,String>(4)?){item["watched"]=json!(watched(&item,&raw));if let Ok(context)=matching_context(&raw){item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());}}
+                if let Ok(raw)=serde_json::from_str::<Value>(&r.get::<_,String>(4)?){add_watch_fields(&mut item,&raw);if let Ok(context)=matching_context(&raw){item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());}}
                 Ok(item)
             }).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
         Ok(axum::Json(json!(items)))
@@ -154,8 +159,21 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE INDEX IF NOT EXISTS favorites_paging ON favorites(profile_id,name COLLATE NOCASE,type,id); CREATE INDEX IF NOT EXISTS progress_paging ON progress(profile_id,updated_at DESC);")
 }
 
+pub fn add_watch_fields(item: &mut Value, context: &Value) {
+    let position = item["position"].as_f64().unwrap_or(0.0);
+    let duration = item["duration"].as_f64().unwrap_or(0.0);
+    let completion_only = context["stremio_completion_only"] == true;
+    item["watched"] = json!(watched(item, context));
+    item["resume_active"] =
+        json!(!completion_only && position > 0.0 && duration > 0.0 && position / duration < 0.95);
+    item["watch_date_known"] = json!(context["stremio_watch_date_unknown"] != true);
+    item["completion_only"] = json!(completion_only);
+}
 /// Explicit completion does not turn an unknown runtime into a fabricated duration.
 pub fn watched(item: &Value, context: &Value) -> bool {
+    if context["progress_corrected"] != true && context["stremio_import_watched"] == true {
+        return true;
+    }
     context["watched_override"].as_bool().unwrap_or_else(|| {
         let duration = item["duration"].as_f64().unwrap_or(0.0);
         duration > 0.0 && item["position"].as_f64().unwrap_or(0.0) / duration >= 0.95

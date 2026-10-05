@@ -10,6 +10,717 @@ fn movie(id: &str) -> Value {
     json!({"_id":id,"type":"movie","name":"Synthetic title","removed":false,"temp":false,
         "state":{"lastWatched":DATE,"timeOffset":12345,"duration":100000,"timesWatched":2}})
 }
+
+#[test]
+fn verified_episode_bitfield_marks_only_verified_ids_without_date() {
+    let item = json!({"_id":"tt2934286","type":"series","name":"Synthetic title",
+        "state":{"watched":"tt2934286:1:2:2:eJxjAgAAAwAD","timesWatched":1}});
+    let metadata = HashMap::from([(
+        ("series".into(), "tt2934286".into()),
+        json!({"videos":[{"id":"tt2934286:1:1","season":1,"episode":1},
+            {"id":"tt2934286:1:2","season":1,"episode":2}] }),
+    )]);
+    let (rows, summary) = mapper::map_verified(&[item], false, true, TIME + 1, &metadata);
+    assert_eq!(summary.needs_review, 0);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "tt2934286:1:2");
+    let progress = rows[0].progress.as_ref().unwrap();
+    assert_eq!(
+        (progress.timestamp, progress.position, progress.duration),
+        (0, 0.0, 0.0)
+    );
+    assert_eq!(progress.context["stremio_completion_only"], true);
+    assert_eq!(progress.context["stremio_watch_date_unknown"], true);
+    let non_imdb = json!({"_id":"series-opaque","type":"series","name":"Synthetic title",
+        "state":{"watched":"opaque-episode-2:2:eJxjAgAAAwAD"}});
+    let other = HashMap::from([(
+        ("series".into(), "series-opaque".into()),
+        json!({"videos":[
+        {"id":"opaque-episode-1","season":1,"episode":1},
+        {"id":"opaque-episode-2","season":1,"episode":2}]}),
+    )]);
+    let (rows, summary) = mapper::map_verified(&[non_imdb], false, true, TIME + 1, &other);
+    assert_eq!(summary.needs_review, 0);
+    assert_eq!(rows[0].id, "opaque-episode-2");
+    assert_eq!(
+        rows[0].progress.as_ref().unwrap().context["series_id"],
+        "series-opaque"
+    );
+}
+
+#[test]
+fn verified_current_completion_survives_unusable_resume_and_movie_missing_date() {
+    let metadata = HashMap::from([(
+        ("series".into(), "tt2934286".into()),
+        json!({"videos":[
+        {"id":"tt2934286:1:1","season":1,"episode":1},
+        {"id":"tt2934286:1:2","season":1,"episode":2}]}),
+    )]);
+    for (duration, date) in [(Value::Null, json!(DATE)), (json!(100000), Value::Null)] {
+        let series = json!({"_id":"tt2934286","type":"series","name":"Synthetic title",
+            "state":{"watched":"tt2934286:1:2:2:eJxjAgAAAwAD",
+                "video_id":"tt2934286:1:2","timeOffset":12345,"duration":duration,
+                "lastWatched":date}});
+        let (rows, summary) = mapper::map_verified(&[series], false, true, TIME + 1, &metadata);
+        assert!(
+            summary.needs_review > 0,
+            "missing resume should still require review"
+        );
+        let completion = rows
+            .iter()
+            .find(|row| row.id == "tt2934286:1:2")
+            .and_then(|row| row.progress.as_ref())
+            .expect("verified completion remains mapped");
+        assert_eq!(
+            (
+                completion.position,
+                completion.duration,
+                completion.timestamp
+            ),
+            (0.0, 0.0, 0)
+        );
+        assert_eq!(completion.context["stremio_completion_only"], true);
+    }
+    for date in [Value::Null, json!("not-a-date")] {
+        let mut movie = movie("tt1234567");
+        movie["state"]["timeOffset"] = json!(0);
+        movie["state"]["lastWatched"] = date;
+        let (rows, _) = mapper::map(&[movie], false, true, TIME + 1);
+        let completion = rows[0]
+            .progress
+            .as_ref()
+            .expect("undated movie completion remains mapped");
+        assert_eq!(
+            (
+                completion.position,
+                completion.duration,
+                completion.timestamp
+            ),
+            (0.0, 0.0, 0)
+        );
+        assert_eq!(completion.context["stremio_completion_only"], true);
+        assert_eq!(completion.context["stremio_watch_date_unknown"], true);
+    }
+}
+
+#[test]
+fn movie_rewatch_without_usable_resume_retains_previous_completion() {
+    for (duration, date) in [
+        (Value::Null, json!(DATE)),
+        (json!(0), json!(DATE)),
+        (json!(100000), Value::Null),
+        (json!(100000), json!("not-a-date")),
+    ] {
+        let mut item = movie("tt1234567");
+        item["state"]["duration"] = duration;
+        item["state"]["lastWatched"] = date;
+        let (rows, summary) = mapper::map(&[item], false, true, TIME + 1);
+        assert!(
+            summary.needs_review > 0,
+            "unusable rewatch must still require review"
+        );
+        let p = rows[0]
+            .progress
+            .as_ref()
+            .expect("prior watched movie fact must survive");
+        assert_eq!((p.position, p.duration, p.timestamp), (0.0, 0.0, 0));
+        assert_eq!(p.context["stremio_import_watched"], true);
+        assert_eq!(p.context["stremio_completion_only"], true);
+        assert_eq!(p.context["stremio_watch_date_unknown"], true);
+    }
+    let (rows, summary) = mapper::map(&[movie("tt1234567")], false, true, TIME + 1);
+    assert_eq!(summary.needs_review, 0);
+    let p = rows[0].progress.as_ref().unwrap();
+    assert_eq!((p.position, p.duration, p.timestamp), (12.345, 100.0, TIME));
+    assert_eq!(p.context["stremio_import_watched"], true);
+    assert!(p.context.get("stremio_completion_only").is_none());
+}
+#[tokio::test]
+async fn legacy_progress_get_exports_authoritative_completion_fields() {
+    let app = crate::auth_integration_tests::fixture();
+    app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,type,id,name,position,duration,updated_at,context,title_id) VALUES(1,'movie','tt1234567','Synthetic title',0,0,0,?1,'tt1234567')",
+        [json!({"stremio_import_watched":true,"stremio_completion_only":true,"stremio_watch_date_unknown":true,"watched_override":true}).to_string()]).unwrap();
+    let (status, rows) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/progress",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rows[0]["watched"], true);
+    assert_eq!(rows[0]["completion_only"], true);
+    assert_eq!(rows[0]["resume_active"], false);
+    assert_eq!(rows[0]["watch_date_known"], false);
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/progress/page",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for field in [
+        "watched",
+        "completion_only",
+        "resume_active",
+        "watch_date_known",
+    ] {
+        assert_eq!(rows[0][field], page["items"][0][field]);
+    }
+}
+#[test]
+fn bitfield_rejects_ambiguous_partial_and_out_of_range_metadata() {
+    let item = json!({"_id":"tt2934286","type":"series","name":"Synthetic title",
+        "state":{"watched":"tt2934286:1:2:2:eJxjAgAAAwAD"}});
+    let videos = json!([{"id":"tt2934286:1:1","season":1,"episode":1},
+        {"id":"tt2934286:1:2","season":1,"episode":2}]);
+    let mut meta = HashMap::from([(
+        ("series".into(), "tt2934286".into()),
+        json!({"videos":videos}),
+    )]);
+    for invalid in [
+        json!([{"id":"tt2934286:1:2","season":1,"episode":2}]),
+        json!([{"id":"tt2934286:1:1","season":1,"episode":1},{"id":"tt2934286:1:3","season":1,"episode":3}]),
+        json!([{"id":"tt2934286:1:2","season":1,"episode":2},{"id":"tt2934286:1:1","season":1,"episode":1}]),
+        json!([{"id":"tt2934286:1:1","season":1,"episode":1},{"id":"tt2934286:1:1","season":1,"episode":1}]),
+    ] {
+        meta.get_mut(&("series".into(), "tt2934286".into()))
+            .unwrap()["videos"] = invalid;
+        let (rows, summary) = mapper::map_verified(&[item.clone()], false, true, TIME + 1, &meta);
+        assert!(rows.is_empty());
+        assert!(summary.needs_review > 0);
+    }
+    meta.get_mut(&("series".into(), "tt2934286".into()))
+        .unwrap()["videos"] = videos;
+    for bitfield in [
+        "tt2934286:1:2:2:garbage",
+        "missing:2:eJxjAgAAAwAD",
+        "tt2934286:1:2:3:eJxjAgAAAwAD",
+        "tt2934286:1:2:2:eJxjBgAABwAH",
+    ] {
+        let mut wrong = item.clone();
+        wrong["state"]["watched"] = json!(bitfield);
+        let (rows, summary) = mapper::map_verified(&[wrong], false, true, TIME + 1, &meta);
+        assert!(rows.is_empty());
+        assert!(summary.needs_review > 0);
+    }
+}
+
+#[tokio::test]
+async fn old_receipt_repairs_completion_without_touching_active_resume_or_manual_correction() {
+    let f = crate::auth_integration_tests::fixture();
+    let db = f.db.lock().unwrap();
+    let id = "tt2934286:1:2";
+    let title = "tt2934286";
+    db.execute("INSERT INTO progress(profile_id,type,id,name,poster,position,duration,updated_at,context,title_id) VALUES(1,'series',?1,'Local',NULL,12,100,?2,?3,?4)",
+        params![id,TIME,json!({"series_id":title,"source_name":"local"}).to_string(),title]).unwrap();
+    db.execute("INSERT INTO stremio_import_receipts(profile_id,source_account,type,id,progress_timestamp) VALUES(1,'synthetic-source','series',?1,?2)",params![id,TIME]).unwrap();
+    let candidate = mapper::Candidate {
+        kind: "series".into(),
+        id: id.into(),
+        title: title.into(),
+        name: "Synthetic".into(),
+        favorite: false,
+        progress: Some(mapper::Progress {
+            position: 0.0,
+            duration: 0.0,
+            timestamp: 0,
+            context: json!({"series_id":title,
+            "stremio_import_watched":true,"stremio_completion_only":true,"stremio_watch_date_unknown":true,"watched_override":true}),
+        }),
+    };
+    let first = merge(
+        &db,
+        1,
+        "synthetic-source",
+        &[candidate.clone()],
+        Summary::default(),
+        false,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    assert_eq!(first.progress_to_update, 1);
+    let preview = review_rows(
+        &db,
+        1,
+        "synthetic-source",
+        &[candidate.clone()],
+        &["opaque-handle".into()],
+    )
+    .unwrap_or_else(|_| panic!("review failed"));
+    assert_eq!(preview[0]["watched"], true);
+    assert_eq!(preview[0]["resume_active"], true);
+    assert_eq!(preview[0]["completion_only"], false);
+    assert_eq!(preview[0]["position"], 12.0);
+    merge(
+        &db,
+        1,
+        "synthetic-source",
+        &[candidate.clone()],
+        Summary::default(),
+        true,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    let (time, position, duration, raw): (i64, f64, f64, String) = db
+        .query_row(
+            "SELECT updated_at,position,duration,context FROM progress WHERE id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    let context: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!((time, position, duration), (TIME, 12.0, 100.0));
+    assert_eq!(context["stremio_import_watched"], true);
+    assert_eq!(context["source_name"], "local");
+    assert!(context.get("stremio_completion_only").is_none());
+    assert_eq!(
+        merge(
+            &db,
+            1,
+            "synthetic-source",
+            &[candidate.clone()],
+            Summary::default(),
+            false
+        )
+        .unwrap_or_else(|_| panic!("merge failed"))
+        .progress_to_update,
+        0
+    );
+    db.execute(
+        "UPDATE progress SET context=?1 WHERE id=?2",
+        params![
+            json!({"progress_corrected":true,"watched_override":false}).to_string(),
+            id
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        merge(
+            &db,
+            1,
+            "synthetic-source",
+            &[candidate],
+            Summary::default(),
+            false
+        )
+        .unwrap_or_else(|_| panic!("merge failed"))
+        .progress_to_update,
+        0
+    );
+}
+
+fn watched_series_resume_candidates() -> Vec<mapper::Candidate> {
+    series_resume_candidates_with_bits([0xff, 0x0f])
+}
+
+fn series_resume_candidates_with_bits(bits: [u8; 2]) -> Vec<mapper::Candidate> {
+    use base64::Engine;
+    use std::io::Write;
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&bits).unwrap();
+    let bits = base64::engine::general_purpose::STANDARD.encode(encoder.finish().unwrap());
+    let item = json!({"_id":"tt2934286","type":"series","name":"Synthetic title",
+        "state":{"lastWatched":DATE,"video_id":"tt2934286:2:9","timeOffset":30000,
+            "duration":100000,"watched":format!("tt2934286:2:12:12:{bits}")}});
+    let videos: Vec<_> = (1..=12)
+        .map(|episode| {
+            json!({"id":format!("tt2934286:2:{episode}"),
+        "season":2,"episode":episode})
+        })
+        .collect();
+    let metadata = HashMap::from([(
+        ("series".into(), "tt2934286".into()),
+        json!({"videos":videos}),
+    )]);
+    mapper::map_verified(&[item], false, true, TIME + 1, &metadata).0
+}
+
+#[tokio::test]
+async fn imported_watched_resume_anchors_queue_on_last_verified_watched_episode() {
+    let app = crate::auth_integration_tests::fixture();
+    let db = app.db.lock().unwrap();
+    let candidates = watched_series_resume_candidates();
+    merge(
+        &db,
+        1,
+        "synthetic-source",
+        &candidates,
+        Summary::default(),
+        true,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    let queue = continuation::queue(&db, 1, 0, 10).unwrap();
+    assert_eq!(queue["items"][0]["id"], "tt2934286:2:12");
+    assert_eq!(queue["items"][0]["season"], 2);
+    assert_eq!(queue["items"][0]["episode"], 12);
+    assert_eq!(queue["items"][0]["watched"], true);
+    assert_eq!(queue["items"][0]["updated_at"], TIME);
+    let original: (f64, f64, i64) = db.query_row(
+        "SELECT position,duration,updated_at FROM progress WHERE profile_id=1 AND id='tt2934286:2:9'",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    assert_eq!(original, (30.0, 100.0, TIME));
+    let target: (f64, f64, i64) = db.query_row(
+        "SELECT position,duration,updated_at FROM progress WHERE profile_id=1 AND id='tt2934286:2:12'",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    assert_eq!(target, (0.0, 0.0, 0));
+    let replay = merge(
+        &db,
+        1,
+        "synthetic-source",
+        &candidates,
+        Summary::default(),
+        false,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    assert_eq!((replay.progress_to_add, replay.progress_to_update), (0, 0));
+}
+
+#[tokio::test]
+async fn imported_continuation_repairs_legacy_receipt_once_without_changing_playback() {
+    let app = crate::auth_integration_tests::fixture();
+    let db = app.db.lock().unwrap();
+    let candidates = watched_series_resume_candidates();
+    let mut legacy = candidates.clone();
+    for c in &mut legacy {
+        c.progress
+            .as_mut()
+            .unwrap()
+            .context
+            .as_object_mut()
+            .unwrap()
+            .remove("stremio_continuation");
+    }
+    merge(
+        &db,
+        1,
+        "synthetic-source",
+        &legacy,
+        Summary::default(),
+        true,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    let rows = |db: &Connection| {
+        db.prepare("SELECT id,position,duration,updated_at FROM progress ORDER BY id")
+            .unwrap()
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, f64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    let before = rows(&db);
+    assert_eq!(
+        continuation::queue(&db, 1, 0, 10).unwrap()["items"][0]["id"],
+        "tt2934286:2:9"
+    );
+    let plan = merge(
+        &db,
+        1,
+        "synthetic-source",
+        &candidates,
+        Summary::default(),
+        false,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    assert_eq!(plan.progress_to_update, 1);
+    let applied = merge(
+        &db,
+        1,
+        "synthetic-source",
+        &candidates,
+        Summary::default(),
+        true,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    assert_eq!(applied.progress_updated, 1);
+    assert_eq!(before, rows(&db));
+    assert_eq!(
+        continuation::queue(&db, 1, 0, 10).unwrap()["items"][0]["id"],
+        "tt2934286:2:12"
+    );
+    let replay = merge(
+        &db,
+        1,
+        "synthetic-source",
+        &candidates,
+        Summary::default(),
+        false,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    assert_eq!((replay.progress_to_add, replay.progress_to_update), (0, 0));
+}
+
+#[tokio::test]
+async fn imported_continuation_does_not_override_new_playback_or_manual_decisions() {
+    for action in ["playback", "watched", "unwatched"] {
+        let app = crate::auth_integration_tests::fixture();
+        let candidates = watched_series_resume_candidates();
+        {
+            let db = app.db.lock().unwrap();
+            merge(
+                &db,
+                1,
+                "synthetic-source",
+                &candidates,
+                Summary::default(),
+                true,
+            )
+            .unwrap_or_else(|_| panic!("merge failed"));
+        }
+        let mut item = json!({"id":"tt2934286:2:9","type":"series","name":"Synthetic title",
+            "series_id":"tt2934286","season":2,"episode":9,"position":40,"duration":100});
+        let path = if action == "playback" {
+            "/api/profiles/1/progress"
+        } else {
+            item["action"] = json!(action);
+            "/api/profiles/1/progress/correct"
+        };
+        assert_eq!(
+            request(&app, "member-token-1", "PUT", path, item).await.0,
+            StatusCode::OK
+        );
+        let db = app.db.lock().unwrap();
+        let queue = continuation::queue(&db, 1, 0, 10).unwrap();
+        assert_eq!(queue["items"][0]["id"], "tt2934286:2:9", "{action}");
+        if action == "playback" {
+            assert_eq!(queue["items"][0]["position"], 40.0);
+        }
+        let replay = merge(
+            &db,
+            1,
+            "synthetic-source",
+            &candidates,
+            Summary::default(),
+            false,
+        )
+        .unwrap_or_else(|_| panic!("merge failed"));
+        assert_eq!(replay.progress_to_update, 0);
+    }
+}
+
+#[tokio::test]
+async fn imported_continuation_requires_watched_resume_and_selected_valid_target() {
+    for case in [
+        "unwatched_resume",
+        "excluded_target",
+        "corrected_target",
+        "special_target",
+    ] {
+        let app = crate::auth_integration_tests::fixture();
+        let db = app.db.lock().unwrap();
+        let mut candidates = if case == "unwatched_resume" {
+            series_resume_candidates_with_bits([0xff, 0x0e])
+        } else {
+            watched_series_resume_candidates()
+        };
+        if case == "excluded_target" {
+            candidates.retain(|c| c.id != "tt2934286:2:12");
+        }
+        if case == "corrected_target" || case == "special_target" {
+            let target = candidates
+                .iter_mut()
+                .find(|c| c.id == "tt2934286:2:12")
+                .unwrap()
+                .progress
+                .as_mut()
+                .unwrap();
+            if case == "corrected_target" {
+                target.context["progress_corrected"] = json!(true);
+                target.context["watched_override"] = json!(false);
+            } else {
+                target.context["season"] = json!(0);
+            }
+        }
+        merge(
+            &db,
+            1,
+            "synthetic-source",
+            &candidates,
+            Summary::default(),
+            true,
+        )
+        .unwrap_or_else(|_| panic!("merge failed"));
+        assert_eq!(
+            continuation::queue(&db, 1, 0, 10).unwrap()["items"][0]["id"],
+            "tt2934286:2:9",
+            "{case}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn imported_continuation_repair_requires_unchanged_receipt_owned_activity() {
+    for case in ["newer_playback", "manual_correction", "different_source"] {
+        let app = crate::auth_integration_tests::fixture();
+        let db = app.db.lock().unwrap();
+        let candidates = watched_series_resume_candidates();
+        let mut legacy = candidates.clone();
+        for c in &mut legacy {
+            c.progress
+                .as_mut()
+                .unwrap()
+                .context
+                .as_object_mut()
+                .unwrap()
+                .remove("stremio_continuation");
+        }
+        merge(
+            &db,
+            1,
+            "synthetic-source",
+            &legacy,
+            Summary::default(),
+            true,
+        )
+        .unwrap_or_else(|_| panic!("merge failed"));
+        if case == "newer_playback" {
+            db.execute(
+                "UPDATE progress SET updated_at=?1 WHERE id='tt2934286:2:9'",
+                [TIME + 1],
+            )
+            .unwrap();
+        } else if case == "manual_correction" {
+            db.execute("UPDATE progress SET context=json_set(context,'$.progress_corrected',json('true')) WHERE id='tt2934286:2:9'", []).unwrap();
+        }
+        let source = if case == "different_source" {
+            "other-source"
+        } else {
+            "synthetic-source"
+        };
+        let plan = merge(&db, 1, source, &candidates, Summary::default(), false)
+            .unwrap_or_else(|_| panic!("merge failed"));
+        assert_eq!(plan.progress_to_update, 0, "{case}");
+    }
+}
+
+#[tokio::test]
+async fn imported_continuation_repairs_old_resume_and_completion_in_one_pass() {
+    let app = crate::auth_integration_tests::fixture();
+    let db = app.db.lock().unwrap();
+    let candidates = watched_series_resume_candidates();
+    let mut legacy = candidates
+        .iter()
+        .find(|c| c.id == "tt2934286:2:9")
+        .unwrap()
+        .clone();
+    let context = legacy
+        .progress
+        .as_mut()
+        .unwrap()
+        .context
+        .as_object_mut()
+        .unwrap();
+    context.remove("stremio_continuation");
+    context.remove("stremio_import_watched");
+    merge(
+        &db,
+        1,
+        "synthetic-source",
+        &[legacy],
+        Summary::default(),
+        true,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    merge(
+        &db,
+        1,
+        "synthetic-source",
+        &candidates,
+        Summary::default(),
+        true,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    assert_eq!(
+        continuation::queue(&db, 1, 0, 10).unwrap()["items"][0]["id"],
+        "tt2934286:2:12"
+    );
+    let original: (f64, f64, i64) = db
+        .query_row(
+            "SELECT position,duration,updated_at FROM progress WHERE id='tt2934286:2:9'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(original, (30.0, 100.0, TIME));
+}
+
+#[tokio::test]
+async fn imported_continuation_keeps_title_order_hiding_and_normal_next_cache() {
+    let app = crate::auth_integration_tests::fixture();
+    let db = app.db.lock().unwrap();
+    merge(
+        &db,
+        1,
+        "synthetic-source",
+        &watched_series_resume_candidates(),
+        Summary::default(),
+        true,
+    )
+    .unwrap_or_else(|_| panic!("merge failed"));
+    db.execute("INSERT INTO progress(profile_id,type,id,name,position,duration,updated_at,context,title_id) VALUES(1,'movie','tt1234567','Other activity',10,100,?1,'{}','tt1234567')", [TIME+1]).unwrap();
+    let stale =
+        json!({"status":"next","item":{"id":"stale-next","type":"series","queue_status":"next"}});
+    db.execute("INSERT INTO continuation_cache(profile_id,series_id,from_id,result,updated_at) VALUES(1,'tt2934286','tt2934286:2:9',?1,?2)", params![stale.to_string(),util::now()]).unwrap();
+    let queue = continuation::queue(&db, 1, 0, 10).unwrap();
+    assert_eq!(queue["items"][0]["id"], "tt1234567");
+    assert_eq!(queue["items"][1]["id"], "tt2934286:2:12");
+    assert_eq!(queue["items"][1]["updated_at"], TIME);
+    let next = json!({"status":"next","item":{"id":"tt2934286:3:1","type":"series","series_id":"tt2934286","season":3,"episode":1,"position":0,"duration":0,"queue_status":"next"}});
+    db.execute("INSERT INTO continuation_cache(profile_id,series_id,from_id,result,updated_at) VALUES(1,'tt2934286','tt2934286:2:12',?1,?2)", params![next.to_string(),util::now()]).unwrap();
+    let queue = continuation::queue(&db, 1, 0, 10).unwrap();
+    assert_eq!(queue["items"][1]["id"], "tt2934286:3:1");
+    assert_eq!(
+        queue["items"][1]["previous_episode"]["id"],
+        "tt2934286:2:12"
+    );
+    db.execute(
+        "INSERT INTO queue_hidden(profile_id,type,title_id) VALUES(1,'series','tt2934286')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        continuation::queue(&db, 1, 0, 10).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn completion_only_never_ranks_over_real_series_activity() {
+    let app = crate::auth_integration_tests::fixture();
+    {
+        let db = app.db.lock().unwrap();
+        for (id, position, time, context) in [
+            (
+                "tt2934286:1:1",
+                10.0,
+                TIME,
+                json!({"series_id":"tt2934286","season":1,"episode":1}),
+            ),
+            (
+                "tt2934286:1:2",
+                0.0,
+                TIME + 1,
+                json!({"series_id":"tt2934286","season":1,"episode":2,"stremio_import_watched":true,"stremio_completion_only":true,"stremio_watch_date_unknown":true,"watched_override":true}),
+            ),
+        ] {
+            db.execute("INSERT INTO progress(profile_id,type,id,name,position,duration,updated_at,context,title_id) VALUES(1,'series',?1,'Synthetic title',?2,100,?3,?4,'tt2934286')",params![id,position,time,context.to_string()]).unwrap();
+        }
+        let queue = continuation::queue(&db, 1, 0, 10).unwrap();
+        assert_eq!(queue["items"][0]["id"], "tt2934286:1:1");
+        assert_eq!(queue["items"].as_array().unwrap().len(), 1);
+    }
+}
 fn credentials() -> Value {
     json!({"email":"synthetic@example.invalid","password":"synthetic-private-password","import_library":true,"import_progress":true})
 }
@@ -94,6 +805,7 @@ async fn fixture_with(
         axum::serve(listener, source).await.unwrap();
     });
     let service = Arc::get_mut(&mut app.stremio_import).unwrap();
+    service.public_metadata_endpoint = Some(endpoint.clone());
     service.endpoint = Some(endpoint);
     service.backup_directory = Some(directory.path().join("backups"));
     Fixture {
@@ -375,6 +1087,137 @@ async fn failed_changed_review_preserves_published_plan_and_version() {
     );
 }
 
+#[tokio::test]
+async fn no_addon_imdb_bitfields_are_verified_beyond_first_sixteen_without_guessing_opaque() {
+    use axum::extract::Path;
+    let mut items: Vec<Value> = (0..20)
+        .map(|n| {
+            json!({"_id":format!("opaque-{n}"),"type":"series","name":"Synthetic title",
+        "state":{"watched":"opaque-episode-2:2:eJxjAgAAAwAD"}})
+        })
+        .collect();
+    items.extend((1..=19).map(|n| {
+        let id = format!("tt{n:07}");
+        json!({"_id":id,"type":"series","name":"Synthetic title",
+            "state":{"watched":format!("{id}:1:2:2:eJxjAgAAAwAD")}})
+    }));
+    let mut f = fixture(items, login()).await;
+    f.app.addons.allow_test_loopback = true;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let received = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/meta/series/:id",
+                get(move |Path(id): Path<String>| {
+                    let received = received.clone();
+                    async move {
+                        received.fetch_add(1, Ordering::SeqCst);
+                        let title = id.trim_end_matches(".json");
+                        Json(json!({"meta":{"id":title,"type":"series","videos":[
+                    {"id":format!("{title}:1:1"),"season":1,"episode":1},
+                    {"id":format!("{title}:1:2"),"season":1,"episode":2}]}}))
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    Arc::get_mut(&mut f.app.stremio_import)
+        .unwrap()
+        .public_metadata_endpoint = Some(base);
+    let preview = staged_preview(&f.app).await;
+    let (status, reviewed) = review_selection(&f.app, &preview, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    let rows = reviewed["review_items"].as_array().unwrap();
+    assert_eq!(
+        rows.iter().filter(|r| r["completion_only"] == true).count(),
+        19
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        19,
+        "opaque identity must never fetch public IMDb metadata"
+    );
+    assert!(rows
+        .iter()
+        .any(|r| r["status"] == "needs_review" && r["selectable"] == false));
+    assert_eq!(reviewed["summary"]["needs_review"], 20);
+    upstream.abort();
+}
+#[tokio::test]
+async fn metadata_deadline_keeps_fast_verified_results_and_bounds_inflight() {
+    use axum::extract::Path;
+    use base64::Engine;
+    struct Active(Arc<AtomicUsize>);
+    impl Drop for Active {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    let items: Vec<Value> = (1..=16)
+        .map(|n| {
+            let id = format!("tt{n:07}");
+            json!({"_id":id,"type":"series","name":"Synthetic title",
+            "state":{"watched":format!("{id}:1:2:2:eJxjAgAAAwAD")}})
+        })
+        .collect();
+    let mut f = fixture(items, login()).await;
+    Arc::get_mut(&mut f.app.stremio_import)
+        .unwrap()
+        .metadata_deadline = Some(Duration::from_secs(8));
+    let vault = Arc::new(crate::secret_store::Vault::from_json(&json!({"active":"fixture","keys":{"fixture":base64::engine::general_purpose::STANDARD.encode([8u8;32])}}).to_string()).unwrap());
+    f.app.secret_vault = Some(vault.clone());
+    f.app.addons.vault = Some(vault);
+    f.app.addons.allow_test_loopback = true;
+    let active = Arc::new(AtomicUsize::new(0));
+    let maximum = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/manifest.json", listener.local_addr().unwrap());
+    let active_for_route = active.clone();
+    let maximum_for_route = maximum.clone();
+    let upstream = tokio::spawn(async move {
+        axum::serve(listener,Router::new()
+            .route("/manifest.json",get(||async {Json(json!({"id":"synthetic.meta","name":"Synthetic","types":["series"],"resources":["meta"]}))}))
+            .route("/meta/series/:id",get(move |Path(id):Path<String>| {
+                let active = active_for_route.clone();
+                let maximum = maximum_for_route.clone();
+                async move {
+                    let current = active.fetch_add(1,Ordering::SeqCst)+1;
+                    maximum.fetch_max(current,Ordering::SeqCst);
+                    let _guard = Active(active);
+                    if id.starts_with("tt0000001") || id.starts_with("tt0000002") {
+                        tokio::time::sleep(Duration::from_secs(12)).await;
+                    }
+                    let title = id.trim_end_matches(".json");
+                    Json(json!({"meta":{"id":title,"type":"series","videos":[
+                        {"id":format!("{title}:1:1"),"season":1,"episode":1},
+                        {"id":format!("{title}:1:2"),"season":1,"episode":2}]}}))
+                }
+            }))).await.unwrap();
+    });
+    *f.addon_response.lock().unwrap() = json!({"addons":[{"manifest":{"id":"synthetic.meta","name":"Synthetic","resources":["meta"]},"transportUrl":url}]});
+    let preview = staged_preview(&f.app).await;
+    let (status, reviewed) =
+        review_selection(&f.app, &preview, json!([preview["addons"][0]["item_id"]])).await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    assert!(
+        reviewed["review_items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["completion_only"] == true),
+        "completed fast metadata must survive deadline"
+    );
+    assert!(reviewed["summary"]["needs_review"].as_u64().unwrap() >= 2);
+    assert!(maximum.load(Ordering::SeqCst) > 1);
+    assert!(maximum.load(Ordering::SeqCst) <= 8);
+    upstream.abort();
+}
 #[tokio::test]
 async fn removing_metadata_addon_removes_only_its_rows_and_restores_same_handle() {
     use base64::Engine;
@@ -769,7 +1612,7 @@ async fn undated_series_watch_flags_are_review_only() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["reason"] == "watch_date_unknown")
+        .find(|row| row["reason"] == "unverified_episode_bitfield")
         .unwrap();
     assert_eq!(row["selectable"], false);
     assert_eq!(row["status"], "needs_review");
@@ -824,14 +1667,38 @@ fn mapper_rejects_missing_future_invalid_dates_offsets_and_episode_ids() {
         let mut item = movie("tt0000001");
         item["state"]["lastWatched"] = date;
         let (c, s) = mapper::map(&[item], true, true, util::now());
-        assert!(c[0].progress.is_none());
+        let completion = c[0]
+            .progress
+            .as_ref()
+            .expect("watched fact survives missing date");
+        assert_eq!(
+            (
+                completion.position,
+                completion.duration,
+                completion.timestamp
+            ),
+            (0.0, 0.0, 0)
+        );
+        assert_eq!(completion.context["stremio_completion_only"], true);
         assert_eq!(s.needs_review, 1);
     }
     for offset in [json!(-1), json!(100001), json!(1.5), json!("1000")] {
         let mut item = movie("tt0000001");
         item["state"]["timeOffset"] = offset;
         let (c, _) = mapper::map(&[item], true, true, util::now());
-        assert!(c[0].progress.is_none());
+        let completion = c[0]
+            .progress
+            .as_ref()
+            .expect("watched fact survives invalid offset");
+        assert_eq!(
+            (
+                completion.position,
+                completion.duration,
+                completion.timestamp
+            ),
+            (0.0, 0.0, 0)
+        );
+        assert_eq!(completion.context["stremio_completion_only"], true);
     }
     for video in [
         "tt9999999:1:1",
@@ -984,11 +1851,11 @@ async fn merge_preserves_newer_equal_manual_source_context_and_queue_hiding() {
             .unwrap();
     }
     let p = get_preview(&f.app).await;
-    assert_eq!(p["summary"]["existing_preserved"], 3);
-    assert_eq!(p["summary"]["progress_to_update"], 1);
+    assert_eq!(p["summary"]["existing_preserved"], 1);
+    assert_eq!(p["summary"]["progress_to_update"], 3);
     let (status, r) = apply_preview(&f.app, &p).await;
     assert_eq!(status, StatusCode::OK, "{r}");
-    assert_eq!(r["summary"]["progress_updated"], 1);
+    assert_eq!(r["summary"]["progress_updated"], 3);
     assert_eq!(r["summary"]["progress_added"], 1);
     let db = f.app.db.lock().unwrap();
     for n in 1..=3 {
@@ -1015,8 +1882,12 @@ async fn merge_preserves_newer_equal_manual_source_context_and_queue_hiding() {
         serde_json::from_str::<Value>(&row.2).unwrap()["source_fingerprint"],
         "original"
     );
-    assert_eq!(row.3, 12.345);
-    assert_eq!(row.4, TIME);
+    assert_eq!(row.3, 7.0);
+    assert_eq!(
+        serde_json::from_str::<Value>(&row.2).unwrap()["stremio_import_watched"],
+        true
+    );
+    assert_eq!(row.4, TIME - 1);
     assert_eq!(
         db.query_row("SELECT COUNT(*) FROM queue_hidden", [], |r| r
             .get::<_, i64>(0))
@@ -1341,9 +2212,9 @@ async fn episode_identity_survives_http_apply_and_movie_watched_keeps_known_loca
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .unwrap();
-    assert_eq!((position, duration), (77.0, 77.0));
+    assert_eq!((position, duration), (7.0, 77.0));
     let context: Value = serde_json::from_str(&context).unwrap();
-    assert_eq!(context["watched_override"], true);
+    assert_eq!(context["stremio_import_watched"], true);
     assert_eq!(context["source_name"], "local");
 }
 
@@ -1522,7 +2393,9 @@ async fn imported_completion_is_replaced_by_newer_rewatch_resume_and_replay_is_i
         Value::Null,
     )
     .await;
-    assert!(queue["items"].as_array().unwrap().is_empty());
+    assert_eq!(queue["items"][0]["id"], "tt0000001");
+    assert_eq!(queue["items"][0]["watched"], true);
+    assert_eq!(queue["items"][0]["resume_active"], true);
 
     let mut resume = movie("tt0000001");
     resume["state"]["lastWatched"] = json!("2025-01-01T01:00:00.123Z");
@@ -1548,7 +2421,7 @@ async fn imported_completion_is_replaced_by_newer_rewatch_resume_and_replay_is_i
     assert_eq!(result["summary"]["progress_updated"], 1);
     let context: Value = serde_json::from_str(&row.3).unwrap();
     assert!(context.get("watched_override").is_none());
-    assert!(context.get("stremio_import_watched").is_none());
+    assert_eq!(context["stremio_import_watched"], true);
     assert_eq!(context["source_name"], "local");
     assert_eq!(context["source_fingerprint"], "original");
     let (_, history) = request(
@@ -1559,7 +2432,8 @@ async fn imported_completion_is_replaced_by_newer_rewatch_resume_and_replay_is_i
         Value::Null,
     )
     .await;
-    assert_eq!(history["items"][0]["watched"], false);
+    assert_eq!(history["items"][0]["watched"], true);
+    assert_eq!(history["items"][0]["resume_active"], true);
     let (_, queue) = request(
         &second.app,
         "member-token-1",
@@ -1571,7 +2445,7 @@ async fn imported_completion_is_replaced_by_newer_rewatch_resume_and_replay_is_i
     assert_eq!(queue["items"].as_array().unwrap().len(), 1);
     assert_eq!(queue["items"][0]["id"], "tt0000001");
     assert_eq!(queue["items"][0]["position"], 12.345);
-    assert_eq!(queue["items"][0]["watched"], false);
+    assert_eq!(queue["items"][0]["watched"], true);
     assert_eq!(
         apply_preview(&second.app, &preview).await.1["already_completed"],
         true
@@ -1614,17 +2488,25 @@ async fn genuine_manual_watched_correction_is_preserved_even_with_import_owned_a
             context["stremio_import_watched"] = json!(true);
         }
         f.app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,type,id,name,position,duration,updated_at,context,title_id) VALUES(1,'movie',?1,'Local',7,100,?2,?3,?1)",params![id,TIME-1,context.to_string()]).unwrap();
+        let (status, correction) = request(
+            &f.app,
+            "member-token-1",
+            "PUT",
+            "/api/profiles/1/progress/correct",
+            json!({"id":id,"type":"movie","name":"Local","action":"watched"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(correction["watched"], true);
+        assert_eq!(correction["completion_only"], false);
+        assert_eq!(correction["watch_date_known"], true);
+        assert_eq!(correction["resume_active"], false);
         assert_eq!(
-            request(
-                &f.app,
-                "member-token-1",
-                "PUT",
-                "/api/profiles/1/progress/correct",
-                json!({"id":id,"type":"movie","name":"Local","action":"watched"})
-            )
-            .await
-            .0,
-            StatusCode::OK
+            (
+                correction["position"].as_f64(),
+                correction["duration"].as_f64()
+            ),
+            (Some(100.0), Some(100.0))
         );
         // Historical synthetic correction is older than the source resume. Its manual
         // authority, rather than recency, must protect it even if an import marker remains.
