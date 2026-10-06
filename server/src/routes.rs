@@ -130,6 +130,7 @@ pub fn router_with_tv(
             "/profiles/:id/continue",
             get(continue_watching_authenticated),
         )
+        .route("/v2/playback-protocol", get(gateway::playback::support))
         .route("/v2/playback", post(gateway::playback::start))
         .route(
             "/v2/playback/:id",

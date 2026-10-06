@@ -966,3 +966,34 @@ pub(crate) async fn stop(
     }
     Ok(Json(json!({"ok":true})))
 }
+
+/// Reports implemented protocol support, never playback admission or device qualification.
+pub(crate) async fn support(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, Error> {
+    let body = tokio::time::timeout(
+        Duration::from_secs(5),
+        axum::body::to_bytes(request.into_body(), 0),
+    )
+    .await
+    .map_err(|_| Error::Code("invalid_playback_request"))?
+    .map_err(|_| Error::Code("invalid_playback_request"))?;
+    if !body.is_empty() {
+        return Err(Error::Code("invalid_playback_request"));
+    }
+    tokio::task::spawn_blocking(move || {
+        let app = app.with_lease(lease.clone());
+        let db = app
+            .db
+            .lock()
+            .map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        lease.validate(&db)?;
+        app.require_media(&db)?;
+        // Empty support prevents clients negotiating an incomplete native extension.
+        Ok(Json(json!({"version":1,"native_torrent_versions":[]})))
+    })
+    .await
+    .map_err(|_| Error::Code("provider_storage_unavailable"))?
+}

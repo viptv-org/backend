@@ -26,6 +26,27 @@ non-visual backend adoption is in progress. No visual parity or completed
 cross-platform adoption is claimed. See docs/V2_OPERATIONS.md and the design
 implementation ledger for current evidence and incomplete work.
 
+## Android native control protocol
+
+The non-visual Android extension is specified by
+[SRC-TORRENT-NATIVE-001](https://github.com/viptv-org/design/blob/83d338b6ffc1fc5e7f14ad4059f6159b8ee84509/specs/behavior/torrent-native-android.md).
+DESIGN_REF retains the visual/asset baseline; this reference does not claim
+native implementation, device qualification or deployment.
+
+Authenticated, bodyless GET `/api/v2/playback-protocol` revalidates the resource
+lease and requires an admitted profile. It returns the closed response
+`{"version":1,"native_torrent_versions":[]}` with `Cache-Control: no-store`.
+A submitted or stalled request body is refused without echoing its contents.
+Empty native support prevents negotiation of an incomplete server extension;
+ordinary direct/gateway starts retain their closed client and delivery shapes.
+
+Private native grants, scoped request-ID cancellation/admission, authorization
+renewal/revocation and the Android transport remain implementation prerequisites.
+Rust core owns shared wire validation and pure projection/transition rules;
+the backend owns database/HTTP effects and authoritative source, authorization,
+admission and lease facts. Native capability must not be inferred from ordinary
+HTTP direct capability or a source format error.
+
 ## Historical extraction contract
 
 Move server/, operational scripts, container acceptance and Compose deployment files verbatim from vynxc/viptv@7d6b413. Pin the independently maintained React web repository at dashboard using a git submodule. Keep the HTTP wire contract, SQLite schema/migrations, account/profile IDs, auth origin, provider/addon settings and playback behavior unchanged.
