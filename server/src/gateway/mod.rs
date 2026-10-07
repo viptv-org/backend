@@ -13,3 +13,5 @@ mod tests;
 
 #[cfg(test)]
 mod torrent_browser_acceptance;
+#[cfg(test)]
+mod torrent_native_acceptance;
