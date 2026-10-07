@@ -30,6 +30,11 @@ async fn actual_backend_android_native_server() {
         db.execute("INSERT INTO auth_profiles VALUES(1,2)", [])
             .unwrap();
         db.execute(
+            "INSERT INTO auth_device_profiles(session_id,profile_id) VALUES('s1',1),('s1',2)",
+            [],
+        )
+        .unwrap();
+        db.execute(
             "UPDATE auth_sessions SET kind='device',refresh_hash=?1 WHERE id='s1'",
             [auth::hash("owned-unused-refresh")],
         )
@@ -42,7 +47,7 @@ async fn actual_backend_android_native_server() {
         policy_revision: 0,
         principal: auth::Principal::Account {
             account_id: 1,
-            role: "member".into(),
+            role: "device".into(),
             profile_id: Some(1),
             session_id: Some("s1".into()),
         },
