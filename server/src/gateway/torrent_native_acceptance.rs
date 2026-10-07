@@ -30,6 +30,11 @@ async fn actual_backend_android_native_server() {
         .unwrap();
         db.execute("INSERT INTO auth_profiles VALUES(1,2)", [])
             .unwrap();
+        db.execute(
+            "UPDATE auth_sessions SET kind='device',refresh_hash=?1 WHERE id='s1'",
+            [auth::hash("owned-unused-refresh")],
+        )
+        .unwrap();
     }
     app.gateway_playbacks
         .native_policy_enabled
@@ -63,6 +68,30 @@ async fn actual_backend_android_native_server() {
         });
         sources.push(json!({"index": index, "stream_id": id}));
     }
+    let origin: url::Url = config["origin"].as_str().unwrap().parse().unwrap();
+    assert_eq!(origin.scheme(), "https");
+    assert_eq!(origin.host_str(), Some("127.0.0.1"));
+    assert!(
+        origin.username().is_empty()
+            && origin.password().is_none()
+            && origin.path() == "/"
+            && origin.query().is_none()
+            && origin.fragment().is_none()
+    );
+    let mut ordinary_sources = Vec::new();
+    for (kind, path) in [
+        ("direct", "/owned/episode.mp4"),
+        ("hls", "/owned/hls/index.m3u8"),
+    ] {
+        let (cards, error) = app.clone().with_lease(lease.clone()).register(
+            "addon:1",
+            vec![json!({"url": origin.join(path).unwrap().as_str()})],
+            "movie",
+        );
+        assert!(error.is_none());
+        let id = cards[0]["id"].as_str().unwrap().to_owned();
+        ordinary_sources.push(json!({"kind":kind,"stream_id":id}));
+    }
     let port: u16 = config["port"]
         .as_u64()
         .expect("fixture port required")
@@ -72,7 +101,7 @@ async fn actual_backend_android_native_server() {
         .await
         .unwrap();
     let ready = path.with_file_name("backend-ready.json");
-    std::fs::write(ready, serde_json::to_vec(&json!({"port": listener.local_addr().unwrap().port(), "access_token": "member-token-1", "profile_id": "1", "sources": sources,
+    std::fs::write(ready, serde_json::to_vec(&json!({"port": listener.local_addr().unwrap().port(), "access_token": "member-token-1", "profile_id": "1", "sources": sources, "ordinary_sources": ordinary_sources,
         "core_session": {"sessionId":"s1","accountId":"1","profileId":"1","accessToken":"member-token-1","refreshToken":"owned-unused-refresh","expiresIn":3600}})).unwrap()).unwrap();
     // This finite process owns only its in-memory database. Commands cannot
     // affect production accounts, fixtures in another process, or an owner APK.
