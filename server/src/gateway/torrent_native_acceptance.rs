@@ -4,7 +4,6 @@ use serde_json::{json, Value};
 use std::{
     net::{Ipv4Addr, SocketAddrV4},
     path::PathBuf,
-    sync::atomic::Ordering,
     time::Duration,
 };
 
@@ -36,9 +35,7 @@ async fn actual_backend_android_native_server() {
         )
         .unwrap();
     }
-    app.gateway_playbacks
-        .native_policy_enabled
-        .store(true, Ordering::Release);
+    app.gateway_playbacks.enable_owned_native_fixture();
     app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,enabled,manifest,account_id) VALUES(1,'Owned episodes','https://fixture.invalid/manifest.json',1,'{}',1)", []).unwrap();
     crate::test_support::encrypt_fixture_sources(&app);
     let lease = ResourceLease {

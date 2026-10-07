@@ -174,6 +174,11 @@ pub(crate) struct Registry {
     native_policy_enabled: AtomicBool,
 }
 impl Registry {
+    #[cfg(test)]
+    pub(super) fn enable_owned_native_fixture(&self) {
+        self.native_policy_enabled.store(true, Ordering::Release);
+    }
+
     pub(crate) fn new(db: Arc<Mutex<Connection>>) -> Arc<Self> {
         let registry = Arc::new(Self {
             entries: Mutex::new(HashMap::new()),
