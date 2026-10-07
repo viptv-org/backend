@@ -35,7 +35,7 @@ async fn protocol_request(
 }
 
 #[tokio::test]
-async fn native_protocol_is_authenticated_bodyless_and_support_is_separate_from_policy() {
+async fn native_protocol_is_authenticated_bodyless_and_enabled_by_default() {
     let app = fixture();
     let (status, value, cache) = protocol_request(&app, "member-token-1", Body::empty()).await;
     assert_eq!(status, StatusCode::OK, "{value}");

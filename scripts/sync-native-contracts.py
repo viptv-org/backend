@@ -31,5 +31,5 @@ for name, (revision, paths) in SOURCES.items():
             'members = ["crates/viptv-core"]'))
     manifest[name] = {'revision': revision, 'license': ['GPL-2.0-only'] if name == 'core' else ['GPL-2.0-only', 'Apache-2.0'],
                       'archive_sha256': hashlib.sha256(data).hexdigest()}
-manifest['design_revision'] = '83d338b6ffc1fc5e7f14ad4059f6159b8ee84509'
+manifest['design_revision'] = 'ae1f09db6afd5259a38363686d9480feb4b70269'
 (ROOT / 'server' / 'shared' / 'NATIVE_CONTRACTS.json').write_text(json.dumps(manifest, indent=2) + '\n')

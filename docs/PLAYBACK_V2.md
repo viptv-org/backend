@@ -109,33 +109,24 @@ must stop native playback when their control authorization is lost.
 
 ## Evidence and limitations
 
-Normal native admission defaults off. An explicit development operator may set
-`VIPTV_NATIVE_TORRENT_SCOPED_POLICY` to the closed JSON schema shown in
-`.env.example`: `decision`, `account_id`, `device_session_id`, `platform` and
-`max_active_grants`. The only admitted decision is
-`scoped_experimental_sticky_quarantine_v1`, the platform is `android_tv`, and
-the grant limit is one or two. Account and stable session-family values must
-match the authenticated paired-device principal exactly; a display name is not
-identity evidence. Malformed configuration fails startup. All negotiation,
-exact-source/index proof and request-tombstone checks still apply.
+Native torrent admission is enabled by default for every authenticated supported
+Android and Android TV client. There is no operator enable setting or account or
+paired-family allowlist. Clients must still negotiate v1, advertise the closed
+native capability, and provide an authorized exact VOD source with explicit file
+selection. Account/profile/session, source ownership and current configuration
+proofs are revalidated on admission, poll and renewal. At most two active native
+grants are admitted per authenticated session: outgoing playback and one prepared
+candidate. Releasing or expiring a grant frees that session's capacity. Explicit
+server-side conversion and unsupported clients retain authorized gateway delivery.
 
-This opt-in records the owner's narrow experimental development decision, not
-general native qualification. Android still needs a measured normal artifact
-receipt for its configured TV cohort and successful runtime/cache/clock facts.
-Unconditional two-second settlement under stalled OS IO remains unproven;
-failed settlement retains work/cache reservations and sticky quarantine.
-Owned-private media evidence does not qualify sustained public-peer egress,
-human audio/remote or distribution acceptance. Protocol support remains
-separate from admission policy, and ordinary delivery behavior is unchanged.
-
-Keep real scope identifiers in ignored private service configuration. Activate
-only the authorized development environment after its actual device checks and
-preserve the running data, sign-in and origin. Rollback stops/joins client-owned
-native work, releases/tombstones grants, removes this operator configuration and
-restores the previously sealed disabled normal APK with its signing identity
-and retained app data. A service restart loses in-memory grants but preserves
-request tombstones; do not treat advertisement removal as native retirement or
-discard failed-settlement accounting.
+Default admission does not establish hardware, public-peer or distribution
+qualification. Unconditional two-second settlement under stalled OS IO remains
+unproven; failed settlement retains work/cache reservations and sticky quarantine.
+Owned-private media evidence does not qualify sustained public-peer egress or
+human audio/remote acceptance. Preserve data, sign-in and origin during development
+activation. A service restart loses in-memory grants but preserves request
+idempotency and cancellation tombstones; client rollback must stop/join owned
+native work without discarding failed-settlement accounting.
 
 Router fixtures verify direct playback without an embedded worker; mandatory
 gateway policy; no private-gateway fallback; capacity selection and affinity;

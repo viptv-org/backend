@@ -29,16 +29,18 @@ implementation ledger for current evidence and incomplete work.
 ## Android native control protocol
 
 The non-visual Android extension is specified by
-[SRC-TORRENT-NATIVE-001](https://github.com/viptv-org/design/blob/83d338b6ffc1fc5e7f14ad4059f6159b8ee84509/specs/behavior/torrent-native-android.md).
+[SRC-TORRENT-NATIVE-001](https://github.com/viptv-org/design/blob/ae1f09db6afd5259a38363686d9480feb4b70269/specs/behavior/torrent-native-android.md).
 DESIGN_REF retains the visual/asset baseline. The implementation below consumes
 the non-visual contract; device qualification and deployment are separately scoped.
 
 Authenticated, bodyless GET `/api/v2/playback-protocol` revalidates the resource
 lease and admitted profile and returns `{"version":1,"native_torrent_versions":[1]}`
-with `Cache-Control: no-store`. Protocol support is independent of native admission:
-the production native policy gate remains **disabled**, with no environment variable
-or source field that enables it. Android qualification and production activation
-remain separate owner-reviewed work.
+with `Cache-Control: no-store`. Native admission is enabled by default for every
+authenticated supported Android and Android TV client, without an operator
+setting or account/session-family allowlist. Negotiation, closed capability, exact source/file proof and normal
+authorization remain mandatory. Each authenticated session has at most two active
+native grants. Hardware qualification and production deployment remain separately
+scoped work.
 
 The closed Android capability adds native VOD admission to the existing playback
 registry while ordinary direct/gateway clients retain their delivery shapes. Exact

@@ -3,106 +3,128 @@ use crate::{auth, auth_integration_tests::fixture, test_support::request};
 use axum::{body::Body, http::Request};
 use tower::ServiceExt;
 
-#[test]
-fn scoped_policy_rejects_broad_malformed_and_unpaired_authority() {
-    let value = json!({"decision":"scoped_experimental_sticky_quarantine_v1", "account_id":1,
-        "device_session_id":"s1", "platform":"android_tv", "max_active_grants":2});
-    let policy = ScopedNativePolicy::parse(&value.to_string()).unwrap();
-    let mut paired = lease();
-    assert!(!policy.allows(&paired, &Platform::AndroidTv));
-    let auth::Principal::Account { role, .. } = &mut paired.principal;
-    *role = "device".into();
-    assert!(policy.allows(&paired, &Platform::AndroidTv));
-    assert!(!policy.allows(&paired, &Platform::Android));
-    paired.session_id = Some("another_device".into());
-    assert!(!policy.allows(&paired, &Platform::AndroidTv));
-    paired.session_id = Some("s1".into());
-    let auth::Principal::Account { account_id, .. } = &mut paired.principal;
-    *account_id = 2;
-    assert!(!policy.allows(&paired, &Platform::AndroidTv));
-    for (key, replacement) in [
-        ("account_id", json!(0)),
-        ("device_session_id", json!("*")),
-        ("platform", json!("android")),
-        ("max_active_grants", json!(0)),
-        ("max_active_grants", json!(3)),
-        ("decision", json!("qualified_release")),
-        ("unexpected", json!(true)),
-    ] {
-        let mut invalid = value.clone();
-        invalid[key] = replacement;
-        assert!(
-            ScopedNativePolicy::parse(&invalid.to_string()).is_err(),
-            "{key}"
-        );
+#[tokio::test]
+async fn default_native_admission_supports_phone_and_tv_with_two_grants_per_session() {
+    for platform in ["android", "android_tv"] {
+        for paired in [false, true] {
+            let app = setup().await;
+            if paired {
+                app.db
+                    .lock()
+                    .unwrap()
+                    .execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
+                    .unwrap();
+            }
+            let source = torrent(&app, Some(0));
+            if paired {
+                for owner in app.resource_owners.lock().unwrap().values_mut() {
+                    let auth::Principal::Account { role, .. } = &mut owner.lease.principal;
+                    *role = "device".into();
+                }
+            }
+            let input = |id: &str| {
+                let mut input = body(&source, id);
+                input["client"]["platform"] = json!(platform);
+                input
+            };
+            let first = ready(&app, input("first_default")).await;
+            ready(&app, input("second_default")).await;
+            assert_eq!(
+                request(
+                    &app,
+                    "member-token-1",
+                    "POST",
+                    "/api/v2/playback",
+                    input("third_default")
+                )
+                .await
+                .1["error_code"],
+                "playback_capacity"
+            );
+            request(
+                &app,
+                "member-token-1",
+                "DELETE",
+                &format!("/api/v2/playback/{}", first["id"].as_str().unwrap()),
+                Value::Null,
+            )
+            .await;
+            ready(&app, input("after_release_default")).await;
+        }
     }
 }
 
 #[tokio::test]
-async fn scoped_device_admission_capacity_and_retirement_preserve_legacy_delivery() {
-    let mut app = fixture();
-    app.db
+async fn default_native_admission_is_independent_for_other_accounts_and_sessions() {
+    let app = setup().await;
+    let first_source = torrent(&app, Some(0));
+    ready(&app, body(&first_source, "account_one_first")).await;
+    ready(&app, body(&first_source, "account_one_second")).await;
+    app.db.lock().unwrap().execute_batch("INSERT INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Second','two',1); INSERT INTO profile_owners VALUES(2,2,0); INSERT INTO auth_profiles VALUES(2,2); UPDATE auth_sessions SET profile_id=2 WHERE account_id=2; INSERT INTO addons(id,name,manifest_url,enabled,manifest,account_id) VALUES(2,'Second','https://second.fixture.invalid/manifest.json',1,'{}',2);").unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
+    let second_lease = ResourceLease {
+        policy_revision: 0,
+        principal: auth::Principal::Account {
+            account_id: 2,
+            role: "member".into(),
+            profile_id: Some(2),
+            session_id: Some("s2".into()),
+        },
+        session_id: Some("s2".into()),
+    };
+    let (cards, error) = app.clone().with_lease(second_lease).register(
+        "addon:2",
+        vec![json!({"infoHash":"0000000000000000000000000000000000000000", "fileIdx":0})],
+        "movie",
+    );
+    assert!(error.is_none());
+    let second_source = cards[0]["id"].as_str().unwrap();
+    app.streams
         .lock()
         .unwrap()
-        .execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
-        .unwrap();
-    let policy = ScopedNativePolicy::parse(
-        &json!({"decision":"scoped_experimental_sticky_quarantine_v1",
-        "account_id":1, "device_session_id":"s1", "platform":"android_tv", "max_active_grants":2})
-        .to_string(),
-    )
-    .unwrap();
-    app.gateway_playbacks = Registry::with_native_policy(app.db.clone(), Some(policy));
-    request(
-        &app,
-        "member-token-1",
-        "GET",
-        "/api/v2/playback-protocol",
-        Value::Null,
-    )
-    .await;
-    let source = torrent(&app, Some(0));
-    // Source fixtures must carry the same authoritative paired principal.
-    for owner in app.resource_owners.lock().unwrap().values_mut() {
-        let auth::Principal::Account { role, .. } = &mut owner.lease.principal;
-        *role = "device".into();
-    }
-    let first = ready(&app, body(&source, "scoped_first")).await;
-    ready(&app, body(&source, "scoped_second")).await;
+        .get_mut(second_source)
+        .unwrap()
+        .exact_vod = Some(crate::app_state::ExactVod {
+        title: "second_movie".into(),
+        series: None,
+        season: None,
+        episode: None,
+    });
     assert_eq!(
         request(
             &app,
-            "member-token-1",
+            "member-token-2",
+            "GET",
+            "/api/v2/playback-protocol",
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    ready_as(
+        &app,
+        "member-token-2",
+        body(second_source, "account_two_first"),
+    )
+    .await;
+    ready_as(
+        &app,
+        "member-token-2",
+        body(second_source, "account_two_second"),
+    )
+    .await;
+    assert_eq!(
+        request(
+            &app,
+            "member-token-2",
             "POST",
             "/api/v2/playback",
-            body(&source, "scoped_third")
+            body(second_source, "account_two_third")
         )
         .await
         .1["error_code"],
         "playback_capacity"
-    );
-    request(
-        &app,
-        "member-token-1",
-        "DELETE",
-        &format!("/api/v2/playback/{}", first["id"].as_str().unwrap()),
-        Value::Null,
-    )
-    .await;
-    ready(&app, body(&source, "scoped_after_release")).await;
-    let mut unsupported = body(&source, "scoped_phone");
-    unsupported["client"]["platform"] = json!("android");
-    assert_eq!(
-        request(
-            &app,
-            "member-token-1",
-            "POST",
-            "/api/v2/playback",
-            unsupported
-        )
-        .await
-        .1["error_code"],
-        "gateway_required"
     );
 }
 
@@ -145,9 +167,6 @@ fn body(source: &str, id: &str) -> Value {
 }
 async fn setup() -> App {
     let app = fixture();
-    app.gateway_playbacks
-        .native_policy_enabled
-        .store(true, Ordering::Release);
     let (status, value) = request(
         &app,
         "member-token-1",
@@ -161,13 +180,16 @@ async fn setup() -> App {
     app
 }
 async fn ready(app: &App, input: Value) -> Value {
-    let (status, value) = request(app, "member-token-1", "POST", "/api/v2/playback", input).await;
+    ready_as(app, "member-token-1", input).await
+}
+async fn ready_as(app: &App, token: &str, input: Value) -> Value {
+    let (status, value) = request(app, token, "POST", "/api/v2/playback", input).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{value}");
     let id = value["id"].as_str().unwrap();
     for _ in 0..100 {
         let (_, value) = request(
             app,
-            "member-token-1",
+            token,
             "GET",
             &format!("/api/v2/playback/{id}"),
             Value::Null,
@@ -263,7 +285,7 @@ async fn native_grants_are_exact_independent_transient_and_poll_never_renews() {
     );
 }
 #[tokio::test]
-async fn native_policy_negotiation_exact_selection_and_server_owned_controls_gate_admission() {
+async fn native_negotiation_exact_selection_and_server_owned_controls_gate_admission() {
     let app = setup().await;
     let source = torrent(&app, Some(0));
     for (field, value) in [
@@ -302,24 +324,6 @@ async fn native_policy_negotiation_exact_selection_and_server_owned_controls_gat
         ready(&app, preferred).await["delivery"]["preferences"]["audio_language"],
         "fr"
     );
-    app.gateway_playbacks
-        .native_policy_enabled
-        .store(false, Ordering::Release);
-    assert_eq!(
-        request(
-            &app,
-            "member-token-1",
-            "POST",
-            "/api/v2/playback",
-            body(&source, "disabled")
-        )
-        .await
-        .1["error_code"],
-        "gateway_required"
-    );
-    app.gateway_playbacks
-        .native_policy_enabled
-        .store(true, Ordering::Release);
     app.gateway_playbacks.negotiated.lock().unwrap().clear();
     assert_eq!(
         request(
