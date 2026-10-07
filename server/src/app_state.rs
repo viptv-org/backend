@@ -203,7 +203,15 @@ impl ResourceLease {
         }
     }
 }
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct ExactVod {
+    pub(crate) title: String,
+    pub(crate) series: Option<String>,
+    pub(crate) season: Option<u32>,
+    pub(crate) episode: Option<u32>,
+}
 pub(crate) struct Job {
+    pub(crate) exact_vod: Option<ExactVod>,
     // Validated original API request kind, never an upstream stream field.
     pub(crate) kind: String,
     pub(crate) created: Instant,
@@ -215,6 +223,7 @@ pub(crate) struct JobState {
     pub(crate) pending: usize,
 }
 pub(crate) struct StreamEntry {
+    pub(crate) exact_vod: Option<ExactVod>,
     // Set only by exact, account-authorized raw live-channel resolution.
     pub(crate) live_channel_id: Option<String>,
     pub(crate) producer: String,
@@ -224,6 +233,7 @@ pub(crate) struct StreamEntry {
     pub(crate) live: bool,
     pub(crate) url: String,
     pub(crate) file_index: Option<u32>,
+    pub(crate) info_hash: Option<String>,
     pub(crate) requires_torrent_gateway: bool,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) created: Instant,
@@ -242,6 +252,8 @@ impl App {
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
         provider::v2::init(&db).map_err(|_| "Account IPTV schema initialization failed")?;
         provider::refresh_v2::prepare(&db).map_err(|_| "IPTV refresh initialization failed")?;
+        gateway::playback::init(&db)
+            .map_err(|_| "Playback request schema initialization failed")?;
         gateway::registry::init(&db).map_err(|_| "Gateway schema initialization failed")?;
         stremio_import::init(&db).map_err(|_| "Import schema initialization failed")?;
         let stremio_import = stremio_import::Service::new()?;

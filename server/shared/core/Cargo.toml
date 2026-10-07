@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/viptv-core"]
+exclude = ["adapters/tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-only"
+rust-version = "1.90"
+
+[workspace.dependencies]
+crux_core = "=0.20.0"
+crux_http = "=0.20.0"
+facet = "=0.46.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

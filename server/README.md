@@ -1,7 +1,7 @@
 # VIPTV server
 
 Rust/Axum, SQLite, account-owned Xtream and Stremio-compatible addons. Requires
-Rust 1.88+, a C compiler for bundled SQLite at build time, and trusted HTTPS
+Rust 1.90+, a C compiler for bundled SQLite at build time, and trusted HTTPS
 ingress for clients. The backend does not run FFmpeg, probe media, expose a
 generic media relay or manage GPU devices. The separate playback gateway owns
 media processing and viewer capabilities.

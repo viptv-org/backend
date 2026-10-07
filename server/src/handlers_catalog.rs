@@ -149,7 +149,26 @@ pub(crate) async fn start_streams(
         .take(32)
         .collect::<Vec<_>>();
     a.require_media(&a.db.lock().unwrap())?;
+    let exact_vod = match kind.as_str() {
+        "movie" => Some(app_state::ExactVod {
+            title: id.clone(),
+            series: None,
+            season: None,
+            episode: None,
+        }),
+        "series" => match (v["season"].as_u64(), v["episode"].as_u64()) {
+            (Some(season), Some(episode)) => Some(app_state::ExactVod {
+                title: id.clone(),
+                series: v["series_id"].as_str().map(str::to_owned),
+                season: Some(season as u32),
+                episode: Some(episode as u32),
+            }),
+            _ => None,
+        },
+        _ => None,
+    };
     let job = Arc::new(Job {
+        exact_vod,
         kind: kind.clone(),
         created: Instant::now(),
         state: Mutex::new(JobState {

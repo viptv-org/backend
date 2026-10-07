@@ -1,0 +1,18 @@
+{
+  "core": {
+    "revision": "28e114949a5bef205ca0aa125d7f6fd2851b6c25",
+    "license": [
+      "GPL-2.0-only"
+    ],
+    "archive_sha256": "d4314dd3a04966c3fc59ee33184aa0caf8daceb52e2f684f83f14ef19e8e7c41"
+  },
+  "playback-gateway": {
+    "revision": "f0f8c0d5927135560b299b8f8b02f99de1897fe7",
+    "license": [
+      "GPL-2.0-only",
+      "Apache-2.0"
+    ],
+    "archive_sha256": "01e331edf13dac2cc495dc9d1747bb1bfa4c622ae0f819adbfb1edbdb7b6be29"
+  },
+  "design_revision": "83d338b6ffc1fc5e7f14ad4059f6159b8ee84509"
+}

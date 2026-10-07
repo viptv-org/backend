@@ -35,11 +35,11 @@ async fn protocol_request(
 }
 
 #[tokio::test]
-async fn native_protocol_is_authenticated_bodyless_and_does_not_advertise_partial_support() {
+async fn native_protocol_is_authenticated_bodyless_and_support_is_separate_from_policy() {
     let app = fixture();
     let (status, value, cache) = protocol_request(&app, "member-token-1", Body::empty()).await;
     assert_eq!(status, StatusCode::OK, "{value}");
-    assert_eq!(value, json!({"version":1,"native_torrent_versions":[]}));
+    assert_eq!(value, json!({"version":1,"native_torrent_versions":[1]}));
     assert_eq!(cache, "no-store");
     let (status, value, _) = protocol_request(&app, "invalid-token", Body::empty()).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{value}");

@@ -1,5 +1,6 @@
 pub(crate) mod client;
 pub(crate) mod http;
+mod native_fetch;
 pub(crate) mod playback;
 #[cfg(test)]
 mod playback_protocol_tests;

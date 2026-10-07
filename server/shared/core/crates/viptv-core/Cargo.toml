@@ -1,0 +1,39 @@
+[package]
+name = "viptv-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = []
+typegen = ["facet_typegen"]
+facet_typegen = ["crux_core/facet_typegen", "crux_http/facet_typegen"]
+native = ["dep:uniffi"]
+bindgen = ["native", "uniffi/cli"]
+
+[dependencies]
+base64 = "0.22.1"
+sha1 = "0.10.6"
+unicode-normalization = "0.1.24"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+regex = "1"
+crux_core.workspace = true
+crux_http.workspace = true
+facet.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+url = "2"
+thiserror = "2"
+uniffi = { version = "0.29.4", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+
+[[bin]]
+name = "viptv-uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]

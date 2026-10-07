@@ -4,9 +4,16 @@ default-run = "viptv-server"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-2.0-only"
-rust-version = "1.88"
+rust-version = "1.90"
 
 [dependencies]
+viptv-core = { path = "shared/core/crates/viptv-core" }
+torrent-policy = { path = "shared/playback-gateway/torrent-policy" }
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
 viptv-provider = { path = "provider", features = ["discovery"] }
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }

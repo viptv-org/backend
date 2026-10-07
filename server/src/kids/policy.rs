@@ -280,6 +280,7 @@ fn sanitize_request(app: &App, path: &str, mut value: Value) -> Result<Value, Ap
     Ok(value)
 }
 pub(crate) async fn before(app: &App, req: &mut Request) -> Result<Option<Value>, ApiError> {
+    let closed_v2_playback = req.uri().path().trim_start_matches("/api") == "/v2/playback";
     let path = policy_path(req.uri().path().trim_start_matches("/api")).to_owned();
     let method = req.method().clone();
     let q = query(req);
@@ -288,6 +289,11 @@ pub(crate) async fn before(app: &App, req: &mut Request) -> Result<Option<Value>
     match blocking(move || decide_request(&decision_app, &decision_path, &method, &q)).await? {
         PolicyDecision::Pass => return Ok(None),
         PolicyDecision::Respond(value) => return Ok(Some(value)),
+        PolicyDecision::Sanitize if closed_v2_playback => {
+            // The v2 handler validates original closed JSON and server-issued
+            // source/title proof. A Value round trip here would erase duplicates.
+            return Ok(None);
+        }
         PolicyDecision::Sanitize => {}
     }
     let bytes = axum::body::to_bytes(
@@ -402,6 +408,12 @@ pub(crate) async fn after(app: &App, path: &str, response: Response) -> Response
 // V2 source jobs and playback keep the existing title/episode authorization
 // rules. Raw v2 live catalogs/guide and management routes remain separately gated.
 fn policy_path(path: &str) -> &str {
+    if path == "/v2/playback-protocol" {
+        return "/playback/protocol";
+    }
+    if path.starts_with("/v2/playback-requests/") {
+        return "/playback/requests";
+    }
     match path.strip_prefix("/v2") {
         Some(rest)
             if rest == "/streams"

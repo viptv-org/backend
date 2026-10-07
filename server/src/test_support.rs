@@ -124,7 +124,15 @@ pub(crate) async fn request(
                 .uri(path)
                 .header("authorization", format!("Bearer {token}"))
                 .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
+                .body(
+                    if body.is_null()
+                        && (method == "GET" || method == "DELETE" || path.ends_with("/heartbeat"))
+                    {
+                        Body::empty()
+                    } else {
+                        Body::from(body.to_string())
+                    },
+                )
                 .unwrap(),
         )
         .await

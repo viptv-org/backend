@@ -2,3 +2,7 @@
 /data/
 core
 core.*
+
+# Immutable library sources are committed for portable backend/Docker builds.
+!shared/core/
+!shared/core/**

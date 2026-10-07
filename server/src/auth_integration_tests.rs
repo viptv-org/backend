@@ -580,6 +580,7 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
     a.jobs.lock().unwrap().insert(
         "profile-job".into(),
         Arc::new(Job {
+            exact_vod: None,
             kind: "movie".into(),
             created: Instant::now(),
             state: Mutex::new(JobState {
@@ -618,7 +619,12 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
             request(&a, "member-token-1", method, path, Value::Null)
                 .await
                 .0,
-            StatusCode::NOT_FOUND
+            if method == "DELETE" {
+                // Bodyless release is idempotent and does not disclose another scope.
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            }
         );
     }
     assert_eq!(
@@ -950,7 +956,12 @@ async fn same_account_and_profile_other_session_cannot_reuse_owned_resources() {
             request(&a, "other-session-token", method, path, Value::Null)
                 .await
                 .0,
-            StatusCode::NOT_FOUND
+            if method == "DELETE" {
+                // Bodyless release is idempotent and does not disclose another scope.
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            }
         );
     }
     let (cards, _) = owner.register(

@@ -163,6 +163,7 @@ impl App {
             entries.insert(
                 id.clone(),
                 StreamEntry {
+                    exact_vod: None,
                     live_channel_id: None,
                     producer: source.to_owned(),
                     configuration,
@@ -171,6 +172,7 @@ impl App {
                     live: kind == "live",
                     url: url.into(),
                     file_index: input.file_index,
+                    info_hash: input.info_hash.clone(),
                     requires_torrent_gateway: input.requires_gateway,
                     headers,
                     created: Instant::now(),

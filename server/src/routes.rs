@@ -130,13 +130,20 @@ pub fn router_with_tv(
             "/profiles/:id/continue",
             get(continue_watching_authenticated),
         )
-        .route("/v2/playback-protocol", get(gateway::playback::support))
-        .route("/v2/playback", post(gateway::playback::start))
-        .route(
-            "/v2/playback/:id",
-            get(gateway::playback::get).delete(gateway::playback::stop),
+        .merge(
+            Router::new()
+                .route("/v2/playback-protocol", get(gateway::playback::support))
+                .route("/v2/playback", post(gateway::playback::start))
+                .route(
+                    "/v2/playback/:id",
+                    get(gateway::playback::get).delete(gateway::playback::stop),
+                )
+                .route("/v2/playback/:id/heartbeat", post(gateway::playback::renew))
+                .route(
+                    "/v2/playback-requests/:request_id",
+                    axum::routing::delete(gateway::playback::cancel_request),
+                ),
         )
-        .route("/v2/playback/:id/heartbeat", post(gateway::playback::renew))
         .route(
             "/v2/gateways",
             get(gateway::http::list).post(gateway::http::register),
@@ -180,7 +187,8 @@ pub fn router_with_tv(
             auth::authenticate,
         ))
         .layer(middleware::from_fn(json_errors))
-        .layer(middleware::map_response(private_api_response));
+        .layer(middleware::map_response(private_api_response))
+        .layer(middleware::from_fn(gateway::playback::control_deadline));
     let mut r = Router::new()
         .nest("/api", api)
         .route(

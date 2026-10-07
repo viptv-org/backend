@@ -57,6 +57,14 @@ pub(crate) fn emit_batch(
     let (streams, error, registration_error) = match result {
         Ok(r) => {
             let (streams, error) = a.register(source, r, &j.kind);
+            {
+                let mut entries = a.streams.lock().unwrap();
+                for source in &streams {
+                    if let Some(entry) = source["id"].as_str().and_then(|id| entries.get_mut(id)) {
+                        entry.exact_vod = j.exact_vod.clone();
+                    }
+                }
+            }
             (streams, error, true)
         }
         Err(e) => (vec![], Some(e), false),

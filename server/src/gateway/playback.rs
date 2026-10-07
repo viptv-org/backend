@@ -11,7 +11,7 @@ use crate::{
     util, ApiError,
 };
 use axum::{
-    extract::{rejection::JsonRejection, Path, State},
+    extract::{Path, State},
     http::StatusCode,
     Extension, Json,
 };
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -30,6 +30,28 @@ use std::{
 };
 
 const LEASE: Duration = Duration::from_secs(60);
+const REQUEST_QUOTA: usize = 4096;
+pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS playback_request_authority(
+      session_id TEXT NOT NULL REFERENCES auth_sessions(id) ON DELETE CASCADE,
+      request_id TEXT NOT NULL, scope TEXT NOT NULL, request_hash BLOB,
+      playback_id TEXT, cancelled INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(session_id,request_id));",
+    )
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NativeCapability {
+    version: u32,
+    network_policy: String,
+}
+fn native_capability<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<NativeCapability>, D::Error> {
+    NativeCapability::deserialize(d).map(Some)
+}
+
 #[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Conversion {
@@ -61,6 +83,12 @@ pub(crate) struct Facts {
     max_height: u32,
     video_codecs: Vec<String>,
     audio_codecs: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "native_capability",
+        skip_serializing_if = "Option::is_none"
+    )]
+    native_torrent: Option<NativeCapability>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -89,11 +117,13 @@ struct Proof {
     producer: String,
     configuration: [u8; 32],
     kind: String,
+    exact_vod: Option<crate::app_state::ExactVod>,
 }
 struct Source {
     proof: Proof,
     url: String,
     file_index: Option<u32>,
+    info_hash: Option<String>,
     requires_torrent_gateway: bool,
     headers: BTreeMap<String, String>,
     live: bool,
@@ -107,7 +137,15 @@ struct Remote {
     client: Client,
     expires_at: u64,
 }
+struct NativeState {
+    expires_at: u64,
+    last_server_time: u64,
+    grant: Option<viptv_core::native_torrent::NativeTorrentGrant>,
+    position: f64,
+    preferences: viptv_core::native_torrent::NativeTorrentPreferences,
+}
 struct StateData {
+    native: Option<NativeState>,
     status: &'static str,
     delivery: Option<Value>,
     error: Option<&'static str>,
@@ -119,20 +157,29 @@ struct Entry {
     scope: String,
     request_id: String,
     request_hash: [u8; 32],
+    request_identity: viptv_core::native_torrent_policy::NativeTorrentRequestIdentity,
     lease: ResourceLease,
     proof: Proof,
     identity: [u8; 32],
     cancelled: AtomicBool,
+    cancel_signal: tokio::sync::Notify,
     state: Mutex<StateData>,
     permit: Mutex<Option<tokio::sync::OwnedSemaphorePermit>>,
 }
 pub(crate) struct Registry {
     entries: Mutex<HashMap<String, Arc<Entry>>>,
+    request_gate: Mutex<()>,
+    negotiated: Mutex<HashSet<(String, String)>>,
+    // Qualification/rollout is a separate explicit gate. No environment variable activates it.
+    native_policy_enabled: AtomicBool,
 }
 impl Registry {
     pub(crate) fn new(db: Arc<Mutex<Connection>>) -> Arc<Self> {
         let registry = Arc::new(Self {
             entries: Mutex::new(HashMap::new()),
+            request_gate: Mutex::new(()),
+            negotiated: Mutex::new(HashSet::new()),
+            native_policy_enabled: AtomicBool::new(false),
         });
         let weak = Arc::downgrade(&registry);
         tokio::spawn(async move {
@@ -260,6 +307,9 @@ fn account(lease: &ResourceLease) -> i64 {
     lease.principal.account_id().expect("authenticated account")
 }
 fn failure_code(error: Error) -> &'static str {
+    failure_code_ref(&error)
+}
+fn failure_code_ref(error: &Error) -> &'static str {
     match error {
         Error::Code(code) => code,
         Error::Auth(error) => error.api_error_code().unwrap_or("authorization_expired"),
@@ -274,6 +324,9 @@ fn gateway_current(db: &Connection, lease: &ResourceLease, id: &str, revision: i
 }
 fn validate_source(db: &Connection, proof: &Proof) -> Result<(), Error> {
     proof.lease.validate(db)?;
+    if let Some(exact) = &proof.exact_vod {
+        crate::kids::require_item(db, &proof.lease.principal, &proof.kind, &exact.title)?;
+    }
     let Some((kind, id)) = proof.producer.split_once(':') else {
         return Err(Error::Code("source_not_found"));
     };
@@ -312,7 +365,16 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
         let source_lease = app
             .resource_lease("stream", &id)
             .ok_or(Error::Code("source_not_found"))?;
-        let (proof, url, file_index, requires_torrent_gateway, headers, live, provider_id) = {
+        let (
+            proof,
+            url,
+            file_index,
+            info_hash,
+            requires_torrent_gateway,
+            headers,
+            live,
+            provider_id,
+        ) = {
             let streams = app.streams.lock().unwrap();
             let entry = streams
                 .get(&id)
@@ -325,9 +387,11 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
                     producer: entry.producer.clone(),
                     configuration: entry.configuration.ok_or(Error::Code("source_not_found"))?,
                     kind: entry.kind.clone(),
+                    exact_vod: entry.exact_vod.clone(),
                 },
                 entry.url.clone(),
                 entry.file_index,
+                entry.info_hash.clone(),
                 entry.requires_torrent_gateway,
                 entry
                     .headers
@@ -348,15 +412,27 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
             return Err(Error::Code("source_route_migration_required"));
         }
         let identity = Sha256::digest(
-            json!([account(&proof.lease), url, headers, live, file_index])
-                .to_string()
-                .as_bytes(),
+            json!([
+                account(&proof.lease),
+                url,
+                headers,
+                live,
+                file_index,
+                info_hash,
+                proof
+                    .exact_vod
+                    .as_ref()
+                    .map(|v| (&v.title, &v.series, v.season, v.episode))
+            ])
+            .to_string()
+            .as_bytes(),
         )
         .into();
         Ok(Source {
             proof,
             url,
             file_index,
+            info_hash,
             requires_torrent_gateway,
             headers,
             live,
@@ -368,14 +444,47 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
     .map_err(|_| Error::Code("provider_storage_unavailable"))?
 }
 fn response(entry: &Entry) -> Value {
-    let state = entry.state.lock().unwrap();
+    let mut state = entry.state.lock().unwrap();
+    if state.status == "ready" {
+        if let Some(native) = state.native.as_mut() {
+            let now = util::now() as u64;
+            if let Some(grant) = native
+                .grant
+                .as_mut()
+                .filter(|_| now >= native.last_server_time)
+            {
+                grant.server_time = now;
+                native.last_server_time = grant.server_time;
+                if let Ok(body) = viptv_core::native_torrent::native_ready_response(
+                    &entry.id,
+                    native.position,
+                    &native.preferences,
+                    grant,
+                ) {
+                    if let Ok(value) = serde_json::from_str(&body) {
+                        return value;
+                    }
+                }
+            }
+            state.status = "expired";
+            state.error = Some("playback_expired");
+            state.delivery = None;
+            state.native.as_mut().unwrap().grant = None;
+            entry.cancelled.store(true, Ordering::Release);
+        }
+    }
     let error = state.error.map(crate::account_api::description);
     let local_expiry = util::now() as u64 + LEASE.saturating_sub(state.touched.elapsed()).as_secs();
     let expires_at = if matches!(state.status, "starting" | "ready") {
-        state
-            .remote
-            .as_ref()
-            .map_or(local_expiry, |remote| remote.expires_at.min(local_expiry))
+        state.native.as_ref().map_or_else(
+            || {
+                state
+                    .remote
+                    .as_ref()
+                    .map_or(local_expiry, |remote| remote.expires_at.min(local_expiry))
+            },
+            |native| native.expires_at,
+        )
     } else {
         util::now() as u64
     };
@@ -384,12 +493,17 @@ fn response(entry: &Entry) -> Value {
 fn expired(state: &StateData) -> bool {
     state.touched.elapsed() >= LEASE
         || state
+            .native
+            .as_ref()
+            .is_some_and(|native| native.expires_at <= util::now() as u64)
+        || state
             .remote
             .as_ref()
             .is_some_and(|remote| remote.expires_at <= util::now() as u64)
 }
 fn terminate(entry: &Entry, status: &'static str, error: Option<&'static str>) -> Option<Remote> {
     entry.cancelled.store(true, Ordering::Release);
+    entry.cancel_signal.notify_one();
     entry.permit.lock().unwrap().take();
     let mut state = entry.state.lock().unwrap();
     if !matches!(state.status, "starting" | "ready") {
@@ -398,6 +512,9 @@ fn terminate(entry: &Entry, status: &'static str, error: Option<&'static str>) -
     state.status = status;
     state.error = error;
     state.delivery = None;
+    if let Some(native) = state.native.as_mut() {
+        native.grant = None;
+    }
     state.touched = Instant::now();
     state.remote.take()
 }
@@ -422,6 +539,319 @@ struct Cleanup {
     target: Arc<AuthorizedGateway>,
     viewer: String,
     armed: bool,
+}
+
+async fn control_body(
+    request: axum::extract::Request,
+    limit: usize,
+) -> Result<axum::body::Bytes, Error> {
+    if request.uri().query().is_some() || request.uri().path().contains('%') {
+        return Err(Error::Code("invalid_playback_request"));
+    }
+    if request
+        .headers()
+        .get_all("content-encoding")
+        .iter()
+        .any(|v| v != "identity")
+    {
+        return Err(Error::Code("invalid_playback_request"));
+    }
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        axum::body::to_bytes(request.into_body(), limit),
+    )
+    .await
+    .map_err(|_| Error::Code("invalid_playback_request"))?
+    .map_err(|_| Error::Code("invalid_playback_request"))
+}
+fn native_scope(
+    lease: &ResourceLease,
+) -> Result<viptv_core::native_torrent_policy::NativeTorrentScope, Error> {
+    Ok(viptv_core::native_torrent_policy::NativeTorrentScope {
+        scope_key: App::scoped_key(&lease.principal),
+        session_id: lease
+            .session_id
+            .clone()
+            .ok_or(Error::Code("playback_expired"))?,
+    })
+}
+fn core_request(request: &Start) -> Result<viptv_core::dto::PlaybackV2Request, Error> {
+    fn camel(value: Value) -> Value {
+        match value {
+            Value::Object(values) => Value::Object(
+                values
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let mut name = String::new();
+                        let mut upper = false;
+                        for character in key.chars() {
+                            if character == '_' {
+                                upper = true;
+                            } else if upper {
+                                name.push(character.to_ascii_uppercase());
+                                upper = false;
+                            } else {
+                                name.push(character);
+                            }
+                        }
+                        (name, camel(value))
+                    })
+                    .collect(),
+            ),
+            Value::Array(values) => Value::Array(values.into_iter().map(camel).collect()),
+            value => value,
+        }
+    }
+    serde_json::to_value(request)
+        .and_then(|v| serde_json::from_value(camel(v)))
+        .map_err(|_| Error::Code("invalid_playback_request"))
+}
+fn previous_request(
+    app: &App,
+    lease: &ResourceLease,
+    scope: &str,
+    request_id: &str,
+    hash: &[u8; 32],
+    incoming: &viptv_core::native_torrent_policy::NativeTorrentRequestIdentity,
+) -> Result<Option<Arc<Entry>>, Error> {
+    let _gate = app.gateway_playbacks.request_gate.lock().unwrap();
+    previous_request_locked(app, lease, scope, request_id, hash, incoming)
+}
+fn previous_request_locked(
+    app: &App,
+    lease: &ResourceLease,
+    scope: &str,
+    request_id: &str,
+    hash: &[u8; 32],
+    incoming: &viptv_core::native_torrent_policy::NativeTorrentRequestIdentity,
+) -> Result<Option<Arc<Entry>>, Error> {
+    use rusqlite::OptionalExtension;
+    let session = lease
+        .session_id
+        .as_ref()
+        .ok_or(Error::Code("playback_expired"))?;
+    let db = app.db.lock().unwrap();
+    lease.validate(&db)?;
+    let record = db.query_row("SELECT scope,request_hash,playback_id,cancelled FROM playback_request_authority WHERE session_id=?1 AND request_id=?2",
+        params![session,request_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,Option<Vec<u8>>>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,bool>(3)?)))
+        .optional().map_err(|_| Error::Code("provider_storage_unavailable"))?;
+    drop(db);
+    let Some((previous_scope, previous_hash, playback_id, cancelled)) = record else {
+        return Ok(None);
+    };
+    if cancelled {
+        return Err(Error::Code("playback_expired"));
+    }
+    if previous_scope != scope || previous_hash.as_deref() != Some(hash.as_slice()) {
+        return Err(Error::Code("playback_conflict"));
+    }
+    let entry = playback_id.and_then(|id| {
+        app.gateway_playbacks
+            .entries
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+    });
+    if let Some(entry) = &entry {
+        if viptv_core::native_torrent_policy::native_request_transition(
+            Some(&entry.request_identity),
+            incoming,
+            false,
+        ) != viptv_core::native_torrent_policy::NativeTorrentRequestDecision::Idempotent
+        {
+            return Err(Error::Code("playback_conflict"));
+        }
+    }
+    entry.map(Some).ok_or(Error::Code("playback_expired"))
+}
+fn magnet_hash(source: &Source) -> Option<String> {
+    let url = url::Url::parse(&source.url).ok()?;
+    if url.scheme() != "magnet" {
+        return None;
+    }
+    let mut hashes = url
+        .query_pairs()
+        .filter(|(k, _)| k == "xt")
+        .map(|(_, v)| v.into_owned());
+    let hash = hashes
+        .next()?
+        .strip_prefix("urn:btih:")?
+        .to_ascii_lowercase();
+    (hashes.next().is_none() && viptv_core::native_torrent_policy::canonical_v1_hash(&hash))
+        .then_some(hash)
+}
+fn native_candidate(app: &App, lease: &ResourceLease, source: &Source, request: &Start) -> bool {
+    let Ok(request) = core_request(request) else {
+        return false;
+    };
+    let Ok(scope) = native_scope(lease) else {
+        return false;
+    };
+    let negotiated = app
+        .gateway_playbacks
+        .negotiated
+        .lock()
+        .unwrap()
+        .contains(&(scope.scope_key.clone(), scope.session_id.clone()));
+    app.gateway_playbacks
+        .native_policy_enabled
+        .load(Ordering::Acquire)
+        && negotiated
+        && request.client.native_torrent.is_some()
+        && matches!(
+            request.client.platform,
+            viptv_core::dto::PlaybackPlatform::Android
+                | viptv_core::dto::PlaybackPlatform::AndroidTv
+        )
+        && viptv_core::native_torrent_policy::native_request_eligible(&request)
+        && !source.live
+        && source.provider_id.is_none()
+        && source.proof.exact_vod.is_some()
+        && source.file_index.is_some()
+        && source.requires_torrent_gateway
+        && (magnet_hash(source).is_some()
+            || url::Url::parse(&source.url).is_ok_and(|u| {
+                matches!(u.scheme(), "http" | "https")
+                    && u.path().to_ascii_lowercase().ends_with(".torrent")
+            }))
+}
+async fn prepare_native(
+    app: &App,
+    entry: &Entry,
+    source: &Source,
+    request: &Start,
+) -> Result<(), Error> {
+    use base64::Engine;
+    use viptv_core::{native_torrent::*, native_torrent_policy::*};
+    let index = source
+        .file_index
+        .ok_or(Error::Code("source_format_unsupported"))?;
+    let (hash, input, size) = if let Some(hash) = magnet_hash(source) {
+        let uri = format!("magnet:?xt=urn:btih:{hash}");
+        (
+            hash,
+            NativeTorrentInput {
+                kind: "magnet".into(),
+                value: uri,
+            },
+            None,
+        )
+    } else {
+        let bytes = super::native_fetch::fetch(&source.url, &source.headers).await?;
+        let metadata = torrent_policy::metainfo::vet_native_metainfo(&bytes)
+            .map_err(|_| Error::Code("native_metainfo_invalid"))?;
+        metadata
+            .verify_selection(source.info_hash.as_deref(), index, None)
+            .map_err(|_| Error::Code("source_not_found"))?;
+        let size = metadata.file_sizes()[index as usize];
+        (
+            metadata.info_hash_hex(),
+            NativeTorrentInput {
+                kind: "metainfo".into(),
+                value: base64::engine::general_purpose::STANDARD.encode(metadata.canonical_bytes()),
+            },
+            Some(size),
+        )
+    };
+    validate_entry(app, entry).await?;
+    let request_core = core_request(request)?;
+    let scope = native_scope(&entry.lease)?;
+    let source_scope = native_scope(&source.proof.lease)?;
+    let facts = NativeTorrentAdmissionFacts {
+        caller_scope: &scope,
+        source_scope: &source_scope,
+        request_scope: &scope,
+        request: &request_core,
+        backend_policy_enabled: app
+            .gateway_playbacks
+            .native_policy_enabled
+            .load(Ordering::Acquire),
+        qualified: true,
+        negotiated: app
+            .gateway_playbacks
+            .negotiated
+            .lock()
+            .unwrap()
+            .contains(&(scope.scope_key.clone(), scope.session_id.clone())),
+        resource_authorized: true,
+        source_proof_current: true,
+        exact_vod: source.proof.exact_vod.is_some(),
+        info_hash: Some(&hash),
+        file_index: Some(index),
+    };
+    if native_admission(&facts) != NativeTorrentAdmissionDecision::Native {
+        return Err(Error::Code("source_not_found"));
+    }
+    let db = app.db.lock().unwrap();
+    entry.lease.validate(&db)?;
+    validate_source(&db, &entry.proof)?;
+    let mut state = entry.state.lock().unwrap();
+    if entry.cancelled.load(Ordering::Acquire) || expired(&state) {
+        return Err(Error::Code("playback_expired"));
+    }
+    let native = state
+        .native
+        .as_mut()
+        .ok_or(Error::Code("playback_expired"))?;
+    let grant = NativeTorrentGrant {
+        version: 1,
+        network_policy: "public_dht_tcp_v1".into(),
+        id: uuid::Uuid::new_v4().to_string(),
+        server_time: util::now() as u64,
+        expires_at: native.expires_at,
+        info_hash: hash,
+        file_index: index,
+        input,
+        expected_file_size: size,
+    };
+    native_ready_response(&entry.id, native.position, &native.preferences, &grant)
+        .map_err(|_| Error::Code("native_metainfo_invalid"))?;
+    native.last_server_time = grant.server_time;
+    native.grant = Some(grant);
+    state.status = "ready";
+    Ok(())
+}
+
+pub(crate) async fn cancel_request(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(request_id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, Error> {
+    control_body(request, 0).await?;
+    if !protocol::identifier(&request_id) {
+        return Err(Error::Code("invalid_playback_request"));
+    }
+    let remote = {
+        let _gate = app.gateway_playbacks.request_gate.lock().unwrap();
+        let db = app.db.lock().unwrap();
+        lease.validate(&db)?;
+        let session = lease
+            .session_id
+            .as_ref()
+            .ok_or(Error::Code("playback_expired"))?;
+        let scope = App::scoped_key(&lease.principal);
+        // Even an absent request gets a durable, session-lifetime tombstone.
+        // Cancellation never evicts a live record; admission refuses quota exhaustion.
+        db.execute("INSERT INTO playback_request_authority(session_id,request_id,scope,cancelled) VALUES(?1,?2,?3,1) ON CONFLICT(session_id,request_id) DO UPDATE SET cancelled=1 WHERE playback_request_authority.scope=excluded.scope",params![session,request_id,scope])
+            .map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        app.gateway_playbacks
+            .entries
+            .lock()
+            .unwrap()
+            .values()
+            .find(|entry| {
+                entry.scope == scope
+                    && entry.lease.session_id == lease.session_id
+                    && entry.request_id == request_id
+            })
+            .and_then(|entry| terminate(entry, "released", None))
+    };
+    if let Some(remote) = remote {
+        release_remote(&remote.client, &remote.target, &remote.viewer).await;
+    }
+    Ok(Json(json!({"ok":true})))
 }
 impl Drop for Cleanup {
     fn drop(&mut self) {
@@ -536,7 +966,19 @@ async fn choose(
     .map_err(|_| Error::Code("gateway_unavailable"))?
 }
 fn validate(request: &Start) -> Result<(), Error> {
-    if !protocol::identifier(&request.request_id)
+    if request
+        .client
+        .native_torrent
+        .as_ref()
+        .is_some_and(|native| {
+            native.version != 1
+                || native.network_policy != "public_dht_tcp_v1"
+                || !matches!(
+                    request.client.platform,
+                    Platform::Android | Platform::AndroidTv
+                )
+        })
+        || !protocol::identifier(&request.request_id)
         || request.stream_id.is_empty()
         || request.stream_id.len() > 128
         || !request.position.is_finite()
@@ -582,27 +1024,37 @@ fn validate(request: &Start) -> Result<(), Error> {
 pub(crate) async fn start(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
-    body: Result<Json<Start>, JsonRejection>,
+    request_body: axum::extract::Request,
 ) -> Result<(StatusCode, Json<Value>), Error> {
-    let Json(mut request) = body.map_err(|_| Error::Code("invalid_playback_request"))?;
+    let bytes = control_body(request_body, 16384).await?;
+    let mut request: Start =
+        serde_json::from_slice(&bytes).map_err(|_| Error::Code("invalid_playback_request"))?;
+    if request.position == 0.0 {
+        request.position = 0.0;
+    }
     validate(&request)?;
+    let request_identity = viptv_core::native_torrent_policy::NativeTorrentRequestIdentity {
+        scope: native_scope(&lease)?,
+        request: core_request(&request)?,
+    };
+    if viptv_core::native_torrent_policy::native_request_transition(None, &request_identity, false)
+        != viptv_core::native_torrent_policy::NativeTorrentRequestDecision::New
+    {
+        return Err(Error::Code("invalid_playback_request"));
+    }
     let hash: [u8; 32] = Sha256::digest(
         serde_json::to_vec(&request).map_err(|_| Error::Code("invalid_playback_request"))?,
     )
     .into();
     let scope = App::scoped_key(&lease.principal);
-    let existing = app
-        .gateway_playbacks
-        .entries
-        .lock()
-        .unwrap()
-        .values()
-        .find(|entry| entry.scope == scope && entry.request_id == request.request_id)
-        .cloned();
-    if let Some(entry) = existing {
-        if entry.request_hash != hash {
-            return Err(Error::Code("playback_conflict"));
-        }
+    if let Some(entry) = previous_request(
+        &app,
+        &lease,
+        &scope,
+        &request.request_id,
+        &hash,
+        &request_identity,
+    )? {
         inspect_entry(&app, &entry).await?;
         return Ok((StatusCode::OK, Json(response(&entry))));
     }
@@ -649,7 +1101,14 @@ pub(crate) async fn start(
         && request.subtitle_track.is_none()
         && request.audio_language.is_none()
         && !request.subtitles_off;
-    if !direct {
+    let native_candidate = native_candidate(&app, &lease, &input, &request);
+    // The legacy gateway input has no metainfo hash-binding field. A paired URL
+    // and hash was previously unsupported there; never drop that exact identity
+    // when force-gateway/old-client/policy gates bypass native admission.
+    if !native_candidate && input.info_hash.is_some() && !input.url.starts_with("magnet:") {
+        return Err(Error::Code("source_format_unsupported"));
+    }
+    if !direct && !native_candidate {
         let db = app.db.lock().unwrap();
         lease.validate(&db)?;
         if registry::list(&db, account(&lease))?
@@ -660,11 +1119,23 @@ pub(crate) async fn start(
         }
     }
     let entry = {
+        let _gate = app.gateway_playbacks.request_gate.lock().unwrap();
+        if let Some(entry) = previous_request_locked(
+            &app,
+            &lease,
+            &scope,
+            &request.request_id,
+            &hash,
+            &request_identity,
+        )? {
+            return Ok((StatusCode::OK, Json(response(&entry))));
+        }
         let mut entries = app.gateway_playbacks.entries.lock().unwrap();
-        if let Some(entry) = entries
-            .values()
-            .find(|entry| entry.scope == scope && entry.request_id == request.request_id)
-        {
+        if let Some(entry) = entries.values().find(|entry| {
+            entry.scope == scope
+                && entry.lease.session_id == lease.session_id
+                && entry.request_id == request.request_id
+        }) {
             if entry.request_hash != hash {
                 return Err(Error::Code("playback_conflict"));
             }
@@ -674,16 +1145,52 @@ pub(crate) async fn start(
             return Err(Error::Code("playback_capacity"));
         }
         let id = uuid::Uuid::new_v4().to_string();
+        let issued_at = u64::try_from(util::now()).map_err(|_| Error::Code("playback_expired"))?;
+        let native_expiry = issued_at
+            .checked_add(60)
+            .filter(|value| *value <= 9007199254740)
+            .ok_or(Error::Code("playback_expired"))?;
+        let db = app.db.lock().unwrap();
+        lease.validate(&db)?;
+        validate_source(&db, &input.proof)?;
+        let session = lease
+            .session_id
+            .as_ref()
+            .ok_or(Error::Code("playback_expired"))?;
+        let count: usize = db
+            .query_row(
+                "SELECT count(*) FROM playback_request_authority WHERE session_id=?1",
+                [session],
+                |r| r.get(0),
+            )
+            .map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        if count >= REQUEST_QUOTA {
+            return Err(Error::Code("playback_capacity"));
+        }
+        db.execute("INSERT INTO playback_request_authority(session_id,request_id,scope,request_hash,playback_id) VALUES(?1,?2,?3,?4,?5)", params![session, request.request_id, scope, hash.as_slice(), id]).map_err(|_| Error::Code("provider_storage_unavailable"))?;
         let entry = Arc::new(Entry {
             id: id.clone(),
             scope,
             request_id: request.request_id.clone(),
             request_hash: hash,
+            request_identity,
             lease: lease.clone(),
             proof: input.proof.clone(),
             identity: input.identity,
             cancelled: AtomicBool::new(false),
+            cancel_signal: tokio::sync::Notify::new(),
             state: Mutex::new(StateData {
+                native: native_candidate.then(|| NativeState {
+                    expires_at: native_expiry,
+                    last_server_time: issued_at,
+                    grant: None,
+                    position: request.position,
+                    preferences: viptv_core::native_torrent::NativeTorrentPreferences {
+                        audio_language: request.preferred_audio_language.clone(),
+                        subtitle_language: request.preferred_subtitle_language.clone(),
+                        subtitles_enabled: request.preferred_subtitle_language.is_some(),
+                    },
+                }),
                 status: "starting",
                 delivery: None,
                 error: None,
@@ -697,11 +1204,22 @@ pub(crate) async fn start(
     };
     let worker = entry.clone();
     tokio::spawn(async move {
-        let outcome = tokio::time::timeout(
+        let preparation = tokio::time::timeout(
             Duration::from_secs(45),
-            prepare(app.clone(), worker.clone(), input, request, direct),
-        )
-        .await;
+            prepare(
+                app.clone(),
+                worker.clone(),
+                input,
+                request,
+                direct,
+                native_candidate,
+            ),
+        );
+        let outcome = if native_candidate {
+            tokio::select! { _ = worker.cancel_signal.notified() => return, result = preparation => result }
+        } else {
+            preparation.await
+        };
         let failure = match outcome {
             Ok(Ok(())) => None,
             Ok(Err(error)) => Some(failure_code(error)),
@@ -761,8 +1279,12 @@ async fn prepare(
     source: Source,
     request: Start,
     direct: bool,
+    native_candidate: bool,
 ) -> Result<(), Error> {
     validate_entry(&app, &entry).await?;
+    if native_candidate {
+        return prepare_native(&app, &entry, &source, &request).await;
+    }
     let delivery = if direct {
         if let Some(provider) = source.provider_id {
             let permit = app
@@ -902,18 +1424,87 @@ pub(crate) async fn get(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<String>,
+    request: axum::extract::Request,
 ) -> Result<Json<Value>, Error> {
+    control_body(request, 0).await?;
     let entry = app.gateway_playbacks.snapshot(&id, &lease)?;
-    inspect_entry(&app, &entry).await?;
+    if let Err(error) = inspect_entry(&app, &entry).await {
+        let native = entry.state.lock().unwrap().native.is_some();
+        let code = match &error {
+            Error::Code(code) => *code,
+            Error::Auth(error) => error.api_error_code().unwrap_or("authorization_expired"),
+        };
+        if let Some(remote) = terminate(&entry, "expired", Some(code)) {
+            release_remote(&remote.client, &remote.target, &remote.viewer).await;
+        }
+        if !native || matches!(&error, Error::Auth(_)) {
+            return Err(error);
+        }
+    }
     Ok(Json(response(&entry)))
 }
 pub(crate) async fn renew(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<String>,
+    request: axum::extract::Request,
 ) -> Result<Json<Value>, Error> {
+    control_body(request, 0).await?;
     let entry = app.gateway_playbacks.snapshot(&id, &lease)?;
-    validate_entry(&app, &entry).await?;
+    if let Err(error) = validate_entry(&app, &entry).await {
+        let code = match &error {
+            Error::Code(code) => *code,
+            Error::Auth(error) => error.api_error_code().unwrap_or("authorization_expired"),
+        };
+        if let Some(remote) = terminate(&entry, "expired", Some(code)) {
+            release_remote(&remote.client, &remote.target, &remote.viewer).await;
+        }
+        return Err(error);
+    }
+    if entry.state.lock().unwrap().native.is_some() {
+        let renewed = (|| -> Result<(), Error> {
+            let db = app.db.lock().unwrap();
+            lease.validate(&db)?;
+            validate_source(&db, &entry.proof)?;
+            let mut state = entry.state.lock().unwrap();
+            if entry.cancelled.load(Ordering::Acquire) || expired(&state) {
+                return Err(Error::Code("playback_expired"));
+            }
+            let now = util::now() as u64;
+            let native = state.native.as_mut().unwrap();
+            if now < native.last_server_time {
+                return Err(Error::Code("playback_expired"));
+            }
+            let next_expiry = now
+                .checked_add(60)
+                .filter(|n| *n <= 9007199254740)
+                .ok_or(Error::Code("playback_expired"))?;
+            if let Some(grant) = native.grant.as_mut() {
+                let mut next = grant.clone();
+                next.server_time = now;
+                next.expires_at = next_expiry;
+                let scope = native_scope(&lease)?;
+                viptv_core::native_torrent_policy::validate_native_transition(
+                    grant,
+                    &next,
+                    viptv_core::native_torrent::NativeTorrentControlOperation::Heartbeat,
+                    &scope,
+                    &scope,
+                )
+                .map_err(|_| Error::Code("playback_expired"))?;
+                *grant = next;
+            }
+            native.expires_at = next_expiry;
+            native.last_server_time = now;
+            state.touched = Instant::now();
+            Ok(())
+        })();
+        if let Err(error) = renewed {
+            terminate(&entry, "expired", Some(failure_code_ref(&error)));
+            return Err(error);
+        }
+        return Ok(Json(response(&entry)));
+    }
     entry.state.lock().unwrap().touched = Instant::now();
     let remote = entry.state.lock().unwrap().remote.clone();
     if let Some(Remote { target, viewer, .. }) = remote {
@@ -959,9 +1550,24 @@ pub(crate) async fn stop(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<String>,
+    request: axum::extract::Request,
 ) -> Result<Json<Value>, Error> {
-    let entry = app.gateway_playbacks.snapshot(&id, &lease)?;
-    if let Some(remote) = terminate(&entry, "released", None) {
+    control_body(request, 0).await?;
+    let entry = match app.gateway_playbacks.snapshot(&id, &lease) {
+        Ok(entry) => entry,
+        Err(_) => {
+            lease.validate(&app.db.lock().unwrap())?;
+            return Ok(Json(json!({"ok":true})));
+        }
+    };
+    let remote = {
+        let _gate = app.gateway_playbacks.request_gate.lock().unwrap();
+        let db = app.db.lock().unwrap();
+        lease.validate(&db)?;
+        db.execute("UPDATE playback_request_authority SET cancelled=1 WHERE session_id=?1 AND request_id=?2",params![lease.session_id,entry.request_id]).map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        terminate(&entry, "released", None)
+    };
+    if let Some(remote) = remote {
         release_remote(&remote.client, &remote.target, &remote.viewer).await;
     }
     Ok(Json(json!({"ok":true})))
@@ -973,16 +1579,7 @@ pub(crate) async fn support(
     Extension(lease): Extension<ResourceLease>,
     request: axum::extract::Request,
 ) -> Result<Json<Value>, Error> {
-    let body = tokio::time::timeout(
-        Duration::from_secs(5),
-        axum::body::to_bytes(request.into_body(), 0),
-    )
-    .await
-    .map_err(|_| Error::Code("invalid_playback_request"))?
-    .map_err(|_| Error::Code("invalid_playback_request"))?;
-    if !body.is_empty() {
-        return Err(Error::Code("invalid_playback_request"));
-    }
+    control_body(request, 0).await?;
     tokio::task::spawn_blocking(move || {
         let app = app.with_lease(lease.clone());
         let db = app
@@ -991,9 +1588,50 @@ pub(crate) async fn support(
             .map_err(|_| Error::Code("provider_storage_unavailable"))?;
         lease.validate(&db)?;
         app.require_media(&db)?;
-        // Empty support prevents clients negotiating an incomplete native extension.
-        Ok(Json(json!({"version":1,"native_torrent_versions":[]})))
+        // Complete server protocol support is independent of disabled native policy.
+        let scope = App::scoped_key(&lease.principal);
+        let session = lease
+            .session_id
+            .clone()
+            .ok_or(Error::Code("playback_expired"))?;
+        app.gateway_playbacks
+            .negotiated
+            .lock()
+            .unwrap()
+            .insert((scope, session));
+        Ok(Json(json!({"version":1,"native_torrent_versions":[1]})))
     })
     .await
     .map_err(|_| Error::Code("provider_storage_unavailable"))?
 }
+
+/// Bound the complete control handler and always prevent caching private results.
+pub(crate) async fn control_deadline(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = request.uri().path();
+    if !(path.starts_with("/v2/playback") || path.starts_with("/api/v2/playback")) {
+        return next.run(request).await;
+    }
+    let seconds = if path.ends_with("playback-protocol") {
+        5
+    } else {
+        10
+    };
+    let mut response =
+        match tokio::time::timeout(Duration::from_secs(seconds), next.run(request)).await {
+            Ok(response) => response,
+            Err(_) => Error::Code("playback_control_timeout").into_response(),
+        };
+    response.headers_mut().insert(
+        "cache-control",
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+#[cfg(test)]
+#[path = "playback_native_tests.rs"]
+mod native_tests;

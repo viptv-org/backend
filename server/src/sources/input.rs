@@ -5,6 +5,7 @@ use url::Url;
 
 pub(super) struct Input {
     pub url: String,
+    pub info_hash: Option<String>,
     pub file_index: Option<u32>,
     pub requires_gateway: bool,
     pub private_values: Vec<String>,
@@ -39,7 +40,7 @@ impl Input {
         };
         let mut private_values = Vec::new();
         let (url, hash, torrent, archive) = if let Some(value) = raw.get("infoHash") {
-            if !addon || raw.get("url").is_some() {
+            if !addon {
                 return None;
             }
             let hash = value.as_str()?;
@@ -48,12 +49,17 @@ impl Input {
             }
             private_values.push(hash.into());
             let hash = hash.to_ascii_lowercase();
-            (
-                format!("magnet:?xt=urn:btih:{hash}"),
-                Some(hash),
-                true,
-                false,
-            )
+            let url = if let Some(raw_url) = raw.get("url") {
+                let raw_url = raw_url.as_str()?;
+                let parsed = util::validate_url(raw_url).ok()?;
+                if !parsed.path().to_ascii_lowercase().ends_with(".torrent") {
+                    return None;
+                }
+                raw_url.to_owned()
+            } else {
+                format!("magnet:?xt=urn:btih:{hash}")
+            };
+            (url, Some(hash), true, false)
         } else {
             let url = raw["url"].as_str()?;
             if url.starts_with("magnet:") {
@@ -118,6 +124,7 @@ impl Input {
         };
         Some(Self {
             url,
+            info_hash: hash,
             file_index,
             requires_gateway: torrent || archive,
             private_values,

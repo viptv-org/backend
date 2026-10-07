@@ -162,6 +162,8 @@ fn details(code: &str) -> (StatusCode, &'static str) {
         "provider_response_too_large" | "provider_protocol_invalid" => (StatusCode::BAD_GATEWAY,"The IPTV provider returned an oversized or invalid response."),
         "provider_timeout" => (StatusCode::GATEWAY_TIMEOUT,"The IPTV provider took too long to respond. Try again later."),
         "provider_dns_unavailable" | "provider_unavailable" => (StatusCode::BAD_GATEWAY,"The IPTV provider could not be reached. Check its address or try again later."),
+        "native_metainfo_invalid" => (StatusCode::NOT_ACCEPTABLE,"This source could not be safely prepared. Choose another source."),
+        "native_metainfo_timeout" | "playback_control_timeout" => (StatusCode::GATEWAY_TIMEOUT,"Playback preparation took too long. Try again or choose another source."),
         "gateway_processing_failed" => (StatusCode::BAD_GATEWAY,"The gateway could not prepare this stream. Choose another source or check the gateway."),
             "gateway_required" => (StatusCode::CONFLICT, "This device or source requires a playback gateway. Configure one in account settings or ask the server operator."),
             "invalid_playback_request" => (StatusCode::BAD_REQUEST, "Check the source, playback position and device capabilities."),
