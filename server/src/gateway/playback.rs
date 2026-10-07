@@ -1459,8 +1459,14 @@ pub(crate) async fn renew(
     Path(id): Path<String>,
     request: axum::extract::Request,
 ) -> Result<Json<Value>, Error> {
-    control_body(request, 0).await?;
+    // Existing direct/gateway clients send an empty JSON object. Native v1
+    // remains bodyless; no other legacy request payload is accepted.
+    let body = control_body(request, 2).await?;
     let entry = app.gateway_playbacks.snapshot(&id, &lease)?;
+    if !body.is_empty() && (body.as_ref() != b"{}" || entry.state.lock().unwrap().native.is_some())
+    {
+        return Err(Error::Code("invalid_playback_request"));
+    }
     if let Err(error) = validate_entry(&app, &entry).await {
         let code = match &error {
             Error::Code(code) => *code,

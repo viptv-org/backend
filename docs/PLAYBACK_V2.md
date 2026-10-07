@@ -64,8 +64,10 @@ original URL/required headers; this deliberately discloses them to an authorized
 device. Gateway delivery contains an absolute URL under the registered gateway
 origin/path prefix, without an integration key or arbitrary upstream JSON.
 
-POST /api/v2/playback/:id/heartbeat renews the viewer. DELETE releases only that
-viewer. Status reads do not renew. Use a 20-second heartbeat and respect the
+POST /api/v2/playback/:id/heartbeat renews the viewer. Existing direct/gateway
+clients may send the established empty JSON object `{}` or no body; arbitrary
+payloads are refused. Native torrent heartbeat requires no body. DELETE releases
+only that viewer. Status reads do not renew. Use a 20-second heartbeat and respect the
 returned expiry. Resuming after backgrounding should renew/validate before
 trusting a cached URL. Terminal responses include an actionable error and stable
 error_code; no provider diagnostics, credentials or gateway error text are echoed.

@@ -725,6 +725,47 @@ async fn native_direct_and_mandatory_gateway_policy_do_not_invoke_embedded_playb
 }
 
 #[tokio::test]
+async fn ordinary_direct_and_gateway_heartbeat_preserve_empty_json_compatibility() {
+    for platform in ["android", "roku"] {
+        let (app, _peer) = setup().await;
+        gateway(&app, "first", 1);
+        let source = source(&app);
+        let (status, start) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/playback",
+            body(&source, "heartbeat_compat", platform),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let id = start["id"].as_str().unwrap();
+        let initial = settled(&app, id).await;
+        assert_eq!(
+            initial["delivery"]["kind"],
+            if platform == "android" {
+                "direct"
+            } else {
+                "gateway"
+            }
+        );
+        let path = format!("/api/v2/playback/{id}/heartbeat");
+        for body in [json!([]), json!({"extra":true}), json!(0)] {
+            let (status, response) = request(&app, "member-token-1", "POST", &path, body).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(response["error_code"], "invalid_playback_request");
+        }
+        for body in [Value::Null, json!({})] {
+            let (status, response) = request(&app, "member-token-1", "POST", &path, body).await;
+            assert_eq!(status, StatusCode::OK, "{response}");
+            assert_eq!(response["id"], id);
+            assert_eq!(response["status"], "ready");
+            assert_eq!(response["delivery"], initial["delivery"]);
+        }
+    }
+}
+
+#[tokio::test]
 async fn conversion_and_track_choices_require_and_reach_the_authorized_gateway() {
     let (app, peer) = setup().await;
     let source = source(&app);
