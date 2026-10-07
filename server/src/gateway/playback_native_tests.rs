@@ -3,6 +3,109 @@ use crate::{auth, auth_integration_tests::fixture, test_support::request};
 use axum::{body::Body, http::Request};
 use tower::ServiceExt;
 
+#[test]
+fn scoped_policy_rejects_broad_malformed_and_unpaired_authority() {
+    let value = json!({"decision":"scoped_experimental_sticky_quarantine_v1", "account_id":1,
+        "device_session_id":"s1", "platform":"android_tv", "max_active_grants":2});
+    let policy = ScopedNativePolicy::parse(&value.to_string()).unwrap();
+    let mut paired = lease();
+    assert!(!policy.allows(&paired, &Platform::AndroidTv));
+    let auth::Principal::Account { role, .. } = &mut paired.principal;
+    *role = "device".into();
+    assert!(policy.allows(&paired, &Platform::AndroidTv));
+    assert!(!policy.allows(&paired, &Platform::Android));
+    paired.session_id = Some("another_device".into());
+    assert!(!policy.allows(&paired, &Platform::AndroidTv));
+    paired.session_id = Some("s1".into());
+    let auth::Principal::Account { account_id, .. } = &mut paired.principal;
+    *account_id = 2;
+    assert!(!policy.allows(&paired, &Platform::AndroidTv));
+    for (key, replacement) in [
+        ("account_id", json!(0)),
+        ("device_session_id", json!("*")),
+        ("platform", json!("android")),
+        ("max_active_grants", json!(0)),
+        ("max_active_grants", json!(3)),
+        ("decision", json!("qualified_release")),
+        ("unexpected", json!(true)),
+    ] {
+        let mut invalid = value.clone();
+        invalid[key] = replacement;
+        assert!(
+            ScopedNativePolicy::parse(&invalid.to_string()).is_err(),
+            "{key}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn scoped_device_admission_capacity_and_retirement_preserve_legacy_delivery() {
+    let mut app = fixture();
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
+        .unwrap();
+    let policy = ScopedNativePolicy::parse(
+        &json!({"decision":"scoped_experimental_sticky_quarantine_v1",
+        "account_id":1, "device_session_id":"s1", "platform":"android_tv", "max_active_grants":2})
+        .to_string(),
+    )
+    .unwrap();
+    app.gateway_playbacks = Registry::with_native_policy(app.db.clone(), Some(policy));
+    request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/playback-protocol",
+        Value::Null,
+    )
+    .await;
+    let source = torrent(&app, Some(0));
+    // Source fixtures must carry the same authoritative paired principal.
+    for owner in app.resource_owners.lock().unwrap().values_mut() {
+        let auth::Principal::Account { role, .. } = &mut owner.lease.principal;
+        *role = "device".into();
+    }
+    let first = ready(&app, body(&source, "scoped_first")).await;
+    ready(&app, body(&source, "scoped_second")).await;
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/playback",
+            body(&source, "scoped_third")
+        )
+        .await
+        .1["error_code"],
+        "playback_capacity"
+    );
+    request(
+        &app,
+        "member-token-1",
+        "DELETE",
+        &format!("/api/v2/playback/{}", first["id"].as_str().unwrap()),
+        Value::Null,
+    )
+    .await;
+    ready(&app, body(&source, "scoped_after_release")).await;
+    let mut unsupported = body(&source, "scoped_phone");
+    unsupported["client"]["platform"] = json!("android");
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/v2/playback",
+            unsupported
+        )
+        .await
+        .1["error_code"],
+        "gateway_required"
+    );
+}
+
 fn lease() -> ResourceLease {
     ResourceLease {
         policy_revision: 0,

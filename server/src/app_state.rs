@@ -263,7 +263,10 @@ impl App {
         let mut providers = ProviderService::new(db.clone(), client);
         providers.vault = secret_vault.clone();
         provider::refresh_v2::start(&providers);
-        let gateway_playbacks = gateway::playback::Registry::new(db.clone());
+        let gateway_playbacks = gateway::playback::Registry::with_native_policy(
+            db.clone(),
+            gateway::playback::ScopedNativePolicy::from_environment()?,
+        );
         Ok(Self {
             db,
             addons,

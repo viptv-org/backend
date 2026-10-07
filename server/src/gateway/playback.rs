@@ -170,20 +170,84 @@ pub(crate) struct Registry {
     entries: Mutex<HashMap<String, Arc<Entry>>>,
     request_gate: Mutex<()>,
     negotiated: Mutex<HashSet<(String, String)>>,
-    // Qualification/rollout is a separate explicit gate. No environment variable activates it.
+    native_policy: Option<ScopedNativePolicy>,
+    // The isolated fixture switch is never compiled into a normal server.
+    #[cfg(test)]
     native_policy_enabled: AtomicBool,
 }
+
+/// Operator authorization for one paired-device family, never a bearer credential.
+/// This experimental decision preserves sticky quarantine; it does not certify
+/// the unconditional blocked-OS-IO settlement bound or other NT acceptance cases.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScopedNativePolicy {
+    decision: String,
+    account_id: i64,
+    device_session_id: String,
+    platform: String,
+    max_active_grants: usize,
+}
+impl ScopedNativePolicy {
+    fn parse(value: &str) -> Result<Self, String> {
+        let policy: Self =
+            serde_json::from_str(value).map_err(|_| "Invalid scoped native policy".to_owned())?;
+        if policy.decision != "scoped_experimental_sticky_quarantine_v1"
+            || policy.account_id <= 0
+            || !protocol::identifier(&policy.device_session_id)
+            || policy.platform != "android_tv"
+            || !(1..=2).contains(&policy.max_active_grants)
+        {
+            return Err("Invalid scoped native policy".into());
+        }
+        Ok(policy)
+    }
+
+    pub(crate) fn from_environment() -> Result<Option<Self>, String> {
+        match std::env::var("VIPTV_NATIVE_TORRENT_SCOPED_POLICY") {
+            Ok(value) => Self::parse(&value).map(Some),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(_) => Err("Invalid scoped native policy".into()),
+        }
+    }
+
+    fn allows(&self, lease: &ResourceLease, platform: &Platform) -> bool {
+        matches!(platform, Platform::AndroidTv)
+            && lease.principal.account_id() == Some(self.account_id)
+            && lease.session_id.as_deref() == Some(self.device_session_id.as_str())
+            && matches!(&lease.principal, crate::auth::Principal::Account { role, .. } if role == "device")
+    }
+}
 impl Registry {
+    fn native_policy_allows(&self, lease: &ResourceLease, platform: &Platform) -> bool {
+        #[cfg(test)]
+        if self.native_policy_enabled.load(Ordering::Acquire) {
+            return true;
+        }
+        self.native_policy
+            .as_ref()
+            .is_some_and(|policy| policy.allows(lease, platform))
+    }
     #[cfg(test)]
     pub(super) fn enable_owned_native_fixture(&self) {
         self.native_policy_enabled.store(true, Ordering::Release);
     }
 
+    #[cfg(test)]
     pub(crate) fn new(db: Arc<Mutex<Connection>>) -> Arc<Self> {
+        Self::with_native_policy(db, None)
+    }
+
+    pub(crate) fn with_native_policy(
+        db: Arc<Mutex<Connection>>,
+        native_policy: Option<ScopedNativePolicy>,
+    ) -> Arc<Self> {
         let registry = Arc::new(Self {
             entries: Mutex::new(HashMap::new()),
             request_gate: Mutex::new(()),
             negotiated: Mutex::new(HashSet::new()),
+            native_policy,
+            #[cfg(test)]
             native_policy_enabled: AtomicBool::new(false),
         });
         let weak = Arc::downgrade(&registry);
@@ -687,6 +751,9 @@ fn magnet_hash(source: &Source) -> Option<String> {
         .then_some(hash)
 }
 fn native_candidate(app: &App, lease: &ResourceLease, source: &Source, request: &Start) -> bool {
+    let policy_enabled = app
+        .gateway_playbacks
+        .native_policy_allows(lease, &request.client.platform);
     let Ok(request) = core_request(request) else {
         return false;
     };
@@ -699,9 +766,7 @@ fn native_candidate(app: &App, lease: &ResourceLease, source: &Source, request: 
         .lock()
         .unwrap()
         .contains(&(scope.scope_key.clone(), scope.session_id.clone()));
-    app.gateway_playbacks
-        .native_policy_enabled
-        .load(Ordering::Acquire)
+    policy_enabled
         && negotiated
         && request.client.native_torrent.is_some()
         && matches!(
@@ -770,8 +835,7 @@ async fn prepare_native(
         request: &request_core,
         backend_policy_enabled: app
             .gateway_playbacks
-            .native_policy_enabled
-            .load(Ordering::Acquire),
+            .native_policy_allows(&entry.lease, &request.client.platform),
         qualified: true,
         negotiated: app
             .gateway_playbacks
@@ -1148,6 +1212,26 @@ pub(crate) async fn start(
         }
         if entries.len() >= 4096 {
             return Err(Error::Code("playback_capacity"));
+        }
+        if native_candidate {
+            if let Some(policy) = &app.gateway_playbacks.native_policy {
+                let active = entries
+                    .values()
+                    .filter(|entry| {
+                        entry.lease.session_id.as_deref() == Some(policy.device_session_id.as_str())
+                            && !entry.cancelled.load(Ordering::Acquire)
+                            && {
+                                let state = entry.state.lock().unwrap();
+                                state.native.is_some()
+                                    && matches!(state.status, "starting" | "ready")
+                                    && !expired(&state)
+                            }
+                    })
+                    .count();
+                if active >= policy.max_active_grants {
+                    return Err(Error::Code("playback_capacity"));
+                }
+            }
         }
         let id = uuid::Uuid::new_v4().to_string();
         let issued_at = u64::try_from(util::now()).map_err(|_| Error::Code("playback_expired"))?;

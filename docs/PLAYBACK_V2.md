@@ -109,6 +109,34 @@ must stop native playback when their control authorization is lost.
 
 ## Evidence and limitations
 
+Normal native admission defaults off. An explicit development operator may set
+`VIPTV_NATIVE_TORRENT_SCOPED_POLICY` to the closed JSON schema shown in
+`.env.example`: `decision`, `account_id`, `device_session_id`, `platform` and
+`max_active_grants`. The only admitted decision is
+`scoped_experimental_sticky_quarantine_v1`, the platform is `android_tv`, and
+the grant limit is one or two. Account and stable session-family values must
+match the authenticated paired-device principal exactly; a display name is not
+identity evidence. Malformed configuration fails startup. All negotiation,
+exact-source/index proof and request-tombstone checks still apply.
+
+This opt-in records the owner's narrow experimental development decision, not
+general native qualification. Android still needs a measured normal artifact
+receipt for its configured TV cohort and successful runtime/cache/clock facts.
+Unconditional two-second settlement under stalled OS IO remains unproven;
+failed settlement retains work/cache reservations and sticky quarantine.
+Owned-private media evidence does not qualify sustained public-peer egress,
+human audio/remote or distribution acceptance. Protocol support remains
+separate from admission policy, and ordinary delivery behavior is unchanged.
+
+Keep real scope identifiers in ignored private service configuration. Activate
+only the authorized development environment after its actual device checks and
+preserve the running data, sign-in and origin. Rollback stops/joins client-owned
+native work, releases/tombstones grants, removes this operator configuration and
+restores the previously sealed disabled normal APK with its signing identity
+and retained app data. A service restart loses in-memory grants but preserves
+request tombstones; do not treat advertisement removal as native retirement or
+discard failed-settlement accounting.
+
 Router fixtures verify direct playback without an embedded worker; mandatory
 gateway policy; no private-gateway fallback; capacity selection and affinity;
 independent release/renewal; source mutation; safe remote failures; same-origin
