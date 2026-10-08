@@ -65,6 +65,28 @@ host-check is read-only and suppresses rendered secret configuration. The
 container check uses uniquely disposable, network-none resources and tracked
 source only. No legacy owner-login/embedded-playback deployment probe is active.
 
+## Approved Android native-torrent rollout — 2026-10-08
+
+After explicit owner approval, source `d9ca1fc27b6f4fed5bd75d68ede4143aeef62085`
+replaced the October 4 backend as image
+`sha256:fb04756e32c6da83bcca5ed75215b6ba61ce10a6312c3b822455263060106350`.
+The candidate passed 281 library tests and trusted local HTTPS/copied-data
+qualification before replacement. Fresh SQLite online and stopped-writer backups,
+the exact previous image/container and the private environment/keyring are
+retained. The same named data volume, origin, UID, read-only root, capabilities,
+tmpfs, network and port configuration were preserved. No offline retirement ran.
+
+The replacement became ready in 1.63 seconds. Its actual image and healthy
+container state were checked. All 90 existing tables matched the stopped-writer
+snapshot immediately afterwards, including 40 protected account/profile/history/
+source tables. Public HTTPS health, `/tv/` and dashboard asset
+`assets/index-CiF8XBO-.js` were verified. The native protocol endpoint returns
+401 without authorization and version 1 / native `[1]` with the existing device
+session. Existing profiles, addons, history and Continue Watching remain readable.
+The gateway, WARP and watch services/configuration were retained; the watch
+hostname's separate viewing bundle was not updated in this backend-only rollout.
+Physical public-swarm startup remains a separate Android acceptance measurement.
+
 ## Historical evidence below
 
 The following records describe their exact older source/images. Their embedded
