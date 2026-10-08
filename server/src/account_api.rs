@@ -31,6 +31,11 @@ impl IntoResponse for Error {
             Self::Code(code) => code,
         };
         let (status, message) = details(code);
+        tracing::warn!(
+            error_code = code,
+            status = status.as_u16(),
+            "API rejected operation"
+        );
         (status, Json(json!({"error":message,"error_code":code}))).into_response()
     }
 }

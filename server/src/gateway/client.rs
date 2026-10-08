@@ -98,6 +98,12 @@ impl Client {
         timeout: Duration,
     ) -> futures::future::BoxFuture<'a, Result<serde_json::Value>> {
         async move {
+            let started = std::time::Instant::now();
+            let operation = if path == "v1/sessions" { "create" } else if path.ends_with("/renew") { "renew" } else if path == "v1/capabilities" { "capabilities" } else { "session" };
+            let session_tag = path.strip_prefix("v1/sessions/").and_then(|p| p.split('/').next()).map(super::diagnostics::tag).unwrap_or_default();
+            let mut stage = "capacity";
+            let mut http_status = 0u16;
+            let outcome = async {
             let gate = if path == "v1/sessions" && method == reqwest::Method::POST {
                 &self.starts
             } else {
@@ -107,6 +113,7 @@ impl Client {
                 .clone()
                 .try_acquire_owned()
                 .map_err(|_| "gateway_checks_busy")?;
+            stage = "endpoint";
             let target = endpoint(base)?
                 .join(path)
                 .map_err(|_| "invalid_gateway_endpoint")?;
@@ -124,6 +131,7 @@ impl Client {
             let port = target
                 .port_or_known_default()
                 .ok_or("invalid_gateway_endpoint")?;
+            stage = "dns";
             let addresses = tokio::time::timeout(
                 Duration::from_secs(3),
                 tokio::net::lookup_host((host.as_str(), port)),
@@ -145,6 +153,7 @@ impl Client {
             {
                 return Err("gateway_private_destination");
             }
+            stage = "client";
             let client = reqwest::Client::builder()
                 .no_proxy()
                 .https_only(!fixture)
@@ -164,14 +173,23 @@ impl Client {
             let mut request = client
                 .request(method, target)
                 .header(reqwest::header::AUTHORIZATION, header);
+            if let Ok(trace) = super::diagnostics::TRACE.try_with(Clone::clone) {
+                request = request.header("x-playback-trace", trace);
+            }
             if let Some(body) = body {
                 request = request.json(body);
             }
             if let Some(idempotency) = idempotency {
                 request = request.header("idempotency-key", idempotency);
             }
-            let mut response = request.send().await.map_err(|_| "gateway_unavailable")?;
+            stage = "send";
+            let mut response = request.send().await.map_err(|error| {
+                tracing::warn!(timeout = error.is_timeout(), connect = error.is_connect(), "Gateway transport failed");
+                "gateway_unavailable"
+            })?;
             let status = response.status().as_u16();
+            http_status = status;
+            stage = "response_body";
             if (300..400).contains(&status) {
                 return Err("gateway_redirect_rejected");
             }
@@ -211,6 +229,13 @@ impl Client {
                 }));
             }
             Ok(value)
+            }.await;
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            match &outcome {
+                Ok(_) => tracing::info!(operation, %session_tag, http_status, elapsed_ms, "Gateway control completed"),
+                Err(code) => tracing::warn!(operation, %session_tag, http_status, elapsed_ms, stage, error_code = *code, "Gateway control failed"),
+            }
+            outcome
         }
         .boxed()
     }

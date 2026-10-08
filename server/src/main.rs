@@ -3,6 +3,7 @@ use viptv_server::{router_with_tv, App};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
+        .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::new("viptv_server=info"))
         .init();
     let database = std::env::var("VIPTV_DATABASE").unwrap_or_else(|_| "data/viptv.sqlite".into());
