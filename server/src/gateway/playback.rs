@@ -1216,7 +1216,9 @@ pub(crate) async fn start(
     };
     let worker = entry.clone();
     tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), direct, position_seconds = request.position, "Playback admission accepted");
-    tokio::spawn(async move {
+    let trace_context = service_telemetry::current_context();
+    tokio::spawn(service_telemetry::in_context(trace_context, async move {
+        let observation = service_telemetry::observe(service_telemetry::Operation::PlaybackStart);
         let preparation = tokio::time::timeout(
             Duration::from_secs(45),
             prepare(
@@ -1238,13 +1240,19 @@ pub(crate) async fn start(
             Ok(Err(error)) => Some(failure_code(error)),
             Err(_) => Some("gateway_startup_timeout"),
         };
+        observation.finish(match failure {
+            Some(code) => {
+                service_telemetry::Outcome::Failed(service_telemetry::Failure::from_code(code))
+            }
+            None => service_telemetry::Outcome::Success,
+        });
         if let Some(code) = failure {
             tracing::warn!(session_tag = %super::diagnostics::tag(&worker.id), error_code = code, "Playback preparation failed");
             if let Some(remote) = terminate(&worker, "failed", Some(code)) {
                 release_remote(&remote.client, &remote.target, &remote.viewer).await;
             }
         }
-    });
+    }));
     Ok((StatusCode::ACCEPTED, Json(response(&entry))))
 }
 async fn validate_entry(app: &App, entry: &Entry) -> Result<(), Error> {

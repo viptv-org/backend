@@ -7,6 +7,7 @@ license = "GPL-2.0-only"
 rust-version = "1.90"
 
 [dependencies]
+service-telemetry = { path = "shared/service-telemetry" }
 viptv-core = { path = "shared/core/crates/viptv-core" }
 torrent-policy = { path = "shared/playback-gateway/torrent-policy" }
 hyper = { version = "1", features = ["client", "http1"] }

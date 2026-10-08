@@ -31,6 +31,9 @@ impl IntoResponse for Error {
             Self::Code(code) => code,
         };
         let (status, message) = details(code);
+        service_telemetry::observe(service_telemetry::Operation::Api).finish(
+            service_telemetry::Outcome::Failed(service_telemetry::Failure::from_code(code)),
+        );
         tracing::warn!(
             error_code = code,
             status = status.as_u16(),

@@ -104,6 +104,9 @@ impl Client {
         let addresses = match lookup.await {
             Ok(addresses) => addresses,
             Err(code) => {
+                service_telemetry::observe(service_telemetry::Operation::GatewayDns).finish(
+                    service_telemetry::Outcome::Failed(service_telemetry::Failure::from_code(code)),
+                );
                 if let Some((observed, addresses)) = cached {
                     if observed.elapsed() < Duration::from_secs(180) {
                         tracing::warn!(
@@ -154,11 +157,12 @@ impl Client {
     ) -> futures::future::BoxFuture<'a, Result<serde_json::Value>> {
         async move {
             let started = std::time::Instant::now();
+            let observation = service_telemetry::observe(service_telemetry::Operation::GatewayControl);
             let operation = if path == "v1/sessions" { "create" } else if path.ends_with("/renew") { "renew" } else if path == "v1/capabilities" { "capabilities" } else { "session" };
             let session_tag = path.strip_prefix("v1/sessions/").and_then(|p| p.split('/').next()).map(super::diagnostics::tag).unwrap_or_default();
             let mut stage = "capacity";
             let mut http_status = 0u16;
-            let outcome = async {
+            let outcome = service_telemetry::in_context(observation.context(), async {
             let gate = if path == "v1/sessions" && method == reqwest::Method::POST {
                 &self.starts
             } else {
@@ -191,11 +195,17 @@ impl Client {
             let fixture = self.fixture.is_some();
             #[cfg(not(test))]
             let fixture = false;
-            let addresses = self.resolve_using(&host, port, fixture, async {
+            let dns = service_telemetry::observe(service_telemetry::Operation::GatewayDns);
+            let resolved = self.resolve_using(&host, port, fixture, async {
                 Ok(tokio::time::timeout(Duration::from_secs(3), tokio::net::lookup_host((host.as_str(), port)))
                     .await.map_err(|_| "gateway_dns_unavailable")?
                     .map_err(|_| "gateway_dns_unavailable")?.take(17).collect())
-            }).await?;
+            }).await;
+            dns.finish(match &resolved {
+                Ok(_) => service_telemetry::Outcome::Success,
+                Err(code) => service_telemetry::Outcome::Failed(service_telemetry::Failure::from_code(code)),
+            });
+            let addresses = resolved?;
             if addresses.is_empty()
                 || addresses.len() > 16
                 || addresses.iter().any(|address| {
@@ -226,6 +236,9 @@ impl Client {
                 .header(reqwest::header::AUTHORIZATION, header);
             if let Ok(trace) = super::diagnostics::TRACE.try_with(Clone::clone) {
                 request = request.header("x-playback-trace", trace);
+            }
+            if let Some(trace) = service_telemetry::traceparent() {
+                request = request.header("traceparent", trace);
             }
             if let Some(body) = body {
                 request = request.json(body);
@@ -280,12 +293,16 @@ impl Client {
                 }));
             }
             Ok(value)
-            }.await;
+            }).await;
             let elapsed_ms = started.elapsed().as_millis() as u64;
             match &outcome {
                 Ok(_) => tracing::info!(operation, %session_tag, http_status, elapsed_ms, "Gateway control completed"),
                 Err(code) => tracing::warn!(operation, %session_tag, http_status, elapsed_ms, stage, error_code = *code, "Gateway control failed"),
             }
+            observation.finish(match &outcome {
+                Ok(_) => service_telemetry::Outcome::Success,
+                Err(code) => service_telemetry::Outcome::Failed(service_telemetry::Failure::from_code(code)),
+            });
             outcome
         }
         .boxed()

@@ -4,7 +4,9 @@ use viptv_server::{router_with_tv, App};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_ansi(false)
-        .with_env_filter(tracing_subscriber::EnvFilter::new("viptv_server=info"))
+        .with_env_filter(tracing_subscriber::EnvFilter::new(
+            "viptv_server=info,service_telemetry=warn",
+        ))
         .init();
     let database = std::env::var("VIPTV_DATABASE").unwrap_or_else(|_| "data/viptv.sqlite".into());
     if let Some(parent) = std::path::Path::new(&database).parent() {
@@ -67,8 +69,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from);
     let bind = std::env::var("VIPTV_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
+    let budget_path = std::path::Path::new(&database)
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("observability-budget.json");
+    let telemetry = match service_telemetry::Telemetry::initialize(
+        service_telemetry::Service::Api,
+        std::env::current_dir()?.join(budget_path),
+    )
+    .await
+    {
+        Ok(telemetry) => telemetry,
+        Err(reason) => {
+            tracing::warn!(?reason, "Optional observability disabled");
+            service_telemetry::Telemetry::default()
+        }
+    };
+    tracing::info!(
+        observability_enabled = telemetry.enabled(),
+        "Optional observability configured"
+    );
     tracing::info!("VIPTV server listening");
-    axum::serve(listener, router_with_tv(app, dashboard, tv_dashboard))
+    let router =
+        router_with_tv(app, dashboard, tv_dashboard).layer(axum::middleware::from_fn_with_state(
+            telemetry.clone(),
+            service_telemetry::middleware::observe,
+        ));
+    let result = axum::serve(listener, router)
         .with_graceful_shutdown(async {
             #[cfg(unix)]
             {
@@ -82,6 +110,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = tokio::signal::ctrl_c().await;
             }
         })
-        .await?;
+        .await;
+    telemetry.shutdown().await;
+    result?;
     Ok(())
 }
