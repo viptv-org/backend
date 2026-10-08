@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/viptv-org/playback-gateway",
-  "revision": "f2124b52f29d65ebd3cf5181f2646e3db2df1472",
+  "revision": "c3a8fcfdf1d326ea1cd4d4875e45e021491592d6",
   "license": "GPL-2.0-only",
-  "archive_sha256": "e9f453f164be6b91af545240e1fede3ca4da31d4b4d1ecd60f8086b8cb60dca8"
+  "archive_sha256": "c970ea23e2f329499f49ea7e2d96ebea9b40810f47f464103c864be38405df06"
 }
