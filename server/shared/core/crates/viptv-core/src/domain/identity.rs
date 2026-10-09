@@ -87,8 +87,10 @@ pub fn profile(v: &Value) -> Result<Value> {
 }
 pub fn identity(v: &Value) -> Result<Value> {
     let a = &v["account"];
+    // Existing accounts may retain the backend's empty display-name default.
+    let name = a["name"].as_str().ok_or_else(invalid)?;
     Ok(
-        json!({"account":{"id":id(a,"id")?,"username":string(a,"username")?,"name":string(a,"name")?,"role":string(a,"role")?},
+        json!({"account":{"id":id(a,"id")?,"username":string(a,"username")?,"name":name,"role":string(a,"role")?},
         "profiles":array(v,"profiles")?.iter().map(profile).collect::<Result<Vec<_>>>()?,
         "profileId":id(v,"profile_id").ok(),"restricted":boolean(v,"restricted")?,"profileSetupRequired":boolean(v,"profile_setup_required")?}),
     )

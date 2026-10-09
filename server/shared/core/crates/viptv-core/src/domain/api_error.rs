@@ -1,5 +1,85 @@
 use serde_json::{Value, json};
 
+/// Closed platform observations. Never inspect an exception or private source input.
+pub(crate) fn native_failure_message(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "native_playback_failed" => {
+            "The selected source could not start on this device. Try another source or retry playback."
+        }
+        "native_acquisition_timeout" => {
+            "This device took too long to prepare the selected source. Try another source or retry playback."
+        }
+        "native_metadata_timeout" => {
+            "No torrent metadata arrived from peers before the startup deadline. Check DHT/network access or choose another source."
+        }
+        "native_cache_preparation_timeout" => {
+            "The device timed out preparing local torrent storage. Check free space and retry after the previous stream has stopped."
+        }
+        "native_session_timeout" => {
+            "The device timed out creating its torrent network session. Check network access and retry playback."
+        }
+        "native_initialization_timeout" => {
+            "Torrent metadata arrived, but the local torrent engine did not initialize in time. Retry playback or check device storage."
+        }
+        "native_loopback_timeout" => {
+            "The torrent initialized, but the local playback endpoint did not open in time. Retry playback."
+        }
+        "native_session_unavailable" => {
+            "The device could not create its torrent network session. Check network access and retry playback."
+        }
+        "native_initialization_failed" => {
+            "Torrent metadata arrived, but initializing its local storage or torrent engine failed. Check device storage or choose another source."
+        }
+        "native_loopback_unavailable" => {
+            "The torrent initialized, but its local playback endpoint could not be opened. Retry playback."
+        }
+        "native_retirement_pending" => {
+            "The previous torrent is still closing. Wait a moment and retry playback."
+        }
+        "native_dns_unavailable" => {
+            "The device could not resolve the playback server address. Check DNS or your network connection."
+        }
+        "native_tls_failed" => {
+            "The secure connection to the playback server failed. Check the device clock and server certificate."
+        }
+        "native_connection_failed" => {
+            "The device could not establish a network connection to the playback server. Check that the server is running and reachable."
+        }
+        "native_control_timeout" => {
+            "The playback server did not respond before the request deadline. Check server health and your connection."
+        }
+        "native_payload_limit" => {
+            "The device's playback cache has no room for this stream. Stop another stream, choose another source or retry playback."
+        }
+        "native_storage_unavailable" => {
+            "This device could not reserve storage for playback. Free some space, choose another source or retry playback."
+        }
+        "native_cache_unavailable" => {
+            "The device's playback cache is unavailable. Choose another source or retry playback."
+        }
+        "native_metadata_invalid" => {
+            "This source has invalid or unsupported torrent file information. Choose another source."
+        }
+        "native_file_unavailable" => {
+            "The exact file selected by this source is missing or does not match its file information. Refresh the sources or choose another source."
+        }
+        "native_authorization_expired" => {
+            "This playback session has expired. Start playback again to reconnect."
+        }
+        "native_network_unavailable" => {
+            "This device could not connect to the selected source. Check your connection, choose another source or retry playback."
+        }
+        "native_codec_unsupported" => {
+            "This device cannot decode the selected source's audio or video format. Choose another source or retry playback."
+        }
+        _ => return None,
+    })
+}
+
+pub(crate) fn native_failure_display(code: &str) -> Option<String> {
+    native_failure_message(code).map(|message| format!("{message}\n\nDiagnostic: {code}"))
+}
+
 /// Display facts only. Never promote arbitrary response content into UI diagnostics.
 pub fn api_error(v: &Value) -> Value {
     let status = v["status"].as_u64().unwrap_or(0);
@@ -161,7 +241,7 @@ pub fn api_error(v: &Value) -> Value {
         "parent_pin_invalid" => Some("Incorrect parent PIN"),
         "profile_required" => Some("Profile selection required"),
         "profile_policy_changed" => Some("Profile policy changed"),
-        _ => None,
+        _ => native_failure_message(code),
     };
     let lower = raw.to_ascii_lowercase();
     let protocol = matches!(
@@ -199,7 +279,12 @@ pub fn api_error(v: &Value) -> Value {
         }
         _ => "VIPTV could not complete this request. Try again.",
     };
-    json!({"message": known.unwrap_or(if safe {raw} else {fallback}), "code": code})
+    let message = native_failure_display(code).unwrap_or_else(|| {
+        known
+            .unwrap_or(if safe { raw } else { fallback })
+            .to_owned()
+    });
+    json!({"message": message, "code": code})
 }
 
 #[cfg(test)]

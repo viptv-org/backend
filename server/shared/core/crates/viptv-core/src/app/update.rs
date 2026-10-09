@@ -150,6 +150,7 @@ impl App for Viptv {
                     }
                     StoragePurpose::Adopt => me(model, false),
                     StoragePurpose::Profile => me(model, true),
+                    StoragePurpose::ConfirmedProfile => render(),
                     StoragePurpose::Clear => {
                         model.tokens = None;
                         model.view = ViewModel {

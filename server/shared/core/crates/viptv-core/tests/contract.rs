@@ -70,11 +70,77 @@ fn identity_restores_authorized_profile_without_auth_flash() {
     assert!(!c.view().unwrap().contains("fake-access"));
 }
 #[test]
+fn confirmed_profile_save_does_not_repeat_identity_request() {
+    let core = CoreBridge::new();
+    let request = restored(&core, Value::Null);
+    let effects = http(&core, &request, 200, me(json!("profile-1")));
+    let save = effect(&effects, "Storage");
+    let effects = resolve(&core, &save, json!({"Ok":null}));
+    assert_eq!(view(&core)["phase"], "Ready");
+    assert_eq!(view(&core)["selectedProfileId"], "profile-1");
+    assert!(effects.iter().all(|r| r["effect"].get("Http").is_none()));
+    effect(&effects, "Render");
+}
+#[test]
+fn confirmed_profile_save_preserves_storage_failure_and_epoch_fences() {
+    for stale in [false, true] {
+        let core = CoreBridge::new();
+        let request = restored(&core, Value::Null);
+        let save = effect(
+            &http(&core, &request, 200, me(json!("profile-1"))),
+            "Storage",
+        );
+        if stale {
+            begin(&core);
+        }
+        let effects = resolve(&core, &save, json!({"Err":"unavailable"}));
+        if stale {
+            assert!(effects.is_empty());
+            assert_eq!(view(&core)["phase"], "Restoring");
+        } else {
+            assert_eq!(view(&core)["phase"], "Error");
+            effect(&effects, "Render");
+            effect(&event(&core, json!("Retry")), "Http");
+        }
+    }
+}
+#[test]
+fn identity_restores_profile_with_nullable_avatar_choice() {
+    let core = CoreBridge::new();
+    let request = restored(&core, json!("profile-1"));
+    let mut identity = me(json!("profile-1"));
+    identity["profiles"][0]["avatar_choice"] = Value::Null;
+    let normalized: Value = serde_json::from_str(
+        &normalize("identity".into(), identity.to_string(), "".into()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(normalized["profiles"][0]["avatarChoice"], Value::Null);
+    http(&core, &request, 200, identity);
+    assert_eq!(view(&core)["phase"], "Ready");
+    assert_eq!(view(&core)["selectedProfileId"], "profile-1");
+}
+#[test]
+fn identity_restores_profile_with_empty_optional_account_display_name() {
+    let core = CoreBridge::new();
+    let request = restored(&core, json!("profile-1"));
+    let mut identity = me(json!("profile-1"));
+    identity["account"]["name"] = json!("");
+    identity["profiles"][0]["avatar_choice"] = Value::Null;
+    let normalized: Value = serde_json::from_str(
+        &normalize("identity".into(), identity.to_string(), "".into()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(normalized["account"]["name"], "");
+    http(&core, &request, 200, identity);
+    assert_eq!(view(&core)["phase"], "Ready");
+    assert_eq!(view(&core)["selectedProfileId"], "profile-1");
+}
+#[test]
 fn malformed_successful_identity_is_a_response_error_not_a_network_outage() {
     let core = CoreBridge::new();
     let request = restored(&core, json!("profile-1"));
     let mut malformed = me(json!("profile-1"));
-    malformed["account"]["name"] = json!("");
+    malformed["account"]["name"] = Value::Null;
     http(&core, &request, 200, malformed);
     assert_eq!(view(&core)["phase"], "Error");
     assert_eq!(view(&core)["error"], "Invalid server response");

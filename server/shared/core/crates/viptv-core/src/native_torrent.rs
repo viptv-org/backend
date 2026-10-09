@@ -143,12 +143,121 @@ pub fn negotiation_decision(
         _ => Legacy,
     }
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AuthorizationScope {
+    server_origin: String,
+    account_id: String,
+    profile_id: String,
+    device_authorization_epoch: String,
+}
+impl fmt::Debug for AuthorizationScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("NativeAuthorizationScope(<redacted>)")
+    }
+}
+impl AuthorizationScope {
+    fn canonical(&self) -> Option<(String, &str, &str, &str)> {
+        if self.server_origin.len() > 2048
+            || self.server_origin.trim() != self.server_origin
+            || !identifier(&self.account_id)
+            || !identifier(&self.profile_id)
+            || !identifier(&self.device_authorization_epoch)
+        {
+            return None;
+        }
+        let origin = url::Url::parse(&self.server_origin).ok()?;
+        if origin.scheme() != "https"
+            || origin.host_str().is_none()
+            || !origin.username().is_empty()
+            || origin.password().is_some()
+            || origin.query().is_some()
+            || origin.fragment().is_some()
+            || origin.path() != "/"
+        {
+            return None;
+        }
+        Some((
+            origin.to_string(),
+            &self.account_id,
+            &self.profile_id,
+            &self.device_authorization_epoch,
+        ))
+    }
+}
+
+fn authorization_scope(input: &str) -> Result<String> {
+    fn nullable_scope<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<Option<AuthorizationScope>, D::Error> {
+        Option::<AuthorizationScope>::deserialize(d)
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Facts {
+        operation: String,
+        #[serde(deserialize_with = "nullable_scope")]
+        previous: Option<AuthorizationScope>,
+        #[serde(deserialize_with = "nullable_scope")]
+        current: Option<AuthorizationScope>,
+        revoked: bool,
+    }
+    if input.len() > 8192 {
+        return Err(invalid());
+    }
+    let facts: Facts = parse(input)?;
+    if facts.operation != "authorizationScope" {
+        return Err(invalid());
+    }
+    let previous = facts.previous.as_ref().map(AuthorizationScope::canonical);
+    let current = facts.current.as_ref().map(AuthorizationScope::canonical);
+    let decision = if previous.as_ref().is_some_and(Option::is_none)
+        || current.as_ref().is_some_and(Option::is_none)
+    {
+        "reject"
+    } else if facts.revoked || current.is_none() {
+        if previous.is_some() {
+            "retire"
+        } else {
+            "reject"
+        }
+    } else if previous.is_none() {
+        "create"
+    } else if previous == current {
+        "keep"
+    } else {
+        "retire"
+    };
+    serde_json::to_string(decision).map_err(|_| invalid())
+}
 pub(crate) fn negotiation(input: &str) -> Result<String> {
     #[derive(Deserialize)]
     struct Operation {
         operation: String,
     }
     let operation: Operation = parse(input)?;
+    if operation.operation == "failure" {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Failure {
+            operation: String,
+            reason: String,
+        }
+        if input.len() > 512 {
+            return Err(invalid());
+        }
+        let value: Failure = parse(input)?;
+        let message = crate::domain::native_failure_display(&value.reason).ok_or_else(invalid)?;
+        if value.operation != "failure" {
+            return Err(invalid());
+        }
+        return serde_json::to_string(&json!({"code": value.reason, "message": message}))
+            .map_err(|_| invalid());
+    }
+    if operation.operation == "authorizationScope" {
+        return authorization_scope(input);
+    }
     if operation.operation == "recovery" {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -449,7 +558,7 @@ pub fn validate_native_grant(g: &NativeTorrentGrant, envelope_expires_at: u64) -
         || !crate::native_torrent_policy::canonical_v1_hash(&g.info_hash)
         || g.file_index > 65535
         || g.expected_file_size
-            .is_some_and(|n| !(1..=2_147_483_648).contains(&n))
+            .is_some_and(|n| !(1..=MAX_SAFE).contains(&n))
     {
         return Err(invalid());
     }
@@ -669,11 +778,13 @@ struct Controller {
     playback_id: Option<String>,
     sequence: Option<u64>,
     last_observed_millis: Option<u64>,
+    trusted_wall_upper: Option<u64>,
     closed: bool,
 }
 impl Controller {
     fn invalidate(&mut self, status: &str) {
         self.grant = None;
+        self.trusted_wall_upper = None;
         self.state = NativeTorrentState::empty(status);
         self.closed = true;
     }
@@ -685,6 +796,7 @@ impl Controller {
         status: u16,
         body: &str,
         o: &NativeTorrentObservation,
+        measured: bool,
     ) -> Result<NativeTorrentState> {
         // Replaced/older callbacks cannot revoke or replace current accepted authority.
         if !self.scope(&o.scope, o.generation)
@@ -697,7 +809,7 @@ impl Controller {
             return Err(invalid());
         }
         self.sequence = Some(o.sequence);
-        let result = self.adopt(status, body, o);
+        let result = self.adopt(status, body, o, measured);
         if result.is_err() {
             self.invalidate("invalidated");
         }
@@ -708,6 +820,7 @@ impl Controller {
         status: u16,
         body: &str,
         o: &NativeTorrentObservation,
+        measured: bool,
     ) -> Result<NativeTorrentState> {
         if !matches!(status, 200 | 202)
             || (status == 202 && o.operation != NativeTorrentControlOperation::Start)
@@ -732,6 +845,18 @@ impl Controller {
                 return Err(invalid());
             }
             let grant = lease.grant.ok_or_else(invalid)?;
+            let mut measured_observation = o.clone();
+            if measured {
+                // Authenticated integer server time denotes the start of its second.
+                // The full control RTT and precision bound conservatively cover receipt.
+                measured_observation.trusted_wall_upper_unix_millis = grant
+                    .server_time
+                    .checked_mul(1000)
+                    .and_then(|v| v.checked_add(o.round_trip_millis))
+                    .and_then(|v| v.checked_add(o.uncertainty_millis?))
+                    .and_then(|v| v.checked_add(1000));
+            }
+            let o = &measured_observation;
             let mut deadline = native_deadline(&grant, o)?;
             if let Some(previous) = &self.grant {
                 crate::native_torrent_policy::validate_grant_transition(
@@ -762,11 +887,13 @@ impl Controller {
                 error: None,
             };
             self.grant = Some(grant);
+            self.trusted_wall_upper = o.trusted_wall_upper_unix_millis;
         } else {
             if self.grant.is_some() && matches!(lease.status.as_str(), "starting" | "legacy") {
                 return Err(invalid());
             }
             self.grant = None;
+            self.trusted_wall_upper = None;
             self.state = NativeTorrentState::empty(&lease.status);
             self.state.error = lease.error;
             self.closed = matches!(
@@ -862,6 +989,7 @@ impl NativeTorrentBridge {
                 playback_id: None,
                 sequence: None,
                 last_observed_millis: None,
+                trusted_wall_upper: None,
                 closed: false,
             }),
         })
@@ -883,7 +1011,7 @@ impl NativeTorrentBridge {
             .inner
             .lock()
             .map_err(|_| CoreError::Bridge)?
-            .accept(status, &body, &obs)?;
+            .accept(status, &body, &obs, false)?;
         serde_json::to_string(&state).map_err(|_| invalid())
     }
     /// HTTP adapters pass bounded identity-encoded bytes without lossy UTF-8 decoding.
@@ -900,6 +1028,46 @@ impl NativeTorrentBridge {
             }
         };
         self.accept(status, body, observation)
+    }
+    /// Derive the trusted receipt clock only after strict authenticated grant decoding.
+    pub fn accept_measured_bytes(
+        &self,
+        status: u16,
+        body: Vec<u8>,
+        observation: String,
+    ) -> Result<String> {
+        let decoded = (|| {
+            if body.len() > MAX_BODY || observation.len() > 4096 {
+                return Err(invalid());
+            }
+            let body = String::from_utf8(body).map_err(|_| invalid())?;
+            let obs: NativeTorrentObservation = parse(&observation)?;
+            if obs.trusted_wall_upper_unix_millis.is_some() {
+                return Err(invalid());
+            }
+            Ok((body, obs))
+        })();
+        let (body, obs) = match decoded {
+            Ok(value) => value,
+            Err(error) => {
+                self.invalidate()?;
+                return Err(error);
+            }
+        };
+        let state = self
+            .inner
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .accept(status, &body, &obs, true)?;
+        serde_json::to_string(&state).map_err(|_| invalid())
+    }
+    /// Safe clock fact; neither grant identity nor private source input is exposed.
+    pub fn trusted_wall_upper_unix_millis(&self) -> Result<Option<u64>> {
+        Ok(self
+            .inner
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .trusted_wall_upper)
     }
     pub fn state(&self) -> Result<String> {
         serde_json::to_string(&self.inner.lock().map_err(|_| CoreError::Bridge)?.state)
@@ -1030,6 +1198,23 @@ impl NativeTorrentBridge {
         observation: String,
     ) -> std::result::Result<String, wasm_bindgen::JsValue> {
         self.accept_bytes(status, body, observation)
+            .map_err(|e| e.to_string().into())
+    }
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name=acceptMeasuredBytes)]
+    pub fn wasm_accept_measured_bytes(
+        &self,
+        status: u16,
+        body: Vec<u8>,
+        observation: String,
+    ) -> std::result::Result<String, wasm_bindgen::JsValue> {
+        self.accept_measured_bytes(status, body, observation)
+            .map_err(|e| e.to_string().into())
+    }
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name=trustedWallUpperUnixMillis)]
+    pub fn wasm_trusted_wall_upper(
+        &self,
+    ) -> std::result::Result<Option<u64>, wasm_bindgen::JsValue> {
+        self.trusted_wall_upper_unix_millis()
             .map_err(|e| e.to_string().into())
     }
     #[wasm_bindgen::prelude::wasm_bindgen(js_name=state)]
@@ -1268,7 +1453,8 @@ pub fn native_metadata_matches(g: &NativeTorrentGrant, facts: &NativeTorrentMeta
         && facts.file_index == g.file_index
         && (1..=4096).contains(&facts.file_count)
         && facts.file_index < facts.file_count
-        && (1..=2_147_483_648).contains(&facts.selected_file_size)
+        // File length is metadata, not a reservation for the rolling piece cache.
+        && (1..=MAX_SAFE).contains(&facts.selected_file_size)
         && g.expected_file_size
             .is_none_or(|size| size == facts.selected_file_size)
 }

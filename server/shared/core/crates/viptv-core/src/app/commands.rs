@@ -117,7 +117,9 @@ pub(super) fn finish_identity(model: &mut Model, identity: Identity) -> Command<
             && s.profile_id.as_ref() != Some(&id)
         {
             s.profile_id = Some(id);
-            return save(model, StoragePurpose::Profile);
+            // This identity already confirms the server's profile. Persist the
+            // remembered choice without requesting that same identity again.
+            return save(model, StoragePurpose::ConfirmedProfile);
         }
         render()
     } else if accepted_profile.is_some() {

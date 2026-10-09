@@ -11,6 +11,7 @@ pub(crate) mod playback_protocol;
 mod streams;
 
 pub use api_error::api_error;
+pub(crate) use api_error::native_failure_display;
 pub use identity::{clean, identity, profile, tokens};
 pub use media::{catalog, media};
 pub use playback::playback;

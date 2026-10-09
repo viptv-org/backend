@@ -50,6 +50,134 @@ fn raw_native_lease_transition_clock_and_privacy_corpus() {
 }
 
 #[test]
+fn rolling_cache_accepts_large_exact_metadata_without_reserving_the_file_size() {
+    use viptv_core::NativeTorrentBridge;
+    let root = vectors::corpus();
+    for expected in [None, Some(100 * 1024 * 1024 * 1024_u64)] {
+        let bridge = NativeTorrentBridge::new(root["context"].to_string()).unwrap();
+        let mut body: Value =
+            serde_json::from_str(root["cases"][0]["steps"][0]["body"].as_str().unwrap()).unwrap();
+        let grant = body["delivery"]["grant"].as_object_mut().unwrap();
+        grant.remove("expected_file_size");
+        if let Some(size) = expected {
+            grant.insert("expected_file_size".into(), json!(size));
+        }
+        bridge
+            .accept(200, body.to_string(), root["observation"].to_string())
+            .unwrap();
+        assert!(
+            bridge
+                .metadata_matches_native(
+                    root["infoHash"].as_str().unwrap().into(),
+                    3,
+                    4,
+                    100 * 1024 * 1024 * 1024,
+                    true,
+                    root["clock"].to_string()
+                )
+                .unwrap()
+        );
+        assert!(
+            !bridge
+                .metadata_matches_native(
+                    root["infoHash"].as_str().unwrap().into(),
+                    2,
+                    4,
+                    100 * 1024 * 1024 * 1024,
+                    true,
+                    root["clock"].to_string()
+                )
+                .unwrap()
+        );
+        assert!(
+            bridge
+                .private_input_value(root["clock"].to_string())
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn measured_receipt_clock_is_derived_after_strict_raw_validation() {
+    use viptv_core::NativeTorrentBridge;
+    let root = vectors::corpus();
+    let ready = root["cases"][0]["steps"][0]["body"].as_str().unwrap();
+    let mut observation = root["observation"].clone();
+    observation["trustedWallUpperUnixMillis"] = Value::Null;
+    let bridge = NativeTorrentBridge::new(root["context"].to_string()).unwrap();
+    let state: Value = serde_json::from_str(
+        &bridge
+            .accept_measured_bytes(200, ready.as_bytes().to_vec(), observation.to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        bridge.trusted_wall_upper_unix_millis().unwrap(),
+        Some(1_700_000_001_500)
+    );
+    assert_eq!(state["deadlineMillis"], 158_500);
+    bridge.invalidate().unwrap();
+    assert_eq!(bridge.trusted_wall_upper_unix_millis().unwrap(), None);
+    assert!(
+        bridge
+            .accept_measured_bytes(200, ready.as_bytes().to_vec(), observation.to_string())
+            .is_err()
+    );
+    for bytes in [
+        ready.replace("1700000000", "1700000000.0").into_bytes(),
+        vec![0xff],
+    ] {
+        let bridge = NativeTorrentBridge::new(root["context"].to_string()).unwrap();
+        assert!(
+            bridge
+                .accept_measured_bytes(200, bytes, observation.to_string())
+                .is_err()
+        );
+        assert_eq!(bridge.trusted_wall_upper_unix_millis().unwrap(), None);
+    }
+    observation["roundTripMillis"] = json!(59_000);
+    let bridge = NativeTorrentBridge::new(root["context"].to_string()).unwrap();
+    assert!(
+        bridge
+            .accept_measured_bytes(200, ready.as_bytes().to_vec(), observation.to_string())
+            .is_err()
+    );
+}
+
+#[test]
+fn native_authorization_scope_keeps_only_the_same_stable_epoch() {
+    let scope = json!({"serverOrigin":"https://fixture.invalid", "accountId":"account_fixture", "profileId":"profile_fixture", "deviceAuthorizationEpoch":"epoch_fixture"});
+    let decide = |previous: Value, current: Value, revoked: bool| {
+        let output = normalize("nativeTorrent".into(), json!({"operation":"authorizationScope","previous":previous,"current":current,"revoked":revoked}).to_string(), String::new()).unwrap();
+        serde_json::from_str::<Value>(&output).unwrap()
+    };
+    assert_eq!(decide(Value::Null, scope.clone(), false), "create");
+    let mut canonical_origin = scope.clone();
+    canonical_origin["serverOrigin"] = json!("https://FIXTURE.invalid:443/");
+    assert_eq!(decide(scope.clone(), canonical_origin, false), "keep");
+    for field in [
+        "serverOrigin",
+        "accountId",
+        "profileId",
+        "deviceAuthorizationEpoch",
+    ] {
+        let mut changed = scope.clone();
+        changed[field] = json!(if field == "serverOrigin" {
+            "https://other.invalid"
+        } else {
+            "different_fixture"
+        });
+        assert_eq!(decide(scope.clone(), changed, false), "retire");
+    }
+    assert_eq!(decide(scope.clone(), Value::Null, false), "retire");
+    assert_eq!(decide(scope.clone(), scope.clone(), true), "retire");
+    assert_eq!(decide(Value::Null, scope.clone(), true), "reject");
+    let mut invalid = scope.clone();
+    invalid["serverOrigin"] = json!("http://fixture.invalid");
+    assert_eq!(decide(scope, invalid, false), "reject");
+}
+
+#[test]
 fn backend_admission_compares_caller_source_and_request_resource_sessions() {
     use viptv_core::native_torrent_policy::*;
     let request: viptv_core::dto::PlaybackV2Request =

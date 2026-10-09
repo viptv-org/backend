@@ -22,6 +22,16 @@ fn text(value: &Value) -> String {
 fn run_step(bridge: &NativeTorrentBridge, root: &Value, step: &Value) -> Result<Value, CoreError> {
     let clock = step.get("clock").unwrap_or(&root["clock"]).to_string();
     match step["action"].as_str().unwrap() {
+        "acceptMeasuredBytes" => bridge
+            .accept_measured_bytes(
+                step["status"].as_u64().unwrap_or(200) as u16,
+                step["body"].as_str().unwrap().as_bytes().to_vec(),
+                text(step.get("observation").unwrap_or(&root["observation"])),
+            )
+            .map(|out| serde_json::from_str(&out).unwrap()),
+        "trustedWallUpper" => bridge
+            .trusted_wall_upper_unix_millis()
+            .map(|value| json!(value)),
         "acceptBytes" => bridge
             .accept_bytes(
                 200,

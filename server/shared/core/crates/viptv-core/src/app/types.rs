@@ -125,6 +125,7 @@ pub enum StoragePurpose {
     Load,
     Refresh,
     Profile,
+    ConfirmedProfile,
     Adopt,
     Clear,
 }

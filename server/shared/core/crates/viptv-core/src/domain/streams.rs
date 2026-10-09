@@ -139,6 +139,30 @@ pub(super) fn sources_poll_step(v: &Value) -> Result<Value> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_identities = std::collections::HashSet::new();
+    // Opaque handles can differ for the same producer's exact source identity.
+    // Keep the first handle/order so later polls cannot replace a focused row.
+    let mut unseen = |item: &Value| {
+        let Some(id) = item["id"].as_str().filter(|id| !id.is_empty()) else {
+            return false;
+        };
+        if !seen_ids.insert(id.to_owned()) {
+            return false;
+        }
+        match (
+            item["sourceAddonId"].as_str().filter(|id| !id.is_empty()),
+            item["sourceFingerprint"]
+                .as_str()
+                .filter(|id| !id.is_empty()),
+        ) {
+            (Some(addon), Some(fingerprint)) => {
+                seen_identities.insert((addon.to_owned(), fingerprint.to_owned()))
+            }
+            _ => true,
+        }
+    };
+    sources.retain(|item| unseen(item));
     let page = stream_poll(&v["poll"])?;
     let mut errors:Vec<Value>=state.and_then(|s|s.get("errors")).and_then(Value::as_array).into_iter().flatten().take(16).filter_map(|e| {
         let source=e["source"].as_str()?;
@@ -194,14 +218,7 @@ pub(super) fn sources_poll_step(v: &Value) -> Result<Value> {
             }
         }
         for item in array(event, "sources")? {
-            let id = item["id"].as_str().unwrap_or("");
-            if id.is_empty() {
-                continue;
-            }
-            if !sources
-                .iter()
-                .any(|existing| existing["id"].as_str() == Some(id))
-            {
+            if unseen(item) {
                 sources.push(item.clone());
             }
         }

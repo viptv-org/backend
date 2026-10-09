@@ -12,6 +12,61 @@ fn run(kind: &str, input: Value) -> Value {
     .unwrap()
 }
 #[test]
+fn source_discovery_vectors_keep_exact_identity_and_first_handle() {
+    let vectors: Value =
+        serde_json::from_str(include_str!("../../../tests/source-discovery-vectors.json")).unwrap();
+    for vector in vectors.as_array().unwrap() {
+        let output = run("sourcesPollStep", vector["input"].clone());
+        let ids: Vec<_> = output["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|source| source["id"].clone())
+            .collect();
+        assert_eq!(json!(ids), vector["expectedIds"]);
+    }
+}
+#[test]
+fn exact_source_identity_is_deduplicated_without_collapsing_providers_or_unknowns() {
+    let first = run(
+        "sourcesPollStep",
+        json!({"poll":{"done":false,"events":[
+        {"seq":1,"source":"addon:1","streams":[
+            {"id":"first","source_addon_id":"addon:1","source_fingerprint":"same"},
+            {"id":"duplicate","source_addon_id":"addon:1","source_fingerprint":"same"},
+            {"id":"other-provider","source_addon_id":"addon:2","source_fingerprint":"same"},
+            {"id":"unknown-a","source_addon_id":"addon:1"},
+            {"id":"unknown-b","source_addon_id":"addon:1"}
+        ]}]}}),
+    );
+    let ids = |value: &Value| {
+        value["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|source| source["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids(&first),
+        ["first", "other-provider", "unknown-a", "unknown-b"]
+    );
+    let next = run(
+        "sourcesPollStep",
+        json!({"state":first["state"],"poll":{"done":true,"events":[
+        {"seq":2,"source":"addon:1","streams":[
+            {"id":"later-duplicate","source_addon_id":"addon:1","source_fingerprint":"same"},
+            {"id":"new","source_addon_id":"addon:1","source_fingerprint":"different"}
+        ]}]}}),
+    );
+    assert_eq!(
+        ids(&next),
+        ["first", "other-provider", "unknown-a", "unknown-b", "new"]
+    );
+    assert_eq!(next["state"]["after"], 2);
+    assert_eq!(next["done"], true);
+}
+#[test]
 fn v2_discovery_requests_are_explicit_and_keep_episode_identity() {
     let item = json!({"id":"tt1234567:1:2","type":"series","seriesId":"tt1234567","season":1,"episode":2,"name":"Episode"});
     let request = run("request", json!({"operation":"sourcesV2","item":item}));

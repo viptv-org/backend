@@ -188,7 +188,8 @@ pub fn router_with_tv(
         ))
         .layer(middleware::from_fn(json_errors))
         .layer(middleware::map_response(private_api_response))
-        .layer(middleware::from_fn(gateway::playback::control_deadline));
+        .layer(middleware::from_fn(gateway::playback::control_deadline))
+        .layer(middleware::from_fn(gateway::diagnostics::observe));
     let mut r = Router::new()
         .nest("/api", api)
         .route(
