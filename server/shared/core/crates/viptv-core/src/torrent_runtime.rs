@@ -181,3 +181,115 @@ pub fn ready_response(
             "preferences":{"audio_language":preferences.audio_language,"subtitle_language":preferences.subtitle_language,"subtitles_enabled":preferences.subtitles_enabled},"grant":wire},
         "error_code":null,"error":null})).map_err(|_|CoreError::InvalidInput)
 }
+
+/// V2 uses fresh native authority on retry; it never requests a gateway fallback.
+pub(crate) fn decision(input: &str) -> Result<String, CoreError> {
+    use crate::native_torrent::{
+        NativeTorrentNegotiationDecision, NativeTorrentNegotiationFacts,
+        NativeTorrentRecoveryDecision, NativeTorrentRecoveryFacts,
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "operation", deny_unknown_fields)]
+    enum Operation {
+        #[serde(rename = "negotiation", rename_all = "camelCase")]
+        Negotiation {
+            platform: PlaybackPlatform,
+            qualified: bool,
+            scope_matches: bool,
+            status: Option<u16>,
+            authorization_refused: bool,
+            body: String,
+        },
+        #[serde(rename = "recovery")]
+        Recovery { facts: NativeTorrentRecoveryFacts },
+        #[serde(rename = "stage")]
+        Stage { stage: String },
+        #[serde(rename = "failure")]
+        Failure { stage: String, reason: String },
+    }
+    let op: Operation = serde_json::from_str(input).map_err(|_| CoreError::InvalidInput)?;
+    match op {
+        Operation::Stage { stage } => {
+            let text = match stage.as_str() {
+                "finding_peers" => "Finding peers…",
+                "fetching_metadata" => "Fetching metadata…",
+                "opening_archive" => "Opening archive…",
+                "buffering" | "playing" => "Buffering…",
+                _ => return Err(CoreError::InvalidInput),
+            };
+            serde_json::to_string(text).map_err(|_| CoreError::InvalidInput)
+        }
+        Operation::Failure { stage, reason } => {
+            let timeout = match stage.as_str() {
+                "finding_peers" => "native_no_peers",
+                "fetching_metadata" => "native_metadata_timeout",
+                "opening_archive" => "native_archive_timeout",
+                "buffering" | "playing" => "native_buffering_timeout",
+                _ => return Err(CoreError::InvalidInput),
+            };
+            let code = match reason.as_str() {
+                "startup_stalled" | "startup_deadline" => timeout,
+                "authority_expired" => "native_authorization_expired",
+                "cache_unavailable" | "metadata_cache_unavailable" => "native_cache_unavailable",
+                "invalid_metadata" | "private_torrent_unsupported" => "native_metadata_invalid",
+                "file_index_unavailable"
+                | "empty_file"
+                | "invalid_archive_selection"
+                | "archive_index_unavailable" => "native_file_unavailable",
+                "archive_volume_missing" => "native_archive_missing",
+                "compressed_archive_unsupported" => "native_archive_compressed",
+                "encrypted_archive_unsupported" => "native_archive_encrypted",
+                "archive_metadata_invalid"
+                | "archive_member_unsupported"
+                | "invalid_archive_volume" => "native_archive_invalid",
+                "clock_unavailable" => "native_authorization_expired",
+                _ => return Err(CoreError::InvalidInput),
+            };
+            let message =
+                crate::domain::native_failure_display(code).ok_or(CoreError::InvalidInput)?;
+            Ok(json!({"code":code,"message":message}).to_string())
+        }
+        Operation::Negotiation {
+            platform,
+            qualified,
+            scope_matches,
+            status,
+            authorization_refused,
+            body,
+        } => {
+            let f = NativeTorrentNegotiationFacts {
+                platform,
+                qualified,
+                scope_matches,
+                status,
+                authorization_refused,
+                body,
+            };
+            use NativeTorrentNegotiationDecision::*;
+            let decision = if !f.scope_matches {
+                RejectStale
+            } else if f.authorization_refused || matches!(f.status, Some(401 | 403)) {
+                AuthRecovery
+            } else if f.qualified
+                && native_platform(&f.platform)
+                && f.status == Some(200)
+                && crate::domain::playback_protocol::parse_runtime(&f.body)
+                    .is_ok_and(|protocol| protocol.native_torrent_versions == [2])
+            {
+                Advertise
+            } else {
+                Legacy
+            };
+            serde_json::to_string(&decision).map_err(|_| CoreError::InvalidInput)
+        }
+        Operation::Recovery { facts } => {
+            let decision = match crate::native_torrent::recovery_decision(&facts) {
+                NativeTorrentRecoveryDecision::ForceGatewayRetry => {
+                    NativeTorrentRecoveryDecision::OrdinaryRetry
+                }
+                other => other,
+            };
+            serde_json::to_string(&decision).map_err(|_| CoreError::InvalidInput)
+        }
+    }
+}

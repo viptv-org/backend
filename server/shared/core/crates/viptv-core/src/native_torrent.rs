@@ -397,7 +397,7 @@ pub struct NativeTorrentState {
     pub error: Option<String>,
 }
 impl NativeTorrentState {
-    fn empty(status: &str) -> Self {
+    pub(crate) fn empty(status: &str) -> Self {
         Self {
             status: status.into(),
             deadline_millis: None,
@@ -413,7 +413,7 @@ impl NativeTorrentState {
 
 // This wrapper preserves unsigned integer lexical spelling at the original boundary.
 #[derive(Clone, Copy)]
-struct Integer(u64);
+pub(crate) struct Integer(pub(crate) u64);
 impl<'de> Deserialize<'de> for Integer {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
         let raw = <&RawValue>::deserialize(d)?;
@@ -740,14 +740,21 @@ fn decode(body: &str, origin: &str) -> Result<Lease> {
 }
 /// Conservative suspend-aware deadline from measured facts; no local clock fabricates authorization.
 pub fn native_deadline(grant: &NativeTorrentGrant, o: &NativeTorrentObservation) -> Result<u64> {
+    authority_deadline(grant.server_time, grant.expires_at, o)
+}
+pub(crate) fn authority_deadline(
+    server_time: u64,
+    expires_at: u64,
+    o: &NativeTorrentObservation,
+) -> Result<u64> {
     let u = o.uncertainty_millis.ok_or_else(invalid)?;
     let wall = o.trusted_wall_upper_unix_millis.ok_or_else(invalid)?;
-    let expiry = grant.expires_at.checked_mul(1000).ok_or_else(invalid)?;
-    if grant.server_time > MAX_SECONDS
-        || grant.expires_at > MAX_SECONDS
+    let expiry = expires_at.checked_mul(1000).ok_or_else(invalid)?;
+    if server_time > MAX_SECONDS
+        || expires_at > MAX_SECONDS
         || !o.suspend_aware
         || u > o.max_uncertainty_millis
-        || wall < grant.server_time * 1000
+        || wall < server_time * 1000
         || wall >= expiry
         || wall > MAX_SAFE
         || o.received_at_millis > MAX_SAFE
@@ -756,9 +763,8 @@ pub fn native_deadline(grant: &NativeTorrentGrant, o: &NativeTorrentObservation)
     {
         return Err(invalid());
     }
-    let remaining = grant
-        .expires_at
-        .checked_sub(grant.server_time)
+    let remaining = expires_at
+        .checked_sub(server_time)
         .filter(|n| *n > 0 && *n <= 60)
         .and_then(|n| n.checked_mul(1000))
         .and_then(|n| n.checked_sub(o.round_trip_millis))
@@ -1462,4 +1468,13 @@ pub fn native_metadata_matches(g: &NativeTorrentGrant, facts: &NativeTorrentMeta
         && (1..=MAX_SAFE).contains(&facts.selected_file_size)
         && g.expected_file_size
             .is_none_or(|size| size == facts.selected_file_size)
+}
+
+pub(crate) fn validate_ordinary_native_response(body: &str, origin: &str) -> Result<()> {
+    let lease = decode(body, origin)?;
+    if lease.status == "legacy" {
+        Ok(())
+    } else {
+        Err(invalid())
+    }
 }
