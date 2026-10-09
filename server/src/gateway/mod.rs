@@ -1,4 +1,5 @@
 pub(crate) mod client;
+pub(crate) mod diagnostics;
 pub(crate) mod http;
 mod native_fetch;
 pub(crate) mod playback;

@@ -25,6 +25,13 @@ services:
       # Optional bare mapping: an absent keyring is omitted, never an empty JSON
       # value. Configured host/project values pass through without public defaults.
       VIPTV_SECRETS_KEYRING:
+      OBSERVABILITY_ENABLED: "${OBSERVABILITY_ENABLED:-false}"
+      NEW_RELIC_REGION: "${NEW_RELIC_REGION:-US}"
+      NEW_RELIC_LICENSE_KEY: "${NEW_RELIC_LICENSE_KEY:-}"
+      OBSERVABILITY_DAILY_BYTES: "${OBSERVABILITY_DAILY_BYTES:-10485760}"
+      OBSERVABILITY_TRACE_SAMPLE_RATE: "${OBSERVABILITY_TRACE_SAMPLE_RATE:-0.1}"
+      OBSERVABILITY_EXPORT_INTERVAL_SECONDS: "${OBSERVABILITY_EXPORT_INTERVAL_SECONDS:-30}"
+      OBSERVABILITY_BUDGET_PATH: /data/observability-budget.json
     volumes:
       - viptv_data:/data
     # Temporary control-plane files only; media storage belongs to the gateway.

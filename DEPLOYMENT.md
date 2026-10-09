@@ -123,3 +123,17 @@ were retained. The watch bundle was published by an atomic nginx root change,
 keeping prior bundles and lazy assets. Private rollback images, configuration,
 backups and evidence remain outside Git. The TV was returned to VIPTV and the
 temporary diagnostic servers were stopped.
+
+## Monitoring verification after every backend replacement
+
+A healthy API and `OBSERVABILITY_ENABLED=true` do not prove the image contains
+monitoring. The October 8 native backend replacement retained that variable but
+omitted the exporter, leaving a telemetry gap until restoration.
+
+Run `python3 scripts/check-observability.py viptv-viptv-1` on the Docker host
+(with Docker permissions). It requires a monitoring-enabled startup message
+from the current process and advancement of the persistent export ledger.
+Then confirm fresh `viptv-api` data in New Relic and inspect
+`telemetry.export.failures` and `telemetry.export.budget_drops`. Ledger bytes
+count attempted exports, including failed attempts; they do not prove delivery.
+Keep the ingest-only key private and preserve the ledger across replacements.

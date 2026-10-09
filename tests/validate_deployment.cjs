@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const {execFileSync} = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const read = name => fs.readFileSync(path.join(root,name),'utf8');
-const env = Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('VIPTV_')));
+const env = Object.fromEntries(Object.entries(process.env).filter(([key])=>!['VIPTV_','OBSERVABILITY_','NEW_RELIC_'].some(prefix=>key.startsWith(prefix))));
 env.VIPTV_AUTH_ORIGIN = 'https://fixture.invalid';
 function config(extra={}) {
   return JSON.parse(execFileSync('docker',['compose','--env-file','/dev/null','--project-directory',root,'-f',path.join(root,'compose.yaml'),'config','--format','json'],{env:{...env,...extra},encoding:'utf8'}));
@@ -31,7 +31,7 @@ for(const key of retired)assert.equal(service.environment[key],undefined,key);
 assert(service.environment.VIPTV_SECRETS_KEYRING == null,'Absent keyring must remain an unresolved/omitted value, never empty JSON');
 const fixtureKeyring='synthetic-private-value-not-a-real-keyring';
 assert.equal(config({VIPTV_SECRETS_KEYRING:fixtureKeyring}).services.viptv.environment.VIPTV_SECRETS_KEYRING,fixtureKeyring);
-const backend = ['server/src/main.rs','server/src/auth/schema.rs','server/src/auth/middleware.rs','server/src/secret_store.rs'].map(read).join('\n');
+const backend = ['server/src/main.rs','server/src/auth/schema.rs','server/src/auth/middleware.rs','server/src/secret_store.rs','server/shared/service-telemetry/src/config.rs'].map(read).join('\n');
 for(const key of Object.keys(service.environment))assert(backend.includes('"'+key+'"'),key+' has no backend reader');
 const dockerfile=read('Dockerfile');
 const runtime=dockerfile.slice(dockerfile.lastIndexOf('FROM '));

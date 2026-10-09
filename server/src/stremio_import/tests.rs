@@ -189,7 +189,8 @@ fn bitfield_rejects_ambiguous_partial_and_out_of_range_metadata() {
     ] {
         meta.get_mut(&("series".into(), "tt2934286".into()))
             .unwrap()["videos"] = invalid;
-        let (rows, summary) = mapper::map_verified(&[item.clone()], false, true, TIME + 1, &meta);
+        let (rows, summary) =
+            mapper::map_verified(std::slice::from_ref(&item), false, true, TIME + 1, &meta);
         assert!(rows.is_empty());
         assert!(summary.needs_review > 0);
     }
@@ -236,7 +237,7 @@ async fn old_receipt_repairs_completion_without_touching_active_resume_or_manual
         &db,
         1,
         "synthetic-source",
-        &[candidate.clone()],
+        std::slice::from_ref(&candidate),
         Summary::default(),
         false,
     )
@@ -246,7 +247,7 @@ async fn old_receipt_repairs_completion_without_touching_active_resume_or_manual
         &db,
         1,
         "synthetic-source",
-        &[candidate.clone()],
+        std::slice::from_ref(&candidate),
         &["opaque-handle".into()],
     )
     .unwrap_or_else(|_| panic!("review failed"));
@@ -258,7 +259,7 @@ async fn old_receipt_repairs_completion_without_touching_active_resume_or_manual
         &db,
         1,
         "synthetic-source",
-        &[candidate.clone()],
+        std::slice::from_ref(&candidate),
         Summary::default(),
         true,
     )
@@ -280,7 +281,7 @@ async fn old_receipt_repairs_completion_without_touching_active_resume_or_manual
             &db,
             1,
             "synthetic-source",
-            &[candidate.clone()],
+            std::slice::from_ref(&candidate),
             Summary::default(),
             false
         )
@@ -1575,7 +1576,13 @@ fn metadata_matches_only_original_identity_and_exact_episode_without_guessing_da
     let mut evidence = HashMap::new();
     evidence.insert(("series".to_owned(),"opaque:series".to_owned()),
         json!({"id":"opaque:series","type":"series","videos":[{"id":"opaque:episode:4","season":2,"episode":4}]}));
-    let (mapped, _) = mapper::map_verified(&[item.clone()], true, true, util::now(), &evidence);
+    let (mapped, _) = mapper::map_verified(
+        std::slice::from_ref(&item),
+        true,
+        true,
+        util::now(),
+        &evidence,
+    );
     assert_eq!(mapped.len(), 2);
     assert_eq!(mapped[0].id, "opaque:series");
     assert_eq!(mapped[1].id, "opaque:episode:4");
@@ -1586,8 +1593,13 @@ fn metadata_matches_only_original_identity_and_exact_episode_without_guessing_da
     evidence
         .get_mut(&("series".into(), "opaque:series".into()))
         .unwrap()["videos"] = json!([]);
-    let (mapped, summary) =
-        mapper::map_verified(&[item.clone()], true, true, util::now(), &evidence);
+    let (mapped, summary) = mapper::map_verified(
+        std::slice::from_ref(&item),
+        true,
+        true,
+        util::now(),
+        &evidence,
+    );
     assert_eq!(mapped.len(), 1);
     assert!(mapped[0].progress.is_none());
     assert_eq!(summary.needs_review, 1);

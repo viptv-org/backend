@@ -486,6 +486,7 @@ fn response(entry: &Entry) -> Value {
     } else {
         util::now() as u64
     };
+    tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), status = state.status, expires_at, error_code = state.error.unwrap_or("none"), gateway_session_tag = %state.remote.as_ref().map(|remote| super::diagnostics::tag(&remote.viewer)).unwrap_or_default(), "Playback lease state");
     json!({"id":entry.id,"status":state.status,"delivery":state.delivery,"error_code":state.error,"error":error,"expires_at":expires_at,"renew_after_seconds":20})
 }
 fn expired(state: &StateData) -> bool {
@@ -507,6 +508,7 @@ fn terminate(entry: &Entry, status: &'static str, error: Option<&'static str>) -
     if !matches!(state.status, "starting" | "ready") {
         return None;
     }
+    tracing::warn!(session_tag = %super::diagnostics::tag(&entry.id), previous_status = state.status, terminal_status = status, error_code = error.unwrap_or("none"), "Playback session terminated");
     state.status = status;
     state.error = error;
     state.delivery = None;
@@ -1213,7 +1215,10 @@ pub(crate) async fn start(
         entry
     };
     let worker = entry.clone();
-    tokio::spawn(async move {
+    tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), direct, position_seconds = request.position, "Playback admission accepted");
+    let trace_context = service_telemetry::current_context();
+    tokio::spawn(service_telemetry::in_context(trace_context, async move {
+        let observation = service_telemetry::observe(service_telemetry::Operation::PlaybackStart);
         let preparation = tokio::time::timeout(
             Duration::from_secs(45),
             prepare(
@@ -1235,12 +1240,19 @@ pub(crate) async fn start(
             Ok(Err(error)) => Some(failure_code(error)),
             Err(_) => Some("gateway_startup_timeout"),
         };
+        observation.finish(match failure {
+            Some(code) => {
+                service_telemetry::Outcome::Failed(service_telemetry::Failure::from_code(code))
+            }
+            None => service_telemetry::Outcome::Success,
+        });
         if let Some(code) = failure {
+            tracing::warn!(session_tag = %super::diagnostics::tag(&worker.id), error_code = code, "Playback preparation failed");
             if let Some(remote) = terminate(&worker, "failed", Some(code)) {
                 release_remote(&remote.client, &remote.target, &remote.viewer).await;
             }
         }
-    });
+    }));
     Ok((StatusCode::ACCEPTED, Json(response(&entry))))
 }
 async fn validate_entry(app: &App, entry: &Entry) -> Result<(), Error> {
@@ -1425,7 +1437,8 @@ async fn prepare(
         }
         tx.commit().map_err(|_| Error::Code("provider_storage_unavailable"))?;
         state.delivery = Some(delivery);
-        state.status = "ready";
+    state.status = "ready";
+    tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), "Playback ready");
         state.touched = Instant::now();
         Ok(())
     }).await.map_err(|_| Error::Code("provider_storage_unavailable"))?
