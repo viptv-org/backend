@@ -211,6 +211,7 @@ struct StateData {
     error: Option<&'static str>,
     touched: Instant,
     remote: Option<Remote>,
+    preparing_gateway: Option<Arc<AuthorizedGateway>>,
 }
 struct Entry {
     id: String,
@@ -1398,6 +1399,7 @@ pub(crate) async fn start(
                 error: None,
                 touched: Instant::now(),
                 remote: None,
+                preparing_gateway: None,
             }),
             permit: Mutex::new(None),
         });
@@ -1540,6 +1542,9 @@ async fn prepare(
         )
         .await?;
         validate_entry(&app, &entry).await?;
+        if source.requires_torrent_gateway {
+            entry.state.lock().unwrap().preparing_gateway = Some(target.clone());
+        }
         let mut input = json!({"url":source.url,"headers":source.headers,"live":source.live});
         if let Some(file_index) = source.file_index {
             input["file_index"] = json!(file_index);
@@ -1673,6 +1678,63 @@ pub(crate) async fn get(
         }
     }
     Ok(Json(response(&entry)))
+}
+/// Advisory progress is separately versioned and cannot extend playback authority.
+pub(crate) async fn progress(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, Error> {
+    control_body(request, 0).await?;
+    let entry = app.gateway_playbacks.snapshot(&id, &lease)?;
+    validate_entry(&app, &entry).await?;
+    let (status, target) = {
+        let state = entry.state.lock().unwrap();
+        (state.status, state.preparing_gateway.clone())
+    };
+    let mut stage = None;
+    if let Some(target) = target {
+        let current = {
+            let db = app.db.lock().unwrap();
+            gateway_current(
+                &db,
+                &entry.lease,
+                &target.gateway.id,
+                target.gateway.revision,
+            )
+        };
+        if !current {
+            return Err(Error::Code("gateway_not_found"));
+        }
+        if status == "ready" {
+            stage = Some("buffering");
+        } else if status == "starting" {
+            if let Ok(value) = app
+                .gateway_client
+                .request(
+                    &target.gateway.endpoint,
+                    target.key.expose(),
+                    reqwest::Method::GET,
+                    &format!("v1/preparations/{}", entry.id),
+                    None,
+                    None,
+                    Duration::from_secs(1),
+                )
+                .await
+            {
+                stage = match value.get("stage").and_then(Value::as_str) {
+                    Some("finding_peers") => Some("finding_peers"),
+                    Some("fetching_metadata") => Some("fetching_metadata"),
+                    Some("opening_archive") => Some("opening_archive"),
+                    Some("buffering") => Some("buffering"),
+                    _ => None,
+                };
+            }
+        }
+    }
+    validate_entry(&app, &entry).await?;
+    Ok(Json(json!({"stage":stage})))
 }
 pub(crate) async fn renew(
     State(app): State<App>,

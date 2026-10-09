@@ -144,6 +144,10 @@ pub fn router_with_tv(
                 )
                 .route("/v2/playback/:id/heartbeat", post(gateway::playback::renew))
                 .route(
+                    "/v2/playback/:id/progress",
+                    get(gateway::playback::progress),
+                )
+                .route(
                     "/v2/playback-requests/:request_id",
                     axum::routing::delete(gateway::playback::cancel_request),
                 ),

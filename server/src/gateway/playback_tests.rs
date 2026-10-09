@@ -346,6 +346,7 @@ async fn setup() -> (App, Peer) {
         let scopes=if mode.load(Ordering::SeqCst)==6 {json!(["capabilities","create"])}else{json!(["capabilities","create","read","renew","release"])};
         Json(json!({"version":1,"ready":true,"torrent":mode.load(Ordering::SeqCst)!=5,"protocols":["hls"],"namespaces":["first","second"],"scopes":scopes,"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
     }}))
+        .route("/v1/preparations/:id",axum::routing::get(||async{Json(json!({"stage":"fetching_metadata","private_extra":"never-forward"}))}))
         .route("/v1/sessions",axum::routing::post(move|Json(value):Json<Value>|{let created=created.clone();let state=state.clone();let waiting=waiting.clone();let outputs=received_outputs.clone();let inputs=received_inputs.clone();async move{
             inputs.lock().unwrap().push(value["input"].clone());
             outputs.lock().unwrap().push(value["output"].clone());
@@ -1380,4 +1381,76 @@ async fn isolated_backend_gateway_real_media_lifecycle() {
         .success());
     server.abort();
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn torrent_progress_is_measured_scoped_and_separate_from_authority() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 1);
+    source(&app);
+    let (cards, error) = app.clone().with_lease(lease()).register(
+        "addon:1",
+        vec![json!({"infoHash":"1".repeat(40),"fileIdx":0})],
+        "movie",
+    );
+    assert!(error.is_none());
+    peer.mode.store(3, Ordering::SeqCst);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        body(cards[0]["id"].as_str().unwrap(), "progress-owner", "web"),
+    )
+    .await;
+    let id = start["id"].as_str().unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while peer.starts.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let expiry = start["expires_at"].clone();
+    let path = format!("/api/v2/playback/{id}/progress");
+    let (status, stage) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stage, json!({"stage":"fetching_metadata"}));
+    assert_eq!(
+        request(&app, "member-token-2", "GET", &path, Value::Null)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, pending) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("/api/v2/playback/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert!(pending["expires_at"].as_u64().unwrap() <= expiry.as_u64().unwrap());
+    peer.hold.notify_one();
+    assert_eq!(settled(&app, id).await["status"], "ready");
+    assert_eq!(
+        request(&app, "member-token-1", "GET", &path, Value::Null)
+            .await
+            .1,
+        json!({"stage":"buffering"})
+    );
+    request(
+        &app,
+        "member-token-1",
+        "DELETE",
+        &format!("/api/v2/playback/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert_ne!(
+        request(&app, "member-token-1", "GET", &path, Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
 }
