@@ -1409,11 +1409,12 @@ pub(crate) async fn start(
     let trace_context = service_telemetry::current_context();
     tokio::spawn(service_telemetry::in_context(trace_context, async move {
         let observation = service_telemetry::observe(service_telemetry::Operation::PlaybackStart);
-        let startup_budget = if request
-            .client
-            .native_torrent
-            .as_ref()
-            .is_some_and(|cap| cap.version == 2)
+        let startup_budget = if input.requires_torrent_gateway
+            || request
+                .client
+                .native_torrent
+                .as_ref()
+                .is_some_and(|cap| cap.version == 2)
         {
             120
         } else {
@@ -1543,6 +1544,9 @@ async fn prepare(
         if let Some(file_index) = source.file_index {
             input["file_index"] = json!(file_index);
         }
+        if source.requires_torrent_gateway && !source.trackers.is_empty() {
+            input["trackers"] = json!(source.trackers);
+        }
         let body = json!({"namespace":target.gateway.namespace,"input":input,"output":{"protocol":"hls","video_codecs":request.client.video_codecs,"audio_codecs":request.client.audio_codecs,"max_width":request.client.max_width,"max_height":request.client.max_height,"audio_track":request.audio_track,"subtitle_track":request.subtitle_track,"conversion":request.conversion,"audio_language":request.audio_language,"preferred_audio_language":request.preferred_audio_language,"preferred_subtitle_language":request.preferred_subtitle_language,"subtitles_off":request.subtitles_off},"position_seconds":request.position});
         let value = app
             .gateway_client
@@ -1553,7 +1557,11 @@ async fn prepare(
                 "v1/sessions",
                 Some(&body),
                 Some(&entry.id),
-                Duration::from_secs(35),
+                Duration::from_secs(if source.requires_torrent_gateway {
+                    120
+                } else {
+                    35
+                }),
             )
             .await?;
         let mut remote = protocol::Session::parse(value)?;

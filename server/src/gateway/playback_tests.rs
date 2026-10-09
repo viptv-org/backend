@@ -398,7 +398,7 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let addon = tokio::spawn(async move {
         axum::serve(listener, Router::new().route("/stream/movie/:id", axum::routing::get(|| async {
-            Json(json!({"streams":[{"infoHash":"1".repeat(40),"fileIdx":2,"name":"Fixture"},{"infoHash":"1".repeat(40),"fileIdx":3,"name":"Fixture"}]}))
+            Json(json!({"streams":[{"infoHash":"1".repeat(40),"fileIdx":2,"name":"Fixture","sources":["tracker:https://tracker.example/announce"]},{"infoHash":"1".repeat(40),"fileIdx":3,"name":"Fixture"}]}))
         }))).await.unwrap();
     });
     app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Fixture',?1,?2,1)",rusqlite::params![format!("{endpoint}/manifest.json"),json!({"id":"fixture","name":"Fixture","resources":["stream"],"types":["movie"]}).to_string()]).unwrap();
@@ -449,6 +449,10 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
         assert_eq!(ready["status"], "ready");
         assert_eq!(ready["delivery"]["kind"], "gateway");
         assert_eq!(peer.inputs.lock().unwrap().last().unwrap()["file_index"], 2);
+        assert_eq!(
+            peer.inputs.lock().unwrap().last().unwrap()["trackers"],
+            json!(["https://tracker.example/announce"])
+        );
     }
     // Removing capability/scope support cannot be bypassed by a ready source's affinity.
     for (mode, expected) in [(5, "delivery_unsupported"), (6, "gateway_scope_missing")] {
