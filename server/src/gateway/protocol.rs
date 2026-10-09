@@ -29,7 +29,10 @@ pub(crate) fn failure_code(code: Option<&str>) -> Option<&'static str> {
         "encrypted_archive_unsupported" => "native_archive_encrypted",
         "archive_volume_missing" => "native_archive_missing",
         "archive_metadata_invalid" => "native_archive_invalid",
-        "session_expired" | "session_not_found" | "media_unauthorized" => "playback_expired",
+        "source_preparation_cancelled"
+        | "session_expired"
+        | "session_not_found"
+        | "media_unauthorized" => "playback_expired",
         "idempotency_conflict" => "playback_conflict",
         _ => return None,
     })

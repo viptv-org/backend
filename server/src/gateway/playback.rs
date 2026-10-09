@@ -204,6 +204,11 @@ impl NativeGrant {
         Ok(())
     }
 }
+#[derive(Clone)]
+struct GatewayPreparation {
+    target: Arc<AuthorizedGateway>,
+    client: Client,
+}
 struct StateData {
     native: Option<NativeState>,
     status: &'static str,
@@ -211,7 +216,7 @@ struct StateData {
     error: Option<&'static str>,
     touched: Instant,
     remote: Option<Remote>,
-    preparing_gateway: Option<Arc<AuthorizedGateway>>,
+    preparing_gateway: Option<GatewayPreparation>,
 }
 struct Entry {
     id: String,
@@ -311,12 +316,17 @@ impl Registry {
                 .await
                 .unwrap_or(failed_checks);
                 let mut releases = Vec::new();
+                let mut preparations = Vec::new();
                 for (id, reason) in stale {
                     if let Some(entry) = registry.entries.lock().unwrap().get(&id).cloned() {
                         if let Some(remote) = terminate(&entry, "expired", Some(reason)) {
                             releases.push(remote);
                         }
+                        preparations.push(entry);
                     }
+                }
+                for entry in preparations {
+                    cancel_gateway_preparation(&entry).await;
                 }
                 registry.entries.lock().unwrap().retain(|_, entry| {
                     let state = entry.state.lock().unwrap();
@@ -594,6 +604,26 @@ async fn release_remote(client: &Client, target: &AuthorizedGateway, viewer: &st
             Duration::from_secs(5),
         )
         .await;
+}
+async fn cancel_gateway_preparation(entry: &Arc<Entry>) {
+    let target = entry.state.lock().unwrap().preparing_gateway.take();
+    if let Some(preparation) = target {
+        let target = preparation.target;
+        let body = json!({"namespace":target.gateway.namespace});
+        // Old gateways may lack this endpoint; their late viewer is still reconciled/released.
+        let _ = preparation
+            .client
+            .request(
+                &target.gateway.endpoint,
+                target.key.expose(),
+                reqwest::Method::DELETE,
+                &format!("v1/preparations/{}", entry.id),
+                Some(&body),
+                None,
+                Duration::from_secs(1),
+            )
+            .await;
+    }
 }
 struct Cleanup {
     client: Client,
@@ -991,7 +1021,7 @@ pub(crate) async fn cancel_request(
     if !protocol::identifier(&request_id) {
         return Err(Error::Code("invalid_playback_request"));
     }
-    let remote = {
+    let (remote, entry) = {
         let _gate = app.gateway_playbacks.request_gate.lock().unwrap();
         let db = app.db.lock().unwrap();
         lease.validate(&db)?;
@@ -1004,7 +1034,8 @@ pub(crate) async fn cancel_request(
         // Cancellation never evicts a live record; admission refuses quota exhaustion.
         db.execute("INSERT INTO playback_request_authority(session_id,request_id,scope,cancelled) VALUES(?1,?2,?3,1) ON CONFLICT(session_id,request_id) DO UPDATE SET cancelled=1 WHERE playback_request_authority.scope=excluded.scope",params![session,request_id,scope])
             .map_err(|_| Error::Code("provider_storage_unavailable"))?;
-        app.gateway_playbacks
+        let entry = app
+            .gateway_playbacks
             .entries
             .lock()
             .unwrap()
@@ -1014,10 +1045,17 @@ pub(crate) async fn cancel_request(
                     && entry.lease.session_id == lease.session_id
                     && entry.request_id == request_id
             })
-            .and_then(|entry| terminate(entry, "released", None))
+            .cloned();
+        let remote = entry
+            .as_ref()
+            .and_then(|entry| terminate(entry, "released", None));
+        (remote, entry)
     };
     if let Some(remote) = remote {
         release_remote(&remote.client, &remote.target, &remote.viewer).await;
+    }
+    if let Some(entry) = entry {
+        cancel_gateway_preparation(&entry).await;
     }
     Ok(Json(json!({"ok":true})))
 }
@@ -1543,7 +1581,10 @@ async fn prepare(
         .await?;
         validate_entry(&app, &entry).await?;
         if source.requires_torrent_gateway {
-            entry.state.lock().unwrap().preparing_gateway = Some(target.clone());
+            entry.state.lock().unwrap().preparing_gateway = Some(GatewayPreparation {
+                target: target.clone(),
+                client: app.gateway_client.clone(),
+            });
         }
         let mut input = json!({"url":source.url,"headers":source.headers,"live":source.live});
         if let Some(file_index) = source.file_index {
@@ -1673,6 +1714,7 @@ pub(crate) async fn get(
         if let Some(remote) = terminate(&entry, "expired", Some(code)) {
             release_remote(&remote.client, &remote.target, &remote.viewer).await;
         }
+        cancel_gateway_preparation(&entry).await;
         if !native || matches!(&error, Error::Auth(_)) {
             return Err(error);
         }
@@ -1691,7 +1733,13 @@ pub(crate) async fn progress(
     validate_entry(&app, &entry).await?;
     let (status, target) = {
         let state = entry.state.lock().unwrap();
-        (state.status, state.preparing_gateway.clone())
+        (
+            state.status,
+            state
+                .preparing_gateway
+                .as_ref()
+                .map(|preparation| preparation.target.clone()),
+        )
     };
     let mut stage = None;
     if let Some(target) = target {
@@ -1758,6 +1806,7 @@ pub(crate) async fn renew(
         if let Some(remote) = terminate(&entry, "expired", Some(code)) {
             release_remote(&remote.client, &remote.target, &remote.viewer).await;
         }
+        cancel_gateway_preparation(&entry).await;
         return Err(error);
     }
     if entry.state.lock().unwrap().native.is_some() {
@@ -1858,6 +1907,7 @@ pub(crate) async fn stop(
     if let Some(remote) = remote {
         release_remote(&remote.client, &remote.target, &remote.viewer).await;
     }
+    cancel_gateway_preparation(&entry).await;
     Ok(Json(json!({"ok":true})))
 }
 
