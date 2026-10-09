@@ -125,6 +125,7 @@ struct Source {
     url: String,
     file_index: Option<u32>,
     info_hash: Option<String>,
+    trackers: Vec<String>,
     requires_torrent_gateway: bool,
     headers: BTreeMap<String, String>,
     live: bool,
@@ -141,9 +142,67 @@ struct Remote {
 struct NativeState {
     expires_at: u64,
     last_server_time: u64,
-    grant: Option<viptv_core::native_torrent::NativeTorrentGrant>,
+    grant: Option<NativeGrant>,
     position: f64,
     preferences: viptv_core::native_torrent::NativeTorrentPreferences,
+}
+
+#[derive(Clone)]
+enum NativeGrant {
+    Legacy(viptv_core::native_torrent::NativeTorrentGrant),
+    Runtime(viptv_core::torrent_runtime::TorrentRuntimeGrant),
+}
+impl NativeGrant {
+    fn observe_time(&mut self, now: u64) {
+        match self {
+            Self::Legacy(g) => g.server_time = now,
+            Self::Runtime(g) => g.server_time = now,
+        }
+    }
+    fn ready(
+        &self,
+        id: &str,
+        position: f64,
+        preferences: &viptv_core::native_torrent::NativeTorrentPreferences,
+    ) -> Result<String, viptv_core::CoreError> {
+        match self {
+            Self::Legacy(g) => {
+                viptv_core::native_torrent::native_ready_response(id, position, preferences, g)
+            }
+            Self::Runtime(g) => {
+                viptv_core::torrent_runtime::ready_response(id, position, preferences, g)
+            }
+        }
+    }
+    fn renew(
+        &mut self,
+        now: u64,
+        expiry: u64,
+        scope: &viptv_core::native_torrent_policy::NativeTorrentScope,
+    ) -> Result<(), Error> {
+        use viptv_core::native_torrent::NativeTorrentControlOperation::Heartbeat;
+        match self {
+            Self::Legacy(g) => {
+                let mut next = g.clone();
+                next.server_time = now;
+                next.expires_at = expiry;
+                viptv_core::native_torrent_policy::validate_native_transition(
+                    g, &next, Heartbeat, scope, scope,
+                )
+                .map_err(|_| Error::Code("playback_expired"))?;
+                *g = next;
+            }
+            Self::Runtime(g) => {
+                let mut next = g.clone();
+                next.server_time = now;
+                next.expires_at = expiry;
+                viptv_core::torrent_runtime::validate_transition(g, &next, Heartbeat)
+                    .map_err(|_| Error::Code("playback_expired"))?;
+                *g = next;
+            }
+        }
+        Ok(())
+    }
 }
 struct StateData {
     native: Option<NativeState>,
@@ -171,6 +230,7 @@ pub(crate) struct Registry {
     entries: Mutex<HashMap<String, Arc<Entry>>>,
     request_gate: Mutex<()>,
     negotiated: Mutex<HashSet<(String, String)>>,
+    runtime_negotiated: Mutex<HashSet<(String, String)>>,
 }
 impl Registry {
     pub(crate) fn new(db: Arc<Mutex<Connection>>) -> Arc<Self> {
@@ -178,6 +238,7 @@ impl Registry {
             entries: Mutex::new(HashMap::new()),
             request_gate: Mutex::new(()),
             negotiated: Mutex::new(HashSet::new()),
+            runtime_negotiated: Mutex::new(HashSet::new()),
         });
         let weak = Arc::downgrade(&registry);
         tokio::spawn(async move {
@@ -368,6 +429,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
             url,
             file_index,
             info_hash,
+            trackers,
             requires_torrent_gateway,
             headers,
             live,
@@ -390,6 +452,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
                 entry.url.clone(),
                 entry.file_index,
                 entry.info_hash.clone(),
+                entry.discovery_trackers.clone(),
                 entry.requires_torrent_gateway,
                 entry
                     .headers
@@ -417,6 +480,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
                 live,
                 file_index,
                 info_hash,
+                trackers,
                 proof
                     .exact_vod
                     .as_ref()
@@ -431,6 +495,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
             url,
             file_index,
             info_hash,
+            trackers,
             requires_torrent_gateway,
             headers,
             live,
@@ -451,14 +516,9 @@ fn response(entry: &Entry) -> Value {
                 .as_mut()
                 .filter(|_| now >= native.last_server_time)
             {
-                grant.server_time = now;
-                native.last_server_time = grant.server_time;
-                if let Ok(body) = viptv_core::native_torrent::native_ready_response(
-                    &entry.id,
-                    native.position,
-                    &native.preferences,
-                    grant,
-                ) {
+                grant.observe_time(now);
+                native.last_server_time = now;
+                if let Ok(body) = grant.ready(&entry.id, native.position, &native.preferences) {
                     if let Ok(value) = serde_json::from_str(&body) {
                         return value;
                     }
@@ -688,24 +748,39 @@ fn native_candidate(app: &App, lease: &ResourceLease, source: &Source, request: 
     let Ok(scope) = native_scope(lease) else {
         return false;
     };
-    let negotiated = app
-        .gateway_playbacks
-        .negotiated
-        .lock()
-        .unwrap()
-        .contains(&(scope.scope_key.clone(), scope.session_id.clone()));
+    let runtime = request
+        .client
+        .native_torrent
+        .as_ref()
+        .is_some_and(|cap| cap.version == 2);
+    let negotiated = if runtime {
+        &app.gateway_playbacks.runtime_negotiated
+    } else {
+        &app.gateway_playbacks.negotiated
+    }
+    .lock()
+    .unwrap()
+    .contains(&(scope.scope_key.clone(), scope.session_id.clone()));
     negotiated
         && request.client.native_torrent.is_some()
-        && matches!(
-            request.client.platform,
-            viptv_core::dto::PlaybackPlatform::Android
-                | viptv_core::dto::PlaybackPlatform::AndroidTv
-        )
-        && viptv_core::native_torrent_policy::native_request_eligible(&request)
+        && (if runtime {
+            viptv_core::torrent_runtime::request_eligible(&request)
+        } else {
+            matches!(
+                request.client.platform,
+                viptv_core::dto::PlaybackPlatform::Android
+                    | viptv_core::dto::PlaybackPlatform::AndroidTv
+            ) && request
+                .client
+                .native_torrent
+                .as_ref()
+                .is_some_and(|cap| cap.version == 1)
+                && viptv_core::native_torrent_policy::native_request_eligible(&request)
+        })
         && !source.live
         && source.provider_id.is_none()
         && source.proof.exact_vod.is_some()
-        && source.file_index.is_some()
+        && (runtime || source.file_index.is_some())
         && source.requires_torrent_gateway
         && (magnet_hash(source).is_some()
             || url::Url::parse(&source.url).is_ok_and(|u| {
@@ -719,6 +794,14 @@ async fn prepare_native(
     source: &Source,
     request: &Start,
 ) -> Result<(), Error> {
+    if request
+        .client
+        .native_torrent
+        .as_ref()
+        .is_some_and(|cap| cap.version == 2)
+    {
+        return prepare_runtime(app, entry, source).await;
+    }
     use base64::Engine;
     use viptv_core::{native_torrent::*, native_torrent_policy::*};
     let index = source
@@ -802,7 +885,97 @@ async fn prepare_native(
     native_ready_response(&entry.id, native.position, &native.preferences, &grant)
         .map_err(|_| Error::Code("native_metainfo_invalid"))?;
     native.last_server_time = grant.server_time;
-    native.grant = Some(grant);
+    native.grant = Some(NativeGrant::Legacy(grant));
+    state.status = "ready";
+    Ok(())
+}
+
+async fn prepare_runtime(app: &App, entry: &Entry, source: &Source) -> Result<(), Error> {
+    use base64::Engine;
+    use viptv_core::{native_torrent::NativeTorrentInput, torrent_runtime::TorrentRuntimeGrant};
+    let mut trackers = source.trackers.clone();
+    let (hash, input, size) = if let Some(hash) = magnet_hash(source) {
+        let input = NativeTorrentInput {
+            kind: "magnet".into(),
+            value: format!("magnet:?xt=urn:btih:{hash}"),
+        };
+        (hash, input, None)
+    } else {
+        let bytes = super::native_fetch::fetch(&source.url, &source.headers).await?;
+        let metadata = torrent_policy::metainfo::vet_native_metainfo(&bytes)
+            .map_err(|_| Error::Code("native_metainfo_invalid"))?;
+        if source
+            .info_hash
+            .as_ref()
+            .is_some_and(|hash| metadata.info_hash_hex() != *hash)
+        {
+            return Err(Error::Code("source_not_found"));
+        }
+        let size = source
+            .file_index
+            .map(|index| {
+                metadata
+                    .file_sizes()
+                    .get(index as usize)
+                    .copied()
+                    .ok_or(Error::Code("source_not_found"))
+            })
+            .transpose()?;
+        for tracker in metadata.trackers() {
+            if !trackers.contains(tracker) {
+                trackers.push(tracker.clone())
+            }
+        }
+        let input = NativeTorrentInput {
+            kind: "metainfo".into(),
+            value: base64::engine::general_purpose::STANDARD.encode(metadata.canonical_bytes()),
+        };
+        (metadata.info_hash_hex(), input, size)
+    };
+    validate_entry(app, entry).await?;
+    let caller = native_scope(&entry.lease)?;
+    let source_scope = native_scope(&source.proof.lease)?;
+    if !viptv_core::native_torrent_policy::same_native_scope(&caller, &source_scope)
+        || !app
+            .gateway_playbacks
+            .runtime_negotiated
+            .lock()
+            .unwrap()
+            .contains(&(caller.scope_key, caller.session_id))
+    {
+        return Err(Error::Code("source_not_found"));
+    }
+    let db = app.db.lock().unwrap();
+    entry.lease.validate(&db)?;
+    validate_source(&db, &entry.proof)?;
+    let mut state = entry.state.lock().unwrap();
+    if entry.cancelled.load(Ordering::Acquire) || expired(&state) {
+        return Err(Error::Code("playback_expired"));
+    }
+    let native = state
+        .native
+        .as_mut()
+        .ok_or(Error::Code("playback_expired"))?;
+    let grant = TorrentRuntimeGrant {
+        id: uuid::Uuid::new_v4().to_string(),
+        server_time: util::now() as u64,
+        expires_at: native.expires_at,
+        info_hash: hash,
+        file_index: source.file_index,
+        archive_index: None,
+        input,
+        trackers,
+        expected_file_size: size,
+    };
+    viptv_core::torrent_runtime::ready_response(
+        &entry.id,
+        native.position,
+        &native.preferences,
+        &grant,
+    )
+    .map_err(|_| Error::Code("native_metainfo_invalid"))?;
+    native.last_server_time = grant.server_time;
+    native.grant = Some(NativeGrant::Runtime(grant));
     state.status = "ready";
     Ok(())
 }
@@ -965,12 +1138,19 @@ fn validate(request: &Start) -> Result<(), Error> {
         .native_torrent
         .as_ref()
         .is_some_and(|native| {
-            native.version != 1
-                || native.network_policy != "public_dht_tcp_v1"
-                || !matches!(
+            let v1 = native.version == 1
+                && native.network_policy == "public_dht_tcp_v1"
+                && matches!(
                     request.client.platform,
                     Platform::Android | Platform::AndroidTv
-                )
+                );
+            let v2 = native.version == 2
+                && native.network_policy == viptv_core::torrent_runtime::NETWORK_POLICY
+                && matches!(
+                    request.client.platform,
+                    Platform::Android | Platform::AndroidTv | Platform::Desktop
+                );
+            !v1 && !v2
         })
         || !protocol::identifier(&request.request_id)
         || request.stream_id.is_empty()
@@ -1096,6 +1276,16 @@ pub(crate) async fn start(
         && request.audio_language.is_none()
         && !request.subtitles_off;
     let native_candidate = native_candidate(&app, &lease, &input, &request);
+    if input.requires_torrent_gateway
+        && request
+            .client
+            .native_torrent
+            .as_ref()
+            .is_some_and(|cap| cap.version == 2)
+        && !native_candidate
+    {
+        return Err(Error::Code("source_format_unsupported"));
+    }
     // The legacy gateway input has no metainfo hash-binding field. A paired URL
     // and hash was previously unsupported there; never drop that exact identity
     // when force-gateway/old-client gates bypass native admission.
@@ -1219,8 +1409,18 @@ pub(crate) async fn start(
     let trace_context = service_telemetry::current_context();
     tokio::spawn(service_telemetry::in_context(trace_context, async move {
         let observation = service_telemetry::observe(service_telemetry::Operation::PlaybackStart);
+        let startup_budget = if request
+            .client
+            .native_torrent
+            .as_ref()
+            .is_some_and(|cap| cap.version == 2)
+        {
+            120
+        } else {
+            45
+        };
         let preparation = tokio::time::timeout(
-            Duration::from_secs(45),
+            Duration::from_secs(startup_budget),
             prepare(
                 app.clone(),
                 worker.clone(),
@@ -1509,19 +1709,8 @@ pub(crate) async fn renew(
                 .filter(|n| *n <= 9007199254740)
                 .ok_or(Error::Code("playback_expired"))?;
             if let Some(grant) = native.grant.as_mut() {
-                let mut next = grant.clone();
-                next.server_time = now;
-                next.expires_at = next_expiry;
                 let scope = native_scope(&lease)?;
-                viptv_core::native_torrent_policy::validate_native_transition(
-                    grant,
-                    &next,
-                    viptv_core::native_torrent::NativeTorrentControlOperation::Heartbeat,
-                    &scope,
-                    &scope,
-                )
-                .map_err(|_| Error::Code("playback_expired"))?;
-                *grant = next;
+                grant.renew(now, next_expiry, &scope)?;
             }
             native.expires_at = next_expiry;
             native.last_server_time = now;
@@ -1608,6 +1797,23 @@ pub(crate) async fn support(
     Extension(lease): Extension<ResourceLease>,
     request: axum::extract::Request,
 ) -> Result<Json<Value>, Error> {
+    support_version(app, lease, request, 1).await
+}
+
+pub(crate) async fn runtime_support(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, Error> {
+    support_version(app, lease, request, 2).await
+}
+
+async fn support_version(
+    app: App,
+    lease: ResourceLease,
+    request: axum::extract::Request,
+    version: u32,
+) -> Result<Json<Value>, Error> {
     control_body(request, 0).await?;
     tokio::task::spawn_blocking(move || {
         let app = app.with_lease(lease.clone());
@@ -1623,12 +1829,15 @@ pub(crate) async fn support(
             .session_id
             .clone()
             .ok_or(Error::Code("playback_expired"))?;
-        app.gateway_playbacks
-            .negotiated
-            .lock()
-            .unwrap()
-            .insert((scope, session));
-        Ok(Json(json!({"version":1,"native_torrent_versions":[1]})))
+        let negotiated = if version == 1 {
+            &app.gateway_playbacks.negotiated
+        } else {
+            &app.gateway_playbacks.runtime_negotiated
+        };
+        negotiated.lock().unwrap().insert((scope, session));
+        Ok(Json(
+            json!({"version":version,"native_torrent_versions":[version]}),
+        ))
     })
     .await
     .map_err(|_| Error::Code("provider_storage_unavailable"))?
@@ -1641,14 +1850,18 @@ pub(crate) async fn control_deadline(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let path = request.uri().path();
-    if !(path.starts_with("/v2/playback") || path.starts_with("/api/v2/playback")) {
+    if !(path.starts_with("/v2/playback")
+        || path.starts_with("/api/v2/playback")
+        || path.ends_with("/torrent-runtime-protocol"))
+    {
         return next.run(request).await;
     }
-    let seconds = if path.ends_with("playback-protocol") {
-        5
-    } else {
-        10
-    };
+    let seconds =
+        if path.ends_with("playback-protocol") || path.ends_with("torrent-runtime-protocol") {
+            5
+        } else {
+            10
+        };
     let mut response =
         match tokio::time::timeout(Duration::from_secs(seconds), next.run(request)).await {
             Ok(response) => response,

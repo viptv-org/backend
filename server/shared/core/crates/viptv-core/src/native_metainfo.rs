@@ -164,6 +164,25 @@ fn equivalent_component(map: &[(&[u8], Value<'_>)], key: &[u8], utf8: &[u8]) -> 
     Ok(name)
 }
 pub(crate) fn validate(data: &[u8], hash: &str, index: u32, expected: Option<u64>) -> Result<()> {
+    validate_inner(data, hash, Some(index), expected, false)
+}
+
+pub(crate) fn validate_runtime(
+    data: &[u8],
+    hash: &str,
+    index: Option<u32>,
+    expected: Option<u64>,
+) -> Result<()> {
+    validate_inner(data, hash, index, expected, true)
+}
+
+fn validate_inner(
+    data: &[u8],
+    hash: &str,
+    index: Option<u32>,
+    expected: Option<u64>,
+    rolling: bool,
+) -> Result<()> {
     let mut parser = Parser {
         bytes: data,
         offset: 0,
@@ -194,7 +213,10 @@ pub(crate) fn validate(data: &[u8], hash: &str, index: u32, expected: Option<u64
     }
     equivalent_component(map, b"name", b"name.utf-8")?;
     let piece_length = integer(field(map, b"piece length")?)?;
-    if !(16_384..=16_777_216).contains(&piece_length) || !piece_length.is_power_of_two() {
+    if piece_length == 0
+        || (!rolling
+            && (!(16_384..=16_777_216).contains(&piece_length) || !piece_length.is_power_of_two()))
+    {
         return Err(invalid());
     }
     let pieces = bytes(field(map, b"pieces")?)?;
@@ -232,7 +254,7 @@ pub(crate) fn validate(data: &[u8], hash: &str, index: u32, expected: Option<u64
         }
         _ => return Err(invalid()),
     }
-    if lengths.contains(&0) {
+    if !rolling && lengths.contains(&0) {
         return Err(invalid());
     }
     let total = lengths
@@ -240,15 +262,19 @@ pub(crate) fn validate(data: &[u8], hash: &str, index: u32, expected: Option<u64
         .try_fold(0u64, |sum, n| sum.checked_add(*n))
         .ok_or_else(invalid)?;
     // Full payload must fit the fixed native reservation, including unselected files.
-    if total > 2_147_483_648 {
+    if total == 0 || total > 9_007_199_254_740_991 || (!rolling && total > 2_147_483_648) {
         return Err(invalid());
     }
     let count = total.checked_add(piece_length - 1).ok_or_else(invalid)? / piece_length;
     if count.checked_mul(20) != Some(pieces.len() as u64) {
         return Err(invalid());
     }
-    let selected = *lengths.get(index as usize).ok_or_else(invalid)?;
-    if expected.is_some_and(|n| n != selected) {
+    if let Some(index) = index {
+        let selected = *lengths.get(index as usize).ok_or_else(invalid)?;
+        if selected == 0 || expected.is_some_and(|n| n != selected) {
+            return Err(invalid());
+        }
+    } else if expected.is_some() {
         return Err(invalid());
     }
     Ok(())

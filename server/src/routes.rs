@@ -133,6 +133,10 @@ pub fn router_with_tv(
         .merge(
             Router::new()
                 .route("/v2/playback-protocol", get(gateway::playback::support))
+                .route(
+                    "/v2/torrent-runtime-protocol",
+                    get(gateway::playback::runtime_support),
+                )
                 .route("/v2/playback", post(gateway::playback::start))
                 .route(
                     "/v2/playback/:id",

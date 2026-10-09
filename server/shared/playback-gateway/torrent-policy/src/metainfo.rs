@@ -335,7 +335,7 @@ fn tracker(v: &Value<'_>) -> Result<()> {
 pub struct NativeSelection {
     pub info_hash: [u8; 20],
     pub file_index: u32,
-    pub verified_size: u64,
+    pub verified_size: Option<u64>,
 }
 impl std::fmt::Debug for NativeSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -343,10 +343,15 @@ impl std::fmt::Debug for NativeSelection {
     }
 }
 impl NativeSelection {
-    pub fn from_hex(hash: &str, file_index: u32, verified_size: u64) -> Result<Self> {
+    pub fn from_hex(
+        hash: &str,
+        file_index: u32,
+        verified_size: impl Into<Option<u64>>,
+    ) -> Result<Self> {
+        let verified_size = verified_size.into();
         if hash.len() != 40
             || file_index >= 4096
-            || verified_size == 0
+            || verified_size == Some(0)
             || !hash
                 .bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -362,9 +367,12 @@ impl NativeSelection {
         })
     }
     pub fn verify(&self, metadata: &NativeMetainfo) -> Result<()> {
+        let selected = metadata.file_sizes().get(self.file_index as usize).copied();
         if self.info_hash != metadata.info_hash()
-            || metadata.file_sizes().get(self.file_index as usize).copied()
-                != Some(self.verified_size)
+            || selected.is_none_or(|size| size == 0)
+            || self
+                .verified_size
+                .is_some_and(|size| selected != Some(size))
         {
             return Err(invalid());
         }
@@ -376,6 +384,7 @@ pub struct NativeMetainfo {
     canonical: Vec<u8>,
     hash: [u8; 20],
     file_sizes: Vec<u64>,
+    trackers: Vec<String>,
 }
 impl std::fmt::Debug for NativeMetainfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -394,6 +403,9 @@ impl NativeMetainfo {
     }
     pub fn file_sizes(&self) -> &[u64] {
         &self.file_sizes
+    }
+    pub fn trackers(&self) -> &[String] {
+        &self.trackers
     }
     pub fn total_payload_bytes(&self) -> u64 {
         self.file_sizes.iter().sum()
@@ -414,7 +426,7 @@ impl NativeMetainfo {
             return Err(invalid());
         }
         let selected = *self.file_sizes.get(index as usize).ok_or_else(invalid)?;
-        if expected_size.is_some_and(|n| n != selected) {
+        if selected == 0 || expected_size.is_some_and(|n| n != selected) {
             return Err(invalid());
         }
         Ok(())
@@ -444,6 +456,7 @@ pub fn vet_native_metainfo(data: &[u8]) -> Result<NativeMetainfo> {
     }
     let mut info_range = None;
     let mut sizes = None;
+    let mut trackers = Vec::new();
     while parser.bytes.get(parser.offset) != Some(&b'e') {
         let key = parser.bytes()?;
         let start = parser.offset;
@@ -453,7 +466,15 @@ pub fn vet_native_metainfo(data: &[u8]) -> Result<NativeMetainfo> {
                 sizes = Some(inspect_info(&value)?);
                 info_range = Some(start..parser.offset);
             }
-            b"announce" => tracker(&value)?,
+            b"announce" => {
+                tracker(&value)?;
+                let value = std::str::from_utf8(bytes(&value)?)
+                    .map_err(|_| invalid())?
+                    .to_owned();
+                if !trackers.contains(&value) {
+                    trackers.push(value)
+                }
+            }
             b"announce-list" => match &value {
                 Value::List(tiers) => {
                     for tier in tiers {
@@ -461,6 +482,12 @@ pub fn vet_native_metainfo(data: &[u8]) -> Result<NativeMetainfo> {
                             Value::List(urls) => {
                                 for u in urls {
                                     tracker(u)?;
+                                    let value = std::str::from_utf8(bytes(u)?)
+                                        .map_err(|_| invalid())?
+                                        .to_owned();
+                                    if !trackers.contains(&value) {
+                                        trackers.push(value)
+                                    }
                                 }
                             }
                             _ => return Err(invalid()),
@@ -479,6 +506,9 @@ pub fn vet_native_metainfo(data: &[u8]) -> Result<NativeMetainfo> {
         }
     }
     let info = &data[info_range.ok_or_else(invalid)?];
+    if trackers.len() > 32 {
+        return Err(invalid());
+    }
     let mut sha = Sha1::new();
     sha.update(info);
     let mut canonical = Vec::with_capacity(info.len() + 8);
@@ -492,6 +522,7 @@ pub fn vet_native_metainfo(data: &[u8]) -> Result<NativeMetainfo> {
         canonical,
         hash: sha.finalize().into(),
         file_sizes: sizes.ok_or_else(invalid)?,
+        trackers,
     })
 }
 
@@ -551,6 +582,10 @@ mod tests {
         ]);
         let vetted = vet_native_metainfo(&annotated).unwrap();
         assert_eq!(vetted.canonical_bytes(), bare);
+        assert_eq!(
+            vetted.trackers(),
+            &["udp://tracker.invalid:6969".to_string()]
+        );
         assert_eq!(
             vetted.info_hash(),
             vet_native_metainfo(&bare).unwrap().info_hash()
@@ -651,5 +686,39 @@ mod tests {
         let pos = info.windows(from.len()).position(|s| s == from).unwrap();
         info.splice(pos..pos + from.len(), b"i16385e".iter().copied());
         assert!(validate_native_info(&info).is_err());
+    }
+
+    #[test]
+    fn optional_verified_size_never_changes_exact_hash_index_or_positive_length() {
+        let vetted = vet_native_metainfo(&dict(vec![(b"info", single_info())])).unwrap();
+        let hash = vetted.info_hash_hex();
+        let unknown = NativeSelection::from_hex(&hash, 0, None).unwrap();
+        assert!(unknown.verify(&vetted).is_ok());
+        let size = vetted.file_sizes()[0];
+        assert!(NativeSelection::from_hex(&hash, 0, size)
+            .unwrap()
+            .verify(&vetted)
+            .is_ok());
+        assert!(NativeSelection::from_hex(&hash, 0, size + 1)
+            .unwrap()
+            .verify(&vetted)
+            .is_err());
+        assert!(NativeSelection::from_hex(&hash, 1, None)
+            .unwrap()
+            .verify(&vetted)
+            .is_err());
+        assert!(NativeSelection::from_hex(&"0".repeat(40), 0, None)
+            .unwrap()
+            .verify(&vetted)
+            .is_err());
+        assert!(NativeSelection::from_hex(&hash, 0, Some(0)).is_err());
+        let empty = NativeMetainfo {
+            canonical: vec![],
+            hash: unknown.info_hash,
+            file_sizes: vec![0],
+            trackers: vec![],
+        };
+        assert!(unknown.verify(&empty).is_err());
+        assert!(empty.verify_selection(Some(&hash), 0, None).is_err());
     }
 }

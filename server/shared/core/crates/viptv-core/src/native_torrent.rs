@@ -977,7 +977,12 @@ impl NativeTorrentBridge {
             || !context.qualified
             || !context.negotiated
             || !android(&context.request.client.platform)
-            || context.request.client.native_torrent.is_none()
+            || context
+                .request
+                .client
+                .native_torrent
+                .as_ref()
+                .is_none_or(|cap| cap.version != 1 || cap.network_policy != POLICY)
         {
             return Err(invalid());
         }

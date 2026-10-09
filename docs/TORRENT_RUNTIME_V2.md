@@ -1,0 +1,38 @@
+# Shared torrent runtime native protocol
+
+The owner-authorized refactor follows design
+`16277caf2c7bf16296e25da40f143666465f0d2b`. Performance work is deferred in the
+gateway's `docs/TORRENT_PERFORMANCE_FOLLOWUP.md`; production rollout remains
+separately coordinated.
+
+GET `/api/v2/torrent-runtime-protocol` is authenticated, admitted-profile scoped,
+bodyless and `no-store`. It returns the closed version-2 support object.
+The existing native-v1 route and response remain unchanged. Negotiation records
+are separate, so negotiating one protocol does not authorize the other.
+
+Android, Android TV and desktop may request native transport version 2 with
+`network_policy: public_discovery_verified_v2`. Authoritative source, account,
+profile, session, exact-VOD and cancellation proofs remain required. Native v2
+torrent requests do not substitute gateway delivery when negotiation, selection
+or transport requirements fail. Web/Roku retain gateway delivery.
+
+The private version-2 grant preserves canonical hash identity, metainfo/magnet
+input, validated tracker hints and optional file/archive indices. Missing file
+selection delegates largest-file resolution to the local shared runtime. Grant
+identity remains immutable during twenty-second heartbeat renewal; authority
+lasts at most sixty seconds, and poll never extends it. Release/cancellation and
+source/account/profile revocation retain the existing durable authority rules.
+
+Metainfo grants use canonical info bytes while preserving vetted outer trackers
+separately. Runtime validation permits payloads larger than the aggregate cache;
+the local runtime enforces its bounded piece storage. Native v1's validation and
+exact-file requirements remain separate. Backend v2 native preparation uses the
+120-second startup budget; on-device acquisition/player opening share the
+remaining budget through their adapters.
+
+Local evidence: full backend tests pass, including phone/TV/desktop v2 grants,
+automatic file selection, tracker retention, immutable renewal/release and
+no gateway substitution. Strict Clippy exposed pre-existing type-complexity and
+cloned-reference warnings in unchanged files; checking with those two baseline
+lints allowed passes. Installed apps have not yet adopted this protocol; native
+holder and platform adapter integration remain separate work.

@@ -11,7 +11,7 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = {
     'core': ((ROOT / 'CORE_REF').read_text().strip(), ['Cargo.toml', 'crates/viptv-core', 'LICENSE']),
-    'playback-gateway': ('f0f8c0d5927135560b299b8f8b02f99de1897fe7', ['torrent-policy', 'LICENSE']),
+    'playback-gateway': ('f318d6df9bb3d4d03a4c81c3ea2e524e6f5405d1', ['torrent-policy', 'LICENSE']),
 }
 manifest = {}
 for name, (revision, paths) in SOURCES.items():
@@ -31,5 +31,5 @@ for name, (revision, paths) in SOURCES.items():
             'members = ["crates/viptv-core"]'))
     manifest[name] = {'revision': revision, 'license': ['GPL-2.0-only'] if name == 'core' else ['GPL-2.0-only', 'Apache-2.0'],
                       'archive_sha256': hashlib.sha256(data).hexdigest()}
-manifest['design_revision'] = 'ae1f09db6afd5259a38363686d9480feb4b70269'
+manifest['design_revision'] = (ROOT / 'DESIGN_REF').read_text().strip()
 (ROOT / 'server' / 'shared' / 'NATIVE_CONTRACTS.json').write_text(json.dumps(manifest, indent=2) + '\n')

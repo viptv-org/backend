@@ -6,6 +6,7 @@ mod native_metainfo;
 pub mod native_torrent;
 pub mod native_torrent_policy;
 pub mod policy;
+pub mod torrent_runtime;
 pub mod vizio;
 pub use app::*;
 use crux_core::{
@@ -74,6 +75,10 @@ pub fn normalize(kind: String, input: String, origin: String) -> Result<String, 
         return serde_json::to_string(&domain::playback_protocol::parse(&input)?)
             .map_err(|_| CoreError::InvalidInput);
     }
+    if kind == "torrentRuntimeProtocol" {
+        return serde_json::to_string(&domain::playback_protocol::parse_runtime(&input)?)
+            .map_err(|_| CoreError::InvalidInput);
+    }
     if kind == "nativeTorrent" {
         return native_torrent::negotiation(&input);
     }
@@ -99,6 +104,7 @@ pub fn normalize(kind: String, input: String, origin: String) -> Result<String, 
             value["operation"].as_str(),
             Some(
                 "playbackProtocolV2"
+                    | "torrentRuntimeProtocol"
                     | "playbackV2CancelRequest"
                     | "playbackV2Status"
                     | "playbackV2Heartbeat"

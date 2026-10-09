@@ -172,6 +172,7 @@ impl App {
                     live: kind == "live",
                     url: url.into(),
                     file_index: input.file_index,
+                    discovery_trackers: input.trackers.clone(),
                     info_hash: input.info_hash.clone(),
                     requires_torrent_gateway: input.requires_gateway,
                     headers,

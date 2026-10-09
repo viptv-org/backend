@@ -16,23 +16,36 @@ struct ProtocolWire<'a> {
 
 /// Parse the original text: Value would discard duplicate fields and numeric spelling.
 pub(crate) fn parse(input: &str) -> Result<PlaybackProtocol, CoreError> {
+    parse_version(input, 1)
+}
+
+pub(crate) fn parse_runtime(input: &str) -> Result<PlaybackProtocol, CoreError> {
+    parse_version(input, 2)
+}
+
+fn parse_version(input: &str, version: u32) -> Result<PlaybackProtocol, CoreError> {
     if input.len() > MAX_PROTOCOL_BYTES {
         return Err(CoreError::InvalidInput);
     }
     let wire: ProtocolWire<'_> =
         serde_json::from_str(input).map_err(|_| CoreError::InvalidInput)?;
-    if wire.version.get() != "1"
+    let token = if version == 1 { "1" } else { "2" };
+    if wire.version.get() != token
         || wire.native_torrent_versions.len() > 1
         || wire
             .native_torrent_versions
             .iter()
-            .any(|value| value.get() != "1")
+            .any(|value| value.get() != token)
     {
         return Err(CoreError::InvalidInput);
     }
     Ok(PlaybackProtocol {
-        version: 1,
-        native_torrent_versions: wire.native_torrent_versions.iter().map(|_| 1).collect(),
+        version,
+        native_torrent_versions: wire
+            .native_torrent_versions
+            .iter()
+            .map(|_| version)
+            .collect(),
     })
 }
 
@@ -41,6 +54,8 @@ pub(crate) fn parse(input: &str) -> Result<PlaybackProtocol, CoreError> {
 enum ProtocolRequest {
     #[serde(rename = "playbackProtocolV2")]
     Protocol {},
+    #[serde(rename = "torrentRuntimeProtocol")]
+    RuntimeProtocol {},
     #[serde(rename = "playbackV2CancelRequest")]
     Cancel {
         #[serde(rename = "requestId")]
@@ -57,7 +72,7 @@ enum ProtocolRequest {
 /// Keep the added bodyless bridge inputs closed without tightening legacy inputs.
 pub(crate) fn validate_request(input: &str) -> Result<(), CoreError> {
     match serde_json::from_str::<ProtocolRequest>(input).map_err(|_| CoreError::InvalidInput)? {
-        ProtocolRequest::Protocol {} => Ok(()),
+        ProtocolRequest::Protocol {} | ProtocolRequest::RuntimeProtocol {} => Ok(()),
         ProtocolRequest::Cancel { request_id } if valid_identifier(&request_id) => Ok(()),
         ProtocolRequest::Poll { id }
         | ProtocolRequest::Heartbeat { id }
