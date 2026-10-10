@@ -34,8 +34,9 @@ Local evidence: full backend tests pass, including phone/TV/desktop v2 grants,
 automatic file selection, tracker retention, immutable renewal/release and
 no gateway substitution. Strict Clippy exposed pre-existing type-complexity and
 cloned-reference warnings in unchanged files; checking with those two baseline
-lints allowed passes. Installed apps have not yet adopted this protocol; native
-holder and platform adapter integration remain separate work.
+lints allowed passes. Native holder and platform adapters are integrated in the
+coordinated consumer branches; physical-device qualification and installed
+production delivery remain separately coordinated.
 
 The exported core is `0f3d9f78e6df7e9550a9335b835dbebef454a3b5`, matching
 the Android and shared viewing client pins. It includes the private v2 client

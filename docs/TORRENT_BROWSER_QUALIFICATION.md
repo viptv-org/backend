@@ -12,7 +12,7 @@ controller/backend changed the media response to 401. No production account,
 gateway or device configuration was changed.
 
 The test page wraps production API/controller code, so ordinary login/catalog
-screens and physical Roku presentation are outside this evidence. Two initial
+screens and physical Roku presentation are outside this evidence. Initial
 harness attempts failed before API construction because a standalone esbuild
 bundle omitted its Vite environment constants; they are excluded from playback
 measurements. Five separate HTTPS UI tests pass, including metadata readiness
