@@ -261,6 +261,11 @@ impl Service {
         id: &str,
         profile: Option<i64>,
     ) -> Result<Value, String> {
+        // Canonical public metadata reads must not wait behind a library sync.
+        // The HTTP client still serializes uncached upstream requests.
+        if viptv_simkl::parse_id(id).is_some() {
+            return self.meta_inner(kind, id, profile).await;
+        }
         let _guard = self.gate.lock().await;
         self.meta_inner(kind, id, profile).await
     }
@@ -334,7 +339,29 @@ impl Service {
                 .filter_map(|e| viptv_simkl::episode(&item, e))
                 .collect();
             self.remember(&videos)?;
+            item["next_airing"] = videos.iter().filter_map(|episode| {
+                let date = episode["released"].as_str()?;
+                let timestamp = chrono::DateTime::parse_from_rfc3339(date).ok()
+                    .map(|v| v.timestamp()).or_else(|| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
+                        .map(|v| v.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()))?;
+                (timestamp > util::now()).then_some((timestamp, episode))
+            }).min_by_key(|(timestamp, _)| *timestamp).map(|(_, episode)| episode.clone()).unwrap_or(Value::Null);
+            item["airs"] = raw["airs"].clone();
+            item["network"] = raw["network"].clone();
+            item["studios"] = raw["studios"].clone();
             item["videos"] = json!(videos);
+        }
+        for key in ["similar", "users_recommendations"] {
+            let related: Vec<_> = raw[key].as_array().into_iter().flatten().filter_map(|title| {
+                let category = match title["type"].as_str() {
+                    Some("movie") | Some("movies") => Category::Movie,
+                    Some("anime") => Category::Anime,
+                    Some("tv") | Some("show") | Some("shows") => Category::Tv,
+                    _ => category.clone(),
+                };
+                viptv_simkl::normalize(title, category)
+            }).collect();
+            item[key] = json!(related);
         }
         self.remember(&[item.clone()])?;
         Ok(json!({"meta":item}))
@@ -398,7 +425,6 @@ impl Service {
         r: addon::DiscoverOptions,
         profile: Option<i64>,
     ) -> Result<Value, String> {
-        let _guard = self.gate.lock().await;
         let catalog = r.catalog.as_deref().unwrap_or("today");
         let category = match r.kind.as_str() {
             "movie" => Category::Movie,
@@ -430,6 +456,7 @@ impl Service {
         ]
         .contains(&catalog);
         let mut items: Vec<Value> = if !term.is_empty() && linked && !calendar_surface {
+            let _guard = self.gate.lock().await;
             let sort = r
                 .extras
                 .get("sort")

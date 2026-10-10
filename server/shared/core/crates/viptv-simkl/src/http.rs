@@ -75,9 +75,9 @@ impl Client {
             .append_pair("app-name", "viptv")
             .append_pair("app-version", "0.1");
         // Serialize and pace uncached requests. Cached catalog/CDN GETs are exempt.
-        let mut gate = self.gate.lock().await;
-        if !cdn {
-            tokio::time::sleep_until(*gate).await;
+        let mut gate = if cdn { None } else { Some(self.gate.lock().await) };
+        if let Some(deadline) = gate.as_ref() {
+            tokio::time::sleep_until(**deadline).await;
         }
         let mut attempts = 0;
         loop {
@@ -101,8 +101,10 @@ impl Client {
                 .and_then(|s| s.to_str().ok())
                 .and_then(|s| s.parse::<u64>().ok());
             let data: Value = response.json().await.unwrap_or(Value::Null);
-            *gate = tokio::time::Instant::now()
-                + Duration::from_millis(if method == "GET" { 100 } else { 1000 });
+            if let Some(deadline) = gate.as_mut() {
+                **deadline = tokio::time::Instant::now()
+                    + Duration::from_millis(if method == "GET" { 100 } else { 1000 });
+            }
             if (200..300).contains(&status) {
                 return Ok(data);
             }

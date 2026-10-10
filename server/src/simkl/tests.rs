@@ -27,6 +27,8 @@ async fn fixture() -> (App, Log, Arc<AtomicBool>, tokio::task::JoinHandle<()>) {
             "/sync/history"|"/sync/add-to-list"=>json!({"added":{"movies":1},"not_found":{"movies":[],"shows":[],"episodes":[]}}),
             "/movies/42"=>movie,
             "/tv/7"=>show,
+            "/tv/8"=>json!({"title":"Upcoming show","ids":{"simkl":8},"airs":{"day":"Friday","time":"20:00","timezone":"America/New_York"}}),
+            "/tv/episodes/8"=>json!([{ "season":1,"episode":2,"title":"Next episode","date":"2099-10-10T20:00:00Z" }]),
             "/tv/episodes/7"=>json!([{"season":1,"episode":1,"title":"Pilot"}]),
             "/discover/trending/movies/today_500.json"=>json!([movie]),
             "/lists/user/11"|"/lists/1"=>json!({"error":"premium_only","message":"PRO/VIP required"}),
@@ -709,5 +711,32 @@ async fn playback_events_are_deduplicated_and_progress_saves_do_not_scrobble() {
             "/scrobble/stop"
         ]
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn cached_public_discovery_does_not_wait_for_profile_sync_lock() {
+    let (app, log, _, task) = fixture().await;
+    let (status, _) = request(&app, "member-token-1", "GET", "/api/discover?type=movie", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let count = log.lock().unwrap().len();
+    let _guard = app.simkl.gate.lock().await;
+    let (status, _) = tokio::time::timeout(std::time::Duration::from_millis(500),
+        request(&app, "member-token-1", "GET", "/api/discover?type=movie", Value::Null)).await
+        .expect("Cached Home reads must not wait for a sync's network requests");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(count, log.lock().unwrap().len());
+    task.abort();
+}
+
+#[tokio::test]
+async fn detail_exposes_next_airing_without_hydrating_related_titles() {
+    let (app, log, _, task) = fixture().await;
+    let (status, body) = request(&app, "member-token-1", "GET", "/api/meta/series/simkl:tv:8", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["meta"]["next_airing"]["released"], "2099-10-10T20:00:00Z");
+    assert_eq!(body["meta"]["next_airing"]["episode"], 2);
+    assert_eq!(body["meta"]["airs"]["timezone"], "America/New_York");
+    assert_eq!(log.lock().unwrap().len(), 2);
     task.abort();
 }
