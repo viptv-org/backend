@@ -4,6 +4,19 @@ use std::time::Duration;
 
 impl Service {
     pub(crate) async fn artwork(&self, item: &mut Value) {
+        if !item["background"].is_string() {
+            // Anime cours have separate SIMKL IDs but may share the same series IMDb ID.
+            // Reuse artwork only; never merge their metadata or episode identities.
+            if let (Some(imdb), Some(category)) = (item["simkl_ids"]["imdb"].as_str(), item["simkl_category"].as_str()) {
+                let sibling = self.db.lock().unwrap().query_row(
+                    "SELECT json_extract(value,'$.background') FROM simkl_items WHERE json_extract(value,'$.simkl_ids.imdb')=?1 AND json_extract(value,'$.simkl_category')=?2 AND json_type(value,'$.background')='text' ORDER BY length(id),id LIMIT 1",
+                    params![imdb,category], |row| row.get::<_,String>(0)).optional().ok().flatten();
+                if let Some(background) = sibling.filter(|url| url.starts_with("https://simkl.in/")) {
+                    item["background"] = json!(background);
+                    item["artwork_source"] = json!("SIMKL · shared series artwork");
+                }
+            }
+        }
         if item["background"].is_string() && item["title_logo"].is_string() { return }
         let id = item["id"].as_str().unwrap_or("");
         let cache_key = format!("artwork:{id}");

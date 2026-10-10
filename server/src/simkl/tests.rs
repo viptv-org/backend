@@ -789,3 +789,18 @@ async fn importing_a_thin_anime_title_does_not_replace_known_english_metadata() 
     assert_eq!(item["background"], "https://simkl.in/fanart/42.webp");
     task.abort();
 }
+
+#[tokio::test]
+async fn season_artwork_reuses_matching_simkl_series_without_merging_titles() {
+    let (app, _, _, task) = fixture().await;
+    app.simkl.remember(&[json!({"id":"simkl:anime:42","type":"series","name":"Earlier season","simkl_category":"anime","simkl_ids":{"imdb":"tt1234"},"background":"https://simkl.in/fanart/42.webp"})]).unwrap();
+    let mut item = json!({"id":"simkl:anime:43","type":"series","name":"New season","simkl_category":"anime","simkl_ids":{"imdb":"tt1234"},"title_logo":"https://images.metahub.space/logo/medium/tt1234/img"});
+    app.simkl.artwork(&mut item).await;
+    assert_eq!(item["background"], "https://simkl.in/fanart/42.webp");
+    assert_eq!(item["id"], "simkl:anime:43");
+    assert_eq!(item["name"], "New season");
+    let mut unrelated = json!({"id":"simkl:tv:43","simkl_category":"tv","simkl_ids":{"imdb":"tt1234"},"background":"https://simkl.in/fanart/unrelated.webp","title_logo":"logo"});
+    app.simkl.artwork(&mut unrelated).await;
+    assert_eq!(unrelated["background"], "https://simkl.in/fanart/unrelated.webp");
+    task.abort();
+}
