@@ -1,5 +1,5 @@
-//! Anime ids (kitsu/mal/anilist/anidb) → IMDb through the VIPTV metadata
-//! service, verified against Cinemeta. Matching library items are rewritten
+//! Anime ids (kitsu/mal/anilist/anidb) → IMDb through Simkl, verified
+//! against Cinemeta. Matching library items are rewritten
 //! into IMDb items before mapping, so every mapper check still applies.
 //! Several anime entries of one IMDb show (seasons, split cours) merge into one
 //! item. An episode that cannot be translated and found in Cinemeta is left
@@ -17,28 +17,42 @@ const MAX_TITLES: usize = 500;
 const MAX_RESPONSE: usize = 4_000_000;
 const MAX_EPISODES: i64 = 2000;
 
+/// Simkl (`SIMKL_CLIENT_ID`): anime id → cross ids and per-episode TVDB
+/// numbering. Lookups are on demand and paced under Simkl's 10 GET/s rule.
 pub(crate) struct MetadataService {
     base: String,
     key: String,
+    next: tokio::sync::Mutex<tokio::time::Instant>,
 }
 
 impl MetadataService {
     pub(crate) fn from_env() -> Option<Self> {
-        let base = std::env::var("VIPTV_METADATA_URL").ok()?;
-        let key = std::env::var("VIPTV_METADATA_API_KEY").ok()?;
-        Self::new(&base, &key)
+        let key = std::env::var("SIMKL_CLIENT_ID").ok()?;
+        Self::new("https://api.simkl.com", &key)
     }
 
     pub(crate) fn new(base: &str, key: &str) -> Option<Self> {
         let base = base.trim().trim_end_matches('/').to_owned();
         let key = key.trim().to_owned();
-        (!base.is_empty() && !key.is_empty()).then_some(Self { base, key })
+        (!base.is_empty() && !key.is_empty()).then(|| Self {
+            base,
+            key,
+            next: tokio::sync::Mutex::new(tokio::time::Instant::now()),
+        })
     }
 
     async fn get(&self, client: &reqwest::Client, path: &str) -> Option<Value> {
+        {
+            // At most ~8 requests per second across every lookup.
+            let mut next = self.next.lock().await;
+            tokio::time::sleep_until(*next).await;
+            *next = tokio::time::Instant::now() + Duration::from_millis(125);
+        }
         let mut response = client
             .get(format!("{}{path}", self.base))
-            .bearer_auth(&self.key)
+            .header("simkl-api-key", &self.key)
+            .header("app-name", "viptv")
+            .header("app-version", env!("CARGO_PKG_VERSION"))
             .send()
             .await
             .ok()?;
@@ -94,65 +108,39 @@ async fn resolve(
     source: &str,
     number: &str,
 ) -> Option<Resolution> {
-    let ids = service.get(client, &format!("/v1/ids/{source}/{number}")).await?;
-    let own = ids["ids"]["imdb"].as_str().filter(|i| imdb(i)).map(str::to_owned);
-    if kind == "movie" {
-        return own.map(|imdb| Resolution { imdb, episodes: HashMap::new() });
+    // Exactly one Simkl anime may claim the id.
+    let found = service.get(client, &format!("/search/id?{source}={number}")).await?;
+    let [hit] = found.as_array()?.as_slice() else { return None };
+    if hit["type"] != "anime" {
+        return None;
     }
+    let simkl = hit["ids"]["simkl"].as_i64()?;
+    let detail = service.get(client, &format!("/anime/{simkl}?extended=full")).await?;
+    if detail["ids"][source].as_str() != Some(number) {
+        return None; // the hit does not name this exact work
+    }
+    let imdb = detail["ids"]["imdb"].as_str().filter(|i| imdb(i))?.to_owned();
+    if kind == "movie" {
+        return (detail["anime_type"] == "movie").then(|| Resolution { imdb, episodes: HashMap::new() });
+    }
+    let list = service.get(client, &format!("/anime/episodes/{simkl}?extended=full")).await?;
     let mut episodes = HashMap::new();
-    let imdb = if let Some(own) = own.filter(|_| ids["canonical"]["source"] == "imdb") {
-        // The anime work IS this IMDb show: its IMDb episodes in order are the
-        // anime's own episodes 1..N (specials excluded).
-        let list = service.get(client, &format!("/v1/episodes/{source}/{number}")).await;
-        let regular = list
-            .as_ref()
-            .and_then(|v| v["episodes"]["episodes"].as_array())
-            .into_iter()
-            .flatten()
-            .filter_map(|e| Some((e["season"].as_i64()?, e["number"].as_i64()?)))
-            .filter(|(s, _)| *s >= 1);
-        for (n, coordinate) in (1..=MAX_EPISODES).zip(regular) {
-            episodes.insert(n, coordinate);
-        }
-        own
-    } else {
-        // A season or cour of a longer show: translate through the mapping
-        // evidence into its one TVDB container, then that container's IMDb.
-        let mappings = service
-            .get(client, &format!("/v1/mappings/{source}/{number}?target=tvdb"))
-            .await?;
-        let containers: HashSet<&str> = mappings["mappings"]
-            .as_array()?
-            .iter()
-            .filter(|m| m["to"]["source"] == "tvdb" && m["to"]["kind"] != "movie" && m["season"].is_i64())
-            .filter_map(|m| m["to"]["id"].as_str())
-            .collect();
-        let [container] = containers.into_iter().collect::<Vec<_>>()[..] else {
-            return None;
+    let mut conflicting = HashSet::new();
+    for e in list.as_array()?.iter().filter(|e| e["type"] == "episode") {
+        let (Some(n), Some(s), Some(t)) =
+            (e["episode"].as_i64(), e["tvdb"]["season"].as_i64(), e["tvdb"]["episode"].as_i64())
+        else {
+            continue;
         };
-        let show = service.get(client, &format!("/v1/ids/tvdb/tv:{container}")).await?;
-        let imdb = show["ids"]["imdb"].as_str().filter(|i| imdb(i))?.to_owned();
-        let list = service
-            .get(client, &format!("/v1/episodes/{source}/{number}?numbering=tvdb"))
-            .await?;
-        let mut conflicting = HashSet::new();
-        for e in list["episodes"]["episodes"].as_array()? {
-            let (Some(a), Some(s), Some(n)) =
-                (e["absolute"].as_i64(), e["season"].as_i64(), e["number"].as_i64())
-            else {
-                continue;
-            };
-            if !(1..=MAX_EPISODES).contains(&a) {
-                continue;
-            }
-            if episodes.insert(a, (s, n)).is_some_and(|prior| prior != (s, n)) {
-                conflicting.insert(a);
-            }
+        if !(1..=MAX_EPISODES).contains(&n) {
+            continue;
         }
-        // Two different targets for one episode: neither is trusted.
-        episodes.retain(|a, _| !conflicting.contains(a));
-        imdb
-    };
+        if episodes.insert(n, (s, t)).is_some_and(|prior| prior != (s, t)) {
+            conflicting.insert(n);
+        }
+    }
+    // Two different targets for one episode: neither is trusted.
+    episodes.retain(|n, _| !conflicting.contains(n));
     Some(Resolution { imdb, episodes })
 }
 

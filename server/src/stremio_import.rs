@@ -122,9 +122,8 @@ pub(crate) struct Service {
     pending: Mutex<HashMap<String, Slot>>,
     fetches: tokio::sync::Semaphore,
     client: reqwest::Client,
-    /// Operator-configured VIPTV metadata service (`VIPTV_METADATA_URL`,
-    /// `VIPTV_METADATA_API_KEY`) that maps anime ids to IMDb. Unset: anime ids
-    /// stay review-only unless an add-on verifies them.
+    /// Simkl (`SIMKL_CLIENT_ID`) maps anime ids to IMDb. Unset: anime ids stay
+    /// review-only unless an add-on verifies them.
     metadata_service: Option<remap::MetadataService>,
     // Fixed HTTPS endpoints in production; only isolated HTTP fixtures can override these.
     #[cfg(test)]

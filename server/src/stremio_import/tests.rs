@@ -2591,7 +2591,7 @@ fn anime_item(id: &str, watched: &str, resume: Option<u64>) -> Value {
     }
     item
 }
-/// Metadata service + Cinemeta fixture. S3 Part 2 (kitsu 41982) episode `a`
+/// Simkl + Cinemeta fixture. S3 Part 2 (kitsu 41982) episode `a`
 /// maps to TVDB season 3 episode `a + 12` unless `bad_second` sends episode 2
 /// to an episode Cinemeta does not have.
 async fn remap_review(items: Vec<Value>, s3_episodes: i64, overview: usize, bad_second: bool) -> Value {
@@ -2602,24 +2602,28 @@ async fn remap_review(items: Vec<Value>, s3_episodes: i64, overview: usize, bad_
     let base = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
         axum::serve(listener, Router::new()
-            .route("/v1/ids/:source/:id", get(|Path((source, id)): Path<(String, String)>| async move {
-                match (source.as_str(), id.as_str()) {
-                    ("kitsu", "41982") => Json(json!({"canonical":{"source":"mal","id":"38524"},"ids":{"kitsu":"41982","mal":"38524"}})).into_response(),
-                    ("kitsu", "7442") => Json(json!({"canonical":{"source":"imdb","id":AOT},"ids":{"imdb":AOT,"kitsu":"7442"}})).into_response(),
-                    ("tvdb", "tv:267440") => Json(json!({"canonical":{"source":"imdb","id":AOT},"ids":{"imdb":AOT}})).into_response(),
+            .route("/search/id", get(|RawQuery(q): RawQuery| async move {
+                Json(match q.as_deref() {
+                    Some("kitsu=41982") => json!([{"type":"anime","ids":{"simkl":931899}}]),
+                    Some("kitsu=7442") => json!([{"type":"anime","ids":{"simkl":39687}}]),
+                    _ => json!([]),
+                })
+            }))
+            .route("/anime/:id", get(|Path(id): Path<String>| async move {
+                match id.as_str() {
+                    "931899" => Json(json!({"anime_type":"tv","ids":{"simkl":931899,"kitsu":"41982","imdb":AOT}})).into_response(),
+                    "39687" => Json(json!({"anime_type":"tv","ids":{"simkl":39687,"kitsu":"7442","imdb":AOT}})).into_response(),
                     _ => StatusCode::NOT_FOUND.into_response(),
                 }
             }))
-            .route("/v1/mappings/:source/:id", get(|| async {
-                Json(json!({"mappings":[{"from":{"source":"kitsu","id":"41982"},"to":{"source":"tvdb","id":"267440","kind":"series"},"season":3,"episodeOffset":0}]}))
-            }))
-            .route("/v1/episodes/:source/:id", get(move |Path((_, id)): Path<(String, String)>, RawQuery(q): RawQuery| async move {
-                let episodes: Vec<Value> = if q.as_deref() == Some("numbering=tvdb") && id == "41982" {
-                    (1..=10).map(|a| json!({"absolute":a,"season":3,"number":if bad_second && a == 2 { 99 } else { a + 12 }})).collect()
+            .route("/anime/episodes/:id", get(move |Path(id): Path<String>| async move {
+                let mut episodes: Vec<Value> = if id == "931899" {
+                    (1..=10).map(|a| json!({"type":"episode","episode":a,"tvdb":{"season":3,"episode":if bad_second && a == 2 { 99 } else { a + 12 }}})).collect()
                 } else {
-                    [(1, 3), (2, 2), (3, 22)].into_iter().flat_map(|(s, n)| (1..=n).map(move |e| json!({"season":s,"number":e}))).collect()
+                    (1..=3).map(|a| json!({"type":"episode","episode":a,"tvdb":{"season":1,"episode":a}})).collect()
                 };
-                Json(json!({"episodes":{"episodes":episodes}}))
+                episodes.push(json!({"type":"special","episode":1}));
+                Json(Value::Array(episodes))
             }))
             .route("/meta/series/:id", get(move || async move { Json(aot_meta(s3_episodes, overview)) })))
             .await.unwrap();
@@ -2680,4 +2684,40 @@ async fn long_cinemeta_series_is_not_rejected_by_size() {
         "state":{"lastWatched":DATE,"watched":format!("{id}:1:2:2:eJxjBgAABAAE")}});
     let reviewed = remap_review(vec![item], 1495, 600, false).await;
     assert_eq!(episode_rows(&reviewed), vec![(1, 1, false), (1, 2, false)]);
+}
+
+/// Opt-in, read-only: the owner's real Stremio library through the guided
+/// preview + review on a synthetic VIPTV database. Never applies. Prints
+/// aggregate counts only. Run with STREMIO_EMAIL/STREMIO_PASSWORD set:
+/// `cargo test --lib real_library_remap_preview -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore]
+async fn real_library_remap_preview() {
+    let (Ok(email), Ok(password)) = (std::env::var("STREMIO_EMAIL"), std::env::var("STREMIO_PASSWORD")) else {
+        panic!("STREMIO_EMAIL / STREMIO_PASSWORD not set");
+    };
+    for simkl in [false, true] {
+        let directory = artifact_directory();
+        let mut app = crate::auth_integration_tests::fixture();
+        let service = Arc::get_mut(&mut app.stremio_import).unwrap();
+        service.backup_directory = Some(directory.path().join("backups"));
+        service.metadata_service = if simkl { remap::MetadataService::from_env() } else { None };
+        assert_eq!(service.metadata_service.is_some(), simkl, "SIMKL_CLIENT_ID not set");
+        let body = json!({"email":email,"password":password,"import_library":true,"import_progress":true,"inspect_addons":true});
+        let (status, preview) = request(&app, "member-token-1", "POST", PATH, body).await;
+        assert_eq!(status, StatusCode::OK, "preview failed: {}", preview["error"]);
+        let (status, reviewed) = review_selection(&app, &preview, json!([])).await;
+        assert_eq!(status, StatusCode::OK, "review failed: {}", reviewed["error"]);
+        let rows = reviewed["review_items"].as_array().unwrap();
+        let mut reasons: std::collections::BTreeMap<String, usize> = Default::default();
+        for r in rows.iter().filter(|r| r["selectable"] != true) {
+            *reasons.entry(r["reason"].as_str().unwrap_or("none").to_owned()).or_default() += 1;
+        }
+        let episodes = rows.iter().filter(|r| r["selectable"] == true && r["season"].is_i64()).count();
+        println!(
+            "[remap-preview] simkl={simkl} summary={} importable_rows={} episode_rows={episodes} review_rows_by_reason={reasons:?}",
+            reviewed["summary"],
+            rows.iter().filter(|r| r["selectable"] == true).count(),
+        );
+    }
 }
