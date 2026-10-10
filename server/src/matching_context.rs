@@ -12,7 +12,7 @@ pub(crate) fn init_progress_context(db: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub(crate) const CONTEXT_FIELDS: [&str; 15] = [
+pub(crate) const CONTEXT_FIELDS: [&str; 19] = [
     "series_id",
     "season",
     "episode",
@@ -28,6 +28,10 @@ pub(crate) const CONTEXT_FIELDS: [&str; 15] = [
     "source_quality",
     "source_audio",
     "audio_language",
+    "simkl_category",
+    "simkl_ids",
+    "simkl_episode_ids",
+    "tvdb",
 ];
 
 pub(crate) fn matching_context(value: &Value) -> Result<Value, ApiError> {
@@ -39,6 +43,7 @@ pub(crate) fn matching_context(value: &Value) -> Result<Value, ApiError> {
         }
         let invalid = || ApiError::from(format!("Invalid {key}"));
         let clean = match key {
+            "simkl_ids" | "simkl_episode_ids" | "tvdb" => { if !field.is_object() || field.to_string().len()>4096 { return Err(invalid()); } field.clone() },
             "season" | "episode" | "year" => {
                 let number = field.as_i64().ok_or_else(invalid)?;
                 let range = if key == "year" {

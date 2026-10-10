@@ -1,5 +1,4 @@
 use crate::util::{json_get, now, validate_url};
-use futures::{stream, StreamExt};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::{
@@ -25,13 +24,14 @@ use extras::catalog_extra;
 pub use extras::supports;
 #[cfg(test)]
 pub(super) use extras::MAX_EXTRA_OPTION;
-use extras::{bounded_exact_text, bounded_text, catalog_extras, CatalogExtra};
 
 type CachedResponses = Arc<Mutex<HashMap<String, (i64, Value, usize)>>>;
 type FetchFlight = tokio::sync::OnceCell<Result<Value, String>>;
 pub use viptv_provider::discover::{DiscoveryPlan, DiscoveryRequest as DiscoverOptions};
 #[derive(Clone)]
 pub struct Addons {
+    pub(crate) simkl: Option<Arc<crate::simkl::Service>>,
+    pub(crate) profile_id: Option<i64>,
     db: Arc<Mutex<Connection>>,
     client: reqwest::Client,
     cache: CachedResponses,
@@ -53,7 +53,7 @@ impl Addons {
                 .map_err(|_| "Database initialization failed")?;
             // The table itself is the persistent initialization marker, including for
             // legacy databases whose user deliberately removed every addon.
-            let existed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='addons')", [], |r| r.get(0)).map_err(|_| "Database initialization failed")?;
+            let _existed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='addons')", [], |r| r.get(0)).map_err(|_| "Database initialization failed")?;
             tx.execute_batch("CREATE TABLE IF NOT EXISTS addons(id INTEGER PRIMARY KEY,name TEXT NOT NULL,manifest_url TEXT UNIQUE NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,manifest TEXT NOT NULL,priority INTEGER NOT NULL DEFAULT 0);").map_err(|_| "Database initialization failed")?;
             let has_priority = {
                 let mut stmt = tx
@@ -74,10 +74,6 @@ impl Addons {
                 )
                 .map_err(|_| "Database initialization failed")?;
             }
-            if !existed {
-                let manifest = json!({"id":"com.linvo.cinemeta","name":"Cinemeta","resources":["catalog","meta"],"types":["movie","series"],"catalogs":[{"type":"movie","id":"top","name":"Popular movies","extra":[{"name":"search"},{"name":"skip"}]},{"type":"series","id":"top","name":"Popular series","extra":[{"name":"search"},{"name":"skip"}]}]});
-                tx.execute("INSERT INTO addons(name,manifest_url,manifest) VALUES('Cinemeta','https://v3-cinemeta.strem.io/manifest.json',?1)", [manifest.to_string()]).map_err(|_| "Database initialization failed")?;
-            }
             // Preserve legacy IDs/configuration without inferring an owner.
             let scoped: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('addons') WHERE name='account_id')", [], |r| r.get(0)).map_err(|_| "Database initialization failed")?;
             if !scoped {
@@ -87,6 +83,7 @@ impl Addons {
             tx.commit().map_err(|_| "Database initialization failed")?;
         }
         Ok(Self {
+            simkl: None, profile_id: None,
             db,
             client,
             cache: Default::default(),
@@ -296,12 +293,7 @@ impl Addons {
         )
         .map_err(|_| "Database query failed".into())
     }
-    async fn async_entries(&self) -> Result<Vec<(i64, String, Value)>, String> {
-        let this = self.clone();
-        tokio::task::spawn_blocking(move || this.entries())
-            .await
-            .map_err(|_| "Database task failed")?
-    }
+
     pub async fn add(&self, url: &str) -> Result<Value, String> {
         let vault = self.vault.clone().ok_or("secret_store_not_configured")?;
         let (url, m) = self.prepare_manifest(url).await?;
@@ -328,42 +320,7 @@ impl Addons {
         tx.commit().map_err(|_| "Database update failed")?;
         Ok(())
     }
-    pub fn catalogs(&self) -> Result<Value, String> {
-        let mut out = vec![];
-        'addons: for (id, _, m) in self.entries()? {
-            for c in m["catalogs"].as_array().into_iter().flatten().take(256) {
-                if out.len() == 2048 {
-                    break 'addons;
-                }
-                let Some(catalog_id) = bounded_exact_text(&c["id"], 256) else {
-                    continue;
-                };
-                let Some(kind) = bounded_exact_text(&c["type"], 64) else {
-                    continue;
-                };
-                let name = bounded_text(&c["name"], 256).unwrap_or_else(|| catalog_id.clone());
-                let extras = catalog_extras(c);
-                let normalized = extras.iter().map(CatalogExtra::wire).collect::<Vec<_>>();
-                let genres = extras
-                    .iter()
-                    .find(|extra| extra.name == "genre")
-                    .map(|extra| extra.options.clone())
-                    .unwrap_or_default();
-                out.push(json!({
-                    "addon_id":id,
-                    "addon_name":m["name"],
-                    "id":catalog_id,
-                    "type":kind,
-                    "name":name,
-                    "extra":normalized,
-                    "supports_search":extras.iter().any(|extra| extra.name == "search"),
-                    "supports_skip":extras.iter().any(|extra| extra.name == "skip"),
-                    "genres":genres,
-                }));
-            }
-        }
-        Ok(Value::Array(out))
-    }
+    pub fn catalogs(&self) -> Result<Value, String> { Ok(crate::simkl::catalogs()) }
     pub(crate) fn available(db: &Connection, account: i64, id: i64) -> bool {
         db.query_row(
             "SELECT EXISTS(SELECT 1 FROM addons WHERE id=?1 AND account_id=?2 AND enabled=1)",
@@ -445,15 +402,7 @@ impl Addons {
         cache.insert(key.into(), (now() + ttl, v.clone(), size));
         Ok(v)
     }
-    pub(crate) async fn metadata_from(
-        &self,
-        manifest_url: &str,
-        kind: &str,
-        id: &str,
-    ) -> Result<Value, String> {
-        let endpoint = Self::endpoint(manifest_url, &["meta", kind, &format!("{id}.json")])?;
-        self.fetch(&endpoint, 0).await
-    }
+
     pub fn endpoint(base: &str, parts: &[&str]) -> Result<String, String> {
         viptv_provider::discover::addon_endpoint(base, parts)
     }

@@ -192,7 +192,7 @@ pub struct Page {
 }
 pub fn queue(db: &Connection, profile: i64, offset: u32, limit: u32) -> Result<Value, ApiError> {
     let allowed = kids::sql_allowed("progress.type", "progress.id", "?1");
-    let sql = format!("WITH ranked AS (SELECT *,rowid AS activity_id,ROW_NUMBER() OVER(PARTITION BY type,CASE WHEN title_id='' THEN id ELSE title_id END ORDER BY updated_at DESC,rowid DESC) AS rank FROM progress WHERE profile_id=?1 AND type!='live' AND json_extract(context,'$.stremio_completion_only') IS NOT 1 AND {allowed}), visible AS (SELECT * FROM ranked p WHERE rank=1 AND (position>0 OR json_extract(context,'$.progress_corrected')=1) AND (type='series' OR (json_extract(context,'$.watched_override') IS NOT 1 AND (duration<=0 OR position/duration<0.95))) AND NOT EXISTS(SELECT 1 FROM queue_hidden h WHERE h.profile_id=p.profile_id AND h.type=p.type AND h.title_id=CASE WHEN p.title_id='' THEN p.id ELSE p.title_id END)) SELECT id,type,name,poster,position,duration,updated_at,context,title_id,COUNT(*) OVER() FROM visible ORDER BY updated_at DESC,activity_id DESC LIMIT ?2 OFFSET ?3");
+    let sql = format!("WITH ranked AS (SELECT *,rowid AS activity_id,ROW_NUMBER() OVER(PARTITION BY type,CASE WHEN title_id='' THEN id ELSE title_id END ORDER BY updated_at DESC,rowid DESC) AS rank FROM progress WHERE profile_id=?1 AND type!='live' AND json_extract(context,'$.simkl_completion_only') IS NOT 1 AND {allowed}), visible AS (SELECT * FROM ranked p WHERE rank=1 AND (position>0 OR json_extract(context,'$.progress_corrected')=1) AND (type='series' OR (json_extract(context,'$.watched_override') IS NOT 1 AND (duration<=0 OR position/duration<0.80))) AND NOT EXISTS(SELECT 1 FROM queue_hidden h WHERE h.profile_id=p.profile_id AND h.type=p.type AND h.title_id=CASE WHEN p.title_id='' THEN p.id ELSE p.title_id END)) SELECT id,type,name,poster,position,duration,updated_at,context,title_id,COUNT(*) OVER() FROM visible ORDER BY updated_at DESC,activity_id DESC LIMIT ?2 OFFSET ?3");
     let mut query = db.prepare(&sql).map_err(db_error)?;
     let rows = query.query_map(params![profile,limit+1,offset], |r| {
         let mut item = json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"position":r.get::<_,f64>(4)?,"duration":r.get::<_,f64>(5)?,"updated_at":r.get::<_,i64>(6)?});
@@ -203,16 +203,12 @@ pub fn queue(db: &Connection, profile: i64, offset: u32, limit: u32) -> Result<V
     let total = rows.first().map(|r| r.2).unwrap_or(0);
     let has_more = rows.len() > limit as usize;
     let mut items = Vec::new();
-    for (mut item, series, _, mut manual_watched) in rows.into_iter().take(limit as usize) {
+    for (mut item, series, _, manual_watched) in rows.into_iter().take(limit as usize) {
         item["queue_title_id"] = json!(if series.is_empty() {
             title_id(&item)
         } else {
             series.clone()
         });
-        if let Some(anchor) = stremio_import::continuation_item(db, profile, &item)? {
-            item = anchor;
-            manual_watched = true;
-        }
         let position = item["position"].as_f64().unwrap_or(0.0);
         let duration = item["duration"].as_f64().unwrap_or(0.0);
         let near_end = duration > 10.0 && position >= duration - 10.0;

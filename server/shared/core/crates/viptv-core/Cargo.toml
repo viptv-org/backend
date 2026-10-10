@@ -16,6 +16,7 @@ native = ["dep:uniffi"]
 bindgen = ["native", "uniffi/cli"]
 
 [dependencies]
+viptv-simkl = { path = "../viptv-simkl" }
 base64 = "0.22.1"
 sha1 = "0.10.6"
 unicode-normalization = "0.1.24"

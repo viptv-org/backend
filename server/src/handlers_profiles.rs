@@ -97,14 +97,21 @@ pub(crate) async fn save_favorite_authenticated(
     path: Path<i64>,
     value: axum::Json<Value>,
 ) -> ApiResult {
-    save_favorite(State(app.with_lease(lease)), path, value).await
+    let app=app.with_lease(lease);let item=value.0.clone();let p=path.0;
+    let result=save_favorite(State(app.clone()),path,value).await?;
+    if let Err(error)=app.simkl.changed(p,item,"save").await { app.db.lock().unwrap().execute("UPDATE simkl_connections SET error=?1 WHERE profile_id=?2",params![error,p]).map_err(db_error)?; }
+    Ok(result)
 }
 pub(crate) async fn delete_favorite_authenticated(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     path: Path<(i64, String, String)>,
 ) -> ApiResult {
-    delete_favorite(State(app.with_lease(lease)), path).await
+    let app=app.with_lease(lease);let (p,kind,id)=path.0.clone();
+    let item=app.simkl.cached_item(&id).unwrap_or(json!({"id":id,"type":kind}));
+    let result=delete_favorite(State(app.clone()),path).await?;
+    if let Err(error)=app.simkl.changed(p,item,"remove").await {app.db.lock().unwrap().execute("UPDATE simkl_connections SET error=?1 WHERE profile_id=?2",params![error,p]).map_err(db_error)?;}
+    Ok(result)
 }
 pub(crate) async fn progress_authenticated(
     State(app): State<App>,
@@ -266,7 +273,8 @@ pub(crate) async fn save_progress(
     if p < 0.0 || d < 0.0 || p > 1e9 || d > 1e9 {
         return Err("Invalid playback position".into());
     }
-    let context = matching_context(&v)?;
+    let mut context = matching_context(&v)?;
+    context["simkl_imported"]=json!(false);
     let db = a.db.lock().unwrap();
     a.require_profile(&db, profile)?;
     db.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster,position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,context=json_remove(json_patch(progress.context,excluded.context),'$.watched_override','$.stremio_completion_only','$.stremio_watch_date_unknown'),title_id=CASE WHEN json_extract(excluded.context,'$.series_id') IS NULL AND json_extract(progress.context,'$.series_id') IS NOT NULL THEN json_extract(progress.context,'$.series_id') ELSE excluded.title_id END",params![profile,id,kind,name,v["poster"].as_str(),p,d,library::activity_time(&db,profile)?,context.to_string(),continuation::title_id(&v)]).map_err(db_error)?;

@@ -115,7 +115,7 @@ pub struct App {
     pub(crate) secret_vault: Option<Arc<secret_store::Vault>>,
     pub(crate) gateway_client: gateway::client::Client,
     pub(crate) gateway_playbacks: Arc<gateway::playback::Registry>,
-    pub(crate) stremio_import: Arc<stremio_import::Service>,
+    pub(crate) simkl: Arc<simkl::Service>,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
     // Request-local identity travels with discovery producers; ownership is never upstream-authored.
@@ -256,11 +256,14 @@ impl App {
         gateway::playback::init(&db)
             .map_err(|_| "Playback request schema initialization failed")?;
         gateway::registry::init(&db).map_err(|_| "Gateway schema initialization failed")?;
-        stremio_import::init(&db).map_err(|_| "Import schema initialization failed")?;
-        let stremio_import = stremio_import::Service::new()?;
+        simkl::init(&db).map_err(|_| "SIMKL schema initialization failed")?;
         let db = Arc::new(Mutex::new(db));
+        let mut simkl = simkl::Service::new(db.clone())?;
+        simkl.vault = secret_vault.clone();
+        let simkl = Arc::new(simkl);
         let mut addons = Addons::new(db.clone(), client.clone())?;
         addons.vault = secret_vault.clone();
+        addons.simkl = Some(simkl.clone());
         let mut providers = ProviderService::new(db.clone(), client);
         providers.vault = secret_vault.clone();
         provider::refresh_v2::start(&providers);
@@ -272,7 +275,7 @@ impl App {
             secret_vault,
             gateway_client: Default::default(),
             gateway_playbacks,
-            stremio_import,
+            simkl,
             jobs: Default::default(),
             streams: Default::default(),
             principal: None,
@@ -293,6 +296,8 @@ impl App {
         self.addons = self
             .addons
             .for_account(lease.principal.account_id().expect("account identity"));
+        let auth::Principal::Account { profile_id, .. } = &lease.principal;
+        self.addons.profile_id = *profile_id;
         self.principal = Some(lease.principal.clone());
         self.lease = Some(lease);
         self

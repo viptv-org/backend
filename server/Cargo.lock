@@ -2502,6 +2502,7 @@ dependencies = [
  "thiserror",
  "unicode-normalization",
  "url",
+ "viptv-simkl",
  "wasm-bindgen",
 ]
 
@@ -2554,8 +2555,21 @@ dependencies = [
  "uuid",
  "viptv-core",
  "viptv-provider",
+ "viptv-simkl",
  "webpki-roots",
  "zeroize",
+]
+
+[[package]]
+name = "viptv-simkl"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]

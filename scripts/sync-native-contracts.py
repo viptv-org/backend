@@ -10,7 +10,7 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = {
-    'core': ((ROOT / 'CORE_REF').read_text().strip(), ['Cargo.toml', 'crates/viptv-core', 'LICENSE']),
+    'core': ((ROOT / 'CORE_REF').read_text().strip(), ['Cargo.toml', 'crates/viptv-core', 'crates/viptv-simkl', 'LICENSE']),
     'playback-gateway': ('f318d6df9bb3d4d03a4c81c3ea2e524e6f5405d1', ['torrent-policy', 'LICENSE']),
 }
 manifest = {}
@@ -27,8 +27,8 @@ for name, (revision, paths) in SOURCES.items():
         # The exported workspace intentionally contains only the library used here.
         cargo = destination / 'Cargo.toml'
         cargo.write_text(cargo.read_text().replace(
-            'members = ["crates/viptv-core", "crates/viptv-provider", "crates/typegen"]',
-            'members = ["crates/viptv-core"]'))
+            'members = ["crates/viptv-core", "crates/viptv-provider", "crates/typegen", "crates/viptv-simkl"]',
+            'members = ["crates/viptv-core", "crates/viptv-simkl"]'))
     manifest[name] = {'revision': revision, 'license': ['GPL-2.0-only'] if name == 'core' else ['GPL-2.0-only', 'Apache-2.0'],
                       'archive_sha256': hashlib.sha256(data).hexdigest()}
 manifest['design_revision'] = (ROOT / 'DESIGN_REF').read_text().strip()

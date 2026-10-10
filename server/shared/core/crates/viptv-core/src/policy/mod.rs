@@ -36,10 +36,13 @@ pub(super) fn image(v: &Value, k: &str) -> Value {
 pub(super) fn watched(v: &Value) -> bool {
     v["watched"]
         .as_bool()
-        .unwrap_or(num(v, "duration") > 0.0 && num(v, "position") / num(v, "duration") >= 0.95)
+        .unwrap_or(num(v, "duration") > 0.0 && num(v, "position") / num(v, "duration") >= 0.80)
 }
 pub(super) fn item_request(v: &Value) -> Value {
     let mut o = json!({});
+    for key in ["simkl_category", "simkl_ids", "simkl_episode_ids", "tvdb", "simkl_url"] {
+        if !v["raw"][key].is_null() { o[key] = v["raw"][key].clone(); }
+    }
     for (a, b) in [
         ("id", "id"),
         ("type", "type"),

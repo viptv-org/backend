@@ -13,7 +13,7 @@ pub mod provider;
 mod secret_store;
 mod service_errors;
 mod source_http;
-mod stremio_import;
+mod simkl;
 pub mod util;
 
 mod app_state;

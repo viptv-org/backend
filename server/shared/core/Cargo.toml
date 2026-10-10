@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/viptv-core"]
+members = ["crates/viptv-core", "crates/viptv-simkl"]
 exclude = ["adapters/tauri"]
 resolver = "2"
 

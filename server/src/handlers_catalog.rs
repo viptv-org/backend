@@ -138,7 +138,12 @@ pub(crate) async fn start_streams(
         .ok_or("Invalid stream request")?
         .extend(context.as_object().unwrap().clone());
     let kind = media_type(&v)?.to_string();
-    let id = text(&v, "id", 512)?.to_string();
+    let mut id = text(&v, "id", 512)?.to_string();
+    if viptv_simkl::parse_id(&id).is_some() {
+        let auth::Principal::Account { profile_id, .. } = a.identity();
+        let item = a.simkl.mapped(&id,&kind,&v,profile_id).await.map_err(ApiError::from)?;
+        id = viptv_simkl::stream_id(&item).map_err(ApiError::from)?;
+    }
     a.prune();
     let addons = a.addons.clone();
     let (sources, source_errors) = blocking(move || Ok(addons.entries_with_errors()?)).await?;

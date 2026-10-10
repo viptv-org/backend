@@ -32,7 +32,8 @@ pub async fn toggle(
     axum::Json(item): axum::Json<Value>,
 ) -> ApiResult {
     let app = app.with_lease(lease);
-    blocking(move || {
+    let service=app.simkl.clone();let change=item.clone();
+    let response=blocking(move || {
         let id = text(&item, "id", 512)?;
         let kind = media_type(&item)?;
         let name = text(&item, "name", 512)?;
@@ -57,7 +58,9 @@ pub async fn toggle(
         tx.commit().map_err(db_error)?;
         Ok(axum::Json(json!({"ok":true,"saved":removed==0})))
     })
-    .await
+    .await?;
+    if let Err(error)=service.changed(profile,change,if response.0["saved"]==true{"save"}else{"remove"}).await {service.db.lock().unwrap().execute("UPDATE simkl_connections SET error=?1 WHERE profile_id=?2",params![error,profile]).map_err(db_error)?;}
+    Ok(response)
 }
 
 pub async fn history_page(
@@ -90,7 +93,8 @@ pub async fn correct(
 ) -> ApiResult {
     use rusqlite::OptionalExtension;
     let app = app.with_lease(lease);
-    blocking(move || {
+    let service=app.simkl.clone();let change=item.clone();
+    let response=blocking(move || {
         let id=text(&item,"id",512)?; let kind=media_type(&item)?; let name=text(&item,"name",512)?;
         if kind=="live" {return Err("Live channels do not have episode progress".into());}
         let action=text(&item,"action",32)?;
@@ -111,6 +115,7 @@ pub async fn correct(
         let mut merged=previous.as_ref().and_then(|v|serde_json::from_str::<Value>(&v.1).ok()).filter(|v|v.is_object()).unwrap_or(json!({}));
         merged.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());
         merged["progress_corrected"]=json!(true);
+        merged["simkl_imported"]=json!(false);
         merged["watched_override"]=if action=="watched" {json!(true)}else{Value::Null};
         merged.as_object_mut().unwrap().remove("stremio_import_watched");
         merged.as_object_mut().unwrap().remove("stremio_completion_only");
@@ -126,7 +131,9 @@ pub async fn correct(
         let mut response = json!({"ok":true,"position":position,"duration":duration});
         add_watch_fields(&mut response, &merged);
         Ok(axum::Json(response))
-    }).await
+    }).await?;
+    if let Err(error)=service.changed(profile,change.clone(),change["action"].as_str().unwrap_or("")).await {service.db.lock().unwrap().execute("UPDATE simkl_connections SET error=?1 WHERE profile_id=?2",params![error,profile]).map_err(db_error)?;}
+    Ok(response)
 }
 
 #[derive(Deserialize)]
@@ -162,21 +169,18 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
 pub fn add_watch_fields(item: &mut Value, context: &Value) {
     let position = item["position"].as_f64().unwrap_or(0.0);
     let duration = item["duration"].as_f64().unwrap_or(0.0);
-    let completion_only = context["stremio_completion_only"] == true;
+    let completion_only = context["simkl_completion_only"] == true;
     item["watched"] = json!(watched(item, context));
     item["resume_active"] =
-        json!(!completion_only && position > 0.0 && duration > 0.0 && position / duration < 0.95);
-    item["watch_date_known"] = json!(context["stremio_watch_date_unknown"] != true);
+        json!(!completion_only && position > 0.0 && duration > 0.0 && position / duration < 0.80);
+    item["watch_date_known"] = json!(context["simkl_watch_date_unknown"] != true);
     item["completion_only"] = json!(completion_only);
 }
 /// Explicit completion does not turn an unknown runtime into a fabricated duration.
 pub fn watched(item: &Value, context: &Value) -> bool {
-    if context["progress_corrected"] != true && context["stremio_import_watched"] == true {
-        return true;
-    }
     context["watched_override"].as_bool().unwrap_or_else(|| {
         let duration = item["duration"].as_f64().unwrap_or(0.0);
-        duration > 0.0 && item["position"].as_f64().unwrap_or(0.0) / duration >= 0.95
+        duration > 0.0 && item["position"].as_f64().unwrap_or(0.0) / duration >= 0.80
     })
 }
 

@@ -72,6 +72,27 @@ impl<'de> Deserialize<'de> for JsonValue {
 }
 pub type JsonObject = BTreeMap<String, JsonValue>;
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
+#[serde(rename_all = "camelCase")]
+#[facet(rename_all = "camelCase")]
+pub struct SimklFacts {
+    pub simkl_id: u64,
+    pub category: String,
+    pub external_ids: JsonObject,
+    pub episode_coordinates: Option<JsonObject>,
+    pub ratings: JsonObject,
+    pub rank: Option<f64>,
+    pub last_aired: Option<String>,
+    pub watchlist_status: Option<String>,
+    pub url: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
+#[serde(rename_all = "camelCase")]
+#[facet(rename_all = "camelCase")]
+pub struct SimklDiscoveryCapabilities {
+    pub full_search: bool,
+    pub coverage: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 #[serde(rename_all = "lowercase")]
 #[facet(rename_all = "lowercase")]
 #[repr(C)]

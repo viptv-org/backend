@@ -2,6 +2,7 @@
 pub mod app;
 pub mod domain;
 pub mod dto;
+pub use viptv_simkl as simkl;
 mod native_metainfo;
 pub mod native_torrent;
 pub mod native_torrent_policy;

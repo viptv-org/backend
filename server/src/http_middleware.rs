@@ -147,7 +147,8 @@ pub(crate) async fn authorize_resources(
             ["profiles", id, "favorites", ..]
             | ["profiles", id, "progress", ..]
             | ["profiles", id, "continue", ..]
-            | ["profiles", id, "preferences", ..] => {
+            | ["profiles", id, "preferences", ..]
+            | ["profiles", id, "integrations", ..] => {
                 let profile = id
                     .parse::<i64>()
                     .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "Invalid profile id".into()))?;

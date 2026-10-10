@@ -21,22 +21,13 @@ pub fn router_with_tv(
             "/profiles/:id",
             axum::routing::patch(update_profile_authenticated).delete(delete_profile_authenticated),
         )
-        .route(
-            "/profiles/:id/imports/stremio/preview",
-            post(stremio_import::preview),
-        )
-        .route(
-            "/profiles/:id/imports/stremio/:preview_id/review",
-            post(stremio_import::review),
-        )
-        .route(
-            "/profiles/:id/imports/stremio/:preview_id/apply",
-            post(stremio_import::apply),
-        )
-        .route(
-            "/profiles/:id/imports/stremio/:preview_id",
-            delete(stremio_import::cancel),
-        )
+        .route("/profiles/:id/integrations/simkl", get(simkl::status).delete(simkl::disconnect))
+        .route("/profiles/:id/integrations/simkl/connect", post(simkl::connect))
+        .route("/profiles/:id/integrations/simkl/sync", post(simkl::sync_now))
+        .route("/profiles/:id/integrations/simkl/watchlist", axum::routing::put(simkl::watchlist))
+        .route("/profiles/:id/integrations/simkl/lists", get(simkl::lists))
+        .route("/profiles/:id/integrations/simkl/lists/:list", get(simkl::list))
+        .route("/profiles/:id/integrations/simkl/playback", post(simkl::scrobble))
         .route("/addons", get(addons).post(add_addon))
         .route("/addons/:id", delete(delete_addon).patch(update_addon))
         .route("/catalogs", get(catalogs))
@@ -197,6 +188,7 @@ pub fn router_with_tv(
             app.clone(),
             authorize_resources,
         ))
+        .route("/integrations/simkl/callback", get(simkl::callback))
         .merge(auth::router())
         .route_layer(middleware::from_fn_with_state(
             app.clone(),
