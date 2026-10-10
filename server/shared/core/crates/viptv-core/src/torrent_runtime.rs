@@ -285,7 +285,7 @@ pub(crate) fn decision(input: &str) -> Result<String, CoreError> {
         Operation::Recovery { facts } => {
             let decision = match crate::native_torrent::recovery_decision(&facts) {
                 NativeTorrentRecoveryDecision::ForceGatewayRetry => {
-                    NativeTorrentRecoveryDecision::OrdinaryRetry
+                    NativeTorrentRecoveryDecision::NativeRetry
                 }
                 other => other,
             };

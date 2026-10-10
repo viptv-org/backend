@@ -29,7 +29,7 @@ pub(crate) fn native_failure_message(code: &str) -> Option<&'static str> {
             "This device took too long to prepare the selected source. Try another source or retry playback."
         }
         "native_metadata_timeout" => {
-            "No torrent metadata arrived from peers before the startup deadline. Check DHT/network access or choose another source."
+            "No torrent metadata arrived from reachable peers before the startup deadline. Retry starts one fresh attempt, or choose another source."
         }
         "native_cache_preparation_timeout" => {
             "The device timed out preparing local torrent storage. Check free space and retry after the previous stream has stopped."

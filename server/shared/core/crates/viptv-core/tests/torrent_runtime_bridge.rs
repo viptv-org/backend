@@ -50,7 +50,7 @@ fn native_retry_renegotiates_without_gateway_fallback() {
     let facts = serde_json::json!({"operation":"recovery","facts":{"admitted":true,"authorityRetired":true,"authorizationRefused":false,"selectionRefused":false,"action":"retry"}});
     assert_eq!(
         viptv_core::normalize("torrentRuntime".into(), facts.to_string(), String::new()).unwrap(),
-        "\"ordinaryRetry\""
+        "\"nativeRetry\""
     );
 }
 

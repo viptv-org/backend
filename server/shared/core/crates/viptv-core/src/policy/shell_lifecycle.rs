@@ -170,6 +170,11 @@ pub struct PreviewInput {
     pub failed: bool,
     /// Entry identity is a native ownership fact, not merely equality of target keys.
     pub owner_matches: bool,
+    /// Monotonic age and reuse budget supplied by the shell. Omitted by legacy shells.
+    #[serde(default)]
+    pub elapsed_millis: Option<i64>,
+    #[serde(default)]
+    pub reuse_budget_millis: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Facet)]
@@ -188,16 +193,20 @@ pub enum PreviewDecision {
 pub fn preview(v: &PreviewInput) -> PreviewDecision {
     use PreviewDecision::*;
     let same_key = v.active_key.as_ref() == Some(&v.requested_key);
+    let fresh = match (v.elapsed_millis, v.reuse_budget_millis) {
+        (Some(age), Some(budget)) => age >= 0 && age < budget,
+        _ => true,
+    };
     match v.action {
         PreviewAction::Start => {
-            if same_key {
+            if same_key && fresh {
                 Retain
             } else {
                 BeginSettled
             }
         }
         PreviewAction::Adopt => {
-            if same_key && (v.running || v.has_sources) {
+            if same_key && fresh && (v.running || v.has_sources) {
                 Retain
             } else {
                 BeginImmediate

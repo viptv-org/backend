@@ -109,6 +109,7 @@ pub enum NativeTorrentRecoveryDecision {
     Back,
     OrdinaryRetry,
     ForceGatewayRetry,
+    NativeRetry,
 }
 pub fn recovery_decision(f: &NativeTorrentRecoveryFacts) -> NativeTorrentRecoveryDecision {
     use NativeTorrentRecoveryDecision::*;
@@ -120,7 +121,7 @@ pub fn recovery_decision(f: &NativeTorrentRecoveryFacts) -> NativeTorrentRecover
         NativeTorrentRecoveryAction::ChooseSource => ChooseSource,
         NativeTorrentRecoveryAction::Retry if f.authorization_refused => AuthRecovery,
         NativeTorrentRecoveryAction::Retry if f.selection_refused => ChooseSource,
-        NativeTorrentRecoveryAction::Retry if f.admitted => ForceGatewayRetry,
+        NativeTorrentRecoveryAction::Retry if f.admitted => NativeRetry,
         NativeTorrentRecoveryAction::Retry => OrdinaryRetry,
     }
 }

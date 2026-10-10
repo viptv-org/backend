@@ -117,7 +117,26 @@ fn preview_input(action: PreviewAction) -> PreviewInput {
         done: false,
         failed: false,
         owner_matches: true,
+        elapsed_millis: None,
+        reuse_budget_millis: None,
     }
+}
+
+#[test]
+fn expired_preview_is_replaced_even_with_partial_rows_or_a_running_job() {
+    let mut v = preview_input(PreviewAction::Adopt);
+    v.active_key = Some(v.requested_key.clone());
+    v.has_sources = true;
+    v.running = true;
+    v.reuse_budget_millis = Some(300_000);
+    v.elapsed_millis = Some(299_999);
+    assert_eq!(preview(&v), PreviewDecision::Retain);
+    v.elapsed_millis = Some(300_000);
+    assert_eq!(preview(&v), PreviewDecision::BeginImmediate);
+    v.action = PreviewAction::Start;
+    assert_eq!(preview(&v), PreviewDecision::BeginSettled);
+    v.elapsed_millis = Some(-1);
+    assert_eq!(preview(&v), PreviewDecision::BeginSettled);
 }
 
 #[test]

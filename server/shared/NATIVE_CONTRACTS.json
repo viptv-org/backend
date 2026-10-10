@@ -1,10 +1,10 @@
 {
   "core": {
-    "revision": "0f3d9f78e6df7e9550a9335b835dbebef454a3b5",
+    "revision": "ace288131edb4c71fc9aa182bd74470b9f99cc2f",
     "license": [
       "GPL-2.0-only"
     ],
-    "archive_sha256": "cba737f6579ee3f5ad0ce9a2d5df39f99576aabd90fa2de351d1ff647f227cde"
+    "archive_sha256": "e992712b64429f9e23f8dea9879ca72b42cdb3c9bb2b4146f50d9b3c1f68554c"
   },
   "playback-gateway": {
     "revision": "f318d6df9bb3d4d03a4c81c3ea2e524e6f5405d1",
@@ -14,5 +14,5 @@
     ],
     "archive_sha256": "90a514d87f5d8526670291919d207a29ef2cd1ec3c2b08aaa94ca0cc77c210ac"
   },
-  "design_revision": "16277caf2c7bf16296e25da40f143666465f0d2b"
+  "design_revision": "9998da83ef42cfe1d1c46d76f7ee6d8a2e43242e"
 }
