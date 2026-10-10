@@ -508,6 +508,17 @@ fn configured_https_origin_is_pinned_without_forwarded_host_trust() {
     assert!(check_origin(&h, &[pin]).is_err());
 }
 #[test]
+fn browser_access_cookie_survives_oauth_top_level_return() {
+    let response = response(json!({}), Some(("access".into(), "refresh".into())));
+    let cookies: Vec<_> = response.headers().get_all(header::SET_COOKIE)
+        .iter().map(|value| value.to_str().unwrap()).collect();
+    let access = cookies.iter().find(|cookie| cookie.starts_with("viptv_session=")).unwrap();
+    let refresh = cookies.iter().find(|cookie| cookie.starts_with("viptv_refresh=")).unwrap();
+    assert!(access.contains("HttpOnly; Secure; SameSite=Lax"));
+    assert!(refresh.contains("HttpOnly; Secure; SameSite=Strict"));
+}
+
+#[test]
 fn origins_cookie_flags_and_public_allowlist() {
     let mut h = HeaderMap::new();
     h.insert(header::HOST, HeaderValue::from_static("tv.example"));
@@ -531,7 +542,7 @@ fn origins_cookie_flags_and_public_allowlist() {
     let r = response(json!({}), Some(("access".into(), "refresh".into())));
     for c in r.headers().get_all(header::SET_COOKIE) {
         let c = c.to_str().unwrap();
-        assert!(c.contains("HttpOnly; Secure; SameSite=Strict"));
+        assert!(c.contains("HttpOnly; Secure; SameSite="));
         assert!(!c.contains(".."));
     }
     assert!(public("/auth/login", &Method::POST));

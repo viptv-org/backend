@@ -241,10 +241,14 @@ pub(crate) fn response(v: Value, cookies: Option<(String, String)>) -> Response 
     if let Some((a, b)) = cookies {
         for (name, value, age) in [("viptv_session", a, ACCESS), ("viptv_refresh", b, REFRESH)] {
             let age = if value.is_empty() { 0 } else { age };
+            // OAuth providers return via cross-site top-level GET navigation.
+            // Only the short-lived access cookie needs to accompany that return;
+            // refresh remains Strict, and writes still require origin + CSRF.
+            let same_site = if name == "viptv_session" { "Lax" } else { "Strict" };
             r.headers_mut().append(
                 header::SET_COOKIE,
                 HeaderValue::from_str(&format!(
-                    "{name}={value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={age}"
+                    "{name}={value}; Path=/; HttpOnly; Secure; SameSite={same_site}; Max-Age={age}"
                 ))
                 .unwrap(),
             );
