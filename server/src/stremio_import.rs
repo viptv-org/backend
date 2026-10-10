@@ -12,6 +12,7 @@ use zeroize::{Zeroize, Zeroizing};
 mod addon_review;
 mod backup;
 mod mapper;
+mod remap;
 #[cfg(test)]
 mod tests;
 
@@ -121,6 +122,10 @@ pub(crate) struct Service {
     pending: Mutex<HashMap<String, Slot>>,
     fetches: tokio::sync::Semaphore,
     client: reqwest::Client,
+    /// Operator-configured VIPTV metadata service (`VIPTV_METADATA_URL`,
+    /// `VIPTV_METADATA_API_KEY`) that maps anime ids to IMDb. Unset: anime ids
+    /// stay review-only unless an add-on verifies them.
+    metadata_service: Option<remap::MetadataService>,
     // Fixed HTTPS endpoints in production; only isolated HTTP fixtures can override these.
     #[cfg(test)]
     endpoint: Option<String>,
@@ -143,6 +148,7 @@ impl Service {
                 .user_agent("VIPTV-Stremio-import/1")
                 .build()
                 .map_err(|_| UNAVAILABLE)?,
+            metadata_service: remap::MetadataService::from_env(),
             #[cfg(test)]
             endpoint: None,
             #[cfg(test)]
@@ -583,7 +589,7 @@ pub(crate) async fn review(
     if !selection.selected_addons.iter().all(|s| unique.insert(s)) {
         return Err("stremio_invalid_request".into());
     }
-    let (selected, pending_metadata, reserved_revision) = {
+    let (selected, pending_metadata, source_items, reserved_revision) = {
         let mut slots = app.stremio_import.pending.lock().map_err(|_| STORAGE)?;
         let slot = slots
             .get_mut(&id)
@@ -623,6 +629,7 @@ pub(crate) async fn review(
         (
             selected,
             preview.pending_metadata.clone(),
+            preview.source_items.clone(),
             preview.review_generation,
         )
     };
@@ -652,7 +659,11 @@ pub(crate) async fn review(
     )
     .await
     .map_err(|_| UNAVAILABLE)??;
-    let metadata = addon_review::metadata(&app, &pending_metadata, &verified).await;
+    let (mut metadata, remapped) = tokio::join!(
+        addon_review::metadata(&app, &pending_metadata, &verified),
+        remap::remap(&app, &source_items),
+    );
+    metadata.extend(remapped.meta.clone());
     let worker = app.clone();
     account_api::run(app.clone(), app.request_lease(), move |db, _| {
         authorize(db, &worker, profile)?;
@@ -661,8 +672,9 @@ pub(crate) async fn review(
         if slot.expires <= util::now() { return Err("stremio_preview_expired".into()); }
         let preview = slot.preview.as_mut().ok_or("stremio_preview_not_found")?;
         if preview.review_generation != reserved_revision || !preview.review_in_progress || snapshot(db, profile)? != preview.snapshot { return Err("stremio_preview_stale".into()); }
-        let (candidates, mapped_summary) = mapper::map_verified(&preview.source_items,
+        let (candidates, mut mapped_summary) = mapper::map_verified(&remapped.items,
             preview.import_library, preview.import_progress, preview.mapping_now, &metadata);
+        mapped_summary.needs_review += remapped.unverified;
         let summary = merge(db, profile, &preview.source, &candidates, mapped_summary, false)?;
         let mut row_handles = preview.row_handles.clone();
         let row_ids: Vec<String> = candidates.iter().map(|c| row_handles.entry((c.kind.clone(),c.id.clone()))
@@ -670,10 +682,10 @@ pub(crate) async fn review(
         let mut rows = review_rows(db, profile, &preview.source, &candidates, &row_ids)?;
         for item in &preview.review_only {
             if rows.len() >= MAX_REVIEW_ROWS { break; }
-            if candidates.iter().any(|c| c.kind == item.kind && c.progress.is_some() &&
-                (c.id == item.id || c.title == item.id)) { continue; }
-            if item.reason == "unmatched_identity" && candidates.iter().any(|c|
-                c.kind == item.kind && (c.id == item.id || c.title == item.id)) { continue; }
+            let renamed = remapped.renamed.get(&item.id);
+            let names = |c: &mapper::Candidate| c.id == item.id || c.title == item.id || renamed.is_some_and(|t| &c.title == t);
+            if candidates.iter().any(|c| c.kind == item.kind && c.progress.is_some() && names(c)) { continue; }
+            if item.reason == "unmatched_identity" && candidates.iter().any(|c| c.kind == item.kind && names(c)) { continue; }
             rows.push(json!({"item_id":item.item_id,"name":item.name,"type":item.kind,
                 "favorite_action":"none","progress_action":"none","status":"needs_review","reason":item.reason,
                 "counts":{"favorites_to_add":0,"progress_to_add":0,"progress_to_update":0,

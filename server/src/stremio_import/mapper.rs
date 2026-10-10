@@ -6,7 +6,7 @@ use std::{collections::HashSet, io::Read};
 
 // Stremio stores {last_watched_video_id}:{one_based_index}:{zlib(base64(bitset))}.
 // A metadata change can shift the anchor, but cannot justify guessing missing IDs.
-fn verified_episodes(field: &str, title: &str, meta: &Value) -> Option<Vec<(String, i64, i64)>> {
+pub(super) fn verified_episodes(field: &str, title: &str, meta: &Value) -> Option<Vec<(String, i64, i64)>> {
     let (prefix, encoded) = field.rsplit_once(':')?;
     let (anchor, count) = prefix.rsplit_once(':')?;
     let count = count.parse::<usize>().ok()?;

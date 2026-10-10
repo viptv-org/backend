@@ -144,8 +144,22 @@ pub(super) async fn verify(
         .collect()
 }
 
-fn checked_meta(response: Value, kind: &str, id: &str) -> Option<Value> {
-    let meta = response.get("meta")?.clone();
+/// Keep only what identity verification reads, so long series (One Piece,
+/// Detective Conan) are bounded by episode count rather than by overviews
+/// and thumbnails.
+pub(super) fn trimmed_meta(meta: &Value) -> Value {
+    let mut out = json!({"id":meta["id"],"type":meta["type"]});
+    if let Some(videos) = meta["videos"].as_array() {
+        out["videos"] = videos
+            .iter()
+            .map(|v| json!({"id":v["id"],"season":v["season"],"episode":v["episode"]}))
+            .collect();
+    }
+    out
+}
+
+pub(super) fn checked_meta(response: Value, kind: &str, id: &str) -> Option<Value> {
+    let meta = trimmed_meta(response.get("meta")?);
     (meta["id"] == id
         && meta["type"] == kind
         && serde_json::to_vec(&meta).is_ok_and(|v| v.len() <= 256_000)
@@ -158,6 +172,34 @@ fn imdb(id: &str) -> bool {
         (5..=12).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
     })
 }
+/// Fixed public Cinemeta, for IMDb movie/series ids only.
+pub(super) async fn cinemeta(app: &App, kind: &str, id: &str) -> Option<Value> {
+    if !(matches!(kind, "movie" | "series") && imdb(id)) {
+        return None;
+    }
+    #[cfg(test)]
+    let base = app
+        .stremio_import
+        .public_metadata_endpoint
+        .as_deref()
+        .unwrap_or("https://v3-cinemeta.strem.io");
+    #[cfg(not(test))]
+    let base = "https://v3-cinemeta.strem.io";
+    let url = url::Url::parse(&format!("{base}/meta/{kind}/{id}.json")).ok()?;
+    // The raw response carries overviews and thumbnails; only the trimmed
+    // identity fields are retained.
+    let value = crate::source_http::json(
+        url,
+        4_000_000,
+        Duration::from_secs(8),
+        app.addons.fixture_transport(),
+        false,
+    )
+    .await
+    .ok()?;
+    checked_meta(value, kind, id)
+}
+
 const MAX_RETAINED_METADATA_BYTES: usize = 16 * 1024 * 1024;
 
 fn retain_metadata(
@@ -229,28 +271,8 @@ pub(super) async fn metadata(
                     }
                 }
             }
-            if meta.is_none() && matches!(kind, "movie" | "series") && imdb(id) {
-                #[cfg(test)]
-                let base = app
-                    .stremio_import
-                    .public_metadata_endpoint
-                    .as_deref()
-                    .unwrap_or("https://v3-cinemeta.strem.io");
-                #[cfg(not(test))]
-                let base = "https://v3-cinemeta.strem.io";
-                if let Ok(url) = url::Url::parse(&format!("{base}/meta/{kind}/{id}.json")) {
-                    if let Ok(value) = crate::source_http::json(
-                        url,
-                        256_000,
-                        Duration::from_secs(8),
-                        app.addons.fixture_transport(),
-                        false,
-                    )
-                    .await
-                    {
-                        meta = checked_meta(value, kind, id);
-                    }
-                }
+            if meta.is_none() {
+                meta = cinemeta(app, kind, id).await;
             }
             meta.map(|meta| ((kind.to_owned(), id.to_owned()), meta))
         })

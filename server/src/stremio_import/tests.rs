@@ -2567,3 +2567,117 @@ async fn genuine_manual_watched_correction_is_preserved_even_with_import_owned_a
     .await;
     assert!(queue["items"].as_array().unwrap().is_empty());
 }
+
+// ---- anime ids remapped through the VIPTV metadata service ----
+
+const AOT: &str = "tt2560140";
+fn aot_meta(s3_episodes: i64, overview: usize) -> Value {
+    let mut videos = Vec::new();
+    for (season, count) in [(1, 3), (2, 2), (3, s3_episodes)] {
+        for e in 1..=count {
+            videos.push(json!({"id":format!("{AOT}:{season}:{e}"),"season":season,"episode":e,
+                "overview":"o".repeat(overview),"thumbnail":"https://example.invalid/t.jpg"}));
+        }
+    }
+    json!({"meta":{"id":AOT,"type":"series","name":"Attack on Titan","videos":videos}})
+}
+fn anime_item(id: &str, watched: &str, resume: Option<u64>) -> Value {
+    let mut item = json!({"_id":id,"type":"series","name":"Synthetic anime","removed":false,"temp":false,
+        "state":{"lastWatched":DATE,"watched":watched}});
+    if let Some(n) = resume {
+        item["state"]["video_id"] = json!(format!("{id}:{n}"));
+        item["state"]["timeOffset"] = json!(5000);
+        item["state"]["duration"] = json!(1_400_000);
+    }
+    item
+}
+/// Metadata service + Cinemeta fixture. S3 Part 2 (kitsu 41982) episode `a`
+/// maps to TVDB season 3 episode `a + 12` unless `bad_second` sends episode 2
+/// to an episode Cinemeta does not have.
+async fn remap_review(items: Vec<Value>, s3_episodes: i64, overview: usize, bad_second: bool) -> Value {
+    use axum::extract::{Path, RawQuery};
+    let mut f = fixture(items, login()).await;
+    f.app.addons.allow_test_loopback = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        axum::serve(listener, Router::new()
+            .route("/v1/ids/:source/:id", get(|Path((source, id)): Path<(String, String)>| async move {
+                match (source.as_str(), id.as_str()) {
+                    ("kitsu", "41982") => Json(json!({"canonical":{"source":"mal","id":"38524"},"ids":{"kitsu":"41982","mal":"38524"}})).into_response(),
+                    ("kitsu", "7442") => Json(json!({"canonical":{"source":"imdb","id":AOT},"ids":{"imdb":AOT,"kitsu":"7442"}})).into_response(),
+                    ("tvdb", "tv:267440") => Json(json!({"canonical":{"source":"imdb","id":AOT},"ids":{"imdb":AOT}})).into_response(),
+                    _ => StatusCode::NOT_FOUND.into_response(),
+                }
+            }))
+            .route("/v1/mappings/:source/:id", get(|| async {
+                Json(json!({"mappings":[{"from":{"source":"kitsu","id":"41982"},"to":{"source":"tvdb","id":"267440","kind":"series"},"season":3,"episodeOffset":0}]}))
+            }))
+            .route("/v1/episodes/:source/:id", get(move |Path((_, id)): Path<(String, String)>, RawQuery(q): RawQuery| async move {
+                let episodes: Vec<Value> = if q.as_deref() == Some("numbering=tvdb") && id == "41982" {
+                    (1..=10).map(|a| json!({"absolute":a,"season":3,"number":if bad_second && a == 2 { 99 } else { a + 12 }})).collect()
+                } else {
+                    [(1, 3), (2, 2), (3, 22)].into_iter().flat_map(|(s, n)| (1..=n).map(move |e| json!({"season":s,"number":e}))).collect()
+                };
+                Json(json!({"episodes":{"episodes":episodes}}))
+            }))
+            .route("/meta/series/:id", get(move || async move { Json(aot_meta(s3_episodes, overview)) })))
+            .await.unwrap();
+    });
+    let service = Arc::get_mut(&mut f.app.stremio_import).unwrap();
+    service.public_metadata_endpoint = Some(base.clone());
+    service.metadata_service = remap::MetadataService::new(&base, "fixture-key");
+    let preview = staged_preview(&f.app).await;
+    let (status, reviewed) = review_selection(&f.app, &preview, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    upstream.abort();
+    reviewed
+}
+fn episode_rows(reviewed: &Value) -> Vec<(i64, i64, bool)> {
+    let mut rows: Vec<_> = reviewed["review_items"].as_array().unwrap().iter()
+        .filter(|r| r["selectable"] == true && r["season"].is_i64())
+        .map(|r| (r["season"].as_i64().unwrap(), r["episode"].as_i64().unwrap(), r["resume_active"] == true))
+        .collect();
+    rows.sort();
+    rows
+}
+
+#[tokio::test]
+async fn kitsu_sequel_cour_remaps_to_verified_imdb_episodes() {
+    let reviewed = remap_review(vec![anime_item("kitsu:41982", "kitsu:41982:2:2:eJxjBgAABAAE", Some(3))], 22, 0, false).await;
+    assert_eq!(episode_rows(&reviewed), vec![(3, 13, false), (3, 14, false), (3, 15, true)]);
+    assert_eq!(reviewed["summary"]["needs_review"], 0, "{reviewed}");
+    assert!(!reviewed["review_items"].as_array().unwrap().iter().any(|r| r["status"] == "needs_review"));
+}
+
+#[tokio::test]
+async fn anime_seasons_and_the_imdb_entry_merge_into_one_show() {
+    let mut native = json!({"_id":AOT,"type":"series","name":"Attack on Titan","removed":false,"temp":false,
+        "state":{"lastWatched":"2024-01-01T00:00:00.000Z"}});
+    native["state"]["timesWatched"] = json!(0);
+    let reviewed = remap_review(vec![
+        anime_item("kitsu:7442", "kitsu:7442:2:2:eJxjBgAABAAE", None),
+        anime_item("kitsu:41982", "kitsu:41982:2:2:eJxjBgAABAAE", None),
+        native,
+    ], 22, 0, false).await;
+    assert_eq!(episode_rows(&reviewed), vec![(1, 1, false), (1, 2, false), (3, 13, false), (3, 14, false)]);
+    assert_eq!(reviewed["summary"]["favorites_to_add"], 1, "one show, not three: {reviewed}");
+    assert_eq!(reviewed["summary"]["needs_review"], 0, "{reviewed}");
+}
+
+#[tokio::test]
+async fn untranslatable_anime_episode_is_reviewed_not_guessed() {
+    let reviewed = remap_review(vec![anime_item("kitsu:41982", "kitsu:41982:2:2:eJxjBgAABAAE", None)], 22, 0, true).await;
+    assert_eq!(episode_rows(&reviewed), vec![(3, 13, false)]);
+    assert_eq!(reviewed["summary"]["needs_review"], 1);
+}
+
+#[tokio::test]
+async fn long_cinemeta_series_is_not_rejected_by_size() {
+    // 1,500 episodes with real-sized overviews is ~1 MB of raw metadata.
+    let id = AOT;
+    let item = json!({"_id":id,"type":"series","name":"Long series","removed":false,"temp":false,
+        "state":{"lastWatched":DATE,"watched":format!("{id}:1:2:2:eJxjBgAABAAE")}});
+    let reviewed = remap_review(vec![item], 1495, 600, false).await;
+    assert_eq!(episode_rows(&reviewed), vec![(1, 1, false), (1, 2, false)]);
+}
