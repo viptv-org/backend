@@ -130,6 +130,80 @@ async fn public_discovery_and_metadata_never_contact_addon_catalogs() {
 }
 
 #[tokio::test]
+async fn calendar_date_outside_rolling_window_uses_month_archive() {
+    let (app, log, _, task) = fixture().await;
+    let result = app
+        .simkl
+        .discover(
+            addon::DiscoverOptions {
+                kind: "series".into(),
+                catalog: Some("calendar".into()),
+                addon: None,
+                skip: 0,
+                search: None,
+                genre: None,
+                extras: HashMap::from([("date".into(), "2025-01-12".into())]),
+            },
+            Some(1),
+        )
+        .await
+        .unwrap();
+    assert!(result["metas"].as_array().unwrap().is_empty());
+    assert_eq!(log.lock().unwrap()[0].0, "/calendar/v2/2025/1/tv.json");
+    task.abort();
+}
+
+#[tokio::test]
+async fn offline_watchlist_status_backfills_once_when_linked_later() {
+    let (app, log, _, task) = fixture().await;
+    let item = json!({"id":"simkl:tv:555","type":"series","name":"Local show","simkl_ids":{"simkl":555},"simkl_category":"tv"});
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/integrations/simkl/watchlist",
+        json!({"item":item,"status":"hold"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, list) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/integrations/simkl/watchlist",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(list["metas"][0]["watchlist_status"], "hold");
+    assert!(log.lock().unwrap().is_empty());
+    link(&app, 1, 1, "11");
+    app.simkl.sync(1, true).await.unwrap();
+    let writes: Vec<_> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(p, _, _)| p == "/sync/history")
+        .map(|(_, body, _)| body.clone())
+        .collect();
+    assert!(writes.iter().any(|v| v["shows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|v| v["ids"]["simkl"] == 555 && v["status"] == "hold")));
+    let count = writes.len();
+    app.simkl.sync(1, true).await.unwrap();
+    assert_eq!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|(p, _, _)| p == "/sync/history")
+            .count(),
+        count
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn two_profiles_use_distinct_grants_and_duplicate_identity_is_rejected() {
     let (app, log, _, task) = fixture().await;
     link(&app, 1, 1, "11");
@@ -404,6 +478,44 @@ async fn simkl_identity_requests_only_the_mapped_addon_stream_resource() {
         .iter()
         .all(|(p, _, _)| !p.contains("/catalog/")));
     addon_task.abort();
+    task.abort();
+}
+
+#[tokio::test]
+async fn missing_addon_mapping_does_not_block_iptv_and_proof_keeps_simkl_identity() {
+    let (app, _, _, task) = fixture().await;
+    let item = viptv_simkl::normalize(
+        &json!({"title":"IPTV title","year":2020,"ids":{"simkl":999}}),
+        Category::Movie,
+    )
+    .unwrap();
+    app.simkl.remember(&[item]).unwrap();
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/streams",
+        json!({"id":"simkl:movies:999","type":"movie","name":"IPTV title","year":2020}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let job = app
+        .jobs
+        .lock()
+        .unwrap()
+        .get(body["id"].as_str().unwrap())
+        .unwrap()
+        .clone();
+    assert_eq!(job.exact_vod.as_ref().unwrap().title, "simkl:movies:999");
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/streams",
+        json!({"id":"simkl:movies:999","type":"movie","name":"IPTV title","only_addons":true}),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK);
     task.abort();
 }
 #[tokio::test]

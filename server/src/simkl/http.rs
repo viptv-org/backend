@@ -313,17 +313,22 @@ pub(crate) async fn watchlist(
         json!({"shows":[entry]})
     };
     let media = json!({"title":item["name"],"year":item["year"],"ids":entry["ids"]});
-    let mirror = if kind == "movie" {
+    let mut mirror = if kind == "movie" {
         json!({"status":status,"movie":media})
     } else if item["simkl_category"] == "anime" {
         json!({"status":status,"anime":media})
     } else {
         json!({"status":status,"show":media})
     };
+    mirror["local"] = json!(true);
+    mirror["updated_at"] = json!(util::now());
     {
         let db = app.db.lock().unwrap();
         app.require_profile(&db, p)?;
         db.execute("INSERT INTO simkl_library VALUES(?1,?2,?3) ON CONFLICT(profile_id,id) DO UPDATE SET value=excluded.value",params![p,id,mirror.to_string()]).map_err(db_error)?;
+        if ["plantowatch", "watching", "hold"].contains(&status) {
+            db.execute("INSERT INTO favorites(profile_id,id,type,name,poster) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster",params![p,id,kind,item["name"].as_str().unwrap_or(id),item["poster"].as_str()]).map_err(db_error)?;
+        }
     }
     if app.simkl.connected(p) {
         app.simkl
@@ -333,6 +338,61 @@ pub(crate) async fn watchlist(
         app.simkl.flush(p).await.map_err(ApiError::from)?;
     }
     Ok(axum::Json(json!({"saved":true,"status":status})))
+}
+
+pub(crate) async fn watchlist_items(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(p): Path<i64>,
+) -> ApiResult {
+    let app = scope(app, lease, p)?;
+    let rows = {
+        let db = app.db.lock().unwrap();
+        let rows = db
+            .prepare(
+                "SELECT id,value FROM simkl_library WHERE profile_id=?1 ORDER BY id LIMIT 5000",
+            )
+            .map_err(db_error)?
+            .query_map([p], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+    let mut items = vec![];
+    for (id, value) in rows {
+        let row: Value =
+            serde_json::from_str(&value).map_err(|_| "Invalid saved watchlist item")?;
+        let (category, title) = if row["movie"].is_object() {
+            (Category::Movie, &row["movie"])
+        } else if row["anime"].is_object() {
+            (Category::Anime, &row["anime"])
+        } else {
+            (Category::Tv, &row["show"])
+        };
+        let Some(mut item) = app
+            .simkl
+            .cached_item(&id)
+            .or_else(|| viptv_simkl::normalize(title, category))
+        else {
+            continue;
+        };
+        item["watchlist_status"] = row["status"].clone();
+        item["user_rating"] = row["user_rating"].clone();
+        if kids::require_item(
+            &app.db.lock().unwrap(),
+            &app.identity(),
+            item["type"].as_str().unwrap_or("series"),
+            &id,
+        )
+        .is_ok()
+        {
+            items.push(item);
+        }
+    }
+    Ok(axum::Json(json!({"metas":items})))
 }
 pub(crate) async fn lists(
     State(app): State<App>,

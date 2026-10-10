@@ -138,11 +138,39 @@ pub(crate) async fn start_streams(
         .ok_or("Invalid stream request")?
         .extend(context.as_object().unwrap().clone());
     let kind = media_type(&v)?.to_string();
-    let mut id = text(&v, "id", 512)?.to_string();
+    let id = text(&v, "id", 512)?.to_string();
+    let mut addon_id = Some(id.clone());
+    let mut mapping_error = None;
     if viptv_simkl::parse_id(&id).is_some() {
         let auth::Principal::Account { profile_id, .. } = a.identity();
-        let item = a.simkl.mapped(&id,&kind,&v,profile_id).await.map_err(ApiError::from)?;
-        id = viptv_simkl::stream_id(&item).map_err(ApiError::from)?;
+        match a.simkl.mapped(&id, &kind, &v, profile_id).await {
+            Ok(item) => {
+                enrich_matching(&mut v, &item);
+                for (external, field) in [("imdb", "imdb_id"), ("tmdb", "tmdb_id")] {
+                    if !item["simkl_ids"][external].is_null() {
+                        v[field] = item["simkl_ids"][external].clone();
+                    }
+                }
+                match viptv_simkl::stream_id(&item) {
+                    Ok(mapped) => addon_id = Some(mapped),
+                    Err(error) => {
+                        addon_id = None;
+                        mapping_error = Some(error.to_owned());
+                    }
+                }
+            }
+            Err(error) => {
+                addon_id = None;
+                mapping_error = Some(error);
+            }
+        }
+        // A missing addon ID is not a missing IPTV title. Preserve the original
+        // identity for playback authorization and try IPTV independently.
+        if only_addons && addon_id.is_none() {
+            return Err(mapping_error
+                .unwrap_or_else(|| "SIMKL stream mapping unavailable".into())
+                .into());
+        }
     }
     a.prune();
     let addons = a.addons.clone();
@@ -150,7 +178,12 @@ pub(crate) async fn start_streams(
     let source_errors = source_errors.into_iter().take(32).collect::<Vec<_>>();
     let sources = sources
         .into_iter()
-        .filter(|(_, _, m)| only_provider.is_none() && addon::supports(m, "stream", &kind, &id))
+        .filter(|(_, _, m)| {
+            only_provider.is_none()
+                && addon_id
+                    .as_ref()
+                    .is_some_and(|mapped| addon::supports(m, "stream", &kind, mapped))
+        })
         .take(32)
         .collect::<Vec<_>>();
     a.require_media(&a.db.lock().unwrap())?;
@@ -181,7 +214,7 @@ pub(crate) async fn start_streams(
             pending: sources.len()
                 + usize::from(!only_addons)
                 + if only_provider.is_none() {
-                    source_errors.len()
+                    source_errors.len() + usize::from(mapping_error.is_some())
                 } else {
                     0
                 },
@@ -201,6 +234,9 @@ pub(crate) async fn start_streams(
         a.own_resource("job", &jid);
     }
     if only_provider.is_none() {
+        if let Some(error) = mapping_error {
+            emit(&a, &job, "addon", Err(error));
+        }
         for (id, error) in source_errors {
             emit(&a, &job, &format!("addon:{id}"), Err(error));
         }
@@ -209,7 +245,7 @@ pub(crate) async fn start_streams(
         let a = a.clone();
         let j = job.clone();
         let kind = kind.clone();
-        let id = id.clone();
+        let id = addon_id.clone().expect("mapped stream producer");
         tokio::spawn(async move {
             let source = format!("addon:{aid}");
             let r = tokio::time::timeout(Duration::from_secs(30), a.addons.streams(&u, &kind, &id))

@@ -450,6 +450,15 @@ impl Service {
             let rows=db.prepare("SELECT id,type,name FROM favorites WHERE profile_id=?1 AND type!='live'").map_err(|_|"SIMKL list read failed")?.query_map([p],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?}))).map_err(|_|"SIMKL list read failed")?.collect::<Result<Vec<_>,_>>().map_err(|_|"SIMKL list read failed")?;
             rows
         };
+        let local = {
+            let db = self.db.lock().unwrap();
+            let rows=db.prepare("SELECT id,value FROM simkl_library WHERE profile_id=?1 AND json_extract(value,'$.local')=1").map_err(|_|"Local watchlist read failed")?.query_map([p],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(|_|"Local watchlist read failed")?.collect::<Result<Vec<_>,_>>().map_err(|_|"Local watchlist read failed")?;
+            rows
+        };
+        let mut local: HashMap<String, Value> = local
+            .into_iter()
+            .filter_map(|(id, s)| serde_json::from_str(&s).ok().map(|v| (id, v)))
+            .collect();
         let mut pending = vec![];
         let mut keys = vec![];
         for row in favorites {
@@ -474,8 +483,36 @@ impl Service {
                 .or_else(|| payload.get("anime"))
                 .unwrap()
                 .clone();
-            entry["status"] = json!("plantowatch");
+            entry["status"] = local
+                .remove(id)
+                .map(|row| row["status"].clone())
+                .unwrap_or(json!("plantowatch"));
             pending.push((row["type"] == "movie", entry));
+            keys.push(key);
+        }
+        for (id, row) in local {
+            let key = format!("list:{id}");
+            if self.exported(p, &key) || self.exported(p, &format!("removed:{id}")) {
+                continue;
+            }
+            let movie = row["movie"].is_object();
+            let mut entry = if movie {
+                row["movie"].clone()
+            } else if row["anime"].is_object() {
+                row["anime"].clone()
+            } else {
+                row["show"].clone()
+            };
+            entry["status"] = row["status"].clone();
+            if row["status"] == "completed" {
+                if let Some(time) = chrono::DateTime::<chrono::Utc>::from_timestamp(
+                    row["updated_at"].as_i64().unwrap_or(0),
+                    0,
+                ) {
+                    entry["watched_at"] = json!(time.to_rfc3339());
+                }
+            }
+            pending.push((movie, entry));
             keys.push(key);
         }
         for (batch, keys) in pending.chunks(50).zip(keys.chunks(50)) {
@@ -485,6 +522,9 @@ impl Service {
             }
             for key in keys {
                 self.mark_export(p, key)?;
+                if let Some(id) = key.strip_prefix("list:") {
+                    self.db.lock().unwrap().execute("UPDATE simkl_library SET value=json_set(value,'$.local',json('false')) WHERE profile_id=?1 AND id=?2",params![p,id]).map_err(|_|"Watchlist export save failed")?;
+                }
             }
             count += batch.len();
         }
@@ -544,6 +584,7 @@ impl Service {
             .ok()?
             .flatten()
             .filter_map(|s| serde_json::from_str::<Value>(&s).ok())
+            .filter(|v| v["local"] != true)
             .find(|v| {
                 let media = v
                     .get("movie")
@@ -639,6 +680,7 @@ impl Service {
             }
             self.current(p, &generation)?;
             if action == "add-to-list" {
+                self.db.lock().unwrap().execute("UPDATE simkl_library SET value=json_set(value,'$.local',json('false')) WHERE profile_id=?1 AND id=?2",params![p,id]).map_err(|_|"Watchlist acknowledgement failed")?;
                 let status = response["added"]["movies"]
                     .as_array()
                     .and_then(|a| a.first())

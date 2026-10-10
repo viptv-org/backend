@@ -421,7 +421,15 @@ impl Service {
         let term = r.search.as_deref().unwrap_or("").trim();
         let mut more = false;
         let mut upstream_page = false;
-        let mut items: Vec<Value> = if !term.is_empty() && linked {
+        let calendar_surface = [
+            "calendar",
+            "new-episodes",
+            "my-calendar",
+            "premieres",
+            "upcoming",
+        ]
+        .contains(&catalog);
+        let mut items: Vec<Value> = if !term.is_empty() && linked && !calendar_surface {
             let sort = r
                 .extras
                 .get("sort")
@@ -479,19 +487,50 @@ impl Service {
             } else {
                 category.endpoint()
             };
-            let month = r.extras.get("month").filter(|s| {
-                s.len() == 7
-                    && s.as_bytes()[4] == b'-'
-                    && s.bytes().filter(|b| *b != b'-').all(|b| b.is_ascii_digit())
-            });
-            let path = month
-                .map(|s| format!("/calendar/v2/{}/{}/{t}.json", &s[..4], &s[5..]))
-                .unwrap_or_else(|| format!("/calendar/v2/{t}.json"));
-            let raw = self.public(&path, 18000).await?;
+            let timezone = self
+                .profile_timezone(profile)
+                .or_else(|| {
+                    r.extras
+                        .get("timezone")
+                        .and_then(|s| s.parse::<chrono_tz::Tz>().ok())
+                })
+                .unwrap_or(chrono_tz::America::Detroit);
+            let local_today = chrono::DateTime::<chrono::Utc>::from_timestamp(util::now(), 0)
+                .unwrap()
+                .with_timezone(&timezone)
+                .date_naive();
             let date = r
                 .extras
                 .get("date")
-                .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+                .map(|d| {
+                    chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
+                        .map_err(|_| "Invalid calendar date")
+                })
+                .transpose()?;
+            let month = r
+                .extras
+                .get("month")
+                .map(|m| {
+                    chrono::NaiveDate::parse_from_str(&format!("{m}-01"), "%Y-%m-%d")
+                        .map_err(|_| "Invalid calendar month")
+                })
+                .transpose()?;
+            let archive = month.or_else(|| {
+                date.filter(|day| {
+                    *day < local_today - chrono::Duration::days(1)
+                        || *day > local_today + chrono::Duration::days(33)
+                })
+            });
+            let path = archive
+                .map(|day| {
+                    format!(
+                        "/calendar/v2/{}/{}/{t}.json",
+                        chrono::Datelike::year(&day),
+                        chrono::Datelike::month(&day)
+                    )
+                })
+                .unwrap_or_else(|| format!("/calendar/v2/{t}.json"));
+            let raw = self.public(&path, 18000).await?;
             raw["calendar"]
                 .as_array()
                 .into_iter()
@@ -502,22 +541,12 @@ impl Service {
                     source["ids"]["simkl_id"] = event["simkl_id"].clone();
                     let timestamp =
                         chrono::DateTime::parse_from_rfc3339(event["date"].as_str()?).ok()?;
-                    let timezone = self
-                        .profile_timezone(profile)
-                        .or_else(|| {
-                            r.extras
-                                .get("timezone")
-                                .and_then(|s| s.parse::<chrono_tz::Tz>().ok())
-                        })
-                        .unwrap_or(chrono_tz::America::Detroit);
                     let day = timestamp.with_timezone(&timezone).date_naive();
-                    let local_today =
-                        chrono::DateTime::<chrono::Utc>::from_timestamp(util::now(), 0)
-                            .unwrap()
-                            .with_timezone(&timezone)
-                            .date_naive();
                     if date.is_some_and(|d| d != day)
-                        || (catalog == "new-episodes" && day != local_today)
+                        || (catalog == "new-episodes"
+                            && date.is_none()
+                            && month.is_none()
+                            && day != local_today)
                         || (catalog == "upcoming" && day < local_today)
                         || (catalog == "premieres"
                             && category != Category::Movie
@@ -612,13 +641,22 @@ impl Service {
                 object.remove("videos");
             }
         }
+        if calendar_surface && !term.is_empty() {
+            items.retain(|v| {
+                v["name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&term.to_lowercase())
+            });
+        }
         filter(&mut items, &r)?;
         let start = if upstream_page { 0 } else { r.skip };
         if !upstream_page {
             more = items.len() > start + 50;
         }
         Ok(
-            json!({"metas":items.into_iter().skip(start).take(50).collect::<Vec<_>>(),"has_more":more,"next_skip":if more{Some(r.skip+50)}else{None},"coverage":if linked&&!term.is_empty(){"simkl_search"}else{"public_feeds_and_known_titles"},"full_search":linked}),
+            json!({"metas":items.into_iter().skip(start).take(50).collect::<Vec<_>>(),"has_more":more,"next_skip":if more{Some(r.skip+50)}else{None},"coverage":if linked&&!term.is_empty()&&!calendar_surface{"simkl_search"}else{"public_feeds_and_known_titles"},"full_search":linked}),
         )
     }
     fn profile_timezone(&self, profile: Option<i64>) -> Option<chrono_tz::Tz> {
