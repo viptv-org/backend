@@ -134,6 +134,32 @@ Retain the ingest-only key privately and preserve the ledger across restarts.
 
 ## Historical evidence below
 
+## Shared Go torrent runtime rollout — 2026-10-09
+
+The owner explicitly authorized production deployment after accepting the
+current emulated and controlled qualification. Backend `fb42aa6` is live as
+image `sha256:66074cc6b5b14402058132ee50d4106afe4d65bf04dbc001e3340a4d8861e284`.
+The independently built gateway runtime is
+`sha256:da680d94f7a2deaca0a33b14d65f7dade7001842b877cecedab238ff8e0a6e11`.
+It enables torrent acquisition with the immutable `c7bb3f1` Go worker. Its live
+scoped capabilities report torrent support and the v2 decoder acknowledgement.
+Both replacement containers are healthy. Existing environment/keyrings, named
+volumes, network/port/GPU settings and monitoring configuration were retained.
+
+Read-only SQLite online and stopped-writer backups and original containers are
+retained privately. Copied-data and post-cutover comparisons preserve existing
+accounts/history/configuration across 91 tables; only the operational provider
+refresh queue changed during startup. No ownership retirement or reseeding ran.
+
+The viewing bundle is live on both public hosts with entry
+`app-torrent20261010-Dvfh4chQ.js`. Public entry/helper bytes match the exact image
+on both hosts, public health returns 200, and unauthenticated native v2 requests
+remain 401. A fresh browser renders the watch sign-in surface. The atomic watch
+root change retains older lazy assets and the existing Host/Origin rewrites.
+Production native-app installation is distinct: the latest APK was opened on an
+owned visible Android TV emulator for the owner's manual use. These deployment
+checks do not assert universal source reliability or resolved performance gaps.
+
 The following records describe their exact older source/images. Their embedded
 media/GPU/WARP observations are not current backend instructions or proof of this
 candidate's deployment, decoder behavior or production migration.
