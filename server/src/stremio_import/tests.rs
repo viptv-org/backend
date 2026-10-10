@@ -2714,6 +2714,29 @@ async fn real_library_remap_preview() {
             *reasons.entry(r["reason"].as_str().unwrap_or("none").to_owned()).or_default() += 1;
         }
         let episodes = rows.iter().filter(|r| r["selectable"] == true && r["season"].is_i64()).count();
+        if simkl {
+            // Unmatched review rows by id family, type and source state: counts only.
+            let shown: std::collections::HashSet<&str> = rows.iter()
+                .filter(|r| r["reason"] == "unmatched_identity").filter_map(|r| r["item_id"].as_str()).collect();
+            let slots = app.stremio_import.pending.lock().unwrap();
+            let p = slots.values().find_map(|s| s.preview.as_ref()).unwrap();
+            let mut families: std::collections::BTreeMap<String, usize> = Default::default();
+            for item in p.review_only.iter().filter(|i| shown.contains(i.item_id.as_str())) {
+                let family = match item.id.split_once(':') {
+                    Some((prefix, _)) => format!("{prefix}:"),
+                    None if item.id.starts_with("tt") => "tt(imdb)".into(),
+                    None => "no-prefix".into(),
+                };
+                let source = p.source_items.iter().find(|s| s["_id"] == item.id && s["type"] == item.kind.as_str());
+                let removed = source.is_some_and(|s| s["removed"] == true || s["temp"] == true);
+                let state = source.map(|s| &s["state"]);
+                let has_history = state.is_some_and(|s| s["timeOffset"].as_u64().unwrap_or(0) > 0
+                    || s["timesWatched"].as_u64().unwrap_or(0) > 0
+                    || s["watched"].as_str().is_some_and(|w| !w.is_empty()));
+                *families.entry(format!("{family} {} removed={removed} history={has_history}", item.kind)).or_default() += 1;
+            }
+            println!("[remap-preview] unmatched breakdown: {families:#?}");
+        }
         println!(
             "[remap-preview] simkl={simkl} summary={} importable_rows={} episode_rows={episodes} review_rows_by_reason={reasons:?}",
             reviewed["summary"],
