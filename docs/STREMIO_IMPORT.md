@@ -96,3 +96,11 @@ The built-in user-data export is documented, but [an open Stremio bug](https://g
 4. Only after approving a destination profile and reviewing the preview, write through a profile-authorized backend import operation with idempotency, bounded batches, conflict policy, backups and regression tests. A settings/account-web import UI can follow once the file/API contract and interaction are specified in `design`.
 
 Limitations: Stremio's API is undocumented as a stable third-party contract; title-level `lastWatched` and watched flags cannot reproduce individual viewing events. VIPTV has no separate likes/loves state. Automated synthetic checks are not proof of a personal import or cross-device playback.
+
+## Pending design follow-up (Simkl anime matching)
+
+The anime remap ships as backend logic only; these design and UI items are open:
+
+1. **Attribution.** Simkl's API rules require visible credit where Simkl data is used. The dashboard's review step needs a short "Anime matching by Simkl" credit linking to simkl.com. Record it in `design/specs/behavior/stremio-import.md` first, then implement it in `web`. Required before production uses `SIMKL_CLIENT_ID`.
+2. **Spec text.** `stremio-import.md` still says unsupported identities are left for review. It should describe anime ids matched through Simkl, merged per IMDb show, and verified against Cinemeta (or Simkl's episode list when Cinemeta has no entry).
+3. **Licensing.** Simkl is free below $150/month of revenue; above that a commercial license is required.
