@@ -329,7 +329,10 @@ pub(crate) fn validate_start(input: &str) -> Result<()> {
         return Err(invalid());
     }
     let request: Request = parse(input)?;
-    if request.operation != "playbackV2" {
+    if !matches!(
+        request.operation.as_str(),
+        "playbackV2" | "playbackV2DecodedStart"
+    ) {
         return Err(invalid());
     }
     crate::policy::validate_playback_v2(&request.playback)

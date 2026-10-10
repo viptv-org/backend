@@ -112,6 +112,7 @@ pub fn normalize(kind: String, input: String, origin: String) -> Result<String, 
                     | "torrentRuntimeProtocol"
                     | "playbackV2CancelRequest"
                     | "playbackV2Status"
+                    | "playbackV2FirstFrame"
                     | "playbackV2Heartbeat"
                     | "playbackV2Stop"
             )
@@ -120,8 +121,10 @@ pub fn normalize(kind: String, input: String, origin: String) -> Result<String, 
         domain::playback_protocol::validate_request(&input)?;
     }
     if kind == "request"
-        && (value["operation"] == "playbackV2"
-            || value["playback"]["client"].get("nativeTorrent").is_some())
+        && (matches!(
+            value["operation"].as_str(),
+            Some("playbackV2" | "playbackV2DecodedStart")
+        ) || value["playback"]["client"].get("nativeTorrent").is_some())
     {
         native_torrent::validate_start(&input)?;
     }

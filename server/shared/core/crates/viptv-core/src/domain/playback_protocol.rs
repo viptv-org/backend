@@ -65,6 +65,8 @@ enum ProtocolRequest {
     Poll { id: String },
     #[serde(rename = "playbackV2Heartbeat")]
     Heartbeat { id: String },
+    #[serde(rename = "playbackV2FirstFrame")]
+    FirstFrame { id: String },
     #[serde(rename = "playbackV2Stop")]
     Release { id: String },
 }
@@ -76,6 +78,7 @@ pub(crate) fn validate_request(input: &str) -> Result<(), CoreError> {
         ProtocolRequest::Cancel { request_id } if valid_identifier(&request_id) => Ok(()),
         ProtocolRequest::Poll { id }
         | ProtocolRequest::Heartbeat { id }
+        | ProtocolRequest::FirstFrame { id }
         | ProtocolRequest::Release { id }
             if valid_identifier(&id) =>
         {

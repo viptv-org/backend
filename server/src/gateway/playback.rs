@@ -94,6 +94,8 @@ pub(crate) struct Facts {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Start {
+    #[serde(skip)]
+    decoder_start: bool,
     #[serde(default)]
     conversion: Conversion,
     request_id: String,
@@ -134,6 +136,7 @@ struct Source {
 }
 #[derive(Clone)]
 struct Remote {
+    client_frame_ack: bool,
     target: Arc<AuthorizedGateway>,
     viewer: String,
     client: Client,
@@ -239,6 +242,13 @@ pub(crate) struct Registry {
     runtime_negotiated: Mutex<HashSet<(String, String)>>,
 }
 impl Registry {
+    #[cfg(test)]
+    pub(super) fn frame_authority_facts(&self, id: &str) -> (Instant, u64, bool) {
+        let entries = self.entries.lock().unwrap();
+        let state = entries[id].state.lock().unwrap();
+        let remote = state.remote.as_ref().unwrap();
+        (state.touched, remote.expires_at, remote.client_frame_ack)
+    }
     pub(crate) fn new(db: Arc<Mutex<Connection>>) -> Arc<Self> {
         let registry = Arc::new(Self {
             entries: Mutex::new(HashMap::new()),
@@ -1077,6 +1087,7 @@ async fn choose(
     lease: ResourceLease,
     identity: [u8; 32],
     requires_torrent: bool,
+    client_frame_ack: bool,
 ) -> Result<Arc<AuthorizedGateway>, Error> {
     let actor = account(&lease);
     let vault = app
@@ -1119,7 +1130,18 @@ async fn choose(
                 .await
             {
                 Ok(capabilities) if !requires_torrent || capabilities.torrent => {
-                    return Ok(target.clone())
+                    if client_frame_ack {
+                        match app
+                            .gateway_client
+                            .torrent_startup(&target.gateway.endpoint, target.key.expose())
+                            .await
+                        {
+                            Ok(()) => return Ok(target.clone()),
+                            Err(reason) => affinity_error = Some(reason),
+                        }
+                    } else {
+                        return Ok(target.clone());
+                    }
                 }
                 Ok(_) => affinity_error = Some("delivery_unsupported"),
                 Err(reason) => affinity_error = Some(reason),
@@ -1149,6 +1171,11 @@ async fn choose(
                         .await?;
                     if requires_torrent && !capabilities.torrent {
                         return Err("delivery_unsupported");
+                    }
+                    if client_frame_ack {
+                        client
+                            .torrent_startup(&candidate.gateway.endpoint, candidate.key.expose())
+                            .await?;
                     }
                     let available = capabilities.available.ok_or("gateway_protocol_invalid")?;
                     if available.inputs == 0 || available.outputs == 0 || available.viewers == 0 {
@@ -1239,9 +1266,25 @@ pub(crate) async fn start(
     Extension(lease): Extension<ResourceLease>,
     request_body: axum::extract::Request,
 ) -> Result<(StatusCode, Json<Value>), Error> {
+    start_mode(app, lease, request_body, false).await
+}
+pub(crate) async fn decoder_start(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    request: axum::extract::Request,
+) -> Result<(StatusCode, Json<Value>), Error> {
+    start_mode(app, lease, request, true).await
+}
+async fn start_mode(
+    app: App,
+    lease: ResourceLease,
+    request_body: axum::extract::Request,
+    decoder_start: bool,
+) -> Result<(StatusCode, Json<Value>), Error> {
     let bytes = control_body(request_body, 16384).await?;
     let mut request: Start =
         serde_json::from_slice(&bytes).map_err(|_| Error::Code("invalid_playback_request"))?;
+    request.decoder_start = decoder_start;
     if request.position == 0.0 {
         request.position = 0.0;
     }
@@ -1256,7 +1299,8 @@ pub(crate) async fn start(
         return Err(Error::Code("invalid_playback_request"));
     }
     let hash: [u8; 32] = Sha256::digest(
-        serde_json::to_vec(&request).map_err(|_| Error::Code("invalid_playback_request"))?,
+        serde_json::to_vec(&(&request, decoder_start))
+            .map_err(|_| Error::Code("invalid_playback_request"))?,
     )
     .into();
     let scope = App::scoped_key(&lease.principal);
@@ -1572,11 +1616,16 @@ async fn prepare(
         {
             return Err(Error::Code("delivery_unsupported"));
         }
+        let client_frame_ack = request.decoder_start
+            && source.requires_torrent_gateway
+            && !url::Url::parse(&source.url)
+                .is_ok_and(|url| url.path().to_ascii_lowercase().ends_with(".rar"));
         let target = choose(
             app.clone(),
             entry.lease.clone(),
             source.identity,
             source.requires_torrent_gateway,
+            client_frame_ack,
         )
         .await?;
         validate_entry(&app, &entry).await?;
@@ -1600,7 +1649,11 @@ async fn prepare(
                 &target.gateway.endpoint,
                 target.key.expose(),
                 reqwest::Method::POST,
-                "v1/sessions",
+                if client_frame_ack {
+                    "v2/torrent-sessions"
+                } else {
+                    "v1/sessions"
+                },
                 Some(&body),
                 Some(&entry.id),
                 Duration::from_secs(if source.requires_torrent_gateway {
@@ -1623,6 +1676,7 @@ async fn prepare(
                 return Err(Error::Code("playback_expired"));
             }
             state.remote = Some(Remote {
+                client_frame_ack,
                 target: target.clone(),
                 viewer: remote.id.clone(),
                 client: app.gateway_client.clone(),
@@ -1784,6 +1838,49 @@ pub(crate) async fn progress(
     validate_entry(&app, &entry).await?;
     Ok(Json(json!({"stage":stage})))
 }
+/// Decoder acknowledgement never renews backend or gateway authority.
+pub(crate) async fn first_frame(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<Json<Value>, Error> {
+    if control_body(request, 2).await?.as_ref() != b"{}" {
+        return Err(Error::Code("invalid_playback_request"));
+    }
+    let entry = app.gateway_playbacks.snapshot(&id, &lease)?;
+    validate_entry(&app, &entry).await?;
+    let remote = {
+        let state = entry.state.lock().unwrap();
+        if state.status != "ready" || state.native.is_some() {
+            return Err(Error::Code("playback_expired"));
+        }
+        state.remote.clone()
+    };
+    if let Some(remote) = remote.filter(|remote| remote.client_frame_ack) {
+        let outcome = remote
+            .client
+            .request(
+                &remote.target.gateway.endpoint,
+                remote.target.key.expose(),
+                reqwest::Method::POST,
+                &format!("v2/torrent-sessions/{}/first-frame", remote.viewer),
+                Some(&json!({})),
+                None,
+                Duration::from_secs(5),
+            )
+            .await;
+        if let Err(code) = outcome {
+            if let Some(remote) = terminate(&entry, "failed", Some(code)) {
+                release_remote(&remote.client, &remote.target, &remote.viewer).await;
+            }
+            return Err(Error::Code(code));
+        }
+    }
+    validate_entry(&app, &entry).await?;
+    Ok(Json(json!({"ok":true})))
+}
+
 pub(crate) async fn renew(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,

@@ -139,6 +139,14 @@ pub fn router_with_tv(
                 )
                 .route("/v2/playback", post(gateway::playback::start))
                 .route(
+                    "/v2/playback-decoder-start",
+                    post(gateway::playback::decoder_start),
+                )
+                .route(
+                    "/v2/playback/:id/first-frame",
+                    post(gateway::playback::first_frame),
+                )
+                .route(
                     "/v2/playback/:id",
                     get(gateway::playback::get).delete(gateway::playback::stop),
                 )

@@ -37,10 +37,34 @@ cloned-reference warnings in unchanged files; checking with those two baseline
 lints allowed passes. Installed apps have not yet adopted this protocol; native
 holder and platform adapter integration remain separate work.
 
-The exported core is `d1787f3910306822d68192a5d3c45f980a665234`, matching
+The exported core is `0f3d9f78e6df7e9550a9335b835dbebef454a3b5`, matching
 the Android and shared viewing client pins. It includes the private v2 client
 holder and canonical stage/format failures. The full backend suite passes with
 one test thread (289 tests, 4 ignored), plus its CLI integration tests. A parallel
 run lost the existing diagnostic-capture assertion's span fields; the serial run
 passes. Strict Clippy passes with the same two pre-existing lint classes allowed
 (`type_complexity` and `cloned_ref_to_slice_refs`); no new allowances were added.
+
+## Gateway decoder acknowledgement
+
+POST `/api/v2/playback-decoder-start` takes the existing closed playback start
+envelope. Its route-selected mode is part of idempotency identity; it is not an
+extra JSON field. The original start route and native v1 negotiation stay
+compatible. Ordinary HTTP delivery retains its existing admission rules.
+
+For torrent gateway inputs, selection requires the gateway's separate v2
+decoder-acknowledgement protocol, including when considering an existing input's
+affinity. Unsupported gateways are refused before source creation. The backend
+uses `/v2/torrent-sessions` and retains the original gateway viewer identity.
+
+POST `/api/v2/playback/:id/first-frame` accepts exactly `{}`. It checks the
+current account/profile/session, source ownership/configuration, ready lease
+and gateway configuration before brokering the scoped acknowledgement. It does
+not update backend touch time or gateway expiry. Ordinary direct/legacy gateway
+sessions require no runtime acknowledgement; native sessions report directly to
+their local worker. Stop and replaced authority still revoke access.
+
+The full backend suite passes 292 library tests with four explicit ignored
+fixtures, plus all CLI/integration tests. New regressions cover v2 gateway
+selection/refusal, unchanged authority expiry, route-mode idempotency conflicts,
+closed bodies and source revocation before acknowledgement.

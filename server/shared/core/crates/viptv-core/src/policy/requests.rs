@@ -76,11 +76,21 @@ pub(super) fn request(v: &Value) -> Result {
                 body = Value::Null;
                 ("DELETE", format!("/api/v2/playback-requests/{id}"))
             }
-            "playbackV2" => {
+            "playbackV2" | "playbackV2DecodedStart" => {
                 body = playback_v2_request(&v["playback"])?;
-                ("POST", "/api/v2/playback".into())
+                (
+                    "POST",
+                    if op == "playbackV2DecodedStart" {
+                        "/api/v2/playback-decoder-start".into()
+                    } else {
+                        "/api/v2/playback".into()
+                    },
+                )
             }
-            "playbackV2Status" | "playbackV2Heartbeat" | "playbackV2Stop" => {
+            "playbackV2Status"
+            | "playbackV2Heartbeat"
+            | "playbackV2Stop"
+            | "playbackV2FirstFrame" => {
                 let id = text(v, "id");
                 if id.is_empty()
                     || id.len() > 128
@@ -96,6 +106,10 @@ pub(super) fn request(v: &Value) -> Result {
                     "playbackV2Heartbeat" => {
                         body = json!({});
                         ("POST", format!("{path}/heartbeat"))
+                    }
+                    "playbackV2FirstFrame" => {
+                        body = json!({});
+                        ("POST", format!("{path}/first-frame"))
                     }
                     "playbackV2Stop" => ("DELETE", path),
                     _ => ("GET", path),
