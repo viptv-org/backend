@@ -53,7 +53,11 @@ async fn actual_backend_android_native_server() {
         session_id: Some("s1".into()),
     };
     let mut sources = Vec::new();
-    for index in [1_u32, 2, 99] {
+    let indices: Vec<u32> = config
+        .get("indices")
+        .map(|value| serde_json::from_value(value.clone()).expect("owned indices invalid"))
+        .unwrap_or_else(|| vec![1, 2, 99]);
+    for index in indices {
         let (cards, error) = app.clone().with_lease(lease.clone()).register(
             "addon:1",
             vec![json!({"infoHash": hash, "fileIdx": index})],

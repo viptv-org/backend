@@ -158,12 +158,12 @@ impl Client {
         async move {
             let started = std::time::Instant::now();
             let observation = service_telemetry::observe(service_telemetry::Operation::GatewayControl);
-            let operation = if path == "v1/sessions" { "create" } else if path.ends_with("/renew") { "renew" } else if path == "v1/capabilities" { "capabilities" } else { "session" };
+            let operation = if matches!(path, "v1/sessions" | "v2/torrent-sessions") { "create" } else if path.ends_with("/renew") { "renew" } else if path == "v1/capabilities" { "capabilities" } else { "session" };
             let session_tag = path.strip_prefix("v1/sessions/").and_then(|p| p.split('/').next()).map(super::diagnostics::tag).unwrap_or_default();
             let mut stage = "capacity";
             let mut http_status = 0u16;
             let outcome = service_telemetry::in_context(observation.context(), async {
-            let gate = if path == "v1/sessions" && method == reqwest::Method::POST {
+            let gate = if matches!(path, "v1/sessions" | "v2/torrent-sessions") && method == reqwest::Method::POST {
                 &self.starts
             } else {
                 &self.gate
@@ -306,6 +306,31 @@ impl Client {
             outcome
         }
         .boxed()
+    }
+    pub(crate) async fn torrent_startup(&self, base: &str, key: &[u8]) -> Result<()> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Support {
+            version: u32,
+            first_frame_ack: bool,
+        }
+        let value = self
+            .request(
+                base,
+                key,
+                reqwest::Method::GET,
+                "v2/torrent-runtime-protocol",
+                None,
+                None,
+                Duration::from_secs(5),
+            )
+            .await?;
+        let support: Support =
+            serde_json::from_value(value).map_err(|_| "gateway_protocol_invalid")?;
+        if support.version != 2 || !support.first_frame_ack {
+            return Err("delivery_unsupported");
+        }
+        Ok(())
     }
     pub(crate) async fn capabilities(
         &self,

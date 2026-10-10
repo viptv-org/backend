@@ -1,5 +1,25 @@
 # Real backend and gateway browser torrent qualification
 
+## Shared Go decoder acknowledgement, 2026-10-09
+
+An owned trusted-HTTPS browser run used the current production API/controller
+code, actual backend account/profile/vault/add-on admission and the pinned Go
+worker. It selected the original privately recorded failing source. Gateway
+admission/player opening took 17.85 s in this single observation; Mediabunny
+presented six frames with advancing time. The new control acknowledgement was
+sent after the first observed frame and accepted. Stop through the real
+controller/backend changed the media response to 401. No production account,
+gateway or device configuration was changed.
+
+The test page wraps production API/controller code, so ordinary login/catalog
+screens and physical Roku presentation are outside this evidence. Initial
+harness attempts failed before API construction because a standalone esbuild
+bundle omitted its Vite environment constants; they are excluded from playback
+measurements. Five separate HTTPS UI tests pass, including metadata readiness
+with zero frames followed by a single acknowledgement after measured frames.
+
+The following records describe earlier in-process transport qualification.
+
 The reusable `scripts/check-torrent-browser-backend.sh` runs the real backend
 App router with ephemeral account/profile/session storage, encrypted addon and
 gateway registration, actual gateway capability/scope checks and opaque Source

@@ -1,18 +1,18 @@
 {
   "core": {
-    "revision": "8d9f250c29819a588965703a15eb90626b12a376",
+    "revision": "ace288131edb4c71fc9aa182bd74470b9f99cc2f",
     "license": [
       "GPL-2.0-only"
     ],
-    "archive_sha256": "db886eef91108cf507c13da0a4c77c11fb30780d64964a7596514735ae0397ba"
+    "archive_sha256": "e992712b64429f9e23f8dea9879ca72b42cdb3c9bb2b4146f50d9b3c1f68554c"
   },
   "playback-gateway": {
-    "revision": "f0f8c0d5927135560b299b8f8b02f99de1897fe7",
+    "revision": "f318d6df9bb3d4d03a4c81c3ea2e524e6f5405d1",
     "license": [
       "GPL-2.0-only",
       "Apache-2.0"
     ],
-    "archive_sha256": "01e331edf13dac2cc495dc9d1747bb1bfa4c622ae0f819adbfb1edbdb7b6be29"
+    "archive_sha256": "90a514d87f5d8526670291919d207a29ef2cd1ec3c2b08aaa94ca0cc77c210ac"
   },
-  "design_revision": "ae1f09db6afd5259a38363686d9480feb4b70269"
+  "design_revision": "9998da83ef42cfe1d1c46d76f7ee6d8a2e43242e"
 }

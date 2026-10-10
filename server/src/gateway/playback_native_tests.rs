@@ -179,6 +179,114 @@ async fn setup() -> App {
     assert_eq!(value["native_torrent_versions"], json!([1]));
     app
 }
+
+fn runtime_body(source: &str, id: &str, platform: &str) -> Value {
+    let mut request = body(source, id);
+    request["client"]["platform"] = json!(platform);
+    request["client"]["native_torrent"] =
+        json!({"version":2,"network_policy":"public_discovery_verified_v2"});
+    request
+}
+
+#[tokio::test]
+async fn runtime_grants_support_local_platforms_automatic_selection_and_tracker_hints() {
+    for platform in ["android", "android_tv", "desktop"] {
+        let app = fixture();
+        let (status, _) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/v2/torrent-runtime-protocol",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let source = torrent(&app, None);
+        app.streams
+            .lock()
+            .unwrap()
+            .get_mut(&source)
+            .unwrap()
+            .discovery_trackers = vec!["udp://tracker.fixture.invalid:6969/announce".into()];
+        let first = ready(&app, runtime_body(&source, "runtime_first", platform)).await;
+        let grant = &first["delivery"]["grant"];
+        assert_eq!(grant["version"], 2);
+        assert!(grant["file_index"].is_null());
+        assert_eq!(
+            grant["trackers"],
+            json!(["udp://tracker.fixture.invalid:6969/announce"])
+        );
+        assert!(first["delivery"].get("url").is_none());
+        let id = first["id"].as_str().unwrap();
+        let initial = grant["id"].clone();
+        let (status, renewed) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            &format!("/api/v2/playback/{id}/heartbeat"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{renewed}");
+        assert_eq!(renewed["delivery"]["grant"]["id"], initial);
+        assert_eq!(renewed["delivery"]["grant"]["trackers"], grant["trackers"]);
+        let (status, _) = request(
+            &app,
+            "member-token-1",
+            "DELETE",
+            &format!("/api/v2/playback/{id}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, released) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            &format!("/api/v2/playback/{id}"),
+            Value::Null,
+        )
+        .await;
+        assert!(released["delivery"].is_null());
+    }
+}
+
+#[tokio::test]
+async fn runtime_request_never_substitutes_gateway_delivery() {
+    let app = setup().await; // Native v1 negotiation does not authorize runtime v2.
+    let source = torrent(&app, None);
+    let (status, value) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        runtime_body(&source, "runtime_unnegotiated", "desktop"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_ACCEPTABLE, "{value}");
+    assert_eq!(value["error_code"], "source_format_unsupported");
+    request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v2/torrent-runtime-protocol",
+        Value::Null,
+    )
+    .await;
+    let mut forced = runtime_body(&source, "runtime_forced", "android");
+    forced["force_gateway"] = json!(true);
+    let (_, value) = request(&app, "member-token-1", "POST", "/api/v2/playback", forced).await;
+    assert_eq!(value["error_code"], "source_format_unsupported");
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        runtime_body(&source, "runtime_web", "web"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
 async fn ready(app: &App, input: Value) -> Value {
     ready_as(app, "member-token-1", input).await
 }

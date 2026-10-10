@@ -408,7 +408,7 @@ pub(crate) async fn after(app: &App, path: &str, response: Response) -> Response
 // V2 source jobs and playback keep the existing title/episode authorization
 // rules. Raw v2 live catalogs/guide and management routes remain separately gated.
 fn policy_path(path: &str) -> &str {
-    if path == "/v2/playback-protocol" {
+    if path == "/v2/playback-protocol" || path == "/v2/torrent-runtime-protocol" {
         return "/playback/protocol";
     }
     if path.starts_with("/v2/playback-requests/") {

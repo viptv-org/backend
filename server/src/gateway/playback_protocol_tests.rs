@@ -11,11 +11,20 @@ async fn protocol_request(
     token: &str,
     body: Body,
 ) -> (StatusCode, Value, String) {
+    protocol_route_request(app, token, body, "/api/v2/playback-protocol").await
+}
+
+async fn protocol_route_request(
+    app: &crate::App,
+    token: &str,
+    body: Body,
+    path: &str,
+) -> (StatusCode, Value, String) {
     let response = router(app.clone(), None)
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/api/v2/playback-protocol")
+                .uri(path)
                 .header("authorization", format!("Bearer {token}"))
                 .body(body)
                 .unwrap(),
@@ -32,6 +41,35 @@ async fn protocol_request(
         .to_owned();
     let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
     (status, serde_json::from_slice(&bytes).unwrap(), cache)
+}
+
+#[tokio::test]
+async fn shared_runtime_protocol_is_separate_scoped_and_bodyless() {
+    let app = fixture();
+    let route = "/api/v2/torrent-runtime-protocol";
+    let (status, value, cache) =
+        protocol_route_request(&app, "member-token-1", Body::empty(), route).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(value, json!({"version":2,"native_torrent_versions":[2]}));
+    assert_eq!(cache, "no-store");
+    let (status, _, _) = protocol_route_request(&app, "invalid-token", Body::empty(), route).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, value, _) = protocol_route_request(
+        &app,
+        "member-token-1",
+        Body::from("runtime-private-sentinel"),
+        route,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(!value.to_string().contains("runtime-private-sentinel"));
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE auth_sessions SET profile_id=NULL WHERE id='s1'", [])
+        .unwrap();
+    let (status, _, _) = protocol_route_request(&app, "member-token-1", Body::empty(), route).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

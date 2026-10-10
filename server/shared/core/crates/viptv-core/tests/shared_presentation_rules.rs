@@ -157,7 +157,7 @@ fn batch_ranking_matches_single_policy_with_stable_ties_and_unknown_caps() {
         let second_equal = typed.ordered_indices.iter().position(|i| *i == 1).unwrap();
         assert!(first_equal < second_equal);
         if caps["maxHeight"] == 1080 {
-            assert_eq!(typed.ordered_indices[..4], [0, 1, 2, 3]);
+            assert_eq!(typed.ordered_indices[..4], [0, 1, 2, 5]);
             assert!(!typed.ranks[3].likely);
         } else if caps["hevcSdr"] != true {
             assert_eq!(typed.ordered_indices[0], 3);
@@ -371,4 +371,28 @@ fn zero_position_active_flag_does_not_invent_queue_resume() {
     );
     assert_eq!(actions.card_primary_action, "details");
     assert!(!actions.can_resume);
+}
+
+#[test]
+fn playable_rows_precede_unsupported_rows_even_with_stronger_language_evidence() {
+    let result = call(
+        "sourceRanks",
+        serde_json::json!({
+            "sources":[{"name":"4k HEVC English audio dubbed"},{"name":"1080p h264"}],
+            "capabilities":{"maxHeight":1080,"h264":true,"hevcSdr":false},
+            "preferences":{"audioLanguage":"en"}
+        }),
+    );
+    assert_eq!(result["orderedIndices"], serde_json::json!([1, 0]));
+    assert_eq!(result["ranks"][0]["best"], false);
+    let rejected = call(
+        "sourceMatch",
+        serde_json::json!({
+            "source":{"name":"1080p h264 English audio"},
+            "capabilities":{"maxHeight":1080,"h264":false},
+            "preferences":{"audioLanguage":"en"}
+        }),
+    );
+    assert_eq!(rejected["likely"], false);
+    assert_eq!(rejected["best"], false);
 }

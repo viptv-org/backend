@@ -7,6 +7,7 @@ pub(super) struct Input {
     pub url: String,
     pub info_hash: Option<String>,
     pub file_index: Option<u32>,
+    pub trackers: Vec<String>,
     pub requires_gateway: bool,
     pub private_values: Vec<String>,
 }
@@ -39,6 +40,7 @@ impl Input {
             ),
         };
         let mut private_values = Vec::new();
+        let mut trackers = Vec::new();
         let (url, hash, torrent, archive) = if let Some(value) = raw.get("infoHash") {
             if !addon {
                 return None;
@@ -104,6 +106,10 @@ impl Input {
                 }
                 if let Some(tracker) = hint.strip_prefix("tracker:") {
                     validate_tracker(tracker)?;
+                    let tracker = Url::parse(tracker).ok()?.to_string();
+                    if !trackers.contains(&tracker) {
+                        trackers.push(tracker)
+                    }
                 } else {
                     let dht = hint.strip_prefix("dht:")?;
                     if !hash
@@ -122,10 +128,25 @@ impl Input {
         } else {
             url
         };
+        if torrent && url.starts_with("magnet:") {
+            for (key, value) in Url::parse(&url).ok()?.query_pairs() {
+                if key == "tr" {
+                    validate_tracker(&value)?;
+                    let tracker = Url::parse(&value).ok()?.to_string();
+                    if !trackers.contains(&tracker) {
+                        trackers.push(tracker)
+                    }
+                }
+            }
+        }
+        if trackers.len() > 32 {
+            return None;
+        }
         Some(Self {
             url,
             info_hash: hash,
             file_index,
+            trackers,
             requires_gateway: torrent || archive,
             private_values,
         })
@@ -195,4 +216,24 @@ fn magnet_hash(value: &str) -> Option<String> {
         }
     }
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn tracker_hints_are_preserved_without_entering_presentation_values() {
+        let parsed=Input::parse(&json!({"infoHash":"1111111111111111111111111111111111111111",
+            "sources":["tracker:udp://tracker.fixture.invalid:6969/announce","dht:1111111111111111111111111111111111111111"]}),true,false).unwrap();
+        assert_eq!(
+            parsed.trackers,
+            vec!["udp://tracker.fixture.invalid:6969/announce"]
+        );
+        assert!(parsed
+            .private_values
+            .iter()
+            .any(|value| value.starts_with("tracker:")));
+        assert!(!parsed.url.contains("dht:"));
+    }
 }

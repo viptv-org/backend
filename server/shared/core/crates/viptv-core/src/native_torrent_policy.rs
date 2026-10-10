@@ -126,7 +126,11 @@ pub fn native_admission(f: &NativeTorrentAdmissionFacts<'_>) -> NativeTorrentAdm
             f.request.client.platform,
             PlaybackPlatform::Android | PlaybackPlatform::AndroidTv
         )
-        || f.request.client.native_torrent.is_none()
+        || f.request
+            .client
+            .native_torrent
+            .as_ref()
+            .is_none_or(|cap| cap.version != 1 || cap.network_policy != "public_dht_tcp_v1")
         || !native_request_eligible(f.request)
         || f.info_hash.is_none_or(|hash| !canonical_v1_hash(hash))
         || f.file_index.is_none_or(|index| index > 65535)

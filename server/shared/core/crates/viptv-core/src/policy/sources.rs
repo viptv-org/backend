@@ -265,7 +265,7 @@ impl SourceFit {
         } else {
             5.0
         };
-        (9.0 - self.score) * 10.0 + quality
+        (if self.likely { 0.0 } else { 100.0 }) + (9.0 - self.score) * 10.0 + quality
     }
 }
 
@@ -357,7 +357,7 @@ fn source_fit(s: &Value, caps: &Value, prefs: &Value) -> SourceFit {
         .is_match(&words);
     let likely = resolution > 0.0
         && resolution <= height
-        && (h264 || (h265 && caps["hevcSdr"] == true))
+        && ((h264 && caps["h264"] != false) || (h265 && caps["hevcSdr"] == true))
         && !heavy;
     SourceFit {
         score,

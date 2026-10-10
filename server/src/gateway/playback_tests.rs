@@ -14,6 +14,7 @@ use std::{
 };
 
 struct Peer {
+    frames: Arc<Mutex<Vec<String>>>,
     inputs: Arc<Mutex<Vec<Value>>>,
     outputs: Arc<Mutex<Vec<Value>>>,
     task: tokio::task::JoinHandle<()>,
@@ -340,22 +341,60 @@ async fn setup() -> (App, Peer) {
     let state = mode.clone();
     let waiting = hold.clone();
     let capacity_mode = mode.clone();
+    let frames = Arc::new(Mutex::new(Vec::new()));
+    let received_frames = frames.clone();
+    let protocol_mode = mode.clone();
+    let create = axum::routing::post(move |Json(value): Json<Value>| {
+        let created = created.clone();
+        let state = state.clone();
+        let waiting = waiting.clone();
+        let outputs = received_outputs.clone();
+        let inputs = received_inputs.clone();
+        async move {
+            inputs.lock().unwrap().push(value["input"].clone());
+            outputs.lock().unwrap().push(value["output"].clone());
+            let id = {
+                let mut created = created.lock().unwrap();
+                created.push(value["namespace"].as_str().unwrap().into());
+                format!("viewer_{}", created.len())
+            };
+            if state.load(Ordering::SeqCst) == 2 {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(
+                        json!({"error":{"code":"source_connection_limit","message":"never expose provider-private-credential"}}),
+                    ),
+                );
+            }
+            if state.load(Ordering::SeqCst) == 7 {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(
+                        json!({"error":{"code":"torrent_cache_capacity","message":"never expose private torrent state"}}),
+                    ),
+                );
+            }
+            if state.load(Ordering::SeqCst) == 3 {
+                waiting.notified().await;
+            }
+            let mut value = remote(&id);
+            if state.load(Ordering::SeqCst) == 1 {
+                value["playback"]["url"] = json!("https://foreign.invalid/private-path");
+            }
+            (StatusCode::CREATED, Json(value))
+        }
+    });
     let routes=Router::new().route("/v1/capabilities",axum::routing::get(move|headers:axum::http::HeaderMap|{let mode=capacity_mode.clone();async move{
         let first=headers.get("authorization").and_then(|value|value.to_str().ok()).is_some_and(|value|value.ends_with('a'));
         let capacity=if mode.load(Ordering::SeqCst)==4 && first{0}else{2};
         let scopes=if mode.load(Ordering::SeqCst)==6 {json!(["capabilities","create"])}else{json!(["capabilities","create","read","renew","release"])};
         Json(json!({"version":1,"ready":true,"torrent":mode.load(Ordering::SeqCst)!=5,"protocols":["hls"],"namespaces":["first","second"],"scopes":scopes,"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
     }}))
-        .route("/v1/sessions",axum::routing::post(move|Json(value):Json<Value>|{let created=created.clone();let state=state.clone();let waiting=waiting.clone();let outputs=received_outputs.clone();let inputs=received_inputs.clone();async move{
-            inputs.lock().unwrap().push(value["input"].clone());
-            outputs.lock().unwrap().push(value["output"].clone());
-            let id={let mut created=created.lock().unwrap();created.push(value["namespace"].as_str().unwrap().into());format!("viewer_{}",created.len())};
-            if state.load(Ordering::SeqCst)==2 {return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":{"code":"source_connection_limit","message":"never expose provider-private-credential"}})));}
-            if state.load(Ordering::SeqCst)==7 {return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":{"code":"torrent_cache_capacity","message":"never expose private torrent state"}})));}
-            if state.load(Ordering::SeqCst)==3 {waiting.notified().await;}
-            let mut value=remote(&id);if state.load(Ordering::SeqCst)==1 {value["playback"]["url"]=json!("https://foreign.invalid/private-path");}
-            (StatusCode::CREATED,Json(value))
-        }}))
+        .route("/v1/preparations/:id",axum::routing::get(||async{Json(json!({"stage":"fetching_metadata","private_extra":"never-forward"}))}))
+        .route("/v1/sessions", create.clone())
+        .route("/v2/torrent-sessions", create)
+        .route("/v2/torrent-runtime-protocol", axum::routing::get(move || { let mode=protocol_mode.clone(); async move { Json(if mode.load(Ordering::SeqCst)==8 { json!({"version":2,"first_frame_ack":false}) } else { json!({"version":2,"first_frame_ack":true}) }) }}))
+        .route("/v2/torrent-sessions/:id/first-frame", axum::routing::post(move |Path(id):Path<String>, Json(body):Json<Value>| { let frames=received_frames.clone(); async move { assert_eq!(body,json!({}));frames.lock().unwrap().push(id);StatusCode::NO_CONTENT }}))
         .route("/v1/sessions/:id",axum::routing::get(|Path(id):Path<String>|async move{Json(remote(&id))}).delete(move||{let deleted=deleted.clone();async move{deleted.fetch_add(1,Ordering::SeqCst);StatusCode::NO_CONTENT}}))
         .route("/v1/sessions/:id/renew",axum::routing::post(|Path(id):Path<String>|async move{Json(remote(&id))}));
     let task = tokio::spawn(async move {
@@ -364,6 +403,7 @@ async fn setup() -> (App, Peer) {
     (
         app,
         Peer {
+            frames,
             inputs,
             outputs,
             task,
@@ -398,7 +438,7 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let addon = tokio::spawn(async move {
         axum::serve(listener, Router::new().route("/stream/movie/:id", axum::routing::get(|| async {
-            Json(json!({"streams":[{"infoHash":"1".repeat(40),"fileIdx":2,"name":"Fixture"},{"infoHash":"1".repeat(40),"fileIdx":3,"name":"Fixture"}]}))
+            Json(json!({"streams":[{"infoHash":"1".repeat(40),"fileIdx":2,"name":"Fixture","sources":["tracker:https://tracker.example/announce"]},{"infoHash":"1".repeat(40),"fileIdx":3,"name":"Fixture"}]}))
         }))).await.unwrap();
     });
     app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Fixture',?1,?2,1)",rusqlite::params![format!("{endpoint}/manifest.json"),json!({"id":"fixture","name":"Fixture","resources":["stream"],"types":["movie"]}).to_string()]).unwrap();
@@ -449,6 +489,10 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
         assert_eq!(ready["status"], "ready");
         assert_eq!(ready["delivery"]["kind"], "gateway");
         assert_eq!(peer.inputs.lock().unwrap().last().unwrap()["file_index"], 2);
+        assert_eq!(
+            peer.inputs.lock().unwrap().last().unwrap()["trackers"],
+            json!(["https://tracker.example/announce"])
+        );
     }
     // Removing capability/scope support cannot be bypassed by a ready source's affinity.
     for (mode, expected) in [(5, "delivery_unsupported"), (6, "gateway_scope_missing")] {
@@ -1376,4 +1420,168 @@ async fn isolated_backend_gateway_real_media_lifecycle() {
         .success());
     server.abort();
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn torrent_progress_is_measured_scoped_and_separate_from_authority() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 1);
+    source(&app);
+    let (cards, error) = app.clone().with_lease(lease()).register(
+        "addon:1",
+        vec![json!({"infoHash":"1".repeat(40),"fileIdx":0})],
+        "movie",
+    );
+    assert!(error.is_none());
+    peer.mode.store(3, Ordering::SeqCst);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        body(cards[0]["id"].as_str().unwrap(), "progress-owner", "web"),
+    )
+    .await;
+    let id = start["id"].as_str().unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while peer.starts.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let expiry = start["expires_at"].clone();
+    let path = format!("/api/v2/playback/{id}/progress");
+    let (status, stage) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stage, json!({"stage":"fetching_metadata"}));
+    assert_eq!(
+        request(&app, "member-token-2", "GET", &path, Value::Null)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, pending) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("/api/v2/playback/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert!(pending["expires_at"].as_u64().unwrap() <= expiry.as_u64().unwrap());
+    peer.hold.notify_one();
+    assert_eq!(settled(&app, id).await["status"], "ready");
+    assert_eq!(
+        request(&app, "member-token-1", "GET", &path, Value::Null)
+            .await
+            .1,
+        json!({"stage":"buffering"})
+    );
+    request(
+        &app,
+        "member-token-1",
+        "DELETE",
+        &format!("/api/v2/playback/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert_ne!(
+        request(&app, "member-token-1", "GET", &path, Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn decoder_start_brokers_frames_without_renewing_or_bypassing_source_authority() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 0);
+    source(&app);
+    let (sources, _) = app.clone().with_lease(lease()).register(
+        "addon:1",
+        vec![json!({"url":"magnet:?xt=urn:btih:1111111111111111111111111111111111111111"})],
+        "movie",
+    );
+    let source = sources[0]["id"].as_str().unwrap();
+    let input = body(source, "decoder-start", "web");
+    let (status, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback-decoder-start",
+        input.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = start["id"].as_str().unwrap();
+    let ready = settled(&app, id).await;
+    assert_eq!(ready["status"], "ready", "{ready}");
+    let authority = app.gateway_playbacks.frame_authority_facts(id);
+    assert!(authority.2);
+    let path = format!("/api/v2/playback/{id}/first-frame");
+    for _ in 0..2 {
+        assert_eq!(
+            request(&app, "member-token-1", "POST", &path, json!({}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(peer.frames.lock().unwrap().len(), 2);
+    assert_eq!(app.gateway_playbacks.frame_authority_facts(id), authority);
+    assert_eq!(
+        request(&app, "member-token-1", "POST", "/api/v2/playback", input)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let before = peer.frames.lock().unwrap().len();
+    assert_eq!(
+        request(&app, "member-token-1", "POST", &path, json!({"frame":true}))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE addons SET enabled=0 WHERE id=1", [])
+        .unwrap();
+    assert_ne!(
+        request(&app, "member-token-1", "POST", &path, json!({}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(peer.frames.lock().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn decoder_start_refuses_gateway_without_frame_protocol_before_source_create() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 0);
+    source(&app);
+    let (sources, _) = app.clone().with_lease(lease()).register(
+        "addon:1",
+        vec![json!({"url":"magnet:?xt=urn:btih:1111111111111111111111111111111111111111"})],
+        "movie",
+    );
+    peer.mode.store(8, Ordering::SeqCst);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback-decoder-start",
+        body(
+            sources[0]["id"].as_str().unwrap(),
+            "unsupported-ack",
+            "roku",
+        ),
+    )
+    .await;
+    let failed = settled(&app, start["id"].as_str().unwrap()).await;
+    assert_eq!(failed["error_code"], "delivery_unsupported");
+    assert!(peer.starts.lock().unwrap().is_empty());
 }

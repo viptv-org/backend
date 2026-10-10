@@ -3,6 +3,25 @@ use serde_json::{Value, json};
 /// Closed platform observations. Never inspect an exception or private source input.
 pub(crate) fn native_failure_message(code: &str) -> Option<&'static str> {
     Some(match code {
+        "native_no_peers" => {
+            "No torrent peers connected before the startup deadline. Check your connection or choose another source."
+        }
+        "native_buffering_timeout" => {
+            "Verified media data did not arrive in time to start playback. Retry or choose another source."
+        }
+        "native_archive_timeout" => {
+            "Opening the archive took too long. Retry or choose another source."
+        }
+        "native_archive_missing" => "An archive volume is missing. Choose another source.",
+        "native_archive_compressed" => {
+            "Compressed RAR archives are not supported. Choose an uncompressed source."
+        }
+        "native_archive_encrypted" => {
+            "Password-protected RAR archives are not supported. Choose another source."
+        }
+        "native_archive_invalid" => {
+            "The archive is invalid or contains an unsupported file. Choose another source."
+        }
         "native_playback_failed" => {
             "The selected source could not start on this device. Try another source or retry playback."
         }
@@ -10,7 +29,7 @@ pub(crate) fn native_failure_message(code: &str) -> Option<&'static str> {
             "This device took too long to prepare the selected source. Try another source or retry playback."
         }
         "native_metadata_timeout" => {
-            "No torrent metadata arrived from peers before the startup deadline. Check DHT/network access or choose another source."
+            "No torrent metadata arrived from reachable peers before the startup deadline. Retry starts one fresh attempt, or choose another source."
         }
         "native_cache_preparation_timeout" => {
             "The device timed out preparing local torrent storage. Check free space and retry after the previous stream has stopped."

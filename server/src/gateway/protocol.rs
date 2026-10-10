@@ -21,7 +21,18 @@ pub(crate) fn failure_code(code: Option<&str>) -> Option<&'static str> {
         "source_preparation_failed" | "source_unavailable" => "source_unavailable",
         "unsupported_output" | "unsupported_media" => "delivery_unsupported",
         "startup_timeout" => "gateway_startup_timeout",
-        "session_expired" | "session_not_found" | "media_unauthorized" => "playback_expired",
+        "torrent_no_peers" => "native_no_peers",
+        "torrent_metadata_timeout" => "native_metadata_timeout",
+        "torrent_archive_timeout" => "native_archive_timeout",
+        "torrent_buffering_timeout" => "native_buffering_timeout",
+        "compressed_archive_unsupported" => "native_archive_compressed",
+        "encrypted_archive_unsupported" => "native_archive_encrypted",
+        "archive_volume_missing" => "native_archive_missing",
+        "archive_metadata_invalid" => "native_archive_invalid",
+        "source_preparation_cancelled"
+        | "session_expired"
+        | "session_not_found"
+        | "media_unauthorized" => "playback_expired",
         "idempotency_conflict" => "playback_conflict",
         _ => return None,
     })

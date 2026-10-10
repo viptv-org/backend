@@ -84,7 +84,7 @@ fn best_quality_without_a_device_limit_is_the_highest_likely_source_offered() {
     let unplayable = check("2160p hevc English audio");
     assert_eq!(
         (unplayable["likely"].clone(), unplayable["rank"].clone()),
-        (json!(false), json!(45.0))
+        (json!(false), json!(145.0))
     );
     // Without candidates or a limit, a likely source is judged on its own and
     // carries no quality penalty.

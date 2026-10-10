@@ -6,6 +6,9 @@ mod native_metainfo;
 pub mod native_torrent;
 pub mod native_torrent_policy;
 pub mod policy;
+pub mod torrent_runtime;
+pub mod torrent_runtime_bridge;
+pub use torrent_runtime_bridge::TorrentRuntimeBridge;
 pub mod vizio;
 pub use app::*;
 use crux_core::{
@@ -74,6 +77,13 @@ pub fn normalize(kind: String, input: String, origin: String) -> Result<String, 
         return serde_json::to_string(&domain::playback_protocol::parse(&input)?)
             .map_err(|_| CoreError::InvalidInput);
     }
+    if kind == "torrentRuntimeProtocol" {
+        return serde_json::to_string(&domain::playback_protocol::parse_runtime(&input)?)
+            .map_err(|_| CoreError::InvalidInput);
+    }
+    if kind == "torrentRuntime" {
+        return torrent_runtime::decision(&input);
+    }
     if kind == "nativeTorrent" {
         return native_torrent::negotiation(&input);
     }
@@ -99,8 +109,10 @@ pub fn normalize(kind: String, input: String, origin: String) -> Result<String, 
             value["operation"].as_str(),
             Some(
                 "playbackProtocolV2"
+                    | "torrentRuntimeProtocol"
                     | "playbackV2CancelRequest"
                     | "playbackV2Status"
+                    | "playbackV2FirstFrame"
                     | "playbackV2Heartbeat"
                     | "playbackV2Stop"
             )
@@ -109,8 +121,10 @@ pub fn normalize(kind: String, input: String, origin: String) -> Result<String, 
         domain::playback_protocol::validate_request(&input)?;
     }
     if kind == "request"
-        && (value["operation"] == "playbackV2"
-            || value["playback"]["client"].get("nativeTorrent").is_some())
+        && (matches!(
+            value["operation"].as_str(),
+            Some("playbackV2" | "playbackV2DecodedStart")
+        ) || value["playback"]["client"].get("nativeTorrent").is_some())
     {
         native_torrent::validate_start(&input)?;
     }

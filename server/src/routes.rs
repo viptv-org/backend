@@ -133,12 +133,28 @@ pub fn router_with_tv(
         .merge(
             Router::new()
                 .route("/v2/playback-protocol", get(gateway::playback::support))
+                .route(
+                    "/v2/torrent-runtime-protocol",
+                    get(gateway::playback::runtime_support),
+                )
                 .route("/v2/playback", post(gateway::playback::start))
+                .route(
+                    "/v2/playback-decoder-start",
+                    post(gateway::playback::decoder_start),
+                )
+                .route(
+                    "/v2/playback/:id/first-frame",
+                    post(gateway::playback::first_frame),
+                )
                 .route(
                     "/v2/playback/:id",
                     get(gateway::playback::get).delete(gateway::playback::stop),
                 )
                 .route("/v2/playback/:id/heartbeat", post(gateway::playback::renew))
+                .route(
+                    "/v2/playback/:id/progress",
+                    get(gateway::playback::progress),
+                )
                 .route(
                     "/v2/playback-requests/:request_id",
                     axum::routing::delete(gateway::playback::cancel_request),

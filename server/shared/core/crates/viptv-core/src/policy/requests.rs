@@ -64,6 +64,10 @@ pub(super) fn request(v: &Value) -> Result {
                 body = Value::Null;
                 ("GET", "/api/v2/playback-protocol".into())
             }
+            "torrentRuntimeProtocol" => {
+                body = Value::Null;
+                ("GET", "/api/v2/torrent-runtime-protocol".into())
+            }
             "playbackV2CancelRequest" => {
                 let id = text(v, "requestId");
                 if !crate::domain::playback_protocol::valid_identifier(id) {
@@ -72,11 +76,21 @@ pub(super) fn request(v: &Value) -> Result {
                 body = Value::Null;
                 ("DELETE", format!("/api/v2/playback-requests/{id}"))
             }
-            "playbackV2" => {
+            "playbackV2" | "playbackV2DecodedStart" => {
                 body = playback_v2_request(&v["playback"])?;
-                ("POST", "/api/v2/playback".into())
+                (
+                    "POST",
+                    if op == "playbackV2DecodedStart" {
+                        "/api/v2/playback-decoder-start".into()
+                    } else {
+                        "/api/v2/playback".into()
+                    },
+                )
             }
-            "playbackV2Status" | "playbackV2Heartbeat" | "playbackV2Stop" => {
+            "playbackV2Status"
+            | "playbackV2Heartbeat"
+            | "playbackV2Stop"
+            | "playbackV2FirstFrame" => {
                 let id = text(v, "id");
                 if id.is_empty()
                     || id.len() > 128
@@ -92,6 +106,10 @@ pub(super) fn request(v: &Value) -> Result {
                     "playbackV2Heartbeat" => {
                         body = json!({});
                         ("POST", format!("{path}/heartbeat"))
+                    }
+                    "playbackV2FirstFrame" => {
+                        body = json!({});
+                        ("POST", format!("{path}/first-frame"))
                     }
                     "playbackV2Stop" => ("DELETE", path),
                     _ => ("GET", path),
@@ -208,12 +226,16 @@ pub(crate) fn validate_playback_v2(
     request: &crate::dto::PlaybackV2Request,
 ) -> std::result::Result<(), CoreError> {
     if request.client.native_torrent.as_ref().is_some_and(|cap| {
-        cap.version != 1
-            || cap.network_policy != "public_dht_tcp_v1"
-            || !matches!(
+        let v1 = cap.version == 1
+            && cap.network_policy == "public_dht_tcp_v1"
+            && matches!(
                 request.client.platform,
                 crate::dto::PlaybackPlatform::Android | crate::dto::PlaybackPlatform::AndroidTv
-            )
+            );
+        let v2 = cap.version == 2
+            && cap.network_policy == crate::torrent_runtime::NETWORK_POLICY
+            && crate::torrent_runtime::native_platform(&request.client.platform);
+        !v1 && !v2
     }) || request.request_id.is_empty()
         || request.request_id.len() > 128
         || !request

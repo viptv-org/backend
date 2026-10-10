@@ -87,7 +87,78 @@ The gateway, WARP and watch services/configuration were retained; the watch
 hostname's separate viewing bundle was not updated in this backend-only rollout.
 Physical public-swarm startup remains a separate Android acceptance measurement.
 
+## Backend monitoring restoration — 2026-10-09
+
+The owner requested restoration after a Roku incident investigation exposed a
+monitoring gap. The October 8 replacement retained monitoring environment
+variables but its deployed source omitted the exporter. New Relic backend
+metrics stopped at 20:58 UTC while gateway monitoring continued.
+
+A scoped repair based on the deployed `d9ca1fc` source, with telemetry and safe
+request diagnostics restored, is committed as
+`ef98d5babcb8aa7b41dedb7ea136fb3625336d96` on
+`fix/restore-production-monitoring-20261009`. Native contracts, core pins, and
+frontend bundles were retained. Runtime image
+`sha256:323296fb90fc1efd4a9648b72014d3eb7c7dfcfe46c121c665ee4f9de9af7c4e`
+started at 2026-10-09 07:55:21 UTC. The gateway was not replaced.
+New Relic received fresh `viptv-api` metrics at 07:56:51 UTC, reporting five
+export attempts, zero export failures and zero budget drops. Gateway metrics
+were current too. The MCP connection is separate from telemetry ingestion.
+
+Validation passed 283 backend unit tests, 16 backend integration tests, 15
+exporter tests, strict Clippy, Compose checks and nine host-check tests. Four
+existing unit tests remained ignored. A local trusted-HTTPS fixture verified
+health, frontend mounts, unauthorized heartbeat rejection, enabled export,
+and continued API responsiveness with an unreachable collector.
+
+An isolated copied-production candidate preserved row counts and hashes in 91
+tables; the refresh queue performed the same automatic retry work
+as the old image, with provider/account identity retained. Immediately after
+production replacement all 92 table fingerprints matched the stopped-writer
+snapshot. Environment, volume, security/resource constraints and served assets
+were unchanged. Exact old runtime configuration/container and fresh online and
+stopped-writer SQLite backups remain private for rollback.
+
+### Verify monitoring after replacement
+
+A healthy API and `OBSERVABILITY_ENABLED=true` do not prove monitoring is in the
+image. Run `python3 scripts/check-observability.py viptv-viptv-1` on the Docker
+host with Docker permissions. This check failed against the uninstrumented
+image and passed after restoration. It requires the current process to log
+monitoring startup and its persistent export ledger to advance.
+
+Then confirm fresh `viptv-api` metrics in New Relic, inspecting
+`telemetry.export.failures` and `telemetry.export.budget_drops`. Ledger bytes
+count attempted exports, including failures; they do not prove delivery.
+Retain the ingest-only key privately and preserve the ledger across restarts.
+
 ## Historical evidence below
+
+## Shared Go torrent runtime rollout — 2026-10-09
+
+The owner explicitly authorized production deployment after accepting the
+current emulated and controlled qualification. Backend `fb42aa6` is live as
+image `sha256:66074cc6b5b14402058132ee50d4106afe4d65bf04dbc001e3340a4d8861e284`.
+The independently built gateway runtime is
+`sha256:da680d94f7a2deaca0a33b14d65f7dade7001842b877cecedab238ff8e0a6e11`.
+It enables torrent acquisition with the immutable `c7bb3f1` Go worker. Its live
+scoped capabilities report torrent support and the v2 decoder acknowledgement.
+Both replacement containers are healthy. Existing environment/keyrings, named
+volumes, network/port/GPU settings and monitoring configuration were retained.
+
+Read-only SQLite online and stopped-writer backups and original containers are
+retained privately. Copied-data and post-cutover comparisons preserve existing
+accounts/history/configuration across 91 tables; only the operational provider
+refresh queue changed during startup. No ownership retirement or reseeding ran.
+
+The viewing bundle is live on both public hosts with entry
+`app-torrent20261010-Dvfh4chQ.js`. Public entry/helper bytes match the exact image
+on both hosts, public health returns 200, and unauthenticated native v2 requests
+remain 401. A fresh browser renders the watch sign-in surface. The atomic watch
+root change retains older lazy assets and the existing Host/Origin rewrites.
+Production native-app installation is distinct: the latest APK was opened on an
+owned visible Android TV emulator for the owner's manual use. These deployment
+checks do not assert universal source reliability or resolved performance gaps.
 
 The following records describe their exact older source/images. Their embedded
 media/GPU/WARP observations are not current backend instructions or proof of this
