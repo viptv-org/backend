@@ -379,6 +379,13 @@ pub(crate) async fn watchlist_items(
         else {
             continue;
         };
+        // Watchlist cards need title summaries, not a cached series episode catalog.
+        // Keep the full detail cache for opening the title; avoid oversized list responses.
+        if let Some(fields) = item.as_object_mut() {
+            for key in ["videos", "episodes", "seasons", "similar", "users_recommendations", "recommendations", "characters", "people"] {
+                fields.remove(key);
+            }
+        }
         item["watchlist_status"] = row["status"].clone();
         item["user_rating"] = row["user_rating"].clone();
         if kids::require_item(

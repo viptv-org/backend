@@ -200,6 +200,9 @@ async fn offline_watchlist_status_backfills_once_when_linked_later() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    let mut full = json!({"id":"simkl:tv:555","type":"series","name":"Local show","simkl_ids":{"simkl":555},"simkl_category":"tv"});
+    full["videos"] = Value::Array((0..1250).map(|n| json!({"id":format!("simkl:tv:555:1:{n}"),"description":"x".repeat(2048)})).collect());
+    app.simkl.remember(&[full]).unwrap();
     let (_, list) = request(
         &app,
         "member-token-1",
@@ -209,6 +212,8 @@ async fn offline_watchlist_status_backfills_once_when_linked_later() {
     )
     .await;
     assert_eq!(list["metas"][0]["watchlist_status"], "hold");
+    assert!(list["metas"][0].get("videos").is_none());
+    assert!(serde_json::to_vec(&list).unwrap().len() < 2 * 1024 * 1024);
     assert!(log.lock().unwrap().is_empty());
     link(&app, 1, 1, "11");
     app.simkl.sync(1, true).await.unwrap();
