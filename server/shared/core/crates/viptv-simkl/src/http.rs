@@ -75,7 +75,13 @@ impl Client {
             .append_pair("app-name", "viptv")
             .append_pair("app-version", "0.1");
         // Serialize and pace uncached requests. Cached catalog/CDN GETs are exempt.
-        let mut gate = if cdn { None } else { Some(self.gate.lock().await) };
+        let parts: Vec<_> = path.split('?').next().unwrap_or(path).split('/').filter(|part| !part.is_empty()).collect();
+        let cached_detail = method == "GET" && parts.first().is_some_and(|part| ["movies", "tv", "anime"].contains(part))
+            && ((parts.len() == 2 && parts[1].parse::<u64>().is_ok())
+                || (parts.len() == 3 && parts[1] == "episodes" && parts[2].parse::<u64>().is_ok()));
+        // SIMKL explicitly allows parallel CDN and cached title-detail reads.
+        // They must not queue behind a user's potentially large library sync.
+        let mut gate = if cdn || cached_detail { None } else { Some(self.gate.lock().await) };
         if let Some(deadline) = gate.as_ref() {
             tokio::time::sleep_until(**deadline).await;
         }

@@ -105,10 +105,15 @@ pub(crate) async fn meta(
     State(a): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path((kind, id)): Path<(String, String)>,
+    Query(options): Query<HashMap<String, String>>,
 ) -> ApiResult {
     let a = a.with_lease(lease);
     if id.len() > 512 || !["movie", "series"].contains(&kind.as_str()) {
         return Err("Invalid metadata request".into());
+    }
+    if options.get("summary").is_some_and(|value| value == "true") {
+        let auth::Principal::Account { profile_id, .. } = a.identity();
+        return Ok(axum::Json(a.simkl.summary(&kind, &id, profile_id).await.map_err(ApiError::from)?));
     }
     Ok(axum::Json(a.addons.meta(&kind, &id).await?))
 }

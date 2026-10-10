@@ -740,3 +740,47 @@ async fn detail_exposes_next_airing_without_hydrating_related_titles() {
     assert_eq!(log.lock().unwrap().len(), 2);
     task.abort();
 }
+
+#[tokio::test]
+async fn up_next_is_profile_scoped_cached_and_omits_caught_up_shows() {
+    let (app, log, _, task) = fixture().await;
+    let db = app.db.lock().unwrap();
+    let next = json!({"status":"watching","next_to_watch":"S02E03","next_to_watch_info":{"title":"Next regular episode","season":2,"episode":3,"date":"2026-10-09T20:00:00Z"},"show":{"title":"Watched show","ids":{"simkl":7}}});
+    db.execute("INSERT INTO simkl_library VALUES(1,'simkl:tv:7',?1)", [next.to_string()]).unwrap();
+    db.execute("INSERT INTO simkl_library VALUES(1,'simkl:tv:8',?1)", [json!({"status":"watching","next_to_watch":null,"show":{"title":"Caught up","ids":{"simkl":8}}}).to_string()]).unwrap();
+    db.execute("INSERT OR IGNORE INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Other profile','other-fixture',1)", []).unwrap();
+    db.execute("INSERT INTO simkl_library VALUES(2,'simkl:tv:9',?1)", [next.to_string()]).unwrap();
+    drop(db);
+    let (status, body) = request(&app,"member-token-1","GET","/api/profiles/1/integrations/simkl/up-next?sort=latest",Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["metas"].as_array().unwrap().len(), 1);
+    assert_eq!(body["metas"][0]["id"], "simkl:tv:7:2:3");
+    assert_eq!(body["metas"][0]["episode_title"], "Next regular episode");
+    assert!(log.lock().unwrap().is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn card_summary_fetches_no_episode_catalog_and_preserves_full_cached_details() {
+    let (app, log, _, task) = fixture().await;
+    let (status, full) = request(&app,"member-token-1","GET","/api/meta/series/simkl:tv:7",Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let requests = log.lock().unwrap().len();
+    let (status, summary) = request(&app,"member-token-1","GET","/api/meta/series/simkl:tv:7?summary=true",Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{summary}");
+    assert!(summary["meta"]["videos"].is_null());
+    assert_eq!(log.lock().unwrap().len(), requests);
+    assert_eq!(app.simkl.cached_item("simkl:tv:7").unwrap()["videos"], full["meta"]["videos"]);
+    task.abort();
+}
+
+#[tokio::test]
+async fn importing_a_thin_anime_title_does_not_replace_known_english_metadata() {
+    let (app, _, _, task) = fixture().await;
+    app.simkl.remember(&[json!({"id":"simkl:anime:42","type":"series","name":"English title","title_language":"en","background":"https://simkl.in/fanart/42.webp","simkl_category":"anime"})]).unwrap();
+    app.simkl.remember(&[json!({"id":"simkl:anime:42","type":"series","name":"Original name","title_language":"original","background":null,"simkl_category":"anime"})]).unwrap();
+    let item = app.simkl.cached_item("simkl:anime:42").unwrap();
+    assert_eq!(item["name"], "English title");
+    assert_eq!(item["background"], "https://simkl.in/fanart/42.webp");
+    task.abort();
+}

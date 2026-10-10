@@ -54,17 +54,19 @@ pub(super) fn merge_episode_progress(v: &Value) -> Result {
     Ok({
         let eps = v["episodes"].as_array().ok_or(CoreError::InvalidInput)?;
         let rows = v["history"].as_array().ok_or(CoreError::InvalidInput)?;
+        let mut by_id = std::collections::HashMap::new();
+        let mut by_coordinate = std::collections::HashMap::new();
+        for row in rows {
+            by_id.entry(row["id"].to_string()).or_insert(row);
+            if row["seriesId"] == v["seriesId"] && !row["episode"].is_null() {
+                by_coordinate.entry((row["season"].to_string(), row["episode"].to_string())).or_insert(row);
+            }
+        }
         Value::Array(
             eps.iter()
                 .map(|ep| {
-                    let row = rows.iter().find(|r| r["id"] == ep["id"]).or_else(|| {
-                        rows.iter().find(|r| {
-                            r["seriesId"] == v["seriesId"]
-                                && !r["episode"].is_null()
-                                && r["episode"] == ep["episode"]
-                                && r["season"] == ep["season"]
-                        })
-                    });
+                    let row = by_id.get(&ep["id"].to_string()).copied().or_else(||
+                        by_coordinate.get(&(ep["season"].to_string(), ep["episode"].to_string())).copied());
                     let mut out = ep.clone();
                     if let Some(row) = row {
                         for key in [
@@ -232,7 +234,7 @@ pub(super) fn enrich_home(v: &Value) -> Value {
         if !image(m, "titleLogo").is_null() {
             out["titleLogo"] = m["titleLogo"].clone();
         }
-        if text(&out, "name").is_empty() {
+        if text(&out, "name").is_empty() || (m["raw"]["simkl_category"] == "anime" && !text(m, "name").is_empty()) {
             out["name"] = m["name"].clone();
         }
         // A shelf occurrence needs its matched still, not every episode.

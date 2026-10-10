@@ -45,9 +45,9 @@ impl Service {
                     ""
                 } else {
                     if t == "anime" {
-                        "?extended=full_anime_seasons&episode_watched_at=yes&include_all_episodes=original&next_watch_info=yes"
+                        "?extended=full_anime_seasons&episode_watched_at=yes&include_all_episodes=original&next_watch_info=yes&language=en"
                     } else {
-                        "?extended=full&episode_watched_at=yes&include_all_episodes=original&next_watch_info=yes"
+                        "?extended=full&episode_watched_at=yes&include_all_episodes=original&next_watch_info=yes&language=en"
                     }
                 };
                 let path = format!("/sync/all-items/{t}{flags}");
@@ -79,7 +79,8 @@ impl Service {
                 .append_pair("extended", "full_anime_seasons")
                 .append_pair("episode_watched_at", "yes")
                 .append_pair("include_all_episodes", "original")
-                .append_pair("next_watch_info", "yes");
+                .append_pair("next_watch_info", "yes")
+                .append_pair("language", "en");
             let mut item_change = false;
             let mut ratings = false;
             let mut removed = false;

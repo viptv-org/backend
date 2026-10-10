@@ -249,3 +249,10 @@ pub(super) fn phone_presentation(v: &Value) -> Value {
     };
     json!({"shelfHeading":heading,"cardContext":context,"contentTypeLabel":content_type_label(text(v,"contentType"))})
 }
+
+/// A poster may provide ambient colour when no landscape exists; it is never an episode still.
+pub(super) fn hero_backdrop(v: &Value) -> Value {
+    let background = image(v, "background");
+    let poster = image(v, "poster");
+    json!({"url":if background.is_null(){poster}else{background.clone()},"ambientOnly":background.is_null()})
+}

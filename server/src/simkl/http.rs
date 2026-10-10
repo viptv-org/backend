@@ -419,7 +419,7 @@ pub(crate) async fn lists(
         .clamp(1, 1000);
     Ok(axum::Json(
         app.simkl
-            .custom(p, &format!("/lists/user/{user}?page={page}&limit=20"))
+            .custom(p, &format!("/lists/user/{user}?page={page}&limit=20&followed=true&collaborants=true"))
             .await
             .map_err(ApiError::from)?,
     ))
@@ -604,4 +604,48 @@ impl Service {
         )
         .unwrap_or(false)
     }
+}
+
+/// First unwatched episode per actively watched show, projected from the sync snapshot.
+/// Opening this screen never crawls episodes or sends another SIMKL request.
+pub(crate) async fn up_next(
+    State(app): State<App>, Extension(lease): Extension<ResourceLease>, Path(p): Path<i64>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult {
+    let app = scope(app, lease, p)?;
+    let rows: Vec<(String, String)> = {
+        let db = app.db.lock().unwrap();
+        let mut query = db.prepare("SELECT id,value FROM simkl_library WHERE profile_id=?1 AND json_extract(value,'$.status')='watching' ORDER BY id").map_err(db_error)?;
+        let rows = query.query_map([p], |row| Ok((row.get(0)?, row.get(1)?))).map_err(db_error)?
+            .collect::<Result<_, _>>().map_err(db_error)?;
+        rows
+    };
+    let mut items = Vec::new();
+    for (id, value) in rows {
+        let row: Value = serde_json::from_str(&value).map_err(|_| "Invalid SIMKL library snapshot")?;
+        let Some(marker) = row["next_to_watch"].as_str() else { continue };
+        let (category, title) = if row["anime"].is_object() { (Category::Anime, &row["anime"]) } else { (Category::Tv, &row["show"]) };
+        let Some(parent) = app.simkl.cached_item(&id).or_else(|| viptv_simkl::normalize(title, category)) else { continue };
+        if kids::require_item(&app.db.lock().unwrap(), &app.identity(), "series", &id).is_err() { continue }
+        let mut episode = row["next_to_watch_info"].clone();
+        if !episode.is_object() { episode = json!({}); }
+        if episode["episode"].as_u64().is_none() {
+            if let Some((season, number)) = marker.strip_prefix('S').and_then(|v| v.split_once('E')) {
+                episode["season"] = json!(season.parse::<u64>().ok()); episode["episode"] = json!(number.parse::<u64>().ok());
+            } else { episode["episode"] = json!(marker.trim_start_matches('E').parse::<u64>().ok()); }
+        }
+        let Some(mut item) = viptv_simkl::episode(&parent, &episode) else { continue };
+        item["type"] = json!("episode");
+        item["watchlist_status"] = json!("watching");
+        item["watched"] = json!(false);
+        items.push(item);
+    }
+    if q.get("sort").is_some_and(|v| v == "latest") {
+        fn aired(item: &Value) -> i64 {
+            item["released"].as_str().and_then(|date| chrono::DateTime::parse_from_rfc3339(date).ok())
+                .map(|date| date.timestamp()).unwrap_or(i64::MIN)
+        }
+        items.sort_by_key(|item| std::cmp::Reverse(aired(item)));
+    }
+    Ok(axum::Json(json!({"metas":items,"coverage":"first_unwatched_per_show","connected":app.simkl.connected(p)})))
 }

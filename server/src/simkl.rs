@@ -3,6 +3,7 @@ use crate::*;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use viptv_simkl::{http::Client, Category};
 mod http;
+mod artwork;
 mod sync;
 #[cfg(test)]
 mod tests;
@@ -222,7 +223,9 @@ impl Service {
                 .map_err(|_| "SIMKL cache unavailable")?
                 .and_then(|s| serde_json::from_str::<Value>(&s).ok())
                 .unwrap_or(json!({}));
+            let keep_english = merged["title_language"] == "en" && v["title_language"] != "en";
             for (key, value) in v.as_object().ok_or("SIMKL item invalid")? {
+                if keep_english && ["name", "title_language"].contains(&key.as_str()) { continue; }
                 if !value.is_null() {
                     merged[key] = value.clone();
                 }
@@ -322,6 +325,7 @@ impl Service {
             .await?;
         let mut item =
             viptv_simkl::normalize(&raw, category.clone()).ok_or("Invalid SIMKL metadata")?;
+        self.artwork(&mut item).await;
         if category != Category::Movie {
             let episodes = self
                 .public(
@@ -581,7 +585,8 @@ impl Service {
                     {
                         return None;
                     }
-                    let parent = viptv_simkl::normalize(&source, category.clone())?;
+                    let mut parent = viptv_simkl::normalize(&source, category.clone())?;
+                    parent["released"] = event["date"].clone();
                     if catalog == "my-calendar"
                         && !profile
                             .is_some_and(|p| self.saved(p, parent["id"].as_str().unwrap_or("")))
@@ -595,6 +600,7 @@ impl Service {
                     ep["date"] = event["date"].clone();
                     ep["tvdb"] = event["tvdb"].clone();
                     let mut item = viptv_simkl::episode(&parent, &ep)?;
+                    for key in ["genres", "ratings", "rank", "description"] { item[key] = parent[key].clone(); }
                     item["last_aired"] = event["date"].clone();
                     Some(item)
                 })
@@ -822,5 +828,22 @@ fn genre_key(s: &str) -> String {
         "science-fiction".into()
     } else {
         key
+    }
+}
+
+impl Service {
+    pub(crate) async fn summary(&self, kind: &str, id: &str, profile: Option<i64>) -> Result<Value, String> {
+        let Some((category, number)) = viptv_simkl::parse_id(id) else { return self.meta(kind, id, profile).await };
+        let raw = self.public(&format!("/{}/{number}?extended=full_anime_seasons", category.endpoint()), 21600).await?;
+        let mut item = viptv_simkl::normalize(&raw, category).ok_or("Invalid SIMKL summary")?;
+        self.artwork(&mut item).await;
+        let canonical = item["id"].as_str().unwrap();
+        let mut stored = self.cached_item(canonical).unwrap_or_else(|| item.clone());
+        stored.as_object_mut().unwrap().extend(item.as_object().unwrap().clone());
+        self.remember(&[stored])?;
+        if id.split(':').count() == 5 {
+            if let Some(episode) = self.cached_item(id) { item["videos"] = json!([episode]); }
+        }
+        Ok(json!({"meta":item}))
     }
 }

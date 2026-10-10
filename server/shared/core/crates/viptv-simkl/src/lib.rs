@@ -114,10 +114,18 @@ pub fn normalize(v: &Value, category: Category) -> Option<Value> {
         id,
         v["ids"]["slug"].as_str().unwrap_or("")
     );
+    let name = if category == Category::Anime {
+        ["en_title", "title_en", "title"].iter().filter_map(|key| v[*key].as_str()).find(|title| !title.trim().is_empty()).map(Value::from).unwrap_or(Value::Null)
+    } else { v["title"].clone() };
+    let english = category == Category::Anime && (v["en_title"].as_str().is_some_and(|v| !v.is_empty()) || v["title_en"].as_str().is_some_and(|v| !v.is_empty()) || (v["title_romaji"].is_string() && v["title"] != v["title_romaji"]));
+    let name = name.as_str().map(display_text).map(Value::from).unwrap_or(name);
+    let overview = v["overview"].as_str().map(display_text);
+    let logo = ids.get("imdb").and_then(Value::as_str).filter(|id| id.starts_with("tt") && id[2..].chars().all(|ch| ch.is_ascii_digit()))
+        .map(|id| format!("https://images.metahub.space/logo/medium/{id}/img"));
     Some(
-        json!({"id":canonical,"type":category.kind(),"name":v["title"],"year":year,
+        json!({"id":canonical,"type":category.kind(),"name":name,"title_logo":logo,"logo_source":"metahub.space","title_language":if english {"en"}else{"original"},"original_title":v["title"].as_str().map(display_text),"year":year,
         "poster":image(&v["poster"],"poster"),"background":image(&v["fanart"],"fanart"),
-        "description":v.get("overview").unwrap_or(&Value::Null),"genres":v["genres"],
+        "description":overview,"genres":v["genres"],
         "runtime":minutes,"duration":runtime,"imdbRating":v["ratings"]["imdb"]["rating"],
         "simkl_category":category,"simkl_ids":ids,"simkl_url":link,
         "ratings":v["ratings"],"rank":v["rank"],"status":v["status"],
@@ -127,17 +135,23 @@ pub fn normalize(v: &Value, category: Category) -> Option<Value> {
     )
 }
 pub fn episode(parent: &Value, v: &Value) -> Option<Value> {
-    let mut out = parent.clone();
+    // Episodes retain identity/mapping and artwork, not a clone of the title's
+    // ratings, trailers, genres and related catalogs. Long-running anime must
+    // fit through the bounded native bridge without thousands of duplicates.
+    let mut out = json!({});
+    for key in ["type", "name", "simkl_category", "simkl_ids", "poster", "background", "duration", "runtime", "metadata_source", "contentRating", "year", "title_logo", "logo_source"] {
+        if !parent[key].is_null() { out[key] = parent[key].clone(); }
+    }
     let season = v["season"].as_u64().unwrap_or(1);
     let number = v["episode"].as_u64()?;
     out["series_id"] = parent["id"].clone();
     out["id"] = json!(format!("{}:{season}:{number}", parent["id"].as_str()?));
     out["season"] = json!(season);
     out["episode"] = json!(number);
-    out["episode_title"] = v["title"].clone();
-    out["title"] = v["title"].clone();
+    out["episode_title"] = json!(v["title"].as_str().map(display_text));
+    out["title"] = out["episode_title"].clone();
     out["overview"] = v["description"].clone();
-    out["description"] = v["description"].clone();
+    out["description"] = json!(v["description"].as_str().map(display_text));
     out["released"] = v["date"].clone();
     out["thumbnail"] = image(&v["img"], "episode");
     out["simkl_episode_ids"] = v["ids"].clone();
@@ -227,3 +241,45 @@ pub fn write_item(item: &Value) -> Result<Value, &'static str> {
 
 #[cfg(feature = "http")]
 pub mod http;
+
+/// Provider strings are plain text even when their producer HTML-escaped them.
+pub fn display_text(input: &str) -> String {
+    fn pass(input: &str) -> String {
+        let mut output = String::with_capacity(input.len());
+        let mut rest = input;
+        while let Some(start) = rest.find('&') {
+            output.push_str(&rest[..start]); rest = &rest[start..];
+            let end = rest.find(';').filter(|end| *end <= 12);
+            let decoded = end.and_then(|end| {
+                let entity = &rest[1..end];
+                match entity { "amp" => Some('&'), "apos" => Some('\''), "quot" => Some('"'), "lt" => Some('<'), "gt" => Some('>'), "nbsp" => Some(' '),
+                    _ => entity.strip_prefix("#x").or_else(|| entity.strip_prefix("#X")).and_then(|value| u32::from_str_radix(value,16).ok()).or_else(|| entity.strip_prefix('#').and_then(|value| value.parse::<u32>().ok())).and_then(char::from_u32)
+                }
+            });
+            if let (Some(end), Some(decoded)) = (end, decoded) { output.push(decoded); rest = &rest[end+1..]; }
+            else { output.push('&'); rest = &rest[1..]; }
+        }
+        output.push_str(rest); output
+    }
+    let decoded = pass(&pass(input));
+    let mut output = String::with_capacity(decoded.len());
+    let mut rest = decoded.as_str();
+    while let Some(start) = rest.find('<') {
+        output.push_str(&rest[..start]); rest = &rest[start..];
+        if let Some(end) = rest.find('>').filter(|end| *end < 160) {
+            let tag = rest[1..end].trim().to_ascii_lowercase();
+            let name = tag.split_ascii_whitespace().next().unwrap_or("").trim_end_matches('/');
+            if ["br", "p", "/p", "div", "/div"].contains(&name) { output.push('\n'); rest = &rest[end+1..]; continue; }
+            if ["b", "/b", "i", "/i", "strong", "/strong", "em", "/em", "span", "/span"].contains(&name) { rest = &rest[end+1..]; continue; }
+        }
+        output.push('<'); rest = &rest[1..];
+    }
+    output.push_str(rest); output
+}
+
+#[test]
+fn escaped_titles_are_plain_display_text() {
+    assert_eq!(display_text("It&#039;s &amp; Friends &#x2014; &amp;#39;Hello&amp;#39;"), "It's & Friends — 'Hello'");
+    assert_eq!(display_text("Unknown &stuff;"), "Unknown &stuff;");
+    assert_eq!(display_text("First<br><br>Second <b>part</b>"), "First\n\nSecond part");
+}

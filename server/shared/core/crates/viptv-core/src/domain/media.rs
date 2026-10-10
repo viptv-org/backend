@@ -24,7 +24,7 @@ fn catalog_fields(v: &Value) -> Result<Value> {
         ("id".into(), Value::String(id(v, "id")?)),
         (
             "name".into(),
-            Value::String(fallback(v, &["name", "id"], "Catalog")),
+            Value::String(viptv_simkl::display_text(&fallback(v, &["name", "id"], "Catalog"))),
         ),
         ("type".into(), Value::from(catalog_type)),
         (
@@ -77,6 +77,8 @@ pub fn media(v: &Value) -> Result<Value> {
         }
     }
     let mut out = json!({"id":id(v,"id")?,"type":kind(&v["type"])?,"name":fallback(v,&["name","title"],"Untitled"),"title":fallback(v,&["title","name"],"Untitled"),"genres":strings(v,"genres"),"raw":raw});
+    out["name"] = json!(viptv_simkl::display_text(out["name"].as_str().unwrap_or("")));
+    out["title"] = json!(viptv_simkl::display_text(out["title"].as_str().unwrap_or("")));
     // Generic provider logos describe title artwork for on-demand media, but
     // live-channel logos are station identity and must not replace title text.
     let logo_keys = [

@@ -25,6 +25,7 @@ pub fn router_with_tv(
         .route("/profiles/:id/integrations/simkl/connect", post(simkl::connect))
         .route("/profiles/:id/integrations/simkl/sync", post(simkl::sync_now))
         .route("/profiles/:id/integrations/simkl/watchlist", get(simkl::watchlist_items).put(simkl::watchlist))
+        .route("/profiles/:id/integrations/simkl/up-next", get(simkl::up_next))
         .route("/profiles/:id/integrations/simkl/lists", get(simkl::lists))
         .route("/profiles/:id/integrations/simkl/lists/:list", get(simkl::list))
         .route("/profiles/:id/integrations/simkl/playback", post(simkl::scrobble))

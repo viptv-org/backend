@@ -237,6 +237,16 @@ pub fn queue(db: &Connection, profile: i64, offset: u32, limit: u32) -> Result<V
                 }
             }
         }
+        // Hydrate display fields only from the shared SIMKL cache. This never
+        // performs upstream requests or changes local progress/source identity.
+        let title = if series.is_empty() { title_id(&item) } else { series.clone() };
+        let cached: Option<String> = db.query_row("SELECT json_remove(value,'$.videos','$.similar','$.users_recommendations') FROM simkl_items WHERE id=?1", [&title], |row| row.get(0)).optional().map_err(db_error)?;
+        if let Some(metadata) = cached.and_then(|value| serde_json::from_str::<Value>(&value).ok()) {
+            for key in ["poster", "background", "description", "genres", "year", "runtime", "imdbRating", "title_logo"] {
+                if !metadata[key].is_null() { item[key] = metadata[key].clone(); }
+            }
+            if let Some(name) = metadata["name"].as_str() { item["name"] = json!(name); }
+        }
         items.push(item);
     }
     Ok(
