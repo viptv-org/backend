@@ -682,6 +682,8 @@ pub(crate) async fn review(
         for item in &preview.review_only {
             if rows.len() >= MAX_REVIEW_ROWS { break; }
             let renamed = remapped.renamed.get(&item.id);
+            // Resolved, but nothing to import (a removed entry with no history).
+            if item.reason == "unmatched_identity" && renamed.is_some() { continue; }
             let names = |c: &mapper::Candidate| c.id == item.id || c.title == item.id || renamed.is_some_and(|t| &c.title == t);
             if candidates.iter().any(|c| c.kind == item.kind && c.progress.is_some() && names(c)) { continue; }
             if item.reason == "unmatched_identity" && candidates.iter().any(|c| c.kind == item.kind && names(c)) { continue; }

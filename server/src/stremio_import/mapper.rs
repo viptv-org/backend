@@ -5,7 +5,9 @@ use flate2::read::ZlibDecoder;
 use std::{collections::HashSet, io::Read};
 
 // Stremio stores {last_watched_video_id}:{one_based_index}:{zlib(base64(bitset))}.
-// A metadata change can shift the anchor, but cannot justify guessing missing IDs.
+// Like Stremio, bits are aligned at the anchor: videos added before it shift the
+// stored bits forward, and bits after the anchor name the following videos.
+// Regular seasons must be complete and contiguous; specials may skip numbers.
 pub(super) fn verified_episodes(field: &str, title: &str, meta: &Value) -> Option<Vec<(String, i64, i64)>> {
     let (prefix, encoded) = field.rsplit_once(':')?;
     let (anchor, count) = prefix.rsplit_once(':')?;
@@ -36,23 +38,24 @@ pub(super) fn verified_episodes(field: &str, title: &str, meta: &Value) -> Optio
         if previous.is_some_and(|coordinate| coordinate >= (season, episode_number)) {
             return None;
         }
-        if let Some((prior_season, prior_episode)) = previous {
-            if prior_season == season && episode_number != prior_episode + 1 {
-                return None;
+        if season != 0 {
+            match previous {
+                Some((prior_season, prior_episode)) if prior_season == season => {
+                    if episode_number != prior_episode + 1 {
+                        return None;
+                    }
+                }
+                _ if episode_number != 1 => return None,
+                _ => {}
             }
-            if prior_season != season && episode_number != 1 {
-                return None;
-            }
-        } else if episode_number != 1 && !(season == 0 && episode_number == 0) {
-            return None;
         }
         previous = Some((season, episode_number));
         ordered.push((id.to_owned(), season, episode_number));
     }
     let anchor_index = ordered.iter().position(|(id, _, _)| id == anchor)?;
-    // A shifted anchor could indicate added or missing episodes before it; without the
-    // original video list the historical flags cannot be attributed safely.
-    if count == 0 || count > 2000 || count != anchor_index + 1 {
+    // Fewer videos before the anchor than recorded means episodes vanished: the
+    // stored bits cannot be attributed. Added videos are an end-aligned shift.
+    if count == 0 || count > 2000 || count > anchor_index + 1 {
         return None;
     }
     let compressed = STANDARD.decode(encoded).ok().filter(|v| v.len() <= 4096)?;
@@ -68,7 +71,7 @@ pub(super) fn verified_episodes(field: &str, title: &str, meta: &Value) -> Optio
         for bit in 0..8 {
             if byte & (1 << bit) != 0 {
                 let at = index * 8 + bit;
-                if at >= count || offset + at >= ordered.len() {
+                if offset + at >= ordered.len() {
                     return None;
                 }
                 result.push(ordered[offset + at].clone());

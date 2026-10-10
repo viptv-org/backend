@@ -8,7 +8,7 @@ use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use flate2::{write::ZlibEncoder, Compression};
 use std::{
-    collections::{BTreeMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     io::Write,
 };
 
@@ -359,6 +359,21 @@ pub(super) async fn remap(app: &App, items: &[Value]) -> Remapped {
         }
     }
     drop(fetching);
+    // On IMDb but absent from Cinemeta: verify against Simkl's own episode
+    // list for that show. The mapper's ordering rules still apply to it.
+    let mut fallback: BTreeMap<String, BTreeSet<(i64, i64)>> = BTreeMap::new();
+    for ((kind, _), r) in &resolved {
+        if kind == "series" && !out.meta.contains_key(&(kind.clone(), r.imdb.clone())) {
+            fallback.entry(r.imdb.clone()).or_default().extend(r.episodes.values().copied());
+        }
+    }
+    for (imdb, episodes) in fallback.into_iter().filter(|(_, e)| !e.is_empty()) {
+        let videos: Vec<Value> = episodes
+            .iter()
+            .map(|(s, e)| json!({"id":format!("{imdb}:{s}:{e}"),"season":s,"episode":e}))
+            .collect();
+        out.meta.insert(("series".into(), imdb.clone()), json!({"id":imdb,"type":"series","videos":videos}));
+    }
 
     // Group every entry (anime or native IMDb) by its IMDb target.
     let mut groups: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();

@@ -2606,6 +2606,7 @@ async fn remap_review(items: Vec<Value>, s3_episodes: i64, overview: usize, bad_
                 Json(match q.as_deref() {
                     Some("kitsu=41982") => json!([{"type":"anime","ids":{"simkl":931899}}]),
                     Some("kitsu=7442") => json!([{"type":"anime","ids":{"simkl":39687}}]),
+                    Some("kitsu=999") => json!([{"type":"anime","ids":{"simkl":1999}}]),
                     _ => json!([]),
                 })
             }))
@@ -2613,6 +2614,8 @@ async fn remap_review(items: Vec<Value>, s3_episodes: i64, overview: usize, bad_
                 match id.as_str() {
                     "931899" => Json(json!({"anime_type":"tv","ids":{"simkl":931899,"kitsu":"41982","imdb":AOT}})).into_response(),
                     "39687" => Json(json!({"anime_type":"tv","ids":{"simkl":39687,"kitsu":"7442","imdb":AOT}})).into_response(),
+                    // On IMDb, but Cinemeta has no entry for it.
+                    "1999" => Json(json!({"anime_type":"tv","ids":{"simkl":1999,"kitsu":"999","imdb":"tt0000099"}})).into_response(),
                     _ => StatusCode::NOT_FOUND.into_response(),
                 }
             }))
@@ -2625,7 +2628,9 @@ async fn remap_review(items: Vec<Value>, s3_episodes: i64, overview: usize, bad_
                 episodes.push(json!({"type":"special","episode":1}));
                 Json(Value::Array(episodes))
             }))
-            .route("/meta/series/:id", get(move || async move { Json(aot_meta(s3_episodes, overview)) })))
+            .route("/meta/series/:id", get(move |Path(id): Path<String>| async move {
+                if id == format!("{AOT}.json") { Json(aot_meta(s3_episodes, overview)).into_response() } else { StatusCode::NOT_FOUND.into_response() }
+            })))
             .await.unwrap();
     });
     let service = Arc::get_mut(&mut f.app.stremio_import).unwrap();
@@ -2743,4 +2748,70 @@ async fn real_library_remap_preview() {
             rows.iter().filter(|r| r["selectable"] == true).count(),
         );
     }
+}
+
+/// Stremio-compatible decoding: alignment is by list position at the anchor.
+fn decoded(field: &str, videos: &[(i64, i64)]) -> Option<Vec<(i64, i64)>> {
+    let meta = json!({"videos": videos.iter().map(|(s, e)| json!({"id":format!("tt0000001:{s}:{e}"),"season":s,"episode":e})).collect::<Vec<_>>()});
+    let bits = |byte: u8| {
+        use base64::Engine;
+        use std::io::Write;
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        z.write_all(&[byte]).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(z.finish().unwrap())
+    };
+    let (anchor, count, byte) = {
+        let mut parts = field.split('|');
+        (parts.next().unwrap(), parts.next().unwrap(), u8::from_str_radix(parts.next().unwrap(), 2).unwrap())
+    };
+    mapper::verified_episodes(&format!("tt0000001:{anchor}:{count}:{}", bits(byte)), "tt0000001", &meta)
+        .map(|v| v.into_iter().map(|(_, s, e)| (s, e)).collect())
+}
+
+#[test]
+fn specials_may_skip_numbers() {
+    // Konosuba: Cinemeta's specials start at S0E3.
+    assert_eq!(
+        decoded("1:2|3|00000110", &[(0, 3), (1, 1), (1, 2)]),
+        Some(vec![(1, 1), (1, 2)])
+    );
+    assert_eq!(decoded("1:2|3|00000110", &[(0, 3), (1, 2), (1, 3)]), None, "regular seasons stay contiguous");
+}
+
+#[test]
+fn anchor_aligns_after_videos_were_added_before_it() {
+    // Overlord: a special appeared before the anchor after Stremio stored 2 bits.
+    assert_eq!(
+        decoded("1:2|2|00000011", &[(0, 1), (1, 1), (1, 2)]),
+        Some(vec![(1, 1), (1, 2)])
+    );
+}
+
+#[test]
+fn bits_after_a_stale_anchor_are_read() {
+    // Talker: anchor at episode 2 but episode 3 was finished afterwards.
+    assert_eq!(
+        decoded("1:2|2|00000111", &[(1, 1), (1, 2), (1, 3)]),
+        Some(vec![(1, 1), (1, 2), (1, 3)])
+    );
+    assert_eq!(decoded("1:2|2|00001111", &[(1, 1), (1, 2), (1, 3)]), None, "never past the list");
+}
+
+#[tokio::test]
+async fn show_missing_from_cinemeta_verifies_against_simkl_episodes() {
+    let reviewed = remap_review(vec![anime_item("kitsu:999", "kitsu:999:2:2:eJxjBgAABAAE", Some(3))], 22, 0, false).await;
+    assert_eq!(episode_rows(&reviewed), vec![(1, 1, false), (1, 2, false), (1, 3, true)]);
+    assert_eq!(reviewed["summary"]["needs_review"], 0, "{reviewed}");
+}
+
+#[tokio::test]
+async fn resolved_removed_entry_without_history_is_not_flagged_unmatched() {
+    let mut item = anime_item("kitsu:41982", "", None);
+    item["removed"] = json!(true);
+    item["state"]["watched"] = Value::Null;
+    let reviewed = remap_review(vec![item], 22, 0, false).await;
+    assert!(
+        !reviewed["review_items"].as_array().unwrap().iter().any(|r| r["reason"] == "unmatched_identity"),
+        "{reviewed}"
+    );
 }
