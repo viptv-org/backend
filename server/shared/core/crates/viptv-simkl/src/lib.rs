@@ -137,6 +137,7 @@ pub fn episode(parent: &Value, v: &Value) -> Option<Value> {
     out["episode_title"] = v["title"].clone();
     out["title"] = v["title"].clone();
     out["overview"] = v["description"].clone();
+    out["description"] = v["description"].clone();
     out["released"] = v["date"].clone();
     out["thumbnail"] = image(&v["img"], "episode");
     out["simkl_episode_ids"] = v["ids"].clone();

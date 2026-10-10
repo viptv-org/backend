@@ -610,7 +610,10 @@ impl Service {
                 cached
                     .iter()
                     .filter_map(|s| serde_json::from_str::<Value>(s).ok())
-                    .filter(|v| v["simkl_category"] == serde_json::to_value(&category).unwrap()),
+                    .filter(|v| {
+                        v["simkl_category"] == serde_json::to_value(&category).unwrap()
+                            && v["episode"].is_null()
+                    }),
             );
             let mut seen = HashSet::new();
             items.retain(|v| {

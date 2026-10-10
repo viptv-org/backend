@@ -2,6 +2,22 @@ use serde_json::json;
 use viptv_simkl::{Category, episode, normalize, stream_id, write_item};
 
 #[test]
+fn episode_synopsis_replaces_parent_synopsis() {
+    let parent = normalize(
+        &json!({"title":"Show","overview":"Whole show","ids":{"simkl":7}}),
+        Category::Tv,
+    )
+    .unwrap();
+    let ep = episode(
+        &parent,
+        &json!({"season":1,"episode":1,"title":"Pilot","description":"Episode story"}),
+    )
+    .unwrap();
+    assert_eq!(ep["description"], "Episode story");
+    assert_eq!(ep["overview"], "Episode story");
+}
+
+#[test]
 fn public_feed_dates_runtime_and_identity_are_normalized() {
     let item=normalize(&json!({"title":"Test","ids":{"simkl_id":42,"imdb":"tt42"},"release_date":"08/14/2020","runtime":"1h 30m","ratings":{"simkl":{"rating":8.5}}}),Category::Movie).unwrap();
     assert_eq!(item["id"], "simkl:movies:42");

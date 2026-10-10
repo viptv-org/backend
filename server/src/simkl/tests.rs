@@ -130,6 +130,38 @@ async fn public_discovery_and_metadata_never_contact_addon_catalogs() {
 }
 
 #[tokio::test]
+async fn unlinked_title_search_excludes_cached_episodes() {
+    let (app, _, _, task) = fixture().await;
+    let parent = viptv_simkl::normalize(
+        &json!({"title":"Unique show","ids":{"simkl":7}}),
+        Category::Tv,
+    )
+    .unwrap();
+    let ep =
+        viptv_simkl::episode(&parent, &json!({"season":1,"episode":1,"title":"Pilot"})).unwrap();
+    app.simkl.remember(&[parent, ep]).unwrap();
+    let result = app
+        .simkl
+        .discover(
+            addon::DiscoverOptions {
+                kind: "series".into(),
+                catalog: Some("today".into()),
+                addon: None,
+                skip: 0,
+                search: Some("Unique show".into()),
+                genre: None,
+                extras: HashMap::new(),
+            },
+            Some(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["metas"].as_array().unwrap().len(), 1);
+    assert_eq!(result["metas"][0]["id"], "simkl:tv:7");
+    task.abort();
+}
+
+#[tokio::test]
 async fn calendar_date_outside_rolling_window_uses_month_archive() {
     let (app, log, _, task) = fixture().await;
     let result = app
