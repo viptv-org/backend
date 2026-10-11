@@ -248,91 +248,11 @@ impl Addons {
         }
         Ok((entries, errors))
     }
-    /// Test fixtures below; accounts manage addons through `http_v2`.
-    #[cfg(test)]
-    pub fn list(&self) -> Result<Value, String> {
-        let db = self.db.lock().map_err(|_| "Database unavailable")?;
-        let mut stmt = db
-            .prepare(
-                "SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE account_id=?1 ORDER BY id",
-            )
-            .map_err(|_| "Database query failed")?;
-        let rows = stmt
-            .query_map([self.account_id], Self::config_row)
-            .map_err(|_| "Database query failed")?;
-        Ok(Value::Array(
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|_| "Database query failed")?,
-        ))
-    }
-    #[cfg(test)]
-    fn config_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
-        Ok(
-            json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"manifest_url":null,"enabled":r.get::<_,bool>(3)?,"credentials_encrypted":r.get::<_,i64>(5)?==1}),
-        )
-    }
-    /// Patch only enabled, preserving omitted fields. The complete saved
-    /// configuration is returned. Test fixture; accounts manage addons via http_v2.
-    #[cfg(test)]
-    pub fn update(&self, id: i64, patch: Value) -> Result<Value, String> {
-        let fields = patch.as_object().ok_or("Addon patch must be an object")?;
-        if fields.is_empty() || fields.keys().any(|k| k != "enabled") {
-            return Err("Patch accepts enabled only".into());
-        }
-        let enabled = fields
-            .get("enabled")
-            .map(|v| v.as_bool().ok_or("enabled must be a boolean"))
-            .transpose()?;
-        let db = self.db.lock().map_err(|_| "Database unavailable")?;
-        let changed = db
-            .execute(
-                "UPDATE addons SET enabled=COALESCE(?1,enabled) WHERE id=?2 AND account_id=?3",
-                params![enabled, id, self.account_id],
-            )
-            .map_err(|_| "Database update failed")?;
-        if changed == 0 {
-            return Err("Addon not found".into());
-        }
-        db.query_row(
-            "SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE id=?1 AND account_id=?2",
-            [id,self.account_id],
-            Self::config_row,
-        )
-        .map_err(|_| "Database query failed".into())
-    }
     async fn async_entries(&self) -> Result<Vec<(i64, String, Value)>, String> {
         let this = self.clone();
         tokio::task::spawn_blocking(move || this.entries())
             .await
             .map_err(|_| "Database task failed")?
-    }
-    #[cfg(test)]
-    pub async fn add(&self, url: &str) -> Result<Value, String> {
-        let vault = self.vault.clone().ok_or("secret_store_not_configured")?;
-        let (url, m) = self.prepare_manifest(url).await?;
-        let cache_key = self.cache_key(&url)?;
-        self.cache.lock().unwrap().remove(&cache_key);
-        let this = self.clone();
-        tokio::task::spawn_blocking(move || {
-            let db = this.db.lock().map_err(|_| "Database unavailable")?;
-            let id=credentials_v2::store(&db,&vault,this.account_id,&url,&m)?;
-            db.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE id=?1 AND account_id=?2",params![id,this.account_id],Self::config_row).map_err(|_|"Database query failed".into())
-        }).await.map_err(|_| "Database task failed")?
-    }
-    #[cfg(test)]
-    pub fn delete(&self, id: i64) -> Result<(), String> {
-        let db = self.db.lock().map_err(|_| "Database unavailable")?;
-        let tx = db
-            .unchecked_transaction()
-            .map_err(|_| "Database update failed")?;
-        tx.execute("DELETE FROM addon_credentials_v2 WHERE addon_id IN (SELECT id FROM addons WHERE id=?1 AND account_id=?2)",[id,self.account_id]).map_err(|_|"Database update failed")?;
-        tx.execute(
-            "DELETE FROM addons WHERE id=?1 AND account_id=?2",
-            [id, self.account_id],
-        )
-        .map_err(|_| "Database update failed")?;
-        tx.commit().map_err(|_| "Database update failed")?;
-        Ok(())
     }
     pub fn catalogs(&self) -> Result<Value, String> {
         let mut out = vec![];

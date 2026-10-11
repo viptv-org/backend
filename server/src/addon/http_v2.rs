@@ -32,7 +32,7 @@ fn own(db: &Connection, account: i64, id: i64) -> Result<(), Error> {
         Err(Error::Code("addon_not_found"))
     }
 }
-fn record(
+pub(super) fn record(
     db: &Connection,
     vault: Option<&crate::secret_store::Vault>,
     account: i64,

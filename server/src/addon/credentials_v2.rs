@@ -206,16 +206,6 @@ fn seal(
     );
     vault.seal_addon(account, &id.to_string(), &bytes)
 }
-#[cfg(test)]
-pub(super) fn store(
-    db: &Connection,
-    vault: &Vault,
-    account: i64,
-    url: &str,
-    manifest: &Value,
-) -> Result<i64, &'static str> {
-    store_inner(db, vault, account, url, manifest, None)
-}
 pub(crate) type Snapshot = Option<(i64, String)>;
 pub(crate) fn snapshot(
     db: &Connection,
@@ -251,7 +241,7 @@ pub(crate) fn store_checked(
     manifest: &Value,
     expected: &Snapshot,
 ) -> Result<i64, &'static str> {
-    store_inner(db, vault, account, url, manifest, Some(expected))
+    store_inner(db, vault, account, url, manifest, expected)
 }
 pub(crate) fn store_checked_tx(
     db: &Connection,
@@ -261,7 +251,7 @@ pub(crate) fn store_checked_tx(
     manifest: &Value,
     expected: &Snapshot,
 ) -> Result<i64, &'static str> {
-    store_rows(db, vault, account, url, manifest, Some(expected))
+    store_rows(db, vault, account, url, manifest, expected)
 }
 fn store_inner(
     db: &Connection,
@@ -269,7 +259,7 @@ fn store_inner(
     account: i64,
     url: &str,
     manifest: &Value,
-    expected: Option<&Snapshot>,
+    expected: &Snapshot,
 ) -> Result<i64, &'static str> {
     let tx = db.unchecked_transaction().map_err(storage)?;
     let id = store_rows(&tx, vault, account, url, manifest, expected)?;
@@ -282,7 +272,7 @@ fn store_rows(
     account: i64,
     url: &str,
     manifest: &Value,
-    expected: Option<&Snapshot>,
+    expected: &Snapshot,
 ) -> Result<i64, &'static str> {
     if account <= 0 {
         return Err("account_session_required");
@@ -298,7 +288,7 @@ fn store_rows(
         return Err("account_session_required");
     }
     let current = snapshot(tx, vault, account, url)?;
-    if expected.is_some_and(|expected| expected != &current) {
+    if expected != &current {
         return Err("addon_configuration_changed");
     }
     let existing = current.map(|(id, _)| id);
@@ -466,6 +456,17 @@ mod tests {
     fn vault() -> Arc<Vault> {
         Arc::new(Vault::from_json(&json!({"active":"fixture","keys":{"fixture":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string()).unwrap())
     }
+    /// Store against the current snapshot, as a fresh install does.
+    fn store(
+        db: &Connection,
+        vault: &Vault,
+        account: i64,
+        url: &str,
+        manifest: &Value,
+    ) -> Result<i64, &'static str> {
+        let expected = snapshot(db, vault, account, url)?;
+        store_checked(db, vault, account, url, manifest, &expected)
+    }
     #[test]
     fn legacy_initialization_never_assigns_secrets_to_the_first_owner() {
         let db = Connection::open_in_memory().unwrap();
@@ -474,7 +475,7 @@ mod tests {
           INSERT INTO addons VALUES(7,'Legacy','https://fixture.invalid/private-token/manifest.json',1,'{}');").unwrap();
         let db = Arc::new(Mutex::new(db));
         let addons = Addons::new(db.clone(), reqwest::Client::new()).unwrap();
-        assert_eq!(addons.for_account(1).list().unwrap(), json!([]));
+        assert!(addons.for_account(1).entries().unwrap().is_empty());
         assert_eq!(
             ownership(&db.lock().unwrap()).unwrap()["unassigned"],
             json!([7])
@@ -491,10 +492,15 @@ mod tests {
         let id = store(&app.db.lock().unwrap(), &vault, 1, url, &manifest).unwrap();
         let entries = addons.entries().unwrap();
         assert_eq!(entries[0], (id, url.to_owned(), manifest.clone()));
-        let public = addons.list().unwrap();
-        assert_eq!(public[0]["manifest_url"], Value::Null);
-        assert_eq!(public[0]["credentials_encrypted"], true);
-        assert!(!public.to_string().contains("private-addon-token"));
+        let public = super::super::http_v2::record(&app.db.lock().unwrap(), Some(&vault), 1, id)
+            .ok()
+            .unwrap();
+        assert_eq!(public["manifest_url"], Value::Null);
+        assert_eq!(public["credentials_encrypted"], true);
+        // The validated manifest logo is shown as artwork; the manifest URL stays secret.
+        let mut secret_fields = public.clone();
+        secret_fields.as_object_mut().unwrap().remove("logo");
+        assert!(!secret_fields.to_string().contains("private-addon-token"));
         let before =
             crate::sources::source_configuration(&app.db.lock().unwrap(), &format!("addon:{id}"))
                 .unwrap();
@@ -509,19 +515,18 @@ mod tests {
         );
         let foreign = addons.clone().for_account(2);
         assert!(foreign.entries().unwrap().is_empty());
-        foreign.delete(id).unwrap();
-        assert_eq!(addons.entries().unwrap().len(), 1);
         addons.vault = None;
         assert_eq!(addons.entries().unwrap_err(), "secret_store_not_configured");
-        assert_eq!(
-            addons
-                .add("https://fixture.invalid/another/manifest.json")
-                .await
-                .unwrap_err(),
-            "secret_store_not_configured"
-        );
         addons.vault = Some(vault.clone());
-        addons.delete(id).unwrap();
+        let (status, _) = crate::test_support::request(
+            &app,
+            "member-token-1",
+            "DELETE",
+            &format!("/api/v2/addons/{id}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK);
         assert_eq!(
             app.db
                 .lock()
@@ -530,11 +535,6 @@ mod tests {
                     .get::<_, i64>(0))
                 .unwrap(),
             0
-        );
-        addons.vault = None;
-        assert_eq!(
-            addons.add(url).await.unwrap_err(),
-            "secret_store_not_configured"
         );
         let new_id = store(&app.db.lock().unwrap(), &vault, 1, url, &manifest).unwrap();
         assert!(new_id > id);
@@ -565,10 +565,9 @@ mod tests {
         let server = tokio::spawn(async move {
             axum::serve(listener,Router::new().route("/private-addon-token/manifest.json",get(||async {Json(json!({"id":"fixture","name":"Fixture","resources":["stream"],"types":["movie"],"logo":"http://art.invalid/private-addon-token"}))}))).await.unwrap();
         });
-        let first = addons.add(&url).await.unwrap();
-        let second = addons.add(&url).await.unwrap();
-        assert_eq!(first["id"], second["id"]);
-        assert_eq!(first["manifest_url"], Value::Null);
+        let first = crate::addon::tests::install(&addons, &url).await.unwrap();
+        let second = crate::addon::tests::install(&addons, &url).await.unwrap();
+        assert_eq!(first, second);
         let db = app.db.lock().unwrap();
         let (stored, manifest): (String, String) = db
             .query_row("SELECT manifest_url,manifest FROM addons", [], |r| {

@@ -40,7 +40,6 @@ async fn plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_sib
     assert_eq!(status, StatusCode::OK);
     assert_eq!(metadata["items"][0]["configuration_error_code"], code);
     assert!(!metadata.to_string().contains("private-addon"));
-    assert!(!addons.list().unwrap().to_string().contains("private-addon"));
     let (status, error) = request(
         &app,
         "member-token-1",
@@ -561,6 +560,18 @@ async fn discovery_rejections_are_structured_and_do_not_echo_request_details() {
     assert_eq!(error["error_code"], "discovery_not_found");
 }
 
+async fn set_addon_enabled(app: &crate::App, id: i64, enabled: bool) {
+    let (status, _) = request(
+        app,
+        "member-token-1",
+        "PATCH",
+        &format!("/api/v2/addons/{id}"),
+        json!({ "enabled": enabled }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
     use base64::Engine;
@@ -582,8 +593,15 @@ async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
         axum::serve(listener,Router::new().route("/private-token/manifest.json",get(||async {axum::Json(json!({"id":"fixture","name":"Fixture","resources":["stream"],"types":["movie"]}))}))
             .route("/private-token/stream/movie/:id",get(move || {let entered=entering.clone();let release=releasing.clone();async move {entered.notify_one();release.notified().await;axum::Json(json!({"streams":[{"url":"http://media.invalid/private-stream-token.mp4","name":"Fixture source"}]}))}}))).await.unwrap();
     });
-    let owned = app.addons.clone().for_account(1);
-    let addon = owned.add(&url).await.unwrap()["id"].as_i64().unwrap();
+    let (_, installed) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/addons",
+        json!({"manifest_url":url}),
+    )
+    .await;
+    let addon = installed["id"].as_i64().unwrap();
     let (_, started) = request(
         &app,
         "member-token-1",
@@ -596,7 +614,7 @@ async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
     tokio::time::timeout(Duration::from_secs(3), entered.notified())
         .await
         .unwrap();
-    owned.update(addon, json!({"enabled":false})).unwrap();
+    set_addon_enabled(&app, addon, false).await;
     release.notify_one();
     async fn poll(app: &App, path: &str) -> Value {
         tokio::time::timeout(Duration::from_secs(3), async {
@@ -614,7 +632,7 @@ async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
     let late = poll(&app, &path).await;
     assert_eq!(late["events"][0]["error_code"], "source_not_found");
     assert!(app.streams.lock().unwrap().is_empty());
-    owned.update(addon, json!({"enabled":true})).unwrap();
+    set_addon_enabled(&app, addon, true).await;
     // The changed configuration uses a fresh response cache key and fetches again.
     release.notify_one();
     let (_, started) = request(
@@ -628,7 +646,7 @@ async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
     let path = format!("/api/v2/streams/{}", started["id"].as_str().unwrap());
     let before = poll(&app, &path).await;
     assert_eq!(before["events"][0]["streams"].as_array().unwrap().len(), 1);
-    owned.update(addon, json!({"enabled":false})).unwrap();
+    set_addon_enabled(&app, addon, false).await;
     let after = poll(&app, &path).await;
     assert_eq!(before["events"][0]["seq"], after["events"][0]["seq"]);
     assert_eq!(after["events"][0]["error_code"], "source_not_found");

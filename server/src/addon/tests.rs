@@ -108,20 +108,19 @@ async fn catalog_cache_and_protocol_without_skip() {
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
     let addons = test_addons();
-    let saved = addons
-        .add(&format!("http://{address}/manifest.json"))
+    let saved = install(&addons, &format!("http://{address}/manifest.json"))
         .await
         .unwrap();
     for _ in 0..2 {
         let response = addons
-            .discover("movie".into(), None, saved["id"].as_i64(), 0, None, None)
+            .discover("movie".into(), None, Some(saved), 0, None, None)
             .await
             .unwrap();
         assert_eq!(response["metas"][0]["id"], "tt42");
     }
     assert_eq!(hits.load(Ordering::SeqCst), 1);
     assert!(addons
-        .discover("movie".into(), None, saved["id"].as_i64(), 100, None, None)
+        .discover("movie".into(), None, Some(saved), 100, None, None)
         .await
         .is_err());
     task.abort();
@@ -136,8 +135,55 @@ fn test_addons() -> Addons {
     addons.account_id = 1;
     addons.vault = Some(crate::test_support::vault());
     addons.allow_test_loopback = true;
-    addons.delete(1).unwrap();
+    remove(&addons, 1);
     addons
+}
+/// Install a manifest URL the way `/api/v2/addons` does and return its id.
+pub(super) async fn install(addons: &Addons, url: &str) -> Result<i64, String> {
+    let vault = addons.vault.clone().ok_or("secret_store_not_configured")?;
+    let (url, manifest) = addons.prepare_manifest(url).await?;
+    let db = addons.db.lock().unwrap();
+    let expected = credentials_v2::snapshot(&db, &vault, addons.account_id, &url)?;
+    Ok(credentials_v2::store_checked(
+        &db,
+        &vault,
+        addons.account_id,
+        &url,
+        &manifest,
+        &expected,
+    )?)
+}
+/// Saved (id, enabled) rows for the addons' account, in id order.
+fn saved(addons: &Addons) -> Vec<(i64, bool)> {
+    let db = addons.db.lock().unwrap();
+    let mut rows = db
+        .prepare("SELECT id,enabled FROM addons WHERE account_id=?1 ORDER BY id")
+        .unwrap();
+    rows.query_map([addons.account_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+fn set_enabled(addons: &Addons, id: i64, enabled: bool) {
+    addons
+        .db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE addons SET enabled=?2 WHERE id=?1 AND account_id=?3",
+            params![id, enabled, addons.account_id],
+        )
+        .unwrap();
+}
+fn remove(addons: &Addons, id: i64) {
+    let db = addons.db.lock().unwrap();
+    db.execute("DELETE FROM addon_credentials_v2 WHERE addon_id=?1", [id])
+        .unwrap();
+    db.execute(
+        "DELETE FROM addons WHERE id=?1 AND account_id=?2",
+        params![id, addons.account_id],
+    )
+    .unwrap();
 }
 
 #[tokio::test]
@@ -284,22 +330,21 @@ fn seed_migration_and_restarts_never_restore_deleted_addons() {
         .unwrap()
     };
     let addons = open();
-    assert_eq!(addons.list().unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(saved(&addons).len(), 1);
     let baseline = addons.revision().unwrap();
-    addons.update(1, json!({"enabled":false})).unwrap();
+    set_enabled(&addons, 1, false);
     let disabled_revision = addons.revision().unwrap();
     assert_ne!(disabled_revision, baseline);
     drop(addons);
     let addons = open();
     assert_eq!(addons.revision().unwrap(), disabled_revision);
-    assert_eq!(addons.list().unwrap()[0]["enabled"], false);
-    assert!(addons.list().unwrap()[0]["priority"].is_null());
-    addons.delete(1).unwrap();
+    assert_eq!(saved(&addons), vec![(1, false)]);
+    remove(&addons, 1);
     let deleted_revision = addons.revision().unwrap();
     assert_ne!(deleted_revision, disabled_revision);
     drop(addons);
     let reopened = open();
-    assert_eq!(reopened.list().unwrap(), json!([]));
+    assert!(saved(&reopened).is_empty());
     assert_eq!(reopened.revision().unwrap(), deleted_revision);
     drop(reopened);
     std::fs::remove_file(&path).unwrap();
@@ -317,52 +362,32 @@ fn seed_migration_and_restarts_never_restore_deleted_addons() {
         let db = Arc::new(Mutex::new(db));
         for _ in 0..2 {
             let addons = Addons::new(db.clone(), reqwest::Client::new()).unwrap();
-            let list = addons.list().unwrap();
+            let list = saved(&addons);
             assert_eq!(addons.revision().unwrap().len(), 32);
-            assert_eq!(list.as_array().unwrap().len(), usize::from(populated));
+            assert_eq!(list.len(), usize::from(populated));
             if populated {
-                assert!(list[0]["priority"].is_null());
-                assert_eq!(list[0]["enabled"], false);
+                assert!(!list[0].1);
             }
         }
     }
 }
 #[test]
-fn patch_validation_and_order() {
+fn entries_follow_insert_order_and_skip_disabled_addons() {
     let addons = test_addons();
     let a = insert(&addons, "A", "https://a/manifest.json", json!({}), 0);
     let b = insert(&addons, "B", "https://b/manifest.json", json!({}), 0);
-    assert_eq!(
+    let ids = |addons: &Addons| {
         addons
             .entries()
             .unwrap()
             .iter()
             .map(|e| e.0)
-            .collect::<Vec<_>>(),
-        vec![a, b]
-    );
-    for patch in [
-        json!(null),
-        json!([]),
-        json!({}),
-        json!({"enabled":1}),
-        json!({"enabled":null}),
-        json!({"priority":1.5}),
-        json!({"priority":"2"}),
-        json!({"priority":18446744073709551615u64}),
-        json!({"name":"bad"}),
-        json!({"enabled":false,"priority":"bad"}),
-    ] {
-        assert!(addons.update(a, patch).is_err());
-    }
-    assert!(addons.update(999, json!({"enabled":false})).is_err());
-    assert_eq!(addons.entries().unwrap().len(), 2);
-    assert!(addons.update(b, json!({"priority":-1})).is_err());
-    assert_eq!(addons.entries().unwrap()[0].0, a);
-    addons.update(b, json!({"enabled":false})).unwrap();
-    assert_eq!(addons.entries().unwrap().len(), 1);
-    assert_eq!(addons.list().unwrap()[1]["id"], b);
-    assert_eq!(addons.list().unwrap()[1]["enabled"], false);
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&addons), vec![a, b]);
+    set_enabled(&addons, b, false);
+    assert_eq!(ids(&addons), vec![a]);
+    assert_eq!(saved(&addons), vec![(a, true), (b, false)]);
 }
 #[tokio::test]
 async fn ordered_catalogs_raw_pagination_search_constraints_and_meta() {
@@ -471,11 +496,18 @@ async fn ordered_catalogs_raw_pagination_search_constraints_and_meta() {
         )
         .await
         .is_err());
-    addons.update(slow, json!({"enabled":false})).unwrap();
-    let saved = addons.add(&slow_url).await.unwrap();
-    assert_eq!(saved["enabled"], false);
-    assert!(saved["priority"].is_null());
-    assert_eq!(saved["name"], "Refreshed");
+    set_enabled(&addons, slow, false);
+    // Reinstalling refreshes the manifest but keeps the saved disabled state.
+    assert_eq!(install(&addons, &slow_url).await.unwrap(), slow);
+    let (name, enabled): (String, bool) = addons
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT name,enabled FROM addons WHERE id=?1", [slow], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!((name.as_str(), enabled), ("Refreshed", false));
     assert_eq!(
         addons
             .discover("movie".into(), None, None, 0, None, None)

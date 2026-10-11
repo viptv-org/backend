@@ -616,10 +616,9 @@ async fn stalled_installs_do_not_take_viewing_request_slots() {
 }
 
 #[tokio::test]
-async fn legacy_save_without_keyring_refuses_before_download_or_write() {
-    let app = app();
-    let mut old = app.addons.clone().for_account(1);
-    old.vault = None;
+async fn save_without_keyring_refuses_before_download_or_write() {
+    let mut app = app();
+    app.secret_vault = None;
     let entered = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let entering = entered.clone();
@@ -648,15 +647,23 @@ async fn legacy_save_without_keyring_refuses_before_download_or_write() {
         .await
         .unwrap();
     });
-    let pending = tokio::spawn(async move { old.add(&url).await });
-    assert_eq!(
-        tokio::time::timeout(Duration::from_secs(3), pending)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap_err(),
-        "secret_store_not_configured"
-    );
+    let saving = app.clone();
+    let pending = tokio::spawn(async move {
+        request(
+            &saving,
+            "member-token-1",
+            "POST",
+            ROOT,
+            json!({"manifest_url":url}),
+        )
+        .await
+    });
+    let (status, error) = tokio::time::timeout(Duration::from_secs(3), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(error["error_code"], "secret_store_not_configured");
     assert!(
         tokio::time::timeout(Duration::from_millis(50), entered.notified())
             .await

@@ -217,53 +217,46 @@ fn sanitize_request(app: &App, path: &str, mut value: Value) -> Result<Value, Ap
         let db = app.db.lock().unwrap();
         app.request_lease().validate(&db)?;
         let p = app.identity();
-        if path == "/playback" {
-            if let Some(id) = value["channel_id"].as_str() {
-                require_item(&db, &p, "live", id)?;
+        let kind = value["type"].as_str().unwrap_or("").to_owned();
+        let id = value["id"].as_str().unwrap_or("").to_owned();
+        require_item(&db, &p, &kind, &id)?;
+        if kind != "live" {
+            let (meta, parent, _, _) = media(&db, &p, &kind, &id)?.ok_or_else(forbidden)?;
+            let object = value.as_object_mut().ok_or("Invalid item")?;
+            for key in [
+                "series_id",
+                "season",
+                "episode",
+                "imdb_id",
+                "tmdb_id",
+                "aliases",
+                "year",
+                "name",
+                "poster",
+                "title",
+                "seriesName",
+                "title_id",
+            ] {
+                object.remove(key);
             }
-            // stream_id must have been issued to this exact profile/revision; existing playback authorization checks it.
-        } else {
-            let kind = value["type"].as_str().unwrap_or("").to_owned();
-            let id = value["id"].as_str().unwrap_or("").to_owned();
-            require_item(&db, &p, &kind, &id)?;
-            if kind != "live" {
-                let (meta, parent, _, _) = media(&db, &p, &kind, &id)?.ok_or_else(forbidden)?;
-                let object = value.as_object_mut().ok_or("Invalid item")?;
-                for key in [
-                    "series_id",
-                    "season",
-                    "episode",
-                    "imdb_id",
-                    "tmdb_id",
-                    "aliases",
-                    "year",
-                    "name",
-                    "poster",
-                    "title",
-                    "seriesName",
-                    "title_id",
-                ] {
-                    object.remove(key);
+            for key in ["name", "poster", "season", "episode"] {
+                if !meta[key].is_null() {
+                    value[key] = meta[key].clone();
                 }
-                for key in ["name", "poster", "season", "episode"] {
-                    if !meta[key].is_null() {
-                        value[key] = meta[key].clone();
+            }
+            if kind == "series" {
+                value["series_id"] = json!(parent);
+            }
+            // Never let an approved title's opaque request smuggle an unrelated provider ID.
+            if path == "/streams" {
+                let mut safe = json!({"type":kind,"id":id,"name":meta["name"]});
+                for key in ["series_id", "season", "episode"] {
+                    if !value[key].is_null() {
+                        safe[key] = value[key].clone();
                     }
                 }
-                if kind == "series" {
-                    value["series_id"] = json!(parent);
-                }
-                // Never let an approved title's opaque request smuggle an unrelated provider ID.
-                if path == "/streams" {
-                    let mut safe = json!({"type":kind,"id":id,"name":meta["name"]});
-                    for key in ["series_id", "season", "episode"] {
-                        if !value[key].is_null() {
-                            safe[key] = value[key].clone();
-                        }
-                    }
-                    enrich_matching(&mut safe, &meta);
-                    value = safe;
-                }
+                enrich_matching(&mut safe, &meta);
+                value = safe;
             }
         }
     }
