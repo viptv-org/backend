@@ -91,8 +91,18 @@ async fn authorized<T: Send + 'static>(
     .map_err(|_| Error::Code("provider_storage_unavailable"))?
 }
 
+/// Account-shared viewing settings (addons) that paired devices with a selected
+/// profile may also change, as TV settings require. Parent restrictions apply.
+pub(crate) async fn shared<T: Send + 'static>(
+    app: App,
+    lease: ResourceLease,
+    action: impl FnOnce(&rusqlite::Connection, i64) -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    authorized(app, lease, true, action).await
+}
+
 /// Read-only settings metadata for viewing devices with a selected profile.
-/// Mutations must use work/run; parent restrictions still apply to this view.
+/// Other mutations must use work/run; parent restrictions still apply to this view.
 pub(crate) async fn view(
     app: App,
     lease: ResourceLease,

@@ -471,15 +471,6 @@ async fn members_cannot_administer_providers_addons_or_other_resources() {
         )
         .unwrap();
     }
-    for path in ["/api/providers", "/api/matches"] {
-        for method in ["GET", "POST"] {
-            // Unsupported methods retain the existing method-not-allowed contract.
-            let status = request(&a, "member-token-1", method, path, json!({}))
-                .await
-                .0;
-            assert_eq!(status, StatusCode::CONFLICT);
-        }
-    }
     let mut owned = a.clone();
     owned.principal = Some(auth::Principal::Account {
         account_id: 1,
@@ -493,51 +484,17 @@ async fn members_cannot_administer_providers_addons_or_other_resources() {
         session_id: Some("s1".into()),
     });
     owned.own_resource("job", "private-job");
-    owned.own_resource("playback", "private-session");
-    for (method, path) in [
-        ("GET", "/api/v2/streams/private-job"),
-        ("GET", "/api/v2/streams/private-job/events"),
-        ("POST", "/api/playback/private-session/heartbeat"),
-        ("DELETE", "/api/playback/private-session"),
+    for path in [
+        "/api/v2/streams/private-job",
+        "/api/v2/streams/private-job/events",
     ] {
         assert_eq!(
-            request(&a, "member-token-2", method, path, Value::Null)
+            request(&a, "member-token-2", "GET", path, Value::Null)
                 .await
                 .0,
-            if retired::is_path(path) {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::NOT_FOUND
-            }
+            StatusCode::NOT_FOUND
         );
     }
-    assert_eq!(
-        request(
-            &a,
-            "member-token-1",
-            "DELETE",
-            "/api/playback/private-session",
-            Value::Null
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
-    let (cards, _) = owned.register(
-        "addon:1",
-        vec![json!({"url":"https://example.com/video.mp4"})],
-        "movie",
-    );
-    let status = request(
-        &a,
-        "member-token-2",
-        "POST",
-        "/api/playback",
-        json!({"stream_id":cards[0]["id"]}),
-    )
-    .await
-    .0;
-    assert_eq!(status, StatusCode::CONFLICT);
 }
 #[tokio::test]
 async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immediate() {
@@ -685,18 +642,6 @@ async fn owner_paired_device_has_no_administration_privileges() {
             .unwrap();
         db.execute("INSERT INTO auth_profiles VALUES(1,2)", [])
             .unwrap();
-    }
-    for path in ["/api/providers", "/api/matches"] {
-        assert_eq!(
-            request(&a, "member-token-1", "GET", path, Value::Null)
-                .await
-                .0,
-            if retired::is_path(path) {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::FORBIDDEN
-            }
-        );
     }
     assert_eq!(
         request(
@@ -998,9 +943,6 @@ async fn account_media_requires_selected_profile_and_ignores_profile_header() {
         ("GET", "/api/meta/movie/tt1"),
         ("POST", "/api/v2/streams"),
         ("GET", "/api/v2/streams/job"),
-        ("GET", "/api/live"),
-        ("GET", "/api/guide/channel"),
-        ("POST", "/api/playback"),
         ("GET", "/api/profiles/1/favorites"),
         ("PUT", "/api/profiles/1/progress"),
     ] {
@@ -1017,26 +959,10 @@ async fn account_media_requires_selected_profile_and_ignores_profile_header() {
             )
             .await
             .unwrap();
-        assert_eq!(
-            response.status(),
-            if retired::is_path(path) {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::FORBIDDEN
-            },
-            "{path}"
-        );
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
         let value: Value =
             serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
-        assert_eq!(
-            value["error_code"],
-            if retired::is_path(path) {
-                "client_update_required"
-            } else {
-                "profile_required"
-            },
-            "{path}"
-        );
+        assert_eq!(value["error_code"], "profile_required", "{path}");
     }
     assert_eq!(
         request(&a, "member-token-1", "GET", "/api/profiles", Value::Null)
@@ -1154,27 +1080,35 @@ async fn addons_are_account_shared_and_cross_account_mutations_are_isolated() {
             &a,
             &format!("member-token-{owner}"),
             "GET",
-            "/api/addons",
+            "/api/v2/addons",
             Value::Null,
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(list.as_array().unwrap().len(), 1);
-        assert_eq!(list[0]["id"], owner);
-        assert!(list[0]["priority"].is_null());
+        assert_eq!(list["items"].as_array().unwrap().len(), 1);
+        assert_eq!(list["items"][0]["id"], owner);
+        assert!(list["items"][0]["priority"].is_null());
     }
-    let (status, _) = request(
+    let (status, error) = request(
         &a,
         "member-token-1",
         "PATCH",
-        "/api/addons/2",
+        "/api/v2/addons/2",
         json!({"enabled":false}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    request(&a, "member-token-1", "DELETE", "/api/addons/2", Value::Null).await;
-    let (_, other) = request(&a, "member-token-2", "GET", "/api/addons", Value::Null).await;
-    assert_eq!(other[0]["enabled"], true);
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "addon_not_found");
+    request(
+        &a,
+        "member-token-1",
+        "DELETE",
+        "/api/v2/addons/2",
+        Value::Null,
+    )
+    .await;
+    let (_, other) = request(&a, "member-token-2", "GET", "/api/v2/addons", Value::Null).await;
+    assert_eq!(other["items"][0]["enabled"], true);
     let (_, catalogs) = request(&a, "member-token-1", "GET", "/api/catalogs", Value::Null).await;
     assert_eq!(catalogs.as_array().unwrap().len(), 1);
     assert_eq!(catalogs[0]["addon_id"], 1);
@@ -1979,7 +1913,7 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        request(&a, "member-token-1", "GET", "/api/addons", Value::Null)
+        request(&a, "member-token-1", "GET", "/api/v2/addons", Value::Null)
             .await
             .1["error_code"],
         "parent_required"
@@ -2647,18 +2581,18 @@ async fn device_profile_management_preserves_pairing_and_household_boundaries() 
             StatusCode::FORBIDDEN
         );
     }
-    for path in ["/api/providers", "/api/auth/accounts"] {
-        assert_eq!(
-            request(&a, "member-token-1", "GET", path, Value::Null)
-                .await
-                .0,
-            if retired::is_path(path) {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::FORBIDDEN
-            }
-        );
-    }
+    assert_eq!(
+        request(
+            &a,
+            "member-token-1",
+            "GET",
+            "/api/auth/accounts",
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
     assert_eq!(
         request(
             &a,

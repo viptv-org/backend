@@ -100,20 +100,11 @@ pub(crate) async fn authorize_resources(
         .strip_prefix("/api")
         .unwrap_or(req.uri().path())
         .to_owned();
-    if retired::is_path(&path) {
-        return retired::reject().await.into_response();
-    }
     let result = blocking(move || {
         let segments: Vec<_> = path.trim_matches('/').split('/').collect();
         let media_route = matches!(
             segments.as_slice(),
-            ["catalogs", ..]
-                | ["discover", ..]
-                | ["meta", ..]
-                | ["streams", ..]
-                | ["live", ..]
-                | ["guide", ..]
-                | ["playback", ..]
+            ["catalogs", ..] | ["discover", ..] | ["meta", ..]
         );
         if media_route
             && matches!(
@@ -127,23 +118,6 @@ pub(crate) async fn authorize_resources(
             return Err(ApiError(StatusCode::FORBIDDEN, MSG_PROFILE_REQUIRED.into()));
         }
         match segments.as_slice() {
-            ["providers", ..]
-            | ["matches", ..]
-            | ["lineup", ..]
-            | ["account-pools", ..]
-            | ["automation", ..]
-            | ["health", ..]
-            | ["service-health", ..]
-            | ["activity", ..]
-            | ["guides", ..]
-            | ["live-policy", ..]
-                if !worker_principal.is_owner() =>
-            {
-                return Err(ApiError(
-                    StatusCode::FORBIDDEN,
-                    "Owner access required".into(),
-                ));
-            }
             ["profiles", id, "favorites", ..]
             | ["profiles", id, "progress", ..]
             | ["profiles", id, "continue", ..]
@@ -159,9 +133,6 @@ pub(crate) async fn authorize_resources(
                 })?;
                 worker_app.require_profile(&db, profile)?;
             }
-            ["streams", id, ..] => worker_app.check_resource(&worker_principal, "job", id)?,
-            ["playback", "startups", ..] => {}
-            ["playback", id, ..] => worker_app.check_resource(&worker_principal, "playback", id)?,
             _ => {}
         }
         Ok(())
