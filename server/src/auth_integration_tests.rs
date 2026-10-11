@@ -1319,6 +1319,16 @@ async fn playback_preferences_are_scoped_validated_and_share_autoplay_setting() 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(saved["audio_language"], "ja");
     assert_eq!(saved["subtitle_language"], "en");
+    // An on/off client derives the mode; a sent mode decides subtitles_enabled.
+    assert_eq!(saved["subtitle_mode"], "always");
+    let (_, foreign) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"subtitle_mode":"foreign"})).await;
+    assert_eq!((foreign["subtitle_mode"].as_str(), foreign["subtitles_enabled"].as_bool()), (Some("foreign"), Some(true)));
+    let (_, still) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"subtitles_enabled":true})).await;
+    assert_eq!(still["subtitle_mode"], "foreign");
+    let (_, off) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"subtitles_enabled":false})).await;
+    assert_eq!(off["subtitle_mode"], "never");
+    assert_eq!(request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"subtitle_mode":"sometimes"})).await.0, StatusCode::BAD_REQUEST);
+    let (_, saved) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"subtitle_mode":"always"})).await;
     let (_, autoplay) = request(
         &a,
         "member-token-1",
