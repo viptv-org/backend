@@ -1,43 +1,5 @@
 use super::*;
 
-pub(crate) async fn addons(
-    State(a): State<App>,
-    Extension(lease): Extension<ResourceLease>,
-) -> ApiResult {
-    let a = a.with_lease(lease);
-    blocking(move || Ok(axum::Json(a.addons.list()?))).await
-}
-pub(crate) async fn update_addon(
-    State(a): State<App>,
-    Extension(lease): Extension<ResourceLease>,
-    Path(id): Path<i64>,
-    axum::Json(v): axum::Json<Value>,
-) -> ApiResult {
-    let a = a.with_lease(lease);
-    blocking(move || Ok(axum::Json(a.addons.update(id, v)?))).await
-}
-pub(crate) async fn add_addon(
-    State(a): State<App>,
-    Extension(lease): Extension<ResourceLease>,
-    axum::Json(v): axum::Json<Value>,
-) -> ApiResult {
-    let a = a.with_lease(lease);
-    Ok(axum::Json(
-        a.addons.add(text(&v, "manifest_url", 4096)?).await?,
-    ))
-}
-pub(crate) async fn delete_addon(
-    State(a): State<App>,
-    Extension(lease): Extension<ResourceLease>,
-    Path(id): Path<i64>,
-) -> ApiResult {
-    let a = a.with_lease(lease);
-    blocking(move || {
-        a.addons.delete(id)?;
-        Ok(axum::Json(json!({"ok":true})))
-    })
-    .await
-}
 pub(crate) async fn catalogs(
     State(a): State<App>,
     Extension(lease): Extension<ResourceLease>,

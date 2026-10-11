@@ -5,7 +5,8 @@ in [RUNTIME_RETIREMENT.md](RUNTIME_RETIREMENT.md). Reviewed clients now have v2
 adoption candidates; historical checkpoint paragraphs below do not override that
 source evidence or authorize production migration. The Android v2 handoff is
 merged in source (viptv-org/android#6). Legacy runtime behavior cannot be retained in
-the cleanup candidate; retired API namespaces return `client_update_required`.
+the cleanup candidate; retired API namespaces were removed after the 2026-10-09
+cutover and answer as unknown routes.
 
 This is a development-branch contract, not authorization to migrate production.
 Production deployment and migration require separate approval. No viewing UI or
@@ -13,9 +14,8 @@ playlist swap control is introduced by these endpoints.
 
 Current source at `8823114` requires encrypted runtime provider/addon credential
 reads and encrypted new credential writes. Preserved plaintext rows are offline
-migration inputs, not a runtime fallback. `/api/addons` GET/PATCH/DELETE metadata
-wrappers and encrypted-only POST remain for compatible clients; retaining these
-wrappers does not restore retired media/setup/organizer behavior. Historical
+migration inputs, not a runtime fallback. Addon management is `/api/v2/addons`
+only; the unversioned `/api/addons` wrappers were removed on 2026-10-11. Historical
 qualification counts and pre-cutover controls below are checkpoint evidence only.
 
 ## Responsive restoration recovery adoption — 2026-10-02
@@ -165,13 +165,13 @@ per-add-on failures, and the v2 management list exposes configuration errors.
 Compatibility catalog arrays retain their existing shape and list only usable
 encrypted sources when mixed with legacy entries.
 
-Compatibility clients may still call `/api/addons` and `/api/catalogs` metadata
-routes. These routes are retained: metadata never returns stored manifest URLs;
-GET/PATCH/DELETE wrappers remain account-scoped and do not decrypt legacy secrets.
+Clients may still call `/api/catalogs` metadata routes; addon metadata moved to
+`/api/v2/addons`. Metadata never returns stored manifest URLs; list/PATCH/DELETE
+remain account-scoped and do not decrypt legacy secrets.
 Enable/delete can operate on archived owned metadata without granting playback
-access to unmigrated credentials. Legacy add-on POST now requires a keyring
-before fetching and writes only encrypted records. It cannot reinstall a legacy
-source to bypass the reviewed migration. No client contract fields or UI changed.
+access to unmigrated credentials. Add-on POST requires a keyring before fetching
+and writes only encrypted records. It cannot reinstall a legacy source to bypass
+the reviewed migration.
 
 Historical validation at the encryption-boundary checkpoint: 206 tests passed,
 two opt-in tests ignored; strict all-target Clippy
@@ -274,8 +274,7 @@ playlist synchronization. Catalog replacement, generation and succeeded status
 commit atomically. Failure keeps the entire prior snapshot; an authenticated,
 valid empty array is a legitimate replacement, not a custom filtering rule.
 The old provider refresh/pool/lineup namespaces are retired in the current
-engine-free runtime and return `client_update_required`, not an alternate refresh
-engine. Reviewed admin/client source adoption is recorded above; production
+engine-free runtime and are no longer routed, not an alternate refresh engine. Reviewed admin/client source adoption is recorded above; production
 migration and client handoff/deployment remain separate gates.
 
 Each handler revalidates the captured account session before querying or writing.
@@ -382,7 +381,7 @@ This command is implemented and fixture-tested, **not approved for production
 use yet**. Reviewed client/runtime source adoption supersedes the historical
 pending-cutover note, but production migration is not complete. Legacy provider
 renew/update/delete/pool, family matching and external provider XMLTV namespaces
-are retired for all sources and return `client_update_required`; they are not
+are retired for all sources and are no longer routed; they are not
 an operational fallback after this command. Raw v2 catalogs, native Xtream guide
 reads and source discovery use the encrypted reader.
 

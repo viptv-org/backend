@@ -58,7 +58,7 @@ No runtime boot performs destructive retirement or infers provider ownership.
 Explicit ownership/encryption and backup-first offline retirement are documented
 in ../docs/RUNTIME_RETIREMENT.md. Active legacy routed connections refuse
 retirement until operator review; archived routing must be reviewed before
-re-enablement. Old protocol namespaces return client_update_required.
+re-enablement. Old protocol namespaces are no longer routed.
 
 Host tests, client mocks and isolated gateway media fixtures have separate
 evidence limits. Production backup/migration/rollback, real providers and physical

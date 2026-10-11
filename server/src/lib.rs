@@ -22,7 +22,6 @@ mod handlers_media;
 mod handlers_profiles;
 mod http_middleware;
 mod matching_context;
-mod retired;
 mod routes;
 mod sources;
 
@@ -52,6 +51,8 @@ pub(crate) use uuid::Uuid;
 mod auth_integration_tests;
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+mod preserved_data_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 

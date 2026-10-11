@@ -248,6 +248,8 @@ impl Addons {
         }
         Ok((entries, errors))
     }
+    /// Test fixtures below; accounts manage addons through `http_v2`.
+    #[cfg(test)]
     pub fn list(&self) -> Result<Value, String> {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
         let mut stmt = db
@@ -263,13 +265,15 @@ impl Addons {
                 .map_err(|_| "Database query failed")?,
         ))
     }
+    #[cfg(test)]
     fn config_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         Ok(
             json!({"id":r.get::<_,i64>(0)?,"name":r.get::<_,String>(1)?,"manifest_url":null,"enabled":r.get::<_,bool>(3)?,"credentials_encrypted":r.get::<_,i64>(5)?==1}),
         )
     }
     /// Patch only enabled, preserving omitted fields. The complete saved
-    /// configuration is returned. Call from a blocking worker in async handlers.
+    /// configuration is returned. Test fixture; accounts manage addons via http_v2.
+    #[cfg(test)]
     pub fn update(&self, id: i64, patch: Value) -> Result<Value, String> {
         let fields = patch.as_object().ok_or("Addon patch must be an object")?;
         if fields.is_empty() || fields.keys().any(|k| k != "enabled") {
@@ -302,6 +306,7 @@ impl Addons {
             .await
             .map_err(|_| "Database task failed")?
     }
+    #[cfg(test)]
     pub async fn add(&self, url: &str) -> Result<Value, String> {
         let vault = self.vault.clone().ok_or("secret_store_not_configured")?;
         let (url, m) = self.prepare_manifest(url).await?;
@@ -314,6 +319,7 @@ impl Addons {
             db.query_row("SELECT id,name,manifest_url,enabled,priority,credentials_version FROM addons WHERE id=?1 AND account_id=?2",params![id,this.account_id],Self::config_row).map_err(|_|"Database query failed".into())
         }).await.map_err(|_| "Database task failed")?
     }
+    #[cfg(test)]
     pub fn delete(&self, id: i64) -> Result<(), String> {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
         let tx = db

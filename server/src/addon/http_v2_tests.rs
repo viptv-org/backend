@@ -163,7 +163,8 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
         )
         .await
         .0,
-        StatusCode::FORBIDDEN
+        StatusCode::OK,
+        "TV settings manage the account's shared addons"
     );
     app.db
         .lock()
@@ -174,6 +175,16 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
         )
         .unwrap();
     let (status, error) = request(&app, "member-token-1", "GET", ROOT, Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "profile_required");
+    let (status, error) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        ROOT,
+        json!({"manifest_url":url}),
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(error["error_code"], "profile_required");
     app.db
@@ -193,6 +204,16 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
         )
         .unwrap();
     let (status, error) = request(&app, "member-token-1", "GET", ROOT, Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "parent_required");
+    let (status, error) = request(
+        &app,
+        "member-token-1",
+        "PATCH",
+        &format!("{ROOT}/{id}"),
+        json!({"enabled":false}),
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(error["error_code"], "parent_required");
     server.abort();

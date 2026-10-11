@@ -185,16 +185,6 @@ fn decide_request(
                 }
                 return Ok(PolicyDecision::Respond(json!({"meta":meta})));
             }
-            ["live"] => return Err(ApiError::from("client_update_required")),
-            ["live", "categories"] => {
-                return Ok(PolicyDecision::Respond(
-                    json!({"categories":[{"id":"category:Kids","name":"Kids"}],"total":1}),
-                ))
-            }
-            ["guide", id] => {
-                require_item(&db, &p, "live", &decode_path(id)?)?;
-                return Ok(PolicyDecision::Pass);
-            }
             ["streams"] | ["playback"] => {}
             ["streams", ..] | ["playback", ..] => return Ok(PolicyDecision::Pass),
             _ => {
@@ -316,8 +306,6 @@ pub(crate) async fn after(app: &App, path: &str, response: Response) -> Response
     }
     let sensitive = path.starts_with("/streams")
         || path.starts_with("/playback")
-        || path.starts_with("/live")
-        || path.starts_with("/guide")
         || path == "/discover"
         || path.starts_with("/meta/")
         || (path.starts_with("/profiles/")

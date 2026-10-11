@@ -425,12 +425,7 @@ async fn canonical_devices_are_account_owned_and_revoke_only_the_callers_device(
 #[tokio::test]
 async fn former_static_bearer_never_establishes_identity() {
     let (app, _) = application();
-    for path in [
-        "/api/profiles",
-        "/api/providers",
-        "/api/addons",
-        "/api/status",
-    ] {
+    for path in ["/api/profiles", "/api/v2/addons", "/api/catalogs"] {
         assert_eq!(
             bearer_request(
                 &app,

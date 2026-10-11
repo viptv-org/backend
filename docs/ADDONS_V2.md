@@ -46,15 +46,15 @@ installs do not occupy the browsing pool. Downloads retain response-size and
 timeout bounds. Test loopback exceptions are explicit and compiled for fixtures,
 not end-user configuration.
 
-The retained `/api/addons` GET/PATCH/DELETE wrappers preserve their array/record
-metadata shapes, account scope and parent/session policy. GET always redacts
-`manifest_url`; PATCH changes only `enabled`, and DELETE removes an owned entry.
-These metadata operations can inspect, disable or remove archived legacy rows
-without decrypting them; enabling one does not make its credentials usable.
-The retained POST wrapper also requires a keyring before downloading and writes
-only sealed credentials. Its route name is not an unkeyed installation mode.
-These wrappers, plus `/api/catalogs`, `/api/discover` and `/api/meta`, are distinct
-from retired media/setup/organizer namespaces that return `client_update_required`.
+The unversioned `/api/addons` wrappers were removed on 2026-10-11; addon
+management is `/api/v2/addons` only. Its list always redacts `manifest_url`;
+PATCH changes only `enabled`, and DELETE removes an owned entry. These can
+inspect, disable or remove archived legacy rows without decrypting them (the row
+reports its configuration error); enabling one does not make its credentials
+usable. Paired viewing devices with a selected profile may list and manage the
+account's shared addons, as TV settings require; parent restrictions apply and
+browser/native account sessions are unchanged. `/api/catalogs`, `/api/discover`
+and `/api/meta` remain the catalog read contract.
 
 ## Storage and runtime behavior
 

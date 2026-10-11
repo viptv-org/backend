@@ -37,8 +37,6 @@ pub fn router_with_tv(
             "/profiles/:id/imports/stremio/:preview_id",
             delete(stremio_import::cancel),
         )
-        .route("/addons", get(addons).post(add_addon))
-        .route("/addons/:id", delete(delete_addon).patch(update_addon))
         .route("/catalogs", get(catalogs))
         .route("/catalogs/revision", get(catalogs_revision))
         .route("/discover", get(discover))
@@ -191,7 +189,6 @@ pub fn router_with_tv(
             "/v2/iptv/live/categories",
             get(provider::v2_http::live_categories),
         )
-        .merge(retired::router())
         .fallback(|| async { ApiError(StatusCode::NOT_FOUND, "API route not found".into()) })
         .route_layer(middleware::from_fn_with_state(
             app.clone(),
@@ -214,7 +211,6 @@ pub fn router_with_tv(
                 axum::Json(json!({"status":"ok","version":env!("CARGO_PKG_VERSION")}))
             }),
         )
-        .route("/media/*path", axum::routing::any(retired::reject))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         .with_state(app);
     r = r

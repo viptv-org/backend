@@ -1,8 +1,8 @@
 # Playback v2 control contract
 
 Status: implemented with reviewed client migration candidates; not deployed.
-The isolated cleanup candidate removes embedded execution and refuses retired
-routes with `client_update_required`. Its production binary does not link the
+The isolated cleanup candidate removes embedded execution; the retired routes'
+`client_update_required` stubs were removed after the 2026-10-09 cutover. Its production binary does not link the
 old engine or relay media. Runtime cutover/offline retirement still require
 separate review.
 

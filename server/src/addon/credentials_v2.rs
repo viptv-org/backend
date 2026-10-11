@@ -206,6 +206,7 @@ fn seal(
     );
     vault.seal_addon(account, &id.to_string(), &bytes)
 }
+#[cfg(test)]
 pub(super) fn store(
     db: &Connection,
     vault: &Vault,
