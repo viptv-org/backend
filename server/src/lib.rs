@@ -2,6 +2,7 @@ mod account_api;
 pub mod addon;
 pub mod auth;
 mod continuation;
+mod engine_v3;
 #[cfg(test)]
 mod discovery_error_tests;
 mod gateway;

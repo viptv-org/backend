@@ -251,6 +251,7 @@ impl App {
         continuation::init(&db).map_err(|_| "Viewing queue migration failed")?;
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
+        engine_v3::configuration::init(&db).map_err(|_| "Engine configuration initialization failed")?;
         provider::v2::init(&db).map_err(|_| "Account IPTV schema initialization failed")?;
         provider::refresh_v2::prepare(&db).map_err(|_| "IPTV refresh initialization failed")?;
         gateway::playback::init(&db)

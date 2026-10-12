@@ -11,6 +11,7 @@ use tokio::sync::Semaphore;
 
 pub(crate) mod credentials_v2;
 mod discover;
+mod engine;
 mod extras;
 pub(crate) mod http_v2;
 #[cfg(test)]
@@ -39,6 +40,7 @@ pub struct Addons {
     gate: Arc<Semaphore>,
     manifest_gate: Arc<Semaphore>,
     account_id: i64,
+    engine_ids: Option<Arc<std::collections::HashSet<i64>>>,
     pub(crate) vault: Option<Arc<crate::secret_store::Vault>>,
     protected_fetch: bool,
     #[cfg(test)]
@@ -94,6 +96,7 @@ impl Addons {
             gate: Arc::new(Semaphore::new(12)),
             manifest_gate: Arc::new(Semaphore::new(2)),
             account_id: 0,
+            engine_ids: None,
             vault: None,
             protected_fetch: false,
             #[cfg(test)]
@@ -233,6 +236,7 @@ impl Addons {
         let mut errors = vec![];
         for r in rows {
             let (i, u, m, version) = r.map_err(|_| "Database query failed")?;
+            if self.engine_ids.as_ref().is_some_and(|ids| !ids.contains(&i)) { continue; }
             match credentials_v2::read(
                 &db,
                 self.vault.as_deref(),

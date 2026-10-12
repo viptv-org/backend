@@ -2506,6 +2506,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "viptv-engine"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "futures",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "viptv-provider"
 version = "0.1.0"
 dependencies = [
@@ -2553,6 +2566,7 @@ dependencies = [
  "url",
  "uuid",
  "viptv-core",
+ "viptv-engine",
  "viptv-provider",
  "webpki-roots",
  "zeroize",

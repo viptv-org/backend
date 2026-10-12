@@ -13,6 +13,11 @@ pub fn router_with_tv(
     tv_dashboard: Option<std::path::PathBuf>,
 ) -> Router {
     let api = Router::new()
+        .route("/v3/bootstrap", get(engine_v3::bootstrap))
+        .route("/v3/profiles/:id/integrations", get(engine_v3::configuration::get).put(engine_v3::configuration::update))
+        .route("/v3/profiles/:id/home", get(engine_v3::home))
+        .route("/v3/discover", get(engine_v3::discover))
+        .route("/v3/meta/:kind/:id", get(engine_v3::detail))
         .route(
             "/profiles",
             get(profiles_authenticated).post(create_profile_authenticated),

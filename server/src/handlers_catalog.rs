@@ -29,6 +29,11 @@ pub(crate) struct Discover {
 fn movie() -> String {
     "movie".into()
 }
+impl Discover {
+    pub(crate) fn is_search(&self) -> bool {
+        self.search.as_deref().is_some_and(|term| !term.trim().is_empty())
+    }
+}
 pub(crate) async fn discover(
     State(a): State<App>,
     Extension(lease): Extension<ResourceLease>,
