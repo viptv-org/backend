@@ -4,6 +4,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub struct Store {
     db: Connection,
 }
+mod connections;
 
 impl Store {
     pub fn open(path: &std::path::Path) -> Result<Self, Error> {
@@ -15,7 +16,8 @@ impl Store {
     fn from_connection(db: Connection) -> Result<Self, Error> {
         db.execute_batch("PRAGMA foreign_keys=ON;
           CREATE TABLE IF NOT EXISTS engine_profiles(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, revision INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile));
-          CREATE TABLE IF NOT EXISTS engine_observations(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, event TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,event));").map_err(|_| Error::Storage)?;
+          CREATE TABLE IF NOT EXISTS engine_observations(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, event TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,event));
+          CREATE TABLE IF NOT EXISTS engine_connections(id TEXT PRIMARY KEY, account TEXT NOT NULL, value TEXT NOT NULL);").map_err(|_| Error::Storage)?;
         Ok(Self { db })
     }
     pub fn profile(&self, scope: &Scope) -> Result<Option<ProfileConfiguration>, Error> {

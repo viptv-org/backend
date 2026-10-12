@@ -135,6 +135,22 @@ fn sqlite_isolates_profiles_rejects_stale_writes_and_deduplicates_events() {
     );
 }
 
+#[cfg(feature="runtime")]
+#[test]
+fn installation_is_account_scoped_and_enables_only_the_selected_profile() {
+    use viptv_engine::store::Store;
+    let mut store=Store::memory().unwrap();
+    let a=ProfileConfiguration::local("local".into(),"alice".into(),"Alice".into());
+    let b=ProfileConfiguration::local("local".into(),"bob".into(),"Bob".into());
+    store.save_profile(&a,None).unwrap();store.save_profile(&b,None).unwrap();
+    let c=IntegrationConnection{id:"addon:one".into(),plugin_id:"stremio".into(),account_id:"local".into(),private_profile_id:None,name:"Catalog".into(),enabled:true,revision:0,capabilities:vec![Capability::Discovery,Capability::Metadata]};
+    store.install("alice",&c).unwrap();
+    assert_eq!(store.connections("local").unwrap().len(),1);
+    assert_eq!(store.profile(&a.scope).unwrap().unwrap().assignments.len(),1);
+    assert!(store.profile(&b.scope).unwrap().unwrap().assignments.is_empty());
+    assert_eq!(store.install("unknown",&c),Err(Error::Forbidden));
+}
+
 #[cfg(feature = "runtime")]
 #[tokio::test(start_paused = true)]
 async fn home_deadline_does_not_wait_for_slow_rows_or_leak_provider_errors() {

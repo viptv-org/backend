@@ -2516,6 +2516,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "viptv-provider",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ pub mod presentation;
 pub mod profile;
 pub mod query;
 pub mod registry;
+pub mod stremio;
 #[cfg(feature = "runtime")]
 pub mod store;
 

@@ -1,10 +1,11 @@
 {
   "repository": "https://github.com/viptv-org/core",
-  "revision": "7d181f4e69f65a4ad27a4b642af97e8a1f6de9f2",
+  "revision": "233fb2a858db9bdbb5e11a0991b3dbbd05f10a3b",
   "path": "crates/viptv-engine",
+  "manifest_transform": "viptv-provider path ../../provider",
   "files": {
-    "Cargo.toml": "7377b35f28a4716bf314fede009bb29826404f86705f8d6199585e8c428ec363",
-    "src/lib.rs": "f86591f58f7afe2b0ccacebc48df72b22b6f166767ec5ec3e4b9b3c8eb2cb564",
+    "Cargo.toml": "4fef65b5aa7086533c6156552e78b8950ead5dd3de76a978dc28aec5740b389e",
+    "src/lib.rs": "2e042959d394d69aaac4bf91fb3ef292492f118c2ece7b32d1365147dc82d6ae",
     "src/capabilities.rs": "79905a097058b43742381c916958c0d88a2ff878d55139d08c2b94e40baa3656",
     "src/profile.rs": "b11bdf3c724c3d6563b7adf21c8ecd47dadeddbb5bc932de89e93a0d645fd99e",
     "src/registry.rs": "f4b54e9d7a3236f556daf3f348d6122e9eb538bf2c240ca7b8350dc4f37154fd",
@@ -12,7 +13,12 @@
     "src/query.rs": "4441aaf57e0aebef9bab17896977c9f94116d79b364c1c5d73188d43d264196f",
     "src/presentation.rs": "dcdf69f4e25771a205438c4c0dae77ef7dea43c1b6b9cb66674b45aea8fa24de",
     "src/home.rs": "cf3a42cd12b7f2aa70f9d33f49bca93478c81c958c5ea29f56f45ba1bf483141",
-    "src/store.rs": "97e4ebbcddac24e669921fe41f61fcc033ae6065a58f06792090d9ec3bcd29a3",
-    "tests/engine.rs": "a5d415a1ad05288122e514370be002abb0856ab91f689706d954882947b3fbd9"
+    "src/store.rs": "fbbf7cd7862de0c467f868fe635e6d05c5d9f8937d2aa8c4d3c20503f5f79797",
+    "src/stremio.rs": "d908f304efa4e8341b5910cb97c4c7a6a639f7c7d3530373fa6143a80f3f2e9b",
+    "tests/engine.rs": "b512574b9b9377acf01d57cc52f9dfd2c879bb10c7335e594829ca9af2c2f708",
+    "tests/stremio.rs": "e69d16c3ca09a0c0b7db8c533945978536d795d910aef3b67ff135353d786863",
+    "src/store/connections.rs": "781e1f37ad52957fbccb22e93795846e6372f7b5bbc530ec1b1f6b95db456b74",
+    "src/stremio/manifest.rs": "16c1c65b47de05f0ae3cd4a696a3313bc300d74420f3425703b0bc6b154c6526",
+    "src/stremio/media.rs": "22e13335d58224c6bfa8f7af92c342d4510e5f597d9ad508e4996e303063ae7c"
   }
 }
