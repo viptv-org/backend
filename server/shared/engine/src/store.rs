@@ -5,6 +5,7 @@ pub struct Store {
     db: Connection,
 }
 mod connections;
+mod playback;
 
 impl Store {
     pub fn open(path: &std::path::Path) -> Result<Self, Error> {
@@ -17,7 +18,9 @@ impl Store {
         db.execute_batch("PRAGMA foreign_keys=ON;
           CREATE TABLE IF NOT EXISTS engine_profiles(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, revision INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile));
           CREATE TABLE IF NOT EXISTS engine_observations(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, event TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,event));
-          CREATE TABLE IF NOT EXISTS engine_connections(id TEXT PRIMARY KEY, account TEXT NOT NULL, value TEXT NOT NULL);").map_err(|_| Error::Storage)?;
+          CREATE TABLE IF NOT EXISTS engine_connections(id TEXT PRIMARY KEY, account TEXT NOT NULL, value TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS engine_playback(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, updated_at_millis INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,kind,id));
+          CREATE INDEX IF NOT EXISTS engine_playback_recent ON engine_playback(connection,account,profile,updated_at_millis DESC);").map_err(|_| Error::Storage)?;
         Ok(Self { db })
     }
     pub fn profile(&self, scope: &Scope) -> Result<Option<ProfileConfiguration>, Error> {

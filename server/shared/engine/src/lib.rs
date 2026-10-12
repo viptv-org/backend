@@ -5,6 +5,7 @@ pub mod home;
 pub mod identity;
 pub mod presentation;
 pub mod profile;
+pub mod playback;
 pub mod query;
 pub mod registry;
 pub mod stremio;
