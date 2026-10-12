@@ -2509,6 +2509,7 @@ dependencies = [
 name = "viptv-engine"
 version = "0.1.0"
 dependencies = [
+ "argon2",
  "facet",
  "futures",
  "rusqlite",

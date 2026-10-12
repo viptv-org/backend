@@ -88,6 +88,7 @@ pub(super) fn read(
                     r.get(0)
                 })
                 .map_err(db_error)?,
+            avatar_id: None,
             browsing_plugin: "stremio".into(),
             assignments: connections
                 .iter()
