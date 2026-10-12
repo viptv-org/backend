@@ -1,10 +1,10 @@
 {
   "repository": "https://github.com/viptv-org/core",
-  "revision": "214a8f70935e09dd63b3bb1554bf41e719f640a8",
+  "revision": "d6466fac21484d9a16fb4ccb2dd86388bce22adc",
   "path": "crates/viptv-engine",
   "manifest_transform": "viptv-provider path ../../provider",
   "files": {
-    "Cargo.toml": "4629ad601ab33bde985a301757dce7f3e4441ef189ab147cd07963dbaefc9edc",
+    "Cargo.toml": "bf42e117ce45db44034b007aa642458ea80e2b9246437021342092de7c4ed697",
     "src/lib.rs": "27a8e5d5c52bc83aebb6419340ce5628fee323cd6a8b74624175ddc59e676a2c",
     "src/capabilities.rs": "79905a097058b43742381c916958c0d88a2ff878d55139d08c2b94e40baa3656",
     "src/profile.rs": "b11bdf3c724c3d6563b7adf21c8ecd47dadeddbb5bc932de89e93a0d645fd99e",
@@ -13,7 +13,7 @@
     "src/query.rs": "4441aaf57e0aebef9bab17896977c9f94116d79b364c1c5d73188d43d264196f",
     "src/presentation.rs": "dcdf69f4e25771a205438c4c0dae77ef7dea43c1b6b9cb66674b45aea8fa24de",
     "src/home.rs": "cf3a42cd12b7f2aa70f9d33f49bca93478c81c958c5ea29f56f45ba1bf483141",
-    "src/store.rs": "2d4f4121c543ef9d2b3903d4afa28d62f578ef4ad94f923007a793b4a39f662b",
+    "src/store.rs": "1e6585a03fcb93411e1b6abfd56d927c6251016365c492b1933fb0cd85f5d9c7",
     "src/stremio.rs": "846b1b278766bdca1b6d794722f00cfa293b516738e93dde53732f582ef43f47",
     "src/playback.rs": "c40f578e944a82ae56bc01e4dab7f8e06c5401cfc0a24dfd032f99f159513f94",
     "tests/engine.rs": "b512574b9b9377acf01d57cc52f9dfd2c879bb10c7335e594829ca9af2c2f708",
@@ -24,6 +24,8 @@
     "src/store/playback.rs": "f0ea1c50d886fbc4dbdf0b0069208f92f9898fd385bc32a3c1875bd5b72c025d",
     "src/stremio/manifest.rs": "16c1c65b47de05f0ae3cd4a696a3313bc300d74420f3425703b0bc6b154c6526",
     "src/stremio/media.rs": "22e13335d58224c6bfa8f7af92c342d4510e5f597d9ad508e4996e303063ae7c",
-    "src/stremio/streams.rs": "0f65142b462fbf20878956d5b2b985f708dfa5341b6dcd8f102219c4ed424bca"
+    "src/stremio/streams.rs": "0f65142b462fbf20878956d5b2b985f708dfa5341b6dcd8f102219c4ed424bca",
+    "src/store/profiles.rs": "e182f90657dead5ad696a2d01a1de39d9fb5879da8f7ed4763096f261b1d5f15",
+    "tests/profiles.rs": "33dcf464ba3df965222561dc158b9dcaeb1674ee53fc71deabc699de0145dd23"
   }
 }

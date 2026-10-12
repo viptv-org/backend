@@ -6,6 +6,7 @@ pub struct Store {
 }
 mod connections;
 mod playback;
+mod profiles;
 
 impl Store {
     pub fn open(path: &std::path::Path) -> Result<Self, Error> {
@@ -20,6 +21,7 @@ impl Store {
           CREATE TABLE IF NOT EXISTS engine_observations(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, event TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,event));
           CREATE TABLE IF NOT EXISTS engine_connections(id TEXT PRIMARY KEY, account TEXT NOT NULL, value TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS engine_playback(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, updated_at_millis INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,kind,id));
+          CREATE TABLE IF NOT EXISTS engine_profile_locks(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, pin_hash TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0, blocked_until INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(connection,account,profile));
           CREATE INDEX IF NOT EXISTS engine_playback_recent ON engine_playback(connection,account,profile,updated_at_millis DESC);").map_err(|_| Error::Storage)?;
         Ok(Self { db })
     }
