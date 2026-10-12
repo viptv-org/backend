@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/viptv-org/core",
-  "revision": "233fb2a858db9bdbb5e11a0991b3dbbd05f10a3b",
+  "revision": "20eabcf7acb8e0a9153932ec471f6713286e1932",
   "path": "crates/viptv-engine",
   "manifest_transform": "viptv-provider path ../../provider",
   "files": {
@@ -14,11 +14,13 @@
     "src/presentation.rs": "dcdf69f4e25771a205438c4c0dae77ef7dea43c1b6b9cb66674b45aea8fa24de",
     "src/home.rs": "cf3a42cd12b7f2aa70f9d33f49bca93478c81c958c5ea29f56f45ba1bf483141",
     "src/store.rs": "fbbf7cd7862de0c467f868fe635e6d05c5d9f8937d2aa8c4d3c20503f5f79797",
-    "src/stremio.rs": "d908f304efa4e8341b5910cb97c4c7a6a639f7c7d3530373fa6143a80f3f2e9b",
+    "src/stremio.rs": "846b1b278766bdca1b6d794722f00cfa293b516738e93dde53732f582ef43f47",
     "tests/engine.rs": "b512574b9b9377acf01d57cc52f9dfd2c879bb10c7335e594829ca9af2c2f708",
     "tests/stremio.rs": "e69d16c3ca09a0c0b7db8c533945978536d795d910aef3b67ff135353d786863",
-    "src/store/connections.rs": "781e1f37ad52957fbccb22e93795846e6372f7b5bbc530ec1b1f6b95db456b74",
+    "tests/streams.rs": "2ad094b4ab05bcc68fa7390687fbd6b56d309c8788a478a5ff056d1ca4cd5269",
+    "src/store/connections.rs": "b4168e656bacd92c9f626e2f5823ead340868502b74370e812c4a077b34212cc",
     "src/stremio/manifest.rs": "16c1c65b47de05f0ae3cd4a696a3313bc300d74420f3425703b0bc6b154c6526",
-    "src/stremio/media.rs": "22e13335d58224c6bfa8f7af92c342d4510e5f597d9ad508e4996e303063ae7c"
+    "src/stremio/media.rs": "22e13335d58224c6bfa8f7af92c342d4510e5f597d9ad508e4996e303063ae7c",
+    "src/stremio/streams.rs": "0f65142b462fbf20878956d5b2b985f708dfa5341b6dcd8f102219c4ed424bca"
   }
 }
