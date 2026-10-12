@@ -34,6 +34,8 @@ pub struct ProfileConfiguration {
     pub scope: Scope,
     pub mode: ExecutionMode,
     pub name: String,
+    #[serde(default)]
+    pub avatar_id: Option<String>,
     pub browsing_plugin: String,
     pub assignments: Vec<ProfileAssignment>,
 }
@@ -49,6 +51,7 @@ impl ProfileConfiguration {
             },
             mode: ExecutionMode::Local,
             name,
+            avatar_id: None,
             browsing_plugin: "stremio".into(),
             assignments: vec![],
         }

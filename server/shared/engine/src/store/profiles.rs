@@ -16,6 +16,32 @@ fn now() -> i64 {
 }
 
 impl Store {
+    pub fn set_profile_avatar(
+        &mut self,
+        scope: &Scope,
+        avatar_id: &str,
+        pin: &str,
+    ) -> Result<(), Error> {
+        if !matches!(
+            avatar_id,
+            "" | "vynxc" | "zayne" | "initial-pink" | "initial-blue"
+        ) {
+            return Err(Error::InvalidQuery);
+        }
+        if self.has_profile_pin(scope)? && !self.verify_profile_pin(scope, pin)? {
+            return Err(Error::Forbidden);
+        }
+        let mut profile = self.profile(scope)?.ok_or(Error::Forbidden)?;
+        let old = profile.scope.revision;
+        profile.scope.revision = old.checked_add(1).ok_or(Error::Conflict)?;
+        profile.avatar_id = if avatar_id.is_empty() {
+            None
+        } else {
+            Some(avatar_id.into())
+        };
+        self.save_profile(&profile, Some(old))
+    }
+
     pub fn has_profile_pin(&self, scope: &Scope) -> Result<bool, Error> {
         let found: Option<i64> = self.db.query_row(
             "SELECT 1 FROM engine_profile_locks WHERE connection=?1 AND account=?2 AND profile=?3",
