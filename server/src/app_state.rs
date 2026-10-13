@@ -272,6 +272,7 @@ impl App {
         engine_v3::history::init(&db).map_err(|_| "Library revision initialization failed")?;
         simkl::init(&db).map_err(|_| "Simkl schema initialization failed")?;
         let simkl = Arc::new(simkl::Service::from_env()?);
+        simkl.warm_discovery();
         provider::v2::init(&db).map_err(|_| "Account IPTV schema initialization failed")?;
         provider::refresh_v2::prepare(&db).map_err(|_| "IPTV refresh initialization failed")?;
         gateway::playback::init(&db)

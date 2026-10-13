@@ -1,6 +1,6 @@
 use super::*;
 use viptv_engine::{
-    home::{assemble, RowRequest},
+    home::{RowRequest, assemble},
     presentation::HomeSnapshot,
 };
 
@@ -113,9 +113,21 @@ pub(super) async fn load(
     let mut snapshot = assemble(
         scope(&lease, profile, configuration_revision),
         requests,
-        Duration::from_secs(2),
+        if simkl {
+            app.simkl.home_budget()
+        } else {
+            Duration::from_secs(2)
+        },
     )
     .await;
+    if let Ok((metadata_app, _)) = configuration::apply(
+        app.clone(),
+        &lease,
+        profile,
+        viptv_engine::capabilities::Capability::Metadata,
+    ) {
+        enrich(&metadata_app, profile, &mut snapshot).await;
+    }
     snapshot.revision = revision;
     configuration::validate_revision(&app, profile, configuration_revision)?;
     lease.validate(
@@ -125,4 +137,103 @@ pub(super) async fn load(
             .map_err(|_| ApiError::from("Database unavailable"))?,
     )?;
     Ok(snapshot)
+}
+
+async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
+    use futures::StreamExt;
+    let mut candidates = snapshot.hero.iter().cloned().collect::<Vec<_>>();
+    candidates.extend(
+        snapshot
+            .rows
+            .iter()
+            .filter(|r| r.id == "continue")
+            .flat_map(|r| r.cards.iter().take(12))
+            .cloned(),
+    );
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|card| {
+        let identity = card.parent_identity.as_ref().unwrap_or(&card.identity);
+        seen.insert((identity.kind.clone(), identity.id.clone()))
+    });
+    let mut tasks = futures::stream::iter(candidates.into_iter().map(|card| {
+        let app = app.clone();
+        async move {
+            let result = if card
+                .parent_identity
+                .as_ref()
+                .unwrap_or(&card.identity)
+                .id
+                .starts_with("simkl:")
+            {
+                crate::simkl::home_metadata(&app, profile, card.clone())
+                    .await
+                    .ok()
+            } else {
+                let identity = card.parent_identity.as_ref().unwrap_or(&card.identity);
+                match app.addons.meta(&identity.kind, &identity.id).await {
+                    Ok(raw) => viptv_engine::stremio::detail(
+                        &raw.to_string(),
+                        &card.provider_id,
+                        &identity.kind,
+                        &identity.id,
+                        0,
+                    )
+                    .ok()
+                    .map(|detail| detail.item),
+                    Err(_) => None,
+                }
+            };
+            (card, result)
+        }
+    }))
+    .buffer_unordered(4);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+    let mut presented = Vec::new();
+    while let Ok(Some((original, result))) = tokio::time::timeout_at(deadline, tasks.next()).await {
+        let Some(metadata) = result else {
+            continue;
+        };
+        apply_metadata(snapshot, &original, &metadata);
+        presented.push((original, metadata));
+    }
+    // Artwork cannot hold completed authoritative metadata behind its deadline.
+    let mut logos = futures::stream::iter(
+        presented
+            .into_iter()
+            .filter(|(_, card)| card.provider_id == "simkl")
+            .map(|(original, mut metadata)| {
+                let app = app.clone();
+                async move {
+                    crate::simkl::enrich_artwork(&app, &mut metadata).await;
+                    (original, metadata)
+                }
+            }),
+    )
+    .buffer_unordered(4);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while let Ok(Some((original, metadata))) = tokio::time::timeout_at(deadline, logos.next()).await
+    {
+        apply_metadata(snapshot, &original, &metadata);
+    }
+}
+fn apply_metadata(
+    snapshot: &mut HomeSnapshot,
+    original: &viptv_engine::presentation::Card,
+    metadata: &viptv_engine::presentation::Card,
+) {
+    let identity = original
+        .parent_identity
+        .as_ref()
+        .unwrap_or(&original.identity);
+    for card in snapshot.hero.iter_mut().chain(
+        snapshot
+            .rows
+            .iter_mut()
+            .flat_map(|row| row.cards.iter_mut()),
+    ) {
+        let target = card.parent_identity.as_ref().unwrap_or(&card.identity);
+        if target.id == identity.id && target.kind == identity.kind {
+            *card = viptv_engine::presentation::enrich_card(card, metadata);
+        }
+    }
 }

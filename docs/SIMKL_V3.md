@@ -137,3 +137,14 @@ permits the selection without claiming a local per-profile PIN. POST/PATCH use
 primary profile and preserves exact account ownership. The v3 parent aliases
 retain existing PIN hashing, rate limits, short session-bound grants and rotation
 invalidation. Kids bootstrap remains a scoped, policy-filtered read.
+
+
+### Shared title presentation and related titles
+
+`Card.category` distinguishes `movie`, `series`, and `anime` without changing playable canonical identity kinds. Simkl anime search objects use `type: tv/movie`, while full anime records use `type: anime` plus `anime_type`; both shapes retain the `simkl:anime:` namespace. All-category search ranks exact and alternate-title matches before broader matches, using provider rating votes to order equal relevance.
+
+Optional `Card.metadata` carries year, runtime minutes, genres, rating/votes, certification, and alternate titles. `DetailSnapshot.recommendations` is an additive list (default empty) from the selected metadata provider's existing recommendation/similar fields. Stremio can fall back to a bounded genre catalog lookup; native hosts reuse their current scoped catalog cache. Anime episode playback uses only explicit provider TVDB aired coordinates, never an invented season.
+
+Initial Home heroes exclude personal library rows and prioritize trending catalogs. Hero and Continue Watching share bounded, coalesced metadata fetches. Continue cards display the parent title, overview and logo while retaining their exact episode identity, progress and resume subtitle. Public artwork is optional and uses only an explicit verified IMDb mapping; it does not change metadata ownership. A slow artwork request cannot discard completed metadata.
+
+One credential-free public trending document warms at server startup. Home allows a four-second assembly budget while startup warming is active (otherwise two), then up to four seconds for metadata and two for optional artwork. Existing profile/revision/kids checks still fence the final response. Bootstrap also includes the first typed library page and preferences snapshot to avoid separate initial hydration requests.

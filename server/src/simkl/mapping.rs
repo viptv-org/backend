@@ -35,7 +35,7 @@ pub(crate) async fn resolve_id(
         return Err(unavailable_mapping());
     }
     let episode = if parts.len() == 5 {
-        if category != "tv" {
+        if category != "tv" && category!="anime" {
             return Err(unavailable_mapping());
         }
         metadata::episodes(app, profile, &access, title, &parent)

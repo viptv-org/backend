@@ -20,7 +20,9 @@ pub fn source_identity(parent: &Card, episode: Option<&Card>) -> Result<MediaIde
     match (parent.identity.kind.as_str(), episode) {
         ("movie", None) => Ok(target),
         ("series", Some(episode))
-            if parent.identity.id.starts_with("simkl:tv:") && episode.provider_id == "simkl" =>
+            if (parent.identity.id.starts_with("simkl:tv:")
+                || parent.identity.id.starts_with("simkl:anime:"))
+                && episode.provider_id == "simkl" =>
         {
             let coordinates = episode
                 .identity

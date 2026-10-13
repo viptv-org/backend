@@ -51,3 +51,8 @@ pub(super) fn cards(app: &App, items: Vec<Value>, provider: &str) -> Result<Vec<
         .filter_map(|v| card(v, provider))
         .collect())
 }
+
+pub(super) fn allowed_cards(app:&App,cards:Vec<Card>)->Result<Vec<Card>,ApiError>{
+    let db=app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;app.require_media(&db)?;
+    Ok(cards.into_iter().filter(|card|kids::require_item(&db,&app.identity(),&card.identity.kind,&card.identity.id).is_ok()).collect())
+}

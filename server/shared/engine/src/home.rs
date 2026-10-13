@@ -61,11 +61,25 @@ pub async fn assemble(scope: Scope, requests: Vec<RowRequest>, budget: Duration)
         }
     }
     snapshot.complete = true;
-    snapshot.hero = snapshot
-        .rows
-        .iter()
-        .flat_map(|r| &r.cards)
-        .find(|c| c.landscape.is_some())
-        .cloned();
+    snapshot.hero = select_hero(&snapshot.rows);
     snapshot
+}
+
+/// Personal rows can never become the initial featured title.
+pub fn select_hero(rows: &[HomeRow]) -> Option<Card> {
+    let eligible = |row: &&HomeRow| {
+        row.provider_id != "library" && !matches!(row.id.as_str(), "continue" | "favorites")
+    };
+    let featured = |row: &&HomeRow| {
+        row.id.ends_with(":trending")
+            || row.id.ends_with(":top")
+            || row.title.to_lowercase().contains("trending")
+    };
+    rows.iter()
+        .filter(eligible)
+        .filter(featured)
+        .chain(rows.iter().filter(eligible))
+        .flat_map(|r| &r.cards)
+        .find(|c| c.landscape.is_some() && c.identity.episode.is_none())
+        .cloned()
 }

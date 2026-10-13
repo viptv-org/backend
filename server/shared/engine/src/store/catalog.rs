@@ -67,3 +67,69 @@ impl Store {
         tx.commit().map_err(|_| Error::Storage)
     }
 }
+
+impl Store {
+    /// Related titles come from this profile's currently assigned, already fetched catalogs.
+    pub fn related_catalog_cards(
+        &self,
+        scope: &Scope,
+        item: &Card,
+        now: i64,
+    ) -> Result<Vec<Card>, Error> {
+        let current = self.profile(scope)?.ok_or(Error::Forbidden)?;
+        if current.scope.revision != scope.revision {
+            return Err(Error::Conflict);
+        }
+        let Some(metadata) = item.metadata.as_ref().filter(|m| !m.genres.is_empty()) else {
+            return Ok(vec![]);
+        };
+        let mut statement=self.db.prepare("SELECT value FROM engine_catalog_cache WHERE connection=?1 AND account=?2 AND profile=?3 AND revision=?4 AND expires_at>?5 AND expires_at<=?5+300 ORDER BY rowid LIMIT 12").map_err(|_|Error::Storage)?;
+        let values = statement
+            .query_map(
+                params![
+                    scope.connection_id,
+                    scope.account_id,
+                    scope.profile_id,
+                    scope.revision,
+                    now
+                ],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(|_| Error::Storage)?;
+        let mut cards = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for value in values {
+            let Ok(value) = value else {
+                continue;
+            };
+            let Ok(cached) = serde_json::from_str::<Vec<Card>>(&value) else {
+                continue;
+            };
+            for card in cached {
+                if card.identity.id == item.identity.id
+                    || card.identity.kind != item.identity.kind
+                    || card.identity.episode.is_some()
+                    || !seen.insert(card.identity.id.clone())
+                {
+                    continue;
+                }
+                let overlap = card.metadata.as_ref().map_or(0, |m| {
+                    m.genres
+                        .iter()
+                        .filter(|g| {
+                            metadata
+                                .genres
+                                .iter()
+                                .any(|genre| genre.eq_ignore_ascii_case(g))
+                        })
+                        .count()
+                });
+                if overlap > 0 {
+                    cards.push((overlap, card));
+                }
+            }
+        }
+        cards.sort_by_key(|(overlap, _)| std::cmp::Reverse(*overlap));
+        Ok(cards.into_iter().take(24).map(|(_, card)| card).collect())
+    }
+}

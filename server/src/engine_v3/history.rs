@@ -103,6 +103,7 @@ pub(super) fn record(item: &Value) -> Option<PlaybackRecord> {
                     })
             });
     Some(PlaybackRecord {
+        presentation:None,
         identity,
         parent_identity,
         provider_id: item["engine_provider_id"]

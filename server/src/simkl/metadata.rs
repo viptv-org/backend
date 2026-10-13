@@ -66,13 +66,14 @@ pub(crate) async fn search(
         return Err("Simkl page exceeds the limit".into());
     }
     let more = values.len() == 24 && q.page < 20;
-    let cards = allowed(
+    let mut cards = allowed(
         &app,
         values
             .iter()
             .filter_map(|v| projection::card(v, category).ok())
             .collect(),
     )?;
+    viptv_engine::search::rank(&mut cards, &q.query);
     Ok(axum::Json(
         serde_json::to_value(CatalogPage {
             cards,
@@ -119,8 +120,10 @@ pub(super) async fn title(
             "Simkl returned a different title".into(),
         ));
     }
-    projection::card(&value, category)
-        .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "Simkl title was invalid".into()))
+    let card = projection::card(&value, category)
+        .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "Simkl title was invalid".into()))?;
+    store::validate(app, profile, credential)?;
+    Ok(card)
 }
 
 pub(super) async fn episodes(
@@ -130,7 +133,18 @@ pub(super) async fn episodes(
     id: u64,
     parent: &Card,
 ) -> Result<Vec<Card>, ApiError> {
-    let value = cache::metadata(app, profile, credential, &format!("/tv/episodes/{id}")).await?;
+    let category = if parent.identity.id.starts_with("simkl:anime:") {
+        "anime"
+    } else {
+        "tv"
+    };
+    let value = cache::metadata(
+        app,
+        profile,
+        credential,
+        &format!("/{category}/episodes/{id}"),
+    )
+    .await?;
     projection::episodes(&value, parent).map_err(|_| {
         ApiError(
             StatusCode::BAD_GATEWAY,
@@ -151,24 +165,71 @@ pub(crate) async fn detail(
     let app = app.with_lease(lease);
     let credential = store::credential(&app, profile, Capability::Metadata)?;
     let item = title(&app, profile, &credential, &category, id).await?;
-    let item = allowed(&app, vec![item])?
+    let mut item = allowed(&app, vec![item])?
         .into_iter()
         .next()
         .ok_or_else(auth::forbidden)?;
-    let all = if category == "tv" {
+    let all = if category == "tv" || category == "anime" && item.identity.kind == "series" {
         episodes(&app, profile, &credential, id, &item).await?
     } else {
         vec![]
     };
+    let endpoint = if category == "movie" {
+        "movies"
+    } else {
+        &category
+    };
+    let document = cache::metadata(
+        &app,
+        profile,
+        &credential,
+        &format!("/{endpoint}/{id}?extended=full"),
+    )
+    .await?;
+    let recommendations = allowed(
+        &app,
+        projection::recommendations(&document, &category, &item.identity.id),
+    )?;
     let next_cursor = (all.len() > q.offset + 24).then(|| (q.offset + 24).to_string());
     let episodes = allowed(&app, all.into_iter().skip(q.offset).take(24).collect())?;
+    let _ = tokio::time::timeout(
+        Duration::from_secs(2),
+        super::artwork::enrich(&app, &mut item),
+    )
+    .await;
     store::validate(&app, profile, &credential)?;
     Ok(axum::Json(
         serde_json::to_value(DetailSnapshot {
             item,
+            recommendations,
             episodes,
             next_cursor,
         })
         .map_err(|_| ApiError::from("Title unavailable"))?,
     ))
+}
+
+pub(crate) async fn home_metadata(
+    app: &App,
+    profile: i64,
+    original: Card,
+) -> Result<Card, ApiError> {
+    let identity = original
+        .parent_identity
+        .as_ref()
+        .unwrap_or(&original.identity);
+    let parts = identity.id.split(':').collect::<Vec<_>>();
+    let ["simkl", category, id] = parts.as_slice() else {
+        return Ok(original);
+    };
+    let id = id
+        .parse()
+        .map_err(|_| ApiError::from("Invalid Simkl identity"))?;
+    let access = store::credential(app, profile, Capability::Metadata)?;
+    let detail = title(app, profile, &access, category, id).await?;
+    let detail = allowed(app, vec![detail])?
+        .into_iter()
+        .next()
+        .ok_or_else(auth::forbidden)?;
+    Ok(detail)
 }

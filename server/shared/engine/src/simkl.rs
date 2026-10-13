@@ -56,15 +56,20 @@ pub fn card(value: &Value, category: &str) -> Result<Card, Error> {
     if value["type"].as_str().is_some_and(|kind| !match category {
         "movie" => kind == "movie",
         "tv" => matches!(kind, "show" | "tv"),
-        "anime" => kind == "anime",
+        "anime" => matches!(
+            kind,
+            "anime" | "tv" | "movie" | "ova" | "ona" | "special" | "music"
+        ),
         _ => false,
     }) {
         return Err(Error::Unresolved);
     }
     let id = id(value).ok_or(Error::Unresolved)?;
     let title = text(&value["title"], 512).ok_or(Error::Unresolved)?;
-    let movie =
-        category == "movie" || category == "anime" && value["anime_type"].as_str() == Some("movie");
+    let movie = category == "movie"
+        || category == "anime"
+            && (value["anime_type"].as_str() == Some("movie")
+                || value["type"].as_str() == Some("movie"));
     let mut ids = vec![ExternalId {
         namespace: "simkl".into(),
         value: id.to_string(),
@@ -87,6 +92,8 @@ pub fn card(value: &Value, category: &str) -> Result<Card, Error> {
             episode: None,
             edition: None,
         },
+        category: Some(if category == "tv" { "series" } else { category }.into()),
+        metadata: Some(metadata(value)),
         provider_id: "simkl".into(),
         title,
         subtitle: value["year"]
@@ -100,13 +107,14 @@ pub fn card(value: &Value, category: &str) -> Result<Card, Error> {
         progress: None,
         badges: vec!["Simkl".into()],
         parent_identity: None,
-        added_at_millis:None,
+        added_at_millis: None,
     })
 }
 
 /// TV coordinates come from the provider's episode list; missing or duplicated coordinates fail closed.
 pub fn episodes(value: &Value, parent: &Card) -> Result<Vec<Card>, Error> {
-    if !parent.identity.id.starts_with("simkl:tv:") {
+    let anime = parent.identity.id.starts_with("simkl:anime:");
+    if !parent.identity.id.starts_with("simkl:tv:") && !anime {
         return Err(Error::Unresolved);
     }
     let values = value.as_array().ok_or(Error::Unresolved)?;
@@ -117,7 +125,13 @@ pub fn episodes(value: &Value, parent: &Card) -> Result<Vec<Card>, Error> {
     let mut cards = Vec::new();
     let mut ids = std::collections::HashSet::new();
     for value in values {
-        let Some((season, episode)) = value["season"].as_u64().zip(value["episode"].as_u64())
+        if anime && (value["type"].as_str() != Some("episode") || value["aired"] == false) {
+            continue;
+        }
+        let coordinates = if anime { &value["tvdb"] } else { value };
+        let Some((season, episode)) = coordinates["season"]
+            .as_u64()
+            .zip(coordinates["episode"].as_u64())
         else {
             continue;
         };
@@ -154,4 +168,82 @@ pub fn episodes(value: &Value, parent: &Card) -> Result<Vec<Card>, Error> {
         (e.season, e.episode)
     });
     Ok(cards)
+}
+
+fn metadata(value: &Value) -> crate::presentation::CardMetadata {
+    let strings = |v: &Value, max: usize| {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| text(v, 512))
+            .take(max)
+            .collect::<Vec<_>>()
+    };
+    let mut alternate_titles = strings(&value["all_titles"], 32);
+    for key in ["en_title", "title_en", "title_romaji"] {
+        if let Some(s) = text(&value[key], 512) {
+            alternate_titles.push(s);
+        }
+    }
+    for value in value["alt_titles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(32)
+    {
+        if let Some(s) = text(&value["name"], 512) {
+            alternate_titles.push(s);
+        }
+    }
+    alternate_titles.sort();
+    alternate_titles.dedup();
+    alternate_titles.truncate(32);
+    let ratings = ["imdb", "simkl", "mal"].into_iter().find_map(|key| {
+        value["ratings"][key]["rating"]
+            .as_f64()
+            .filter(|n| n.is_finite() && (0.0..=10.0).contains(n))
+            .map(|rating| (rating, value["ratings"][key]["votes"].as_u64()))
+    });
+    crate::presentation::CardMetadata {
+        year: value["year"]
+            .as_u64()
+            .filter(|n| *n <= 9999)
+            .map(|n| n as u32),
+        runtime_minutes: value["runtime"]
+            .as_u64()
+            .filter(|n| *n <= 10000)
+            .map(|n| n as u32),
+        genres: strings(&value["genres"], 16),
+        rating: ratings.map(|r| r.0),
+        rating_votes: ratings.and_then(|r| r.1),
+        certification: text(&value["certification"], 128),
+        alternate_titles,
+    }
+}
+
+/// Recommendations are already included in the authoritative full detail record.
+pub fn recommendations(value: &Value, parent_category: &str, parent_id: &str) -> Vec<Card> {
+    let mut seen = std::collections::HashSet::new();
+    ["users_recommendations", "similar", "relations"]
+        .into_iter()
+        .flat_map(|key| value[key].as_array().into_iter().flatten())
+        .take(200)
+        .filter_map(|v| {
+            let category = match v["endpoint_type"].as_str().or_else(|| v["type"].as_str()) {
+                Some("movie" | "movies") => "movie",
+                Some("tv" | "show") => "tv",
+                Some("anime") => "anime",
+                None if parent_category == "anime" => "anime",
+                _ => return None,
+            };
+            let category = if parent_category == "anime" && v["anime_type"].is_string() {
+                "anime"
+            } else {
+                category
+            };
+            let c = card(v, category).ok()?;
+            (c.identity.id != parent_id && seen.insert(c.identity.id.clone())).then_some(c)
+        })
+        .take(24)
+        .collect()
 }

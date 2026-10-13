@@ -22,6 +22,8 @@ fn card() -> Card {
         badges: vec![],
         parent_identity: None,
         added_at_millis:None,
+        category:None,
+        metadata:None,
     }
 }
 

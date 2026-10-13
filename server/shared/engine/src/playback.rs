@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct PlaybackRecord {
+    #[serde(default)]
+    pub presentation: Option<Card>,
     pub identity: MediaIdentity,
     pub provider_id: String,
     pub title: String,
@@ -49,11 +51,11 @@ impl PlaybackRecord {
         } else {
             None
         };
-        Card {
+        let mut card = self.presentation.clone().unwrap_or_else(|| Card {
             identity: self.identity.clone(),
             provider_id: self.provider_id.clone(),
             title: self.title.clone(),
-            subtitle,
+            subtitle: subtitle.clone(),
             description: None,
             poster: self.poster.clone(),
             landscape: self.landscape.clone(),
@@ -61,8 +63,16 @@ impl PlaybackRecord {
             progress: self.progress(),
             badges: vec![],
             parent_identity: self.parent_identity.clone(),
-            added_at_millis:None,
-        }
+            added_at_millis: None,
+            category: None,
+            metadata: None,
+        });
+        card.identity = self.identity.clone();
+        card.parent_identity = self.parent_identity.clone();
+        card.progress = self.progress();
+        card.subtitle = subtitle;
+        card.added_at_millis = None;
+        card
     }
     pub fn can_resume(&self) -> bool {
         self.position_millis > 0

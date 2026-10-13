@@ -61,7 +61,14 @@ impl Store {
         let old = self.playback(scope, &card.identity.kind, &card.identity.id)?;
         let completed = duration_millis > 0
             && position_millis.saturating_mul(100) >= duration_millis.saturating_mul(95);
+        let mut presentation = card.clone();
+        presentation.poster = public_art(card.poster.as_deref());
+        presentation.landscape = public_art(card.landscape.as_deref());
+        presentation.logo = public_art(card.logo.as_deref());
+        presentation.progress = None;
+        presentation.added_at_millis = None;
         let record = PlaybackRecord {
+            presentation: Some(presentation),
             identity: card.identity.clone(),
             parent_identity: card.parent_identity.clone(),
             provider_id: card.provider_id.clone(),

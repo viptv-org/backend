@@ -2,9 +2,26 @@ use crate::{identity::MediaIdentity, profile::Scope};
 use facet::Facet;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Facet)]
+pub struct CardMetadata {
+    pub year: Option<u32>,
+    pub runtime_minutes: Option<u32>,
+    #[serde(default)]
+    pub genres: Vec<String>,
+    pub rating: Option<f64>,
+    pub rating_votes: Option<u64>,
+    pub certification: Option<String>,
+    #[serde(default)]
+    pub alternate_titles: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct Card {
     pub identity: MediaIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<CardMetadata>,
     pub provider_id: String,
     pub title: String,
     pub subtitle: Option<String>,
@@ -16,8 +33,8 @@ pub struct Card {
     pub badges: Vec<String>,
     #[serde(default)]
     pub parent_identity: Option<MediaIdentity>,
-    #[serde(default,skip_serializing_if="Option::is_none")]
-    pub added_at_millis:Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub added_at_millis: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Facet)]
@@ -52,6 +69,8 @@ pub struct HomeSnapshot {
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct DetailSnapshot {
     pub item: Card,
+    #[serde(default)]
+    pub recommendations: Vec<Card>,
     pub episodes: Vec<Card>,
     pub next_cursor: Option<String>,
 }
@@ -124,4 +143,40 @@ impl Card {
         }
         Ok(())
     }
+}
+
+/// Parent metadata enriches an episode's presentation without changing playback identity or progress.
+pub fn enrich_card(original: &Card, metadata: &Card) -> Card {
+    let identity = original
+        .parent_identity
+        .as_ref()
+        .unwrap_or(&original.identity);
+    if identity.id != metadata.identity.id || identity.kind != metadata.identity.kind {
+        return original.clone();
+    }
+    let mut card = original.clone();
+    if original.parent_identity.is_some() {
+        card.title = metadata.title.clone();
+    }
+    if metadata.description.is_some() {
+        card.description = metadata.description.clone();
+    }
+    if metadata.landscape.is_some() && original.identity.episode.is_none() {
+        card.landscape = metadata.landscape.clone();
+    }
+    if card.landscape.is_none() {
+        card.landscape = metadata.landscape.clone();
+    }
+    if metadata.poster.is_some() {
+        card.poster = metadata.poster.clone();
+    }
+    if metadata.logo.is_some() {
+        card.logo = metadata.logo.clone();
+    }
+    card.metadata = metadata.metadata.clone().or(card.metadata);
+    card.category = metadata.category.clone().or(card.category);
+    if card.subtitle.is_none() {
+        card.subtitle = metadata.subtitle.clone();
+    }
+    card
 }

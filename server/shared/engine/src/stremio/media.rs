@@ -64,6 +64,7 @@ pub fn detail(
         }
     }
     Ok(DetailSnapshot {
+        recommendations: recommendations(meta, provider, &item.identity.id)?,
         item,
         episodes,
         next_cursor: (all.len() > offset + 24).then(|| (offset + 24).to_string()),
@@ -103,7 +104,7 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
             Some(Card {
                 identity: MediaIdentity {
                     id,
-                    kind,
+                    kind: kind.clone(),
                     ids,
                     episode: None,
                     edition: None,
@@ -111,16 +112,59 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                 provider_id: provider.into(),
                 title,
                 subtitle: field(v, "releaseInfo", 256),
-                description: field(v, "description", 1600),
+                description: field(v, "description", 16_384).or_else(||field(v,"overview",16_384)),
                 poster: field(v, "poster", 4096),
                 landscape: field(v, "background", 4096),
-                logo: field(v, "logo", 4096),
+                logo: ["logo","clearlogo","clearLogo","titleLogo","title_logo"].into_iter().find_map(|key|field(v,key,4096)),
                 progress: None,
                 badges: vec![],
                 parent_identity: None,
-                added_at_millis:None,
+                added_at_millis: None,
+                category: Some(kind.clone()),
+                metadata: Some(crate::presentation::CardMetadata {
+                    year: field(v, "releaseInfo", 256)
+                        .and_then(|s| s.get(..4).and_then(|s| s.parse::<u32>().ok()))
+                        .filter(|n| *n <= 9999),
+                    runtime_minutes: field(v, "runtime", 64)
+                        .and_then(|s| {
+                            s.split_whitespace()
+                                .next()
+                                .and_then(|s| s.parse::<u32>().ok())
+                        })
+                        .filter(|n| *n <= 10000),
+                    genres: v["genres"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_str())
+                        .take(16)
+                        .map(|s| s.chars().take(128).collect())
+                        .collect(),
+                    rating: v["imdbRating"]
+                        .as_f64()
+                        .or_else(|| v["imdbRating"].as_str().and_then(|s| s.parse().ok()))
+                        .filter(|n| n.is_finite() && (0.0..=10.0).contains(n)),
+                    ..Default::default()
+                }),
             })
         })
         .take(24)
         .collect())
+}
+
+/// Only recommendations supplied by the selected metadata addon are projected.
+pub fn recommendations(meta: &Value, provider: &str, original: &str) -> Result<Vec<Card>, Error> {
+    let values = meta["recommendations"]
+        .as_array()
+        .or_else(|| meta["similar"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(
+        cards(&serde_json::json!({"metas":values}).to_string(), provider)?
+            .into_iter()
+            .filter(|c| {
+                c.identity.id != original && matches!(c.identity.kind.as_str(), "movie" | "series")
+            })
+            .collect(),
+    )
 }

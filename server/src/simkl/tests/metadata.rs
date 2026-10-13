@@ -274,3 +274,25 @@ async fn oauth_required_metadata_uses_profile_link_without_populating_public_cac
     );
     task.abort();
 }
+
+#[tokio::test]
+async fn related_titles_and_full_metadata_arrive_in_one_selected_provider_detail_response(){
+ let (app,task,_)=server().await;
+ let (status,body)=request(&app,"member-token-1","GET","/api/v3/profiles/1/simkl/meta/movie/10",json!({})).await;
+ assert_eq!(status,StatusCode::OK,"{body}");assert_eq!(body["item"]["metadata"]["runtime_minutes"],120);assert_eq!(body["item"]["description"],"Full movie detail");assert_eq!(body["recommendations"].as_array().unwrap().len(),1);assert_eq!(body["recommendations"][0]["identity"]["id"],"simkl:movie:12");
+ task.abort();
+}
+
+#[tokio::test]
+async fn all_search_keeps_anime_subtype_and_ranks_naruto_above_unrelated_movie_ovas(){
+ let (mut app,initial,_)=server().await;initial.abort();
+ let router=Router::new()
+ .route("/search/movie",get(||async{axum::Json(json!([{ "title":"Naruto OVA 12","endpoint_type":"movies","ids":{"simkl_id":1}},{"title":"Naruto","endpoint_type":"movies","ids":{"simkl_id":2},"ratings":{"imdb":{"rating":4,"votes":3}}}]))}))
+ .route("/search/tv",get(||async{axum::Json(json!([{ "title":"Naruto Abridged","endpoint_type":"tv","ids":{"simkl_id":3}}]))}))
+ .route("/search/anime",get(||async{axum::Json(json!([{ "title":"Naruto","endpoint_type":"anime","type":"tv","ids":{"simkl_id":4},"ratings":{"imdb":{"rating":8.4,"votes":150000}}},{"title":"Naruto movie","endpoint_type":"anime","type":"movie","ids":{"simkl_id":5}}]))}));
+ let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();let task=tokio::spawn(async move{axum::serve(listener,router).await.unwrap()});
+ app.simkl=Arc::new(Service::fixture(&format!("http://{address}")));
+ let (status,body)=request(&app,"member-token-1","GET","/api/v3/discover?type=all&search=Naruto",json!({})).await;
+ assert_eq!(status,StatusCode::OK,"{body}");assert_eq!(body["cards"].as_array().unwrap().len(),5);assert_eq!(body["cards"][0]["identity"]["id"],"simkl:anime:4");assert_eq!(body["cards"][0]["category"],"anime");assert_eq!(body["cards"][0]["identity"]["kind"],"series");
+ task.abort();
+}

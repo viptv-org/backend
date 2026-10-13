@@ -13,14 +13,54 @@ pub(crate) struct Service {
     base: String,
     pub(super) data_base: String,
     pub(super) trending: super::discovery::PublicCache,
-    pub(super) public_documents: tokio::sync::Mutex<std::collections::HashMap<String,(Instant,Arc<Value>)>>,
+    pub(super) public_documents:
+        tokio::sync::Mutex<std::collections::HashMap<String, (Instant, Arc<Value>)>>,
     pub(super) metadata: super::cache::Cache,
     pub(super) tracking: super::automatic::Queue,
+    startup_warming: std::sync::atomic::AtomicBool,
     next: tokio::sync::Mutex<tokio::time::Instant>,
     pub(super) refresh_gate: tokio::sync::Mutex<()>,
 }
 
 impl Service {
+    pub(crate) fn warm_discovery(self: &Arc<Self>) {
+        if !self.configured() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        self.startup_warming
+            .store(true, std::sync::atomic::Ordering::Release);
+        let service = self.clone();
+        runtime.spawn(async move {
+            let document = service.trending(|| Ok(())).await;
+            service
+                .startup_warming
+                .store(false, std::sync::atomic::Ordering::Release);
+            if let Ok(document) = document {
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    super::artwork::warm_hero(&service, &document),
+                )
+                .await;
+            }
+        });
+    }
+    pub(crate) fn home_budget(&self) -> Duration {
+        if self
+            .startup_warming
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            Duration::from_secs(4)
+        } else {
+            Duration::from_secs(2)
+        }
+    }
+
+    pub(super) fn public_artwork(&self) -> bool {
+        self.base == "https://api.simkl.com"
+    }
     pub(crate) fn configured(&self) -> bool {
         self.config.is_some()
     }
@@ -75,6 +115,7 @@ impl Service {
             public_documents: Default::default(),
             metadata: Default::default(),
             tracking: Default::default(),
+            startup_warming: std::sync::atomic::AtomicBool::new(false),
             next: tokio::sync::Mutex::new(tokio::time::Instant::now()),
             refresh_gate: tokio::sync::Mutex::new(()),
         })

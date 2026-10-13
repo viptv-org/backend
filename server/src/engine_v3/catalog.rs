@@ -24,11 +24,12 @@ pub(crate) async fn discover(State(app):State<App>,Extension(lease):Extension<Re
     let pages=tokio::time::timeout(Duration::from_secs(12),futures::future::join_all(tasks)).await.map_err(|_|ApiError(StatusCode::GATEWAY_TIMEOUT,"Search exceeded its response deadline".into()))?;
     let mut cards=Vec::new();let mut seen=std::collections::HashSet::new();let mut complete=true;
     for result in pages {
-        let axum::Json(value)=result?;
+        let axum::Json(value)=match result {Ok(value)=>value,Err(error) if error.0.is_server_error()=>{complete=false;continue;},Err(error)=>return Err(error)};
         let page:CatalogPage=serde_json::from_value(value).map_err(|_|ApiError::from("Search response was invalid"))?;
         complete&=page.complete;
         for card in page.cards {if cards.len()<200 && seen.insert((card.identity.kind.clone(),card.identity.id.clone())){cards.push(card);}}
     }
+    viptv_engine::search::rank(&mut cards,q.search.as_deref().unwrap_or_default());
     configuration::validate_revision(&scoped,profile,configuration.scope.revision)?;
     Ok(axum::Json(serde_json::to_value(CatalogPage{cards,next_cursor:None,complete}).map_err(|_|ApiError::from("Search unavailable"))?))
 }
@@ -156,7 +157,19 @@ pub(crate) async fn detail(
         .collect();
     let mut episodes = projection::cards(&app, videos, "stremio")?;
     for episode in &mut episodes { episode.parent_identity = Some(item.identity.clone()); }
-    let value=serde_json::to_value(DetailSnapshot{item,episodes,next_cursor}).map_err(|_|ApiError::from("Title unavailable"))?;
+    let recommendations=viptv_engine::stremio::detail(&json!({"meta":parent}).to_string(),"stremio",&kind,&id,page.offset).map(|detail|detail.recommendations).map_err(|_|ApiError::from("Invalid related metadata"))?;
+    let mut recommendations=super::projection::allowed_cards(&app,recommendations)?;
+    if recommendations.is_empty(){
+        if let Some(genre)=item.metadata.as_ref().and_then(|metadata|metadata.genres.first()){
+            if let Ok((discovery,_))=configuration::apply(app.clone(),&lease,profile,viptv_engine::capabilities::Capability::Discovery){
+                if let Ok(Ok(result))=tokio::time::timeout(Duration::from_secs(2),discovery.addons.discover(kind.clone(),None,None,0,None,Some(genre.clone()))).await{
+                    recommendations=projection::cards(&discovery,result["metas"].as_array().cloned().unwrap_or_default(),"stremio")?.into_iter().filter(|card|card.identity.id!=item.identity.id && card.identity.kind==item.identity.kind && card.identity.episode.is_none()).take(24).collect();
+                }
+            }
+        }
+    }
+    configuration::validate_revision(&app,profile,revision)?;
+    let value=serde_json::to_value(DetailSnapshot{item,recommendations,episodes,next_cursor}).map_err(|_|ApiError::from("Title unavailable"))?;
     super::source_integrations::cache_detail(&app,&lease,revision,&value);
     Ok(axum::Json(value))
 }

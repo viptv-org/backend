@@ -27,7 +27,7 @@ async fn server() -> (App, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
         )
         .route(
             "/movies/10",
-            get(|| async { axum::Json(json!({"title":"Movie","ids":{"simkl":10}})) }),
+            get(|| async { axum::Json(json!({"title":"Movie","ids":{"simkl":10},"overview":"Full movie detail","runtime":120,"ratings":{"imdb":{"rating":8.4,"votes":2000}},"similar":[{"title":"Related","type":"movie","ids":{"simkl":12}},{"title":"Movie","type":"movie","ids":{"simkl":10}}]})) }),
         )
         .route(
             "/movies/11",
