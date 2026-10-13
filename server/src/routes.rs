@@ -261,8 +261,10 @@ pub fn router_with_tv(
         .layer(middleware::from_fn(json_errors))
         .layer(middleware::map_response(private_api_response))
         .layer(middleware::from_fn(gateway::playback::control_deadline))
-        .layer(middleware::from_fn(gateway::diagnostics::observe));
+        .layer(middleware::from_fn(gateway::diagnostics::observe))
+        .layer(middleware::from_fn(images::negotiate));
     let mut r = Router::new()
+        .route("/api/v3/images/simkl/:folder/*asset",get(images::get).options(images::options))
         .nest("/api", api)
         .route(
             "/api/v3/simkl/callback",

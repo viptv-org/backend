@@ -14,6 +14,7 @@ pub mod provider;
 mod secret_store;
 mod service_errors;
 mod source_http;
+mod images;
 mod simkl;
 mod stremio_import;
 pub mod util;
