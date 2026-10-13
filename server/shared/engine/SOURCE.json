@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/viptv-org/core",
-  "revision": "1c03990af6bd174634b7f7eb6603e8ba4553e2a2",
+  "revision": "eb61685491088c082c3ad99abbf88b798d1c41f5",
   "path": "crates/viptv-engine",
   "manifest_transform": "viptv-provider path ../../provider",
   "files": {
@@ -38,10 +38,10 @@
     "src/store/playback.rs": "7dc0a94c792ad9170b86833f7a7c1b617aaf06ab3b9567f4bda1d9fb15fd4e64",
     "src/store/preferences.rs": "8260137df3dce479d2b0a1b5cea747f68199986a4701562c86a3f9b57c6cc341",
     "src/store/profiles.rs": "e1eab89b47b3fe99b4a1b1945ea9f875b085d1e00e1af820f17162430132e621",
-    "src/stremio.rs": "caf545ff5500a606144b9f9cb0cdab2aa9711f5b295001344730009b501f0ae2",
+    "src/stremio.rs": "ca632d9e536f8e1bfa2b0e8df0787bf7355c1bb52130a5f921396ea8792b057e",
     "src/stremio/browse.rs": "a687039901fe8c364e838cac7c0319829b2090f11bbbedd6c8426e6f05f6a158",
     "src/stremio/manifest.rs": "16c1c65b47de05f0ae3cd4a696a3313bc300d74420f3425703b0bc6b154c6526",
-    "src/stremio/media.rs": "32c4f1ac90bc8e7cde66ac0da29797068a4223585e897612bf8ea02455ac1643",
+    "src/stremio/media.rs": "063a0085a781fa0234d677ea446c75f2d9b227fd336d5e853aad1078877b3f6c",
     "src/stremio/streams.rs": "2c46bc266a2adba5e3c03425f472a44d712550328fee0947c492aae54258fa6e",
     "src/stremio/subtitle_encoding.rs": "29db716fe3e105cc3400e7d2b977c1e880796f6953281740c215819845bb8a72",
     "src/stremio/subtitle_text.rs": "b8d3ab746a4e13503c228ac823eb77ca784552582e02e8a5b8f2d6dcc0098d09",
@@ -57,7 +57,7 @@
     "tests/profiles.rs": "feead51c69748b2fe9f0e5506c5044f587cc6c1add5e240ccc6ce7d796ce0ce2",
     "tests/simkl.rs": "8a8b839635a0500f90351434a13780340ceacb4641050c0732b58f483d49bb59",
     "tests/streams.rs": "2ad094b4ab05bcc68fa7390687fbd6b56d309c8788a478a5ff056d1ca4cd5269",
-    "tests/stremio.rs": "f251eaeb19546c734a6fb495beee3c8c95890ad663c00d838a9db1fdac794ce1",
+    "tests/stremio.rs": "1837d51877aabed1005ed06a8d86cd0383b6b16802ad57f0298c2ec7dec045b9",
     "tests/subtitles.rs": "8ec84003da01f4aa1c404971678c7d96796e9bf50b6547408f3409e52da20386",
     "tests/tv_metadata.rs": "23493a821536dcc50e7b64ece154eceec802771996e0fc7c566658c5baf12717"
   },

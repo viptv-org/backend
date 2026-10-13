@@ -104,8 +104,8 @@ async fn canonical_card(
         return Some(card);
     }
     let metadata = async {
-        for offset in (0..2400).step_by(24) {
-            let page = crate::engine_v3::catalog::DetailPage { offset };
+        for offset in (0..2400).step_by(128) {
+            let page = crate::engine_v3::catalog::DetailPage { offset,limit:Some(128) };
             let axum::Json(detail) = crate::engine_v3::catalog::detail(
                 State(app.clone()),
                 Extension(lease.clone()),

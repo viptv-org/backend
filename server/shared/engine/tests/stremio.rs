@@ -63,3 +63,13 @@ fn detail_season_index_uses_the_complete_verified_sorted_sequence_without_invent
  let second=detail(&body,"addon","series","parent",31).unwrap();assert_eq!(second.episodes[0].identity.id,"opaque-2-1");assert_eq!(second.episodes[23].identity.id,"opaque-2-24");assert_eq!(second.next_cursor.as_deref(),Some("55"));assert!(second.episodes.iter().all(|e|e.parent_identity.as_ref()==Some(&first.item.identity)));
  let terminal=detail(&body,"addon","series","parent",55).unwrap();assert_eq!(terminal.episodes.len(),7);assert!(terminal.next_cursor.is_none());let unknown=terminal.episodes.last().unwrap().identity.episode.as_ref().unwrap();assert_eq!(unknown.season,None);assert_eq!(unknown.episode,12);
 }
+
+#[test]
+fn large_title_detail_pages_have_bounded_limits_stable_season_offsets_and_exact_cursors(){
+ let videos=(1..=2).flat_map(|season|(1..=750).rev().map(move|episode|serde_json::json!({"id":format!("opaque-{season}-{episode}"),"title":"Episode","season":season,"episode":episode}))).collect::<Vec<_>>();let body=serde_json::json!({"meta":{"id":"large-parent","type":"series","name":"Large title","videos":videos}}).to_string();
+ let first=detail(&body,"addon","series","large-parent",0).unwrap();assert_eq!(first.episodes.len(),24);assert_eq!(first.next_cursor.as_deref(),Some("24"));
+ let wide=viptv_engine::stremio::detail_page(&body,"addon","series","large-parent",0,96).unwrap();assert_eq!(wide.episodes.len(),96);assert_eq!(wide.next_cursor.as_deref(),Some("96"));assert_eq!(wide.seasons.iter().map(|s|(s.season,s.offset,s.episode_count)).collect::<Vec<_>>(),vec![(Some(1),0,750),(Some(2),750,750)]);
+ let season=viptv_engine::stremio::detail_page(&body,"addon","series","large-parent",750,128).unwrap();assert_eq!(season.episodes.len(),128);assert_eq!(season.episodes[0].identity.id,"opaque-2-1");assert_eq!(season.next_cursor.as_deref(),Some("878"));
+ let terminal=viptv_engine::stremio::detail_page(&body,"addon","series","large-parent",1490,96).unwrap();assert_eq!(terminal.episodes.len(),10);assert!(terminal.next_cursor.is_none());assert!(viptv_engine::stremio::detail_page(&body,"addon","series","large-parent",1500,1).unwrap().episodes.is_empty());
+ for limit in [0,129,usize::MAX]{assert!(viptv_engine::stremio::detail_page(&body,"addon","series","large-parent",0,limit).is_err());}
+}

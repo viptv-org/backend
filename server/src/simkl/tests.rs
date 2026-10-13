@@ -143,3 +143,5 @@ mod history_clear;
 mod watchlists;
 
 mod episode_pages;
+
+mod large_episode_pages;

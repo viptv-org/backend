@@ -13,7 +13,17 @@ pub fn detail(
     id: &str,
     offset: usize,
 ) -> Result<DetailSnapshot, Error> {
-    if raw.len() > 2 * 1024 * 1024 || offset > 100_000 {
+    detail_page(raw, provider, kind, id, offset, 24)
+}
+pub fn detail_page(
+    raw: &str,
+    provider: &str,
+    kind: &str,
+    id: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<DetailSnapshot, Error> {
+    if raw.len() > 2 * 1024 * 1024 || offset > 100_000 || !(1..=128).contains(&limit) {
         return Err(Error::InvalidQuery);
     }
     let root: Value = serde_json::from_str(raw).map_err(|_| Error::InvalidQuery)?;
@@ -32,10 +42,10 @@ pub fn detail(
         .into_iter()
         .next()
         .ok_or(Error::Unresolved)?;
-    let all = episode_cards(meta,provider,&item)?;
-    let seasons=crate::presentation::episode_seasons(&all);
-    let next_cursor=(all.len()>offset+24).then(||(offset+24).to_string());
-    let episodes=all.into_iter().skip(offset).take(24).collect();
+    let all = episode_cards(meta, provider, &item)?;
+    let seasons = crate::presentation::episode_seasons(&all);
+    let next_cursor = (all.len() > offset + limit).then(|| (offset + limit).to_string());
+    let episodes = all.into_iter().skip(offset).take(limit).collect();
     Ok(DetailSnapshot {
         recommendations: recommendations(meta, provider, &item.identity.id)?,
         item,
@@ -46,9 +56,11 @@ pub fn detail(
 }
 
 /// Normalize the already-fetched complete episode document before paging.
-pub fn episode_cards(meta:&Value,provider:&str,item:&Card)->Result<Vec<Card>,Error>{
-    let all=meta["videos"].as_array().cloned().unwrap_or_default();
-    if all.len()>10000{return Err(Error::InvalidQuery);}
+pub fn episode_cards(meta: &Value, provider: &str, item: &Card) -> Result<Vec<Card>, Error> {
+    let all = meta["videos"].as_array().cloned().unwrap_or_default();
+    if all.len() > 10000 {
+        return Err(Error::InvalidQuery);
+    }
     let mut episodes = Vec::new();
     for video in all.iter() {
         let mut normalized = video.clone();
@@ -66,10 +78,23 @@ pub fn episode_cards(meta:&Value,provider:&str,item:&Card)->Result<Vec<Card>,Err
         .into_iter()
         .next()
         {
-            if let Some(episode)=video["episode"].as_u64(){
-                if episode==0 {continue;}
-                let season=if video["season"].is_null(){None}else{Some(u32::try_from(video["season"].as_u64().ok_or(Error::InvalidQuery)?).map_err(|_|Error::InvalidQuery)?)};
-                card.identity.episode=Some(EpisodeCoordinates{order:"aired".into(),season,episode:u32::try_from(episode).map_err(|_|Error::InvalidQuery)?});
+            if let Some(episode) = video["episode"].as_u64() {
+                if episode == 0 {
+                    continue;
+                }
+                let season = if video["season"].is_null() {
+                    None
+                } else {
+                    Some(
+                        u32::try_from(video["season"].as_u64().ok_or(Error::InvalidQuery)?)
+                            .map_err(|_| Error::InvalidQuery)?,
+                    )
+                };
+                card.identity.episode = Some(EpisodeCoordinates {
+                    order: "aired".into(),
+                    season,
+                    episode: u32::try_from(episode).map_err(|_| Error::InvalidQuery)?,
+                });
             }
             card.parent_identity = Some(item.identity.clone());
             episodes.push(card);
@@ -119,10 +144,13 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                 provider_id: provider.into(),
                 title,
                 subtitle: field(v, "releaseInfo", 256),
-                description: field(v, "description", 16_384).or_else(||field(v,"overview",16_384)),
+                description: field(v, "description", 16_384)
+                    .or_else(|| field(v, "overview", 16_384)),
                 poster: field(v, "poster", 4096),
                 landscape: field(v, "background", 4096),
-                logo: ["logo","clearlogo","clearLogo","titleLogo","title_logo"].into_iter().find_map(|key|field(v,key,4096)),
+                logo: ["logo", "clearlogo", "clearLogo", "titleLogo", "title_logo"]
+                    .into_iter()
+                    .find_map(|key| field(v, key, 4096)),
                 progress: None,
                 badges: vec![],
                 parent_identity: None,

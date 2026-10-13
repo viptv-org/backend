@@ -89,6 +89,7 @@ pub(crate) async fn search(
 pub(crate) struct Page {
     #[serde(default)]
     pub(crate) offset: usize,
+    pub(crate) limit:Option<usize>,
 }
 
 pub(super) async fn title(
@@ -159,7 +160,7 @@ pub(crate) async fn detail(
     Path((profile, category, id)): Path<(i64, String, u64)>,
     Query(q): Query<Page>,
 ) -> ApiResult {
-    if q.offset > 10_000 {
+    if q.offset > 10_000 || q.limit.is_some_and(|limit|!(1..=128).contains(&limit)) {
         return Err("Invalid episode offset".into());
     }
     let app = app.with_lease(lease);
@@ -192,8 +193,9 @@ pub(crate) async fn detail(
     )?;
     let all=viptv_engine::presentation::canonical_episodes(allowed(&app,all)?);
     let seasons=viptv_engine::presentation::episode_seasons(&all);
-    let next_cursor = (all.len() > q.offset + 24).then(|| (q.offset + 24).to_string());
-    let episodes = allowed(&app, all.into_iter().skip(q.offset).take(24).collect())?;
+    let limit=q.limit.unwrap_or(24);
+    let next_cursor = (all.len() > q.offset + limit).then(|| (q.offset + limit).to_string());
+    let episodes = allowed(&app, all.into_iter().skip(q.offset).take(limit).collect())?;
     let _ = tokio::time::timeout(
         Duration::from_secs(2),
         super::artwork::enrich(&app, &mut item),

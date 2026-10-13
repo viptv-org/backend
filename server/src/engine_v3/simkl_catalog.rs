@@ -60,6 +60,7 @@ pub(super) async fn detail(
     kind: String,
     id: String,
     offset: usize,
+    limit:Option<usize>,
 ) -> ApiResult {
     let parts: Vec<_> = id.split(':').collect();
     let ["simkl", category, title] = parts.as_slice() else {
@@ -72,7 +73,7 @@ pub(super) async fn detail(
         State(app),
         Extension(lease),
         Path((profile, category.to_string(), title)),
-        Query(crate::simkl::Page { offset }),
+        Query(crate::simkl::Page { offset,limit }),
     )
     .await?;
     if value["item"]["identity"]["kind"].as_str() != Some(kind.as_str()) {

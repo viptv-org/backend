@@ -76,6 +76,7 @@ async fn discover_one(
 pub(crate) struct DetailPage {
     #[serde(default)]
     pub(crate) offset: usize,
+    pub(crate) limit:Option<usize>,
 }
 
 pub(crate) async fn detail(
@@ -87,7 +88,7 @@ pub(crate) async fn detail(
     if id.is_empty()
         || id.len() > 512
         || !["movie", "series"].contains(&kind.as_str())
-        || page.offset > 100_000
+        || page.offset > 100_000 || page.limit.is_some_and(|limit|!(1..=128).contains(&limit))
     {
         return Err("Invalid metadata request".into());
     }
@@ -97,7 +98,7 @@ pub(crate) async fn detail(
     let (configuration, _) = configuration::read(&app, &lease, profile)?;
     if configuration.browsing_plugin == "simkl" {
         let result =
-            super::simkl_catalog::detail(app.clone(), lease.clone(), profile, kind, id, page.offset)
+            super::simkl_catalog::detail(app.clone(), lease.clone(), profile, kind, id, page.offset,page.limit)
                 .await?;
         configuration::validate_revision(&app, profile, configuration.scope.revision)?;
         super::source_integrations::cache_detail(&app,&lease,configuration.scope.revision,&result.0);
@@ -141,7 +142,7 @@ pub(crate) async fn detail(
     let videos=parent["videos"].as_array().cloned().unwrap_or_default().into_iter().map(|mut video|{video["type"]=json!("series");video}).collect();
     {let db=app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;app.require_media(&db)?;
     parent["videos"]=json!(kids::filter_items(&db,&app.identity(),videos)?);}
-    let mut projected=viptv_engine::stremio::detail(&json!({"meta":parent}).to_string(),"stremio",&kind,&id,page.offset).map_err(|_|ApiError::from("Invalid episode metadata"))?;
+    let mut projected=viptv_engine::stremio::detail_page(&json!({"meta":parent}).to_string(),"stremio",&kind,&id,page.offset,page.limit.unwrap_or(24)).map_err(|_|ApiError::from("Invalid episode metadata"))?;
     let seasons=projected.seasons;let episodes=projected.episodes;let next_cursor=projected.next_cursor;
     let recommendations=std::mem::take(&mut projected.recommendations);
     let mut recommendations=super::projection::allowed_cards(&app,recommendations)?;
