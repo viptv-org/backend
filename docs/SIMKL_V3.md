@@ -46,7 +46,7 @@ The server fixture suite verifies opaque Stremio persistence, server dates, 95% 
 
 ## Real-provider qualification (2026-10-13)
 
-`scripts/start-real-provider-qa.py` starts the isolated real-provider runtime on loopback ports 18185/18445 and prints its private run directory. Build the debug server first; use the recorded process IDs for cleanup.
+`scripts/start-real-provider-qa.py` starts the isolated real-provider runtime on loopback ports 18185/18445 and prints its private run directory. Build the debug server first; use the recorded process IDs for cleanup. The local `/qa/` page provides sign-in, profile selection, link status and the Simkl Connect action. Register its displayed callback (`https://viptv.local.test:18445/api/v3/simkl/callback`) in the Simkl application settings before user consent; do not replace a production callback just to run QA.
 
 An isolated server with a fresh database, keyring and owner profile returned real Simkl Home rows and movie/TV/anime detail over trusted local HTTPS. Ted Lasso (`simkl:tv:1359610`) returned 24 episode projections; the first episode resolved to 140 stream candidates from three existing configured Stremio addons. Only addon configuration was read from the old disposable QA database and re-registered through the authenticated API. No account/history or Simkl token was copied. The first PenguPlay source reached native direct-ready playback admission; an independent media probe confirmed H.264 1920×960 video, AAC audio and 1855.968 seconds. Native Kite rendering remains a separate acceptance step.
 

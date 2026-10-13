@@ -7,7 +7,7 @@ existing trusted local TLS certificates. This does not copy provider credentials
 link a Simkl user, start a gateway, or modify the original local environment.
 Stop the PIDs recorded in fixture.json and caddy.pid when finished.
 """
-import pathlib, os, json, base64, secrets, tempfile, subprocess, shlex, time
+import pathlib, os, json, base64, secrets, tempfile, subprocess, shlex, shutil
 import argparse, socket
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--workspace',type=pathlib.Path,default=pathlib.Path('/mnt/ALPH/code/viptv-org'))
@@ -35,6 +35,7 @@ log=open(d/'backend.log','w'); os.chmod(d/'backend.log',0o600)
 p=subprocess.Popen([str(bin)],env=env,stdout=log,stderr=log,start_new_session=True)
 config={'username':'qa-parent','password':password,'api_upstream':'http://127.0.0.1:18185','origin':'https://viptv.local.test:18445','database':str(d/'qa.sqlite'),'pid':p.pid}
 (d/'fixture.json').write_text(json.dumps(config)); (d/'fixture.json').chmod(0o600)
+shutil.copytree(pathlib.Path(__file__).parent/'real-provider-qa',d/'web')
 caddy=f'''{{
  admin off
  auto_https off
@@ -42,7 +43,15 @@ caddy=f'''{{
 https://viptv.local.test:18445 {{
  bind 127.0.0.1
  tls {root}/.local-https/certs/viptv.local.test.crt {root}/.local-https/certs/viptv.local.test.key
- reverse_proxy 127.0.0.1:18185
+ @landing path /
+ redir @landing /qa/ 302
+ handle_path /qa/* {{
+  root * {d}/web
+  file_server
+ }}
+ handle {{
+  reverse_proxy 127.0.0.1:18185
+ }}
 }}
 '''
 (d/'Caddyfile').write_text(caddy)

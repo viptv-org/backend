@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIPTV real-provider QA</title>
+<style>body{font:16px system-ui;background:#13171d;color:#e8edf2;max-width:640px;margin:8vh auto;padding:24px}h1{font-size:28px}label{display:block;margin:16px 0}input,select,button{font:inherit;padding:10px;border-radius:6px;border:1px solid #576574;background:#202934;color:inherit}input{display:block;width:calc(100% - 24px);margin-top:6px}button{cursor:pointer;background:#244f75}button:disabled{opacity:.5;cursor:default}code{overflow-wrap:anywhere}#status{white-space:pre-wrap;line-height:1.5}a{color:#93caff}</style>
+<h1>Real-provider QA</h1>
+<p>Connect Simkl to this disposable VIPTV profile. Public Home and title detail can work before linking; this configured Simkl application requires authorization for search.</p>
+<p>Register this exact OAuth redirect URI in the Simkl application's settings before connecting:</p>
+<p><code id="callback"></code></p>
+<form id="login"><label>Local QA username<input name="username" autocomplete="username" required value="qa-parent"></label><label>Local QA password<input name="password" type="password" autocomplete="current-password" required></label><button>Sign in</button></form>
+<section id="account" hidden><label>Profile <select id="profiles"></select></label><button id="select">Use profile</button> <button id="connect" disabled>Connect Simkl</button> <button id="refresh">Refresh status</button></section>
+<p id="status" role="status">Sign in with the credentials in the private runtime fixture file.</p>
+<script>
+let csrf='', profile='';
+const status=document.getElementById('status'), account=document.getElementById('account'), login=document.getElementById('login'), profiles=document.getElementById('profiles'), connect=document.getElementById('connect');
+document.getElementById('callback').textContent=location.origin+'/api/v3/simkl/callback';
+async function api(path,body){const r=await fetch('/api'+path,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:body===undefined?{}:{'Content-Type':'application/json','x-csrf-token':csrf},body:body===undefined?undefined:JSON.stringify(body)});const v=await r.json();if(!r.ok)throw Error(v.error||v.error_code||'Request failed');return v;}
+async function ready(){const session=await api('/auth/status');csrf=session.csrf_token||csrf;const list=await api('/profiles');profiles.replaceChildren(...list.map(p=>{const o=document.createElement('option');o.value=p.id;o.textContent=p.name;return o}));account.hidden=false;login.hidden=true;status.textContent='Select the disposable profile to continue.';}
+async function refresh(){if(!profile)return;const v=await api('/v3/profiles/'+encodeURIComponent(profile)+'/simkl');status.textContent=v.linked?'Simkl is linked to this profile. Real search can now use the encrypted profile authorization.':v.configured?'Simkl application configured. This profile is not linked.':'Simkl application is not configured.';connect.disabled=!v.configured;}
+function report(error){status.textContent=error.message;}
+login.addEventListener('submit',async e=>{e.preventDefault();try{const f=new FormData(login);const v=await api('/auth/login',{username:f.get('username'),password:f.get('password')});csrf=v.csrf_token;login.elements.password.value='';await ready();}catch(error){report(error)}});
+document.getElementById('select').onclick=async()=>{try{await api('/auth/profile',{profile_id:profiles.value});profile=profiles.value;await refresh();}catch(error){report(error)}};
+document.getElementById('refresh').onclick=()=>refresh().catch(report);
+connect.onclick=async()=>{try{connect.disabled=true;const v=await api('/v3/profiles/'+encodeURIComponent(profile)+'/simkl/authorize',{});const url=new URL(v.authorization_url);if(url.origin!=='https://simkl.com')throw Error('Unexpected authorization destination');location.assign(url.href);}catch(error){report(error);connect.disabled=false}};
+ready().catch(()=>{});
+</script></html>
