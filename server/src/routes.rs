@@ -14,6 +14,12 @@ pub fn router_with_tv(
 ) -> Router {
     let api = Router::new()
         .route("/v3/bootstrap", get(engine_v3::bootstrap))
+        .route("/v3/profiles",get(engine_v3::profiles::list).post(engine_v3::profiles::create))
+        .route("/v3/profiles/:id",axum::routing::patch(engine_v3::profiles::update).delete(delete_profile_authenticated))
+        .route("/v3/profiles/:id/pin",get(engine_v3::profiles::pin_status).put(engine_v3::profiles::unsupported_pin))
+        .route("/v3/parent/status",get(kids::status))
+        .route("/v3/parent/unlock",post(kids::unlock))
+        .route("/v3/parent/pin",axum::routing::put(kids::set_pin))
         .route(
             "/v3/profiles/:id/integrations",
             get(engine_v3::configuration::get).put(engine_v3::configuration::update),

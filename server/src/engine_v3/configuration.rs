@@ -86,7 +86,7 @@ pub(crate) fn read(
         )
         .optional()
         .map_err(db_error)?;
-    let configuration = if let Some(value) = stored {
+    let mut configuration:ProfileConfiguration = if let Some(value) = stored {
         serde_json::from_str(&value)
             .map_err(|_| ApiError::from("Profile configuration unavailable"))?
     } else {
@@ -114,6 +114,8 @@ pub(crate) fn read(
                 .collect(),
         }
     };
+    configuration.name=db.query_row("SELECT name FROM profiles WHERE id=?1",[profile],|r|r.get(0)).map_err(db_error)?;
+    configuration.avatar_id=super::profiles::avatar(&db,profile)?;
     Ok((configuration, connections))
 }
 

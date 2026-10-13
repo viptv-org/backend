@@ -257,6 +257,7 @@ impl App {
         continuation::init(&db).map_err(|_| "Viewing queue migration failed")?;
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
+        engine_v3::profiles::init(&db).map_err(|_| "Profile presentation initialization failed")?;
         engine_v3::configuration::init(&db).map_err(|_| "Engine configuration initialization failed")?;
         engine_v3::history::init(&db).map_err(|_| "Library revision initialization failed")?;
         simkl::init(&db).map_err(|_| "Simkl schema initialization failed")?;

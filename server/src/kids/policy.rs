@@ -109,7 +109,9 @@ fn decide_request(
         app.request_lease().validate(&db)?;
         let p = app.identity();
         match parts.as_slice() {
-            ["parent", ..] => return Ok(PolicyDecision::Pass),
+            ["parent", ..] | ["v3","parent",..] => return Ok(PolicyDecision::Pass),
+            ["v3","bootstrap"] if method==axum::http::Method::GET => return Ok(PolicyDecision::Pass),
+            ["v3","profiles"] | ["v3","profiles",_] | ["v3","profiles",_,"pin"] => return Ok(PolicyDecision::Pass),
             ["v3", "calendar" | "discovery-controls"] if method == axum::http::Method::GET => return Ok(PolicyDecision::Pass),
             ["v3", "profiles", _, "library"]
                 if method == axum::http::Method::GET || method == axum::http::Method::PUT =>

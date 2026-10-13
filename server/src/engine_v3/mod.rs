@@ -14,6 +14,9 @@ pub(crate) mod library;
 #[cfg(test)]
 mod library_tests;
 mod projection;
+pub(crate) mod profiles;
+#[cfg(test)]
+mod profile_tests;
 mod simkl_catalog;
 pub(crate) mod subtitles;
 pub(crate) use catalog::{detail, discover};
@@ -63,9 +66,8 @@ pub(crate) async fn bootstrap(
             integrations.push(simkl);
         }
     }
-    Ok(axum::Json(
-        json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial}),
-    ))
+    let axum::Json(management)=profiles::list(State(app),Extension(lease)).await?;
+    Ok(axum::Json(json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management})))
 }
 
 pub(crate) async fn home(
