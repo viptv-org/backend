@@ -146,7 +146,7 @@ impl App {
                     input.file_index
                 ]);
             }
-            if source.starts_with("addon:") || source.starts_with("iptv:") {
+            if source.starts_with("addon:") || source.starts_with("iptv:") || source.starts_with("vsources:") {
                 public["source_addon_id"] = json!(source);
             }
             public["source_fingerprint"] = json!(format!(
@@ -230,6 +230,7 @@ pub(crate) fn source_configuration(
             let (route,join)=if provider::egress::table_exists(db).map_err(ApiError::from)? {("COALESCE(r.warp,0)","LEFT JOIN provider_routes r ON r.provider_id=p.id")}else{("0","")};
             db.query_row(&format!("SELECT json_array(p.url,p.username,p.password,p.enabled,p.enable_live,p.enable_movies,p.enable_series,{route},o.account_id,p.credentials_version,c.account_id,c.secret) FROM providers p {join} LEFT JOIN provider_ownership o ON o.provider_id=p.id LEFT JOIN provider_credentials_v2 c ON c.provider_id=p.id WHERE p.id=?1"),[id],|row|row.get(0)).optional().map_err(db_error)?
         },
+        "vsources"=>db.query_row("SELECT json_array(s.account_id,s.profile_id,s.revision,s.enabled,s.secret,p.revision,p.value) FROM engine_source_integrations s LEFT JOIN engine_profile_configuration p ON p.profile_id=s.profile_id WHERE s.id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
         "addon"=>db.query_row("SELECT json_array(manifest_url,enabled,account_id,credentials_version,credentials_revision) FROM addons WHERE id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
         _=>None,
     };
@@ -345,6 +346,9 @@ fn source_card(
         .filter(|text| !text.is_empty())
         .unwrap_or(source);
     let mut card = json!({"id":id,"source":source,"name":clean(name,256),"title":clean(title,1024),"description":description,"audio_language_status":"unknown"});
+    if let Some(height)=raw["quality_height"].as_u64().filter(|h|(144..=4320).contains(h)){card["quality_height"]=json!(height);}
+    let audio=raw["audio_languages"].as_array().map(|languages|languages.iter().take(16).filter_map(|v|v.as_str().filter(|tag|viptv_engine::preferences::language_tag(tag))).collect::<Vec<_>>()).unwrap_or_default();
+    if !audio.is_empty(){card["audio_languages"]=json!(audio);}
     if let Some(filename) = raw
         .pointer("/behaviorHints/filename")
         .and_then(Value::as_str)

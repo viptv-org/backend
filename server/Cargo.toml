@@ -6,6 +6,10 @@ edition = "2021"
 license = "GPL-2.0-only"
 rust-version = "1.90"
 
+[features]
+default = []
+vsources-runtime = ["viptv-engine/vsources-runtime"]
+
 [dependencies]
 viptv-engine = { path = "shared/engine", features = ["runtime"] }
 service-telemetry = { path = "shared/service-telemetry" }

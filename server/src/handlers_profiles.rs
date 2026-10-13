@@ -200,7 +200,7 @@ pub(crate) async fn save_favorite(
     let name = text(&v, "name", 512)?;
     let db = a.db.lock().unwrap();
     a.require_profile(&db, profile)?;
-    db.execute("INSERT INTO favorites(profile_id,id,type,name,poster) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster",params![profile,id,kind,name,v["poster"].as_str()]).map_err(db_error)?;
+    db.execute("INSERT INTO favorites(profile_id,id,type,name,poster,added_at_millis) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster",params![profile,id,kind,name,v["poster"].as_str(),util::now_millis()]).map_err(db_error)?;
     Ok(axum::Json(json!({"ok":true})))
     }).await
 }

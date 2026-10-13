@@ -26,6 +26,7 @@ pub(super) fn card(item: &Value) -> Option<Card> {
     saved.title = item["name"].as_str().unwrap_or(&saved.title).to_owned();
     saved.poster = item["poster"].as_str().map(str::to_owned);
     saved.progress = None;
+    saved.added_at_millis=item["added_at_millis"].as_u64();
     Some(saved)
 }
 pub(super) fn cards(
@@ -58,8 +59,8 @@ pub(crate) async fn list(
         let limit = page.limit.unwrap_or(40).clamp(1, 100);
         let allowed = kids::sql_allowed("favorites.type", "favorites.id", "?1");
         let total: u64 = db.query_row(&format!("SELECT count(*) FROM favorites WHERE profile_id=?1 AND type IN ('movie','series') AND {allowed}"), [profile], |r|r.get(0)).map_err(db_error)?;
-        let mut query = db.prepare(&format!("SELECT id,type,name,poster,context FROM favorites WHERE profile_id=?1 AND type IN ('movie','series') AND {allowed} ORDER BY name COLLATE NOCASE,type,id LIMIT ?2 OFFSET ?3")).map_err(db_error)?;
-        let items = query.query_map(params![profile,limit,page.offset], |r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"engine_favorite":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
+        let mut query = db.prepare(&format!("SELECT id,type,name,poster,context,added_at_millis FROM favorites WHERE profile_id=?1 AND type IN ('movie','series') AND {allowed} ORDER BY added_at_millis DESC,name COLLATE NOCASE,type,id LIMIT ?2 OFFSET ?3")).map_err(db_error)?;
+        let items = query.query_map(params![profile,limit,page.offset], |r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"added_at_millis":r.get::<_,Option<u64>>(5)?,"engine_favorite":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
         let cards = cards(&db, &app.identity(), items)?;
         let next = u64::from(page.offset) + u64::from(limit);
         let page = CatalogPage {cards, next_cursor:(next < total).then(||next.to_string()), complete:next >= total};
@@ -80,13 +81,14 @@ pub(crate) async fn save(
         kids::require_item(&db, &app.identity(), &input.card.identity.kind, &input.card.identity.id)?;
         let mut card = input.card;
         card.progress = None;
+        card.added_at_millis=None;
         if kids::restricted(&db, &app.identity())? {
             // Restricted profiles persist only authoritative approved metadata.
             let item = json!({"type":card.identity.kind,"id":card.identity.id});
             let approved = kids::filter_items(&db, &app.identity(), vec![item])?;
             card = approved.first().and_then(|item| projection::card(item, "library")).ok_or_else(auth::forbidden)?;
         }
-        db.execute("INSERT INTO favorites(profile_id,id,type,name,poster,context) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster,context=excluded.context",params![profile,card.identity.id,card.identity.kind,card.title,card.poster,serde_json::to_string(&card).map_err(|_|ApiError::from("Invalid library card"))?]).map_err(db_error)?;
+        db.execute("INSERT INTO favorites(profile_id,id,type,name,poster,context,added_at_millis) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster,context=excluded.context",params![profile,card.identity.id,card.identity.kind,card.title,card.poster,serde_json::to_string(&card).map_err(|_|ApiError::from("Invalid library card"))?,util::now_millis()]).map_err(db_error)?;
         Ok(axum::Json(json!({"ok":true,"saved":true})))
     }).await
 }

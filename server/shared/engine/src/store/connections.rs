@@ -85,7 +85,12 @@ impl Store {
             revision: 0,
         };
         let mut profile = self.profile(&scope)?.ok_or(Error::Forbidden)?;
-        if connection.account_id != "local" {
+        if connection.account_id != "local"
+            || connection
+                .private_profile_id
+                .as_deref()
+                .is_some_and(|id| id != profile_id)
+        {
             return Err(Error::Forbidden);
         }
         if profile
@@ -124,8 +129,10 @@ impl Store {
         connection: &IntegrationConnection,
     ) -> Result<(), Error> {
         if connection.account_id != "local"
-            || !connection.id.starts_with("addon:")
-            || connection.plugin_id != "stremio"
+            || !((connection.id.starts_with("addon:") && connection.plugin_id == "stremio")
+                || (connection.id.starts_with("vsources:")
+                    && connection.plugin_id == "vsources"
+                    && connection.private_profile_id.as_deref() == Some(profile_id)))
         {
             return Err(Error::InvalidQuery);
         }
@@ -159,6 +166,68 @@ impl Store {
         )
         .map_err(|_| Error::Storage)?;
         tx.execute("UPDATE engine_profiles SET revision=?2,value=?3 WHERE connection='local' AND account='local' AND profile=?1",params![profile_id,profile.scope.revision,serde_json::to_string(&profile).map_err(|_|Error::Storage)?]).map_err(|_|Error::Storage)?;
+        tx.commit().map_err(|_| Error::Storage)
+    }
+}
+
+impl Store {
+    /// Replace profile-private source credentials without exposing vault data or losing assignments.
+    pub fn replace_source_connection(
+        &mut self,
+        profile_id: &str,
+        expected: u64,
+        connection: &IntegrationConnection,
+    ) -> Result<(), Error> {
+        let existing = self
+            .connections("local")?
+            .into_iter()
+            .find(|c| c.id == connection.id)
+            .ok_or(Error::Forbidden)?;
+        if existing.plugin_id != "vsources"
+            || connection.plugin_id != "vsources"
+            || existing.private_profile_id.as_deref() != Some(profile_id)
+            || connection.private_profile_id != existing.private_profile_id
+            || connection.account_id != "local"
+            || connection.revision != existing.revision.checked_add(1).ok_or(Error::Conflict)?
+        {
+            return Err(Error::Forbidden);
+        }
+        let scope = Scope {
+            connection_id: "local".into(),
+            account_id: "local".into(),
+            profile_id: profile_id.into(),
+            revision: expected,
+        };
+        let mut profile = self.profile(&scope)?.ok_or(Error::Forbidden)?;
+        if profile.scope.revision != expected {
+            return Err(Error::Conflict);
+        }
+        profile.scope.revision = expected.checked_add(1).ok_or(Error::Conflict)?;
+        if let Some(assignment) = profile
+            .assignments
+            .iter_mut()
+            .find(|a| a.connection_id == connection.id)
+        {
+            assignment.enabled = connection.capabilities.clone();
+        } else {
+            profile.assignments.push(ProfileAssignment {
+                connection_id: connection.id.clone(),
+                enabled: connection.capabilities.clone(),
+            });
+        }
+        let tx = self.db.transaction().map_err(|_| Error::Storage)?;
+        let updated=tx.execute("UPDATE engine_profiles SET revision=?4,value=?5 WHERE connection=?1 AND account=?2 AND profile=?3 AND revision=?6",params![scope.connection_id,scope.account_id,scope.profile_id,profile.scope.revision,serde_json::to_string(&profile).map_err(|_|Error::Storage)?,expected]).map_err(|_|Error::Storage)?;
+        if updated != 1 {
+            return Err(Error::Conflict);
+        }
+        tx.execute(
+            "UPDATE engine_connections SET value=?2 WHERE id=?1 AND account='local'",
+            params![
+                connection.id,
+                serde_json::to_string(connection).map_err(|_| Error::Storage)?
+            ],
+        )
+        .map_err(|_| Error::Storage)?;
         tx.commit().map_err(|_| Error::Storage)
     }
 }

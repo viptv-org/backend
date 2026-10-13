@@ -106,6 +106,12 @@ pub(crate) async fn poll(
     let mut response = axum::Json(json!({"events":state.events.iter().skip(query.after).cloned().collect::<Vec<_>>(),"done":state.pending==0}));
     if let Some(events) = response.0["events"].as_array_mut() {
         for event in events {
+            if let Some(id)=event["source"].as_str().and_then(|s|s.strip_prefix("vsources:")).and_then(|id|id.parse::<i64>().ok()) {
+                let current=crate::sources::source_configuration(&db,&format!("vsources:{id}"))?;
+                let grants=app.streams.lock().unwrap();
+                let stale=event["streams"].as_array().is_some_and(|cards|cards.iter().any(|card|card["id"].as_str().and_then(|id|grants.get(id)).is_none_or(|grant|grant.configuration!=current)));
+                if stale || !crate::engine_v3::source_integrations::available_db(&db,&app.request_lease(),id){*event=json!({"seq":event["seq"],"source":"vsources","streams":[],"error_code":"source_not_found"});}
+            }
             if let Some(id)=event["source"].as_str().and_then(|s|s.strip_prefix("addon:")).and_then(|id|id.parse::<i64>().ok()) {
                 if !addon::Addons::available(&db,app.identity().account_id().unwrap_or(0),id) {
                     *event=json!({"seq":event["seq"],"source":"addon","streams":[],"error":account_api::description("source_not_found"),"error_code":"source_not_found"});
@@ -258,3 +264,15 @@ pub(crate) async fn live_source(
 #[cfg(test)]
 #[path="discovery_wait_tests.rs"]
 mod wait_tests;
+
+/// Cancelling work preserves published grants for early source selection.
+pub(crate) async fn cancel(State(app):State<App>,Extension(lease):Extension<ResourceLease>,Path(id):Path<String>)->Result<axum::Json<Value>,Error>{
+ let app=scoped(app,lease.clone()).await?;
+ blocking(move||{
+  app.check_resource(&app.identity(),"job",&id)?;let job=job(&app,&id)?;
+  if let Some((profile,revision))=job.configuration_revision {crate::engine_v3::configuration::validate_revision(&app,profile,revision)?;}
+  let db=app.db.lock().unwrap();lease.validate(&db)?;app.require_media(&db)?;
+  job.cancelled.store(true,std::sync::atomic::Ordering::Release);job.state.lock().unwrap().pending=0;drop(db);job.notify.notify_waiters();
+  Ok(axum::Json(json!({"id":id,"done":true,"cancelled":true})))
+ }).await.map_err(boundary)
+}

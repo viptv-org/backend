@@ -9,6 +9,7 @@ mod connections;
 mod library;
 mod playback;
 mod profiles;
+mod preferences;
 
 impl Store {
     pub fn open(path: &std::path::Path) -> Result<Self, Error> {
@@ -28,6 +29,8 @@ impl Store {
           CREATE TABLE IF NOT EXISTS engine_library_revisions(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(connection,account,profile), FOREIGN KEY(connection,account,profile) REFERENCES engine_profiles(connection,account,profile) ON DELETE CASCADE);
           CREATE TABLE IF NOT EXISTS engine_profile_locks(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, pin_hash TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0, blocked_until INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(connection,account,profile));
           CREATE INDEX IF NOT EXISTS engine_playback_recent ON engine_playback(connection,account,profile,updated_at_millis DESC);").map_err(|_| Error::Storage)?;
+        let has_added:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('engine_favorites') WHERE name='added_at_millis')",[],|r|r.get(0)).map_err(|_|Error::Storage)?;
+        if !has_added{db.execute_batch("ALTER TABLE engine_favorites ADD COLUMN added_at_millis INTEGER").map_err(|_|Error::Storage)?;}
         Ok(Self { db })
     }
     pub fn profile(&self, scope: &Scope) -> Result<Option<ProfileConfiguration>, Error> {

@@ -29,8 +29,8 @@ pub(super) async fn load(
             queue["items"].as_array().cloned().unwrap_or_default()
         )?);
         let allowed = kids::sql_allowed("favorites.type", "favorites.id", "?1");
-        let mut q=db.prepare(&format!("SELECT id,type,name,poster,context FROM favorites WHERE profile_id=?1 AND {allowed} ORDER BY rowid DESC LIMIT 12")).map_err(db_error)?;
-        let favorites=q.query_map([profile],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"engine_favorite":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
+        let mut q=db.prepare(&format!("SELECT id,type,name,poster,context,added_at_millis FROM favorites WHERE profile_id=?1 AND {allowed} ORDER BY added_at_millis DESC,name COLLATE NOCASE,type,id LIMIT 12")).map_err(db_error)?;
+        let favorites=q.query_map([profile],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"added_at_millis":r.get::<_,Option<u64>>(5)?,"engine_favorite":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
         (
             queue,
             super::library::cards(&db, &app.identity(), favorites)?,

@@ -10,7 +10,9 @@ impl Addons {
         &self,
         account_id: i64,
     ) -> Result<Vec<IntegrationConnection>, String> {
-        self.entries()?
+        let mut descriptors=self.clone();
+        descriptors.engine_ids=None;
+        descriptors.entries()?
             .into_iter()
             .map(|(id, _, manifest)| {
                 let names: Vec<_> = manifest["resources"]

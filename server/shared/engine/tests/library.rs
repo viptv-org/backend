@@ -26,6 +26,7 @@ fn favorites_reopen_page_and_preserve_provider_identity_with_revision_and_profil
         .save_favorite(&a.scope, &card("opaque:a", "Alpha"))
         .unwrap();
     assert_eq!(store.library_revision(&a.scope).unwrap(), 1);
+    std::thread::sleep(std::time::Duration::from_millis(2));
     store
         .save_favorite(&a.scope, &card("opaque:b", "Beta"))
         .unwrap();
@@ -33,7 +34,7 @@ fn favorites_reopen_page_and_preserve_provider_identity_with_revision_and_profil
         .save_favorite(&b.scope, &card("opaque:b", "Bob title"))
         .unwrap();
     let page = store.favorites(&a.scope, 0, 1).unwrap();
-    assert_eq!(page.cards[0].identity, card("opaque:a", "Alpha").identity);
+    assert_eq!(page.cards[0].identity, card("opaque:b", "Beta").identity);
     assert_eq!(page.cards[0].provider_id, "stremio");
     assert!(page.cards[0].progress.is_none());
     assert!(page.cards[0].poster.is_none());
@@ -80,7 +81,7 @@ fn favorites_reopen_page_and_preserve_provider_identity_with_revision_and_profil
     let mut store = Store::open(&path).unwrap();
     assert_eq!(
         store.favorites(&a.scope, 1, 1).unwrap().cards[0].title,
-        "Beta"
+        "Alpha"
     );
     store
         .remove_favorite(&a.scope, "movie", "opaque:a")
@@ -100,4 +101,11 @@ fn favorites_reopen_page_and_preserve_provider_identity_with_revision_and_profil
     assert_eq!(store.library_revision(&a.scope).unwrap(), 0);
     drop(store);
     std::fs::remove_file(path).unwrap();
+}
+#[test]
+fn legacy_unknown_added_dates_stay_unknown_and_new_upserts_preserve_first_add(){
+ let path=std::env::temp_dir().join(format!("viptv-library-dates-{}.sqlite",std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));let mut store=Store::open(&path).unwrap();let profile=ProfileConfiguration::local("local".into(),"alice".into(),"Alice".into());store.save_profile(&profile,None).unwrap();drop(store);
+ let db=rusqlite::Connection::open(&path).unwrap();db.execute_batch("ALTER TABLE engine_favorites DROP COLUMN added_at_millis").unwrap();db.execute("INSERT INTO engine_favorites VALUES('local','local','alice','movie','legacy','Legacy',?1)",[serde_json::to_string(&card("legacy","Legacy")).unwrap()]).unwrap();drop(db);
+ let mut store=Store::open(&path).unwrap();assert_eq!(store.favorites(&profile.scope,0,10).unwrap().cards[0].added_at_millis,None);store.save_favorite(&profile.scope,&card("legacy","Updated legacy")).unwrap();assert_eq!(store.favorites(&profile.scope,0,10).unwrap().cards[0].added_at_millis,None);
+ let mut incoming=card("new","New");incoming.added_at_millis=Some(1);store.save_favorite(&profile.scope,&incoming).unwrap();let first=store.favorites(&profile.scope,0,10).unwrap();assert_eq!(first.cards[0].identity.id,"new");let timestamp=first.cards[0].added_at_millis.unwrap();assert!(timestamp>1);store.save_favorite(&profile.scope,&card("new","Updated")).unwrap();assert_eq!(store.favorites(&profile.scope,0,10).unwrap().cards[0].added_at_millis,Some(timestamp));drop(store);std::fs::remove_file(path).unwrap();
 }

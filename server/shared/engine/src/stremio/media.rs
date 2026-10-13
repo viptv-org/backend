@@ -118,6 +118,7 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                 progress: None,
                 badges: vec![],
                 parent_identity: None,
+                added_at_millis:None,
             })
         })
         .take(24)

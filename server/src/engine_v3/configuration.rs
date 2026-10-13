@@ -78,6 +78,7 @@ pub(crate) fn read(
     if app.simkl.configured() && app.secret_vault.is_some() {
         connections.extend(crate::simkl::connections(&db, account, profile)?);
     }
+    connections.extend(super::source_integrations::connections(&db,account,profile)?);
     let stored: Option<String> = db
         .query_row(
             "SELECT value FROM engine_profile_configuration WHERE profile_id=?1 AND account_id=?2",

@@ -6,6 +6,7 @@ license = "GPL-2.0-only"
 
 [features]
 default = []
+vsources-runtime = ["runtime", "dep:vsources", "dep:async-trait", "dep:reqwest"]
 runtime = ["dep:tokio", "dep:rusqlite", "dep:futures", "dep:argon2"]
 
 [dependencies]
@@ -16,10 +17,14 @@ url = "2"
 facet = "=0.46.5"
 thiserror = "2"
 viptv-provider = { path = "../../provider", features = ["discovery"] }
-tokio = { version = "1", features = ["time", "rt", "sync", "macros"], optional = true }
+tokio = { version = "1", features = ["time", "rt", "sync", "macros", "net"], optional = true }
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 futures = { version = "0.3", optional = true }
 
+vsources = { git = "https://github.com/vynxc/vsources.git", rev = "81388c46685391f97d24ad06034e3d07002bc444", default-features = false, optional = true }
+async-trait = { version = "0.1", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"], optional = true }
+
 [dev-dependencies]
-tokio = { version = "1", features = ["time", "rt", "sync", "macros", "test-util"] }
+tokio = { version = "1", features = ["time", "rt", "sync", "macros", "net", "test-util"] }
 

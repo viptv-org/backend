@@ -20,12 +20,18 @@ pub struct SourceCandidate {
     pub provider_id: String,
     pub label: String,
     pub detail: Option<String>,
+    #[serde(default)]
+    pub quality_height:Option<u32>,
+    #[serde(default)]
+    pub audio_languages:Vec<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PlayableSource {
     pub label: String,
     pub detail: Option<String>,
+    pub quality_height:Option<u32>,
+    pub audio_languages:Vec<String>,
     pub url: String,
     pub headers: Vec<(String, String)>,
 }
@@ -86,6 +92,8 @@ pub fn read_streams(raw: &str) -> Result<Vec<PlayableSource>, Error> {
                 detail: text(source, "description", 1000),
                 url: parsed.into(),
                 headers,
+                quality_height:source["quality_height"].as_u64().and_then(|h|u32::try_from(h).ok()).filter(|h|(144..=4320).contains(h)),
+                audio_languages:source["audio_languages"].as_array().map(|languages|languages.iter().take(16).filter_map(|v|v.as_str().filter(|s|crate::preferences::language_tag(s)).map(str::to_owned)).collect()).unwrap_or_default(),
             })
         })
         .take(80)

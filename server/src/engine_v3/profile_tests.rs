@@ -203,3 +203,8 @@ async fn restricted_profile_management_uses_existing_account_parent_grant() {
         StatusCode::BAD_REQUEST
     );
 }
+#[tokio::test]
+async fn profile_preferences_are_private_independently_versioned_and_reject_stale_edits(){
+ let app=fixture();let(status,defaults)=request(&app,"member-token-1","GET","/api/v3/profiles/1/preferences",Value::Null).await;assert_eq!(status,StatusCode::OK);assert_eq!(defaults["revision"],0);let mut prefs=defaults["preferences"].clone();prefs["preferred_audio_language"]=json!("en-US");prefs["max_quality_height"]=json!(1080);
+ let(status,saved)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/preferences",json!({"revision":0,"preferences":prefs})).await;assert_eq!(status,StatusCode::OK);assert_eq!(saved["revision"],1);assert_eq!(request(&app,"member-token-1","PUT","/api/v3/profiles/1/preferences",json!({"revision":0,"preferences":prefs})).await.0,StatusCode::CONFLICT);assert_eq!(request(&app,"member-token-2","GET","/api/v3/profiles/1/preferences",Value::Null).await.0,StatusCode::FORBIDDEN);
+}

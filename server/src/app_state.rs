@@ -121,6 +121,7 @@ pub struct App {
     pub(crate) simkl: Arc<simkl::Service>,
     pub(crate) stremio_import: Arc<stremio_import::Service>,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
+    pub(crate) verified_cards: Arc<Mutex<HashMap<(String,u64,String,String),viptv_engine::presentation::Card>>>,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
     // Request-local identity travels with discovery producers; ownership is never upstream-authored.
     pub(crate) principal: Option<auth::Principal>,
@@ -215,6 +216,8 @@ pub(crate) struct ExactVod {
     pub(crate) episode: Option<u32>,
 }
 pub(crate) struct Job {
+    pub(crate) cancelled: std::sync::atomic::AtomicBool,
+    pub(crate) configuration_revision: Option<(i64,u64)>,
     pub(crate) media_id: Option<String>,
     pub(crate) exact_vod: Option<ExactVod>,
     // Validated original API request kind, never an upstream stream field.
@@ -257,6 +260,8 @@ impl App {
         continuation::init(&db).map_err(|_| "Viewing queue migration failed")?;
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
+        engine_v3::source_integrations::init(&db).map_err(|_| "Source integration initialization failed")?;
+        engine_v3::preferences::init(&db).map_err(|_| "Profile preferences initialization failed")?;
         engine_v3::profiles::init(&db).map_err(|_| "Profile presentation initialization failed")?;
         engine_v3::configuration::init(&db).map_err(|_| "Engine configuration initialization failed")?;
         engine_v3::history::init(&db).map_err(|_| "Library revision initialization failed")?;
@@ -288,6 +293,7 @@ impl App {
             simkl,
             stremio_import,
             jobs: Default::default(),
+            verified_cards: Default::default(),
             streams: Default::default(),
             principal: None,
             resource_owners: Default::default(),

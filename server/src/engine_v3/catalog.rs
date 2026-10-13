@@ -74,7 +74,7 @@ async fn discover_one(
 #[derive(Default, Deserialize)]
 pub(crate) struct DetailPage {
     #[serde(default)]
-    offset: usize,
+    pub(crate) offset: usize,
 }
 
 pub(crate) async fn detail(
@@ -96,9 +96,10 @@ pub(crate) async fn detail(
     let (configuration, _) = configuration::read(&app, &lease, profile)?;
     if configuration.browsing_plugin == "simkl" {
         let result =
-            super::simkl_catalog::detail(app.clone(), lease, profile, kind, id, page.offset)
+            super::simkl_catalog::detail(app.clone(), lease.clone(), profile, kind, id, page.offset)
                 .await?;
         configuration::validate_revision(&app, profile, configuration.scope.revision)?;
+        super::source_integrations::cache_detail(&app,&lease,configuration.scope.revision,&result.0);
         return Ok(result);
     }
     let (app, revision) = configuration::apply(
@@ -155,12 +156,7 @@ pub(crate) async fn detail(
         .collect();
     let mut episodes = projection::cards(&app, videos, "stremio")?;
     for episode in &mut episodes { episode.parent_identity = Some(item.identity.clone()); }
-    Ok(axum::Json(
-        serde_json::to_value(DetailSnapshot {
-            item,
-            episodes,
-            next_cursor,
-        })
-        .map_err(|_| ApiError::from("Title unavailable"))?,
-    ))
+    let value=serde_json::to_value(DetailSnapshot{item,episodes,next_cursor}).map_err(|_|ApiError::from("Title unavailable"))?;
+    super::source_integrations::cache_detail(&app,&lease,revision,&value);
+    Ok(axum::Json(value))
 }

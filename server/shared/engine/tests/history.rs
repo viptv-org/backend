@@ -21,6 +21,7 @@ fn card() -> Card {
         progress: None,
         badges: vec![],
         parent_identity: None,
+        added_at_millis:None,
     }
 }
 

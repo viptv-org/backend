@@ -13,6 +13,9 @@ pub fn router_with_tv(
     tv_dashboard: Option<std::path::PathBuf>,
 ) -> Router {
     let api = Router::new()
+        .route("/v3/profiles/:id/source-integrations",get(engine_v3::source_integrations::schemas).put(engine_v3::source_integrations::configure))
+        .route("/v3/profiles/:id/source-integrations/:connection",delete(engine_v3::source_integrations::remove))
+        .route("/v3/profiles/:id/preferences",get(engine_v3::preferences::get).put(engine_v3::preferences::update))
         .route("/v3/bootstrap", get(engine_v3::bootstrap))
         .route("/v3/profiles",get(engine_v3::profiles::list).post(engine_v3::profiles::create))
         .route("/v3/profiles/:id",axum::routing::patch(engine_v3::profiles::update).delete(delete_profile_authenticated))
@@ -121,7 +124,7 @@ pub fn router_with_tv(
                 .post(provider::refresh_v2::request)
                 .delete(provider::refresh_v2::cancel),
         )
-        .route("/v2/streams/:id", get(provider::discovery_v2::poll))
+        .route("/v2/streams/:id", get(provider::discovery_v2::poll).delete(provider::discovery_v2::cancel))
         .route("/v2/iptv/guide/:id", get(provider::discovery_v2::guide))
         .route(
             "/v2/iptv/live/:id/source",

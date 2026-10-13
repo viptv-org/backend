@@ -61,6 +61,7 @@ impl PlaybackRecord {
             progress: self.progress(),
             badges: vec![],
             parent_identity: self.parent_identity.clone(),
+            added_at_millis:None,
         }
     }
     pub fn can_resume(&self) -> bool {

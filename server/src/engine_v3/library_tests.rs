@@ -30,7 +30,7 @@ async fn typed_library_preserves_provider_identity_shared_rows_profile_fences_an
     let page = get(&app, "/api/v3/profiles/1/library?limit=1").await;
     assert_eq!(
         page["cards"][0]["identity"],
-        input("opaque-movie-a", "Alpha")["card"]["identity"]
+        input("opaque-movie-b", "Beta")["card"]["identity"]
     );
     assert_eq!(page["cards"][0]["provider_id"], "simkl");
     assert_eq!(
@@ -41,11 +41,11 @@ async fn typed_library_preserves_provider_identity_shared_rows_profile_fences_an
     assert_eq!(page["next_cursor"], "1");
     assert_eq!(page["complete"], false);
     let next = get(&app, "/api/v3/profiles/1/library?offset=1&limit=1").await;
-    assert_eq!(next["cards"][0]["identity"]["id"], "opaque-movie-b");
+    assert_eq!(next["cards"][0]["identity"]["id"], "opaque-movie-a");
     assert_eq!(next["complete"], true);
     let home = get(&app, "/api/v3/bootstrap").await;
     assert_eq!(
-        home["home"]["rows"][1]["cards"][1]["identity"],
+        home["home"]["rows"][1]["cards"][0]["identity"],
         page["cards"][0]["identity"]
     );
     assert_eq!(home["home"]["rows"][1]["cards"][1]["provider_id"], "simkl");
@@ -177,4 +177,12 @@ async fn legacy_favorites_are_projected_without_guessing_and_restricted_changes_
             .unwrap(),
         1
     );
+}
+#[tokio::test]
+async fn favorite_dates_preserve_first_add_and_do_not_invent_legacy_timestamps(){
+ let app=fixture();app.db.lock().unwrap().execute("INSERT INTO favorites(profile_id,id,type,name,poster)VALUES(1,'legacy-date','movie','Legacy',NULL)",[]).unwrap();
+ let card=json!({"identity":{"id":"new-date","kind":"movie","ids":[],"episode":null,"edition":null},"provider_id":"stremio","title":"New","subtitle":null,"description":null,"poster":null,"landscape":null,"logo":null,"progress":null,"badges":[],"parent_identity":null,"added_at_millis":1});
+ let(status,_)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/library",json!({"card":card})).await;assert_eq!(status,StatusCode::OK);
+ let(_,page)=request(&app,"member-token-1","GET","/api/v3/profiles/1/library",Value::Null).await;let first=page["cards"].as_array().unwrap().iter().find(|c|c["identity"]["id"]=="new-date").unwrap()["added_at_millis"].as_u64().unwrap();assert!(first>1);assert_eq!(page["cards"][0]["identity"]["id"],"new-date");assert!(page["cards"].as_array().unwrap().iter().find(|c|c["identity"]["id"]=="legacy-date").unwrap()["added_at_millis"].is_null());
+ let(status,_)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/library",json!({"card":card})).await;assert_eq!(status,StatusCode::OK);let(_,page)=request(&app,"member-token-1","GET","/api/v3/profiles/1/library",Value::Null).await;assert_eq!(page["cards"][0]["added_at_millis"],first);
 }

@@ -49,8 +49,8 @@ pub async fn toggle(
             .map_err(db_error)?;
         if removed == 0 {
             tx.execute(
-                "INSERT INTO favorites(profile_id,id,type,name,poster) VALUES(?1,?2,?3,?4,?5)",
-                params![profile, id, kind, name, item["poster"].as_str()],
+                "INSERT INTO favorites(profile_id,id,type,name,poster,added_at_millis) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![profile, id, kind, name, item["poster"].as_str(),util::now_millis()],
             )
             .map_err(db_error)?;
         }
@@ -170,6 +170,8 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
     if !has_context {
         db.execute_batch("ALTER TABLE favorites ADD COLUMN context TEXT NOT NULL DEFAULT '{}'")?;
     }
+    let has_added:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('favorites') WHERE name='added_at_millis')",[],|r|r.get(0))?;
+    if !has_added{db.execute_batch("ALTER TABLE favorites ADD COLUMN added_at_millis INTEGER")?;}
     db.execute_batch("CREATE INDEX IF NOT EXISTS favorites_paging ON favorites(profile_id,name COLLATE NOCASE,type,id); CREATE INDEX IF NOT EXISTS progress_paging ON progress(profile_id,updated_at DESC);")
 }
 

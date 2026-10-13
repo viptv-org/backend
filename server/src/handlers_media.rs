@@ -10,6 +10,7 @@ pub(crate) fn emit_batch(
     result: Result<Vec<Value>, String>,
     complete: bool,
 ) {
+    if j.cancelled.load(std::sync::atomic::Ordering::Acquire){return;}
     if a.request_lease().validate(&a.db.lock().unwrap()).is_err() {
         let mut state = j.state.lock().unwrap();
         state.events.clear();
@@ -54,6 +55,7 @@ pub(crate) fn emit_batch(
             }
         }
     }
+    if let Some(id)=source.strip_prefix("vsources:").and_then(|id|id.parse::<i64>().ok()){if !crate::engine_v3::source_integrations::available(a,id){let mut state=j.state.lock().unwrap();state.pending=state.pending.saturating_sub(usize::from(complete));drop(state);j.notify.notify_waiters();return;}}
     let (streams, error, registration_error) = match result {
         Ok(r) => {
             let (streams, error) = a.register(source, r, &j.kind);

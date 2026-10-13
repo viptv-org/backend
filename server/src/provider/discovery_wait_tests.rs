@@ -13,6 +13,8 @@ fn setup() -> (App, Arc<Job>) {
     });
     owned.own_resource("job", "wait-job");
     let job = Arc::new(Job {
+        cancelled: std::sync::atomic::AtomicBool::new(false),
+        configuration_revision: None,
         media_id: Some("opaque-movie".into()),
         exact_vod: None,
         kind: "movie".into(),
@@ -141,4 +143,12 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
         .unwrap()
         .unwrap();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+#[tokio::test]
+async fn cancellation_is_owned_idempotent_and_preserves_published_events(){
+ let (app,job)=setup();job.state.lock().unwrap().events.push(json!({"seq":1,"source":"fixture","streams":[{"id":"published-grant"}]}));
+ assert_eq!(request(&app,"member-token-2","DELETE","/api/v2/streams/wait-job",Value::Null).await.0,StatusCode::FORBIDDEN);
+ for _ in 0..2{let(status,receipt)=request(&app,"member-token-1","DELETE","/api/v2/streams/wait-job",Value::Null).await;assert_eq!(status,StatusCode::OK,"{receipt}");assert_eq!(receipt["cancelled"],true);}
+ assert!(job.cancelled.load(std::sync::atomic::Ordering::Acquire));assert_eq!(job.state.lock().unwrap().events[0]["streams"][0]["id"],"published-grant");
+ let(status,poll)=request(&app,"member-token-1","GET","/api/v2/streams/wait-job",Value::Null).await;assert_eq!(status,StatusCode::OK);assert_eq!(poll["done"],true);assert_eq!(poll["events"][0]["streams"][0]["id"],"published-grant");
 }

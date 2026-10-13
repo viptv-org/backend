@@ -140,14 +140,19 @@ pub(crate) async fn start_streams(
         },
         _ => None,
     };
+    let sdk_sources = if only_provider.is_none() {crate::engine_v3::source_integrations::start(&a,&v).await} else {vec![]};
+    let lease=a.request_lease();
+    let configuration_revision=match lease.principal{auth::Principal::Account{profile_id:Some(profile),..}=>crate::engine_v3::configuration::read(&a,&lease,profile).ok().map(|(c,_)|(profile,c.scope.revision)),_=>None};
     let job = Arc::new(Job {
+        cancelled: std::sync::atomic::AtomicBool::new(false),
+        configuration_revision,
         media_id: Some(id.clone()),
         exact_vod,
         kind: kind.clone(),
         created: Instant::now(),
         state: Mutex::new(JobState {
             events: vec![],
-            pending: sources.len()
+            pending: sdk_sources.len() + sources.len()
                 + usize::from(!only_addons)
                 + if only_provider.is_none() {
                     source_errors.len()
@@ -169,6 +174,8 @@ pub(crate) async fn start_streams(
         jobs.insert(jid.clone(), job.clone());
         a.own_resource("job", &jid);
     }
+    #[cfg(feature="vsources-runtime")]
+    for (source,card,config,proof,revision) in sdk_sources {crate::engine_v3::source_integrations::spawn(a.clone(),job.clone(),source,card,config,proof,revision);}
     if only_provider.is_none() {
         for (id, error) in source_errors {
             emit(&a, &job, &format!("addon:{id}"), Err(error));

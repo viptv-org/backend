@@ -5,6 +5,7 @@ use viptv_engine::{
     profile::Scope,
 };
 mod catalog;
+pub(crate) mod source_integrations;
 mod controls;
 pub(crate) use controls::get as discovery_controls;
 pub(crate) mod configuration;
@@ -15,6 +16,7 @@ pub(crate) mod library;
 mod library_tests;
 mod projection;
 pub(crate) mod profiles;
+pub(crate) mod preferences;
 #[cfg(test)]
 mod profile_tests;
 mod simkl_catalog;
@@ -24,6 +26,8 @@ pub(crate) use catalog::{detail, discover};
 mod history_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod source_integration_tests;
 
 pub(crate) async fn bootstrap(
     State(app): State<App>,
@@ -66,6 +70,7 @@ pub(crate) async fn bootstrap(
             integrations.push(simkl);
         }
     }
+    if cfg!(feature="vsources-runtime") && app.secret_vault.is_some(){if let Some(plugin)=builtins().into_iter().find(|p|p.id=="vsources"){integrations.push(plugin);}}
     let axum::Json(management)=profiles::list(State(app),Extension(lease)).await?;
     Ok(axum::Json(json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management})))
 }

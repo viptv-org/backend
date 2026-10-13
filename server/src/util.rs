@@ -52,3 +52,5 @@ mod tests {
         assert!(validate_url("http://192.168.1.2:8080/a").is_ok());
     }
 }
+
+pub fn now_millis()->i64{std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis().min(i64::MAX as u128) as i64}

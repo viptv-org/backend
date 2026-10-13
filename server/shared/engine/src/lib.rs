@@ -30,3 +30,9 @@ pub enum Error {
     #[error("Local data could not be read or saved")]
     Storage,
 }
+
+pub mod source_integration;
+#[cfg(feature = "vsources-runtime")]
+pub mod vsources_runtime;
+
+pub mod preferences;

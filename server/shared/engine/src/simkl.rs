@@ -100,6 +100,7 @@ pub fn card(value: &Value, category: &str) -> Result<Card, Error> {
         progress: None,
         badges: vec!["Simkl".into()],
         parent_identity: None,
+        added_at_millis:None,
     })
 }
 
