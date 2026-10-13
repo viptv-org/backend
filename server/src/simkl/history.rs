@@ -21,9 +21,24 @@ pub(crate) async fn progress(
     {
         return Err("Invalid playback position".into());
     }
-    let mut value = lifecycle::identity_value(&q.record.identity, q.parent_identity.as_ref())?;
+    if q.parent_identity
+        .as_ref()
+        .zip(q.record.parent_identity.as_ref())
+        .is_some_and(|(a, b)| a != b)
+    {
+        return Err("Conflicting parent title identities".into());
+    }
+    let parent = q
+        .parent_identity
+        .as_ref()
+        .or(q.record.parent_identity.as_ref());
+    let mut value = lifecycle::identity_value(&q.record.identity, parent)?;
     value["name"] = json!(q.record.title);
     value["poster"] = json!(q.record.poster);
+    value["background"] = json!(q.record.landscape);
+    value["engine_identity"] = json!(q.record.identity);
+    value["engine_parent_identity"] = json!(parent);
+    value["engine_provider_id"] = json!(q.record.provider_id);
     value["position"] = json!(
         if q.ended && q.record.duration_millis > 0 {
             q.record.duration_millis
@@ -37,7 +52,17 @@ pub(crate) async fn progress(
     if q.record.identity.id.starts_with("simkl:") {
         let target = tracking::Watched::canonical(&value)?;
         let credential = store::credential(&app, profile, Capability::Metadata)?;
-        tracking::verify(&app, profile, &target, &credential).await?;
+        let card = tracking::verify(&app, profile, &target, &credential).await?;
+        value["name"] = json!(card.title);
+        if card.poster.is_some() {
+            value["poster"] = json!(card.poster);
+        }
+        if card.landscape.is_some() {
+            value["background"] = json!(card.landscape);
+        }
+        value["engine_identity"] = json!(card.identity);
+        value["engine_parent_identity"] = json!(card.parent_identity);
+        value["engine_provider_id"] = json!(card.provider_id);
     }
     // Legacy persistence preserves existing lists, completion policy and history corrections.
     crate::handlers_profiles::save_progress(State(app), Path(profile), axum::Json(value)).await

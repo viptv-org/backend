@@ -3,7 +3,15 @@ use super::*;
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS simkl_links(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE, revision INTEGER NOT NULL, credential TEXT);
         CREATE TABLE IF NOT EXISTS simkl_tracking_receipts(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,media_id TEXT NOT NULL,link_revision INTEGER NOT NULL,state TEXT NOT NULL,attempt_at INTEGER NOT NULL,PRIMARY KEY(profile_id,media_id,link_revision));
-        CREATE TABLE IF NOT EXISTS simkl_oauth_states(state_hash TEXT PRIMARY KEY,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,account_id INTEGER NOT NULL,session_id TEXT NOT NULL,role TEXT NOT NULL,policy_revision INTEGER NOT NULL,link_revision INTEGER NOT NULL,expires INTEGER NOT NULL);")
+        CREATE TABLE IF NOT EXISTS simkl_oauth_states(state_hash TEXT PRIMARY KEY,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,account_id INTEGER NOT NULL,session_id TEXT NOT NULL,role TEXT NOT NULL,policy_revision INTEGER NOT NULL,link_revision INTEGER NOT NULL,expires INTEGER NOT NULL);")?;
+    let columns = db
+        .prepare("PRAGMA table_info(simkl_oauth_states)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !columns.iter().any(|c| c == "verifier") {
+        db.execute_batch("ALTER TABLE simkl_oauth_states ADD COLUMN verifier TEXT NOT NULL DEFAULT ''; DELETE FROM simkl_oauth_states;")?;
+    }
+    Ok(())
 }
 
 pub(crate) fn connections(
@@ -129,12 +137,8 @@ pub(super) async fn request(
     path: &str,
     body: Option<Value>,
 ) -> Result<Value, ApiError> {
-    let token = credential
-        .token
-        .as_ref()
-        .map(|token| std::str::from_utf8(token.expose()))
-        .transpose()
-        .map_err(|_| unavailable())?;
+    let token = tokens::access(app, profile, credential).await?;
+    let token = token.as_deref().map(String::as_str);
     // Public documents stay credential-free unless this application requires OAuth.
     let initial_token = (credential.capability == Capability::Tracking)
         .then_some(token)

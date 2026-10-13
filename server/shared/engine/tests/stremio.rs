@@ -39,6 +39,10 @@ fn details_keep_episode_identity_and_reject_other_titles() {
     let raw = r#"{"meta":{"id":"tt123","type":"series","name":"A series","videos":[{"id":"tt123:2:3","season":2,"episode":3,"title":"Episode three","thumbnail":"https://images.example/still"}]}}"#;
     let detail = detail(raw, "addon:a", "series", "tt123", 0).unwrap();
     assert_eq!(detail.item.identity.id, "tt123");
+    assert_eq!(
+        detail.episodes[0].parent_identity,
+        Some(detail.item.identity.clone())
+    );
     assert_eq!(detail.episodes[0].identity.id, "tt123:2:3");
     assert_eq!(
         detail.episodes[0].identity.episode.as_ref().unwrap().season,

@@ -66,7 +66,7 @@ pub(super) async fn verify(
     profile: i64,
     q: &Watched,
     credential: &store::Credential,
-) -> Result<(), ApiError> {
+) -> Result<viptv_engine::presentation::Card, ApiError> {
     if q.id == 0
         || !matches!(q.category.as_str(), "movie" | "tv")
         || (q.category == "movie" && (q.season.is_some() || q.episode.is_some()))
@@ -75,19 +75,20 @@ pub(super) async fn verify(
         return Err("An exact movie or TV episode is required".into());
     }
     let parent = metadata::title(app, profile, credential, &q.category, q.id).await?;
-    if q.category == "tv"
-        && !metadata::episodes(app, profile, credential, q.id, &parent)
+    let selected = if q.category == "tv" {
+        metadata::episodes(app, profile, credential, q.id, &parent)
             .await?
-            .iter()
-            .any(|e| {
-                e.identity
+            .into_iter()
+            .find(|card| {
+                card.identity
                     .episode
                     .as_ref()
                     .is_some_and(|e| e.season == q.season && Some(e.episode) == q.episode)
             })
-    {
-        return Err("Simkl episode could not be verified".into());
-    }
+            .ok_or("Simkl episode could not be verified")?
+    } else {
+        parent.clone()
+    };
     let db = app
         .db
         .lock()
@@ -98,7 +99,8 @@ pub(super) async fn verify(
         &app.identity(),
         &parent.identity.kind,
         &parent.identity.id,
-    )
+    )?;
+    Ok(selected)
 }
 
 pub(super) async fn record(

@@ -101,7 +101,10 @@ pub(crate) fn encrypt_fixture_db(db: &Connection, vault: &crate::secret_store::V
 /// `App` over `db` whose media tools can never run, so playback endpoints
 /// fail fast instead of spawning processes or touching the filesystem.
 pub(crate) fn app_with_db(db: Connection) -> App {
-    App::new(db, reqwest::Client::new()).unwrap()
+    let mut app = App::new(db, reqwest::Client::new()).unwrap();
+    // Protocol fixtures have no media origin. Real qualification hosts use App::new.
+    app.direct_probe = std::sync::Arc::new(crate::gateway::direct_probe::Probe::protocol_fixture());
+    app
 }
 
 /// In-memory `App` with unavailable media tools.

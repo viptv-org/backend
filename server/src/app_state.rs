@@ -115,6 +115,7 @@ pub struct App {
     pub providers: ProviderService,
     pub(crate) secret_vault: Option<Arc<secret_store::Vault>>,
     pub(crate) gateway_client: gateway::client::Client,
+    pub(crate) direct_probe: Arc<gateway::direct_probe::Probe>,
     pub(crate) gateway_playbacks: Arc<gateway::playback::Registry>,
     pub(crate) subtitle_selections: Arc<engine_v3::subtitles::Selections>,
     pub(crate) simkl: Arc<simkl::Service>,
@@ -214,6 +215,7 @@ pub(crate) struct ExactVod {
     pub(crate) episode: Option<u32>,
 }
 pub(crate) struct Job {
+    pub(crate) media_id: Option<String>,
     pub(crate) exact_vod: Option<ExactVod>,
     // Validated original API request kind, never an upstream stream field.
     pub(crate) kind: String,
@@ -226,6 +228,7 @@ pub(crate) struct JobState {
     pub(crate) pending: usize,
 }
 pub(crate) struct StreamEntry {
+    pub(crate) media_id: Option<String>,
     pub(crate) exact_vod: Option<ExactVod>,
     // Set only by exact, account-authorized raw live-channel resolution.
     pub(crate) live_channel_id: Option<String>,
@@ -255,6 +258,7 @@ impl App {
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
         engine_v3::configuration::init(&db).map_err(|_| "Engine configuration initialization failed")?;
+        engine_v3::history::init(&db).map_err(|_| "Library revision initialization failed")?;
         simkl::init(&db).map_err(|_| "Simkl schema initialization failed")?;
         let simkl = Arc::new(simkl::Service::from_env()?);
         provider::v2::init(&db).map_err(|_| "Account IPTV schema initialization failed")?;
@@ -277,6 +281,7 @@ impl App {
             providers,
             secret_vault,
             gateway_client: Default::default(),
+            direct_probe: Default::default(),
             gateway_playbacks,
             subtitle_selections: Default::default(),
             simkl,

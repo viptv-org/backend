@@ -197,7 +197,7 @@ pub fn queue(db: &Connection, profile: i64, offset: u32, limit: u32) -> Result<V
     let rows = query.query_map(params![profile,limit+1,offset], |r| {
         let mut item = json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"position":r.get::<_,f64>(4)?,"duration":r.get::<_,f64>(5)?,"updated_at":r.get::<_,i64>(6)?});
         let mut manual_watched = false;
-        if let Ok(raw) = serde_json::from_str::<Value>(&r.get::<_,String>(7)?) { manual_watched = raw["watched_override"] == true; library::add_watch_fields(&mut item,&raw); if let Ok(context) = matching_context(&raw) { item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone()); } }
+        if let Ok(raw) = serde_json::from_str::<Value>(&r.get::<_,String>(7)?) { manual_watched = raw["watched_override"] == true; library::add_watch_fields(&mut item,&raw); engine_v3::history::restore(&mut item,&raw); if let Ok(context) = matching_context(&raw) { item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone()); } }
         Ok((item,r.get::<_,String>(8)?,r.get::<_,u32>(9)?,manual_watched))
     }).map_err(db_error)?.collect::<rusqlite::Result<Vec<_>>>().map_err(db_error)?;
     let total = rows.first().map(|r| r.2).unwrap_or(0);

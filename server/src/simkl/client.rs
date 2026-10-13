@@ -16,6 +16,7 @@ pub(crate) struct Service {
     pub(super) metadata: super::cache::Cache,
     pub(super) tracking: super::automatic::Queue,
     next: tokio::sync::Mutex<tokio::time::Instant>,
+    pub(super) refresh_gate: tokio::sync::Mutex<()>,
 }
 
 impl Service {
@@ -73,6 +74,7 @@ impl Service {
             metadata: Default::default(),
             tracking: Default::default(),
             next: tokio::sync::Mutex::new(tokio::time::Instant::now()),
+            refresh_gate: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -95,7 +97,11 @@ impl Service {
         check()?;
         let url = format!("{}{path}", self.base);
         let mut request = if let Some(body) = body {
-            self.client.post(url).json(&body)
+            if path == "/oauth2/token" {
+                self.client.post(url).form(&body)
+            } else {
+                self.client.post(url).json(&body)
+            }
         } else {
             self.client.get(url)
         }

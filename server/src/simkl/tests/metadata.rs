@@ -114,7 +114,8 @@ async fn unlink_invalidates_pending_oauth_and_disabled_assignment_blocks_trackin
         Query(crate::simkl::oauth::Callback {
             state,
             code: Some("fixture-code".into()),
-            error: None
+            error: None,
+            iss: Some("https://simkl.com".into())
         })
     )
     .await

@@ -19,6 +19,7 @@ fn simkl_titles_and_episodes_keep_distinct_exact_identities() {
     )
     .unwrap();
     assert_eq!(episodes.len(), 1);
+    assert_eq!(episodes[0].parent_identity, Some(parent.identity.clone()));
     assert_eq!(episodes[0].identity.id, "simkl:tv:42:2:3");
     assert_eq!(episodes[0].identity.ids[0].namespace, "simkl_episode");
     assert_eq!(episodes[0].identity.ids[0].value, "9");

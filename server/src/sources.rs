@@ -163,6 +163,7 @@ impl App {
             entries.insert(
                 id.clone(),
                 StreamEntry {
+                    media_id: None,
                     exact_vod: None,
                     live_channel_id: None,
                     producer: source.to_owned(),

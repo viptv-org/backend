@@ -20,6 +20,7 @@ mod store;
 #[cfg(test)]
 mod tests;
 mod tracking;
+mod tokens;
 pub(crate) use client::Service;
 pub(crate) use metadata::{detail, search, Page, Search};
 pub(crate) use oauth::{authorize, callback, disconnect, status};

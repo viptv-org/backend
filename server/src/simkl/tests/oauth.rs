@@ -10,6 +10,7 @@ async fn oauth_is_single_use_encrypted_and_isolated() {
             state,
             code: Some("fixture-code".into()),
             error: None,
+            iss: Some("https://simkl.com".into()),
         }),
     )
     .await;
@@ -88,7 +89,8 @@ async fn revoked_and_expired_authorizations_cannot_link() {
         Query(crate::simkl::oauth::Callback {
             state,
             code: Some("fixture-code".into()),
-            error: None
+            error: None,
+            iss: Some("https://simkl.com".into())
         })
     )
     .await
@@ -104,7 +106,8 @@ async fn revoked_and_expired_authorizations_cannot_link() {
         Query(crate::simkl::oauth::Callback {
             state,
             code: Some("fixture-code".into()),
-            error: None
+            error: None,
+            iss: Some("https://simkl.com".into())
         })
     )
     .await

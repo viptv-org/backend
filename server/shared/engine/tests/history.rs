@@ -20,6 +20,7 @@ fn card() -> Card {
         logo: None,
         progress: None,
         badges: vec![],
+        parent_identity: None,
     }
 }
 
@@ -74,4 +75,45 @@ fn history_is_profile_scoped_completion_survives_rewatch_and_private_art_is_not_
         Err(Error::InvalidQuery)
     );
     assert_eq!(store.history(&b.scope, 10).unwrap().len(), 1);
+}
+
+#[test]
+fn opaque_episode_parent_survives_local_history_and_legacy_json_defaults() {
+    let mut store = Store::memory().unwrap();
+    let profile = ProfileConfiguration::local("local".into(), "alice".into(), "Alice".into());
+    store.save_profile(&profile, None).unwrap();
+    let mut episode = card();
+    let mut parent = episode.identity.clone();
+    parent.id = "opaque-parent".into();
+    parent.kind = "series".into();
+    episode.identity.id = "opaque-episode".into();
+    episode.identity.kind = "series".into();
+    episode.identity.episode = Some(viptv_engine::identity::EpisodeCoordinates {
+        order: "aired".into(),
+        season: Some(1),
+        episode: 2,
+    });
+    episode.parent_identity = Some(parent.clone());
+    store
+        .record_playback(&profile.scope, &episode, 10_000, 100_000, 1000)
+        .unwrap();
+    let record = store.history(&profile.scope, 10).unwrap().pop().unwrap();
+    assert_eq!(record.parent_identity, Some(parent.clone()));
+    assert_eq!(record.card().parent_identity, Some(parent));
+    let mut old = serde_json::to_value(record).unwrap();
+    old.as_object_mut().unwrap().remove("parent_identity");
+    assert!(
+        serde_json::from_value::<viptv_engine::playback::PlaybackRecord>(old)
+            .unwrap()
+            .parent_identity
+            .is_none()
+    );
+    let mut old = serde_json::to_value(episode).unwrap();
+    old.as_object_mut().unwrap().remove("parent_identity");
+    assert!(
+        serde_json::from_value::<Card>(old)
+            .unwrap()
+            .parent_identity
+            .is_none()
+    );
 }

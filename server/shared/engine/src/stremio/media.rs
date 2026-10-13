@@ -59,6 +59,7 @@ pub fn detail(
                     episode: u32::try_from(episode).map_err(|_| Error::InvalidQuery)?,
                 });
             }
+            card.parent_identity = Some(item.identity.clone());
             episodes.push(card);
         }
     }
@@ -116,6 +117,7 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                 logo: field(v, "logo", 4096),
                 progress: None,
                 badges: vec![],
+                parent_identity: None,
             })
         })
         .take(24)

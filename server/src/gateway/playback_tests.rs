@@ -1585,3 +1585,6 @@ async fn decoder_start_refuses_gateway_without_frame_protocol_before_source_crea
     assert_eq!(failed["error_code"], "delivery_unsupported");
     assert!(peer.starts.lock().unwrap().is_empty());
 }
+
+#[path = "playback_resume_tests.rs"]
+mod resume_tests;

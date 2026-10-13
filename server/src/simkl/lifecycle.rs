@@ -164,13 +164,12 @@ pub(crate) async fn playback(
             body["show"] = json!({"ids":{"simkl":target.id}});
             body["episode"] = json!({"season":target.season,"number":target.episode});
         }
-        let token = credential.token.as_ref().ok_or_else(unavailable)?;
-        let token = std::str::from_utf8(token.expose()).map_err(|_| unavailable())?;
+        let token = tokens::access(&app,profile,&credential).await?.ok_or_else(unavailable)?;
         let result = app
             .simkl
             .request_checked(
                 &format!("/scrobble/{action}"),
-                Some(token),
+                Some(token.as_str()),
                 Some(body),
                 || {
                     app.simkl.tracking.events.validate(&fence)?;

@@ -99,6 +99,7 @@ pub fn card(value: &Value, category: &str) -> Result<Card, Error> {
         logo: None,
         progress: None,
         badges: vec!["Simkl".into()],
+        parent_identity: None,
     })
 }
 
@@ -129,6 +130,7 @@ pub fn episodes(value: &Value, parent: &Card) -> Result<Vec<Card>, Error> {
             return Err(Error::Unresolved);
         }
         let mut card = parent.clone();
+        card.parent_identity = Some(parent.identity.clone());
         card.identity.id = format!("{}:{season}:{episode}", parent.identity.id);
         card.identity.ids = vec![ExternalId {
             namespace: "simkl_episode".into(),

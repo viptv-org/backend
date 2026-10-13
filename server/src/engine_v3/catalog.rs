@@ -122,7 +122,8 @@ pub(crate) async fn detail(
             episode
         })
         .collect();
-    let episodes = projection::cards(&app, videos, "stremio")?;
+    let mut episodes = projection::cards(&app, videos, "stremio")?;
+    for episode in &mut episodes { episode.parent_identity = Some(item.identity.clone()); }
     Ok(axum::Json(
         serde_json::to_value(DetailSnapshot {
             item,

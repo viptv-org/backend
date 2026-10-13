@@ -8,11 +8,12 @@ async fn server() -> (App, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
     let count = writes.clone();
     let router = axum::Router::new()
         .route(
-            "/oauth/token",
-            post(|axum::Json(body): axum::Json<Value>| async move {
+            "/oauth2/token",
+            post(|axum::Form(body): axum::Form<HashMap<String,String>>| async move {
                 assert_eq!(body["grant_type"], "authorization_code");
                 assert_eq!(body["client_secret"], "fixture-secret");
-                axum::Json(json!({"access_token":"fixture-private-token"}))
+                assert!(body["code_verifier"].len()>=43);
+                axum::Json(json!({"access_token":"fixture-private-token","refresh_token":"fixture-refresh-token","token_type":"Bearer","expires_in":604800,"scope":"media:read media:write"}))
             }),
         )
         .route(
@@ -85,6 +86,11 @@ async fn start(app: &App) -> String {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(!body.to_string().contains("fixture-secret"));
     let url = url::Url::parse(body["authorization_url"].as_str().unwrap()).unwrap();
+    assert_eq!(url.path(), "/oauth2/authorize");
+    let fields = url.query_pairs().collect::<HashMap<_, _>>();
+    assert_eq!(fields["code_challenge_method"], "S256");
+    assert_eq!(fields["scope"], "media:read media:write");
+    assert_eq!(fields["code_challenge"].len(), 43);
     url.query_pairs()
         .find(|(key, _)| key == "state")
         .unwrap()
@@ -99,7 +105,7 @@ async fn link(app: &App) -> String {
         .oneshot(
             axum::http::Request::builder()
                 .uri(format!(
-                    "/api/v3/simkl/callback?state={state}&code=fixture-code"
+                    "/api/v3/simkl/callback?state={state}&code=fixture-code&iss=https%3A%2F%2Fsimkl.com"
                 ))
                 .header(header::HOST, "tv.example")
                 .body(axum::body::Body::empty())
@@ -126,3 +132,9 @@ mod tracking_completion;
 mod tracking_fixture;
 mod tracking_history;
 mod tracking_lifecycle;
+
+mod tokens;
+
+mod token_revocation;
+
+mod history_clear;

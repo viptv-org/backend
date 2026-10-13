@@ -62,6 +62,7 @@ pub(crate) fn emit_batch(
                 for source in &streams {
                     if let Some(entry) = source["id"].as_str().and_then(|id| entries.get_mut(id)) {
                         entry.exact_vod = j.exact_vod.clone();
+                        entry.media_id = j.media_id.clone();
                     }
                 }
             }

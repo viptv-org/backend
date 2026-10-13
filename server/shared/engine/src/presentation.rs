@@ -14,6 +14,8 @@ pub struct Card {
     pub logo: Option<String>,
     pub progress: Option<f64>,
     pub badges: Vec<String>,
+    #[serde(default)]
+    pub parent_identity: Option<MediaIdentity>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Facet)]

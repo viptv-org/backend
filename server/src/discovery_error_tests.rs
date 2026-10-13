@@ -311,6 +311,7 @@ async fn unsupported_required_header_events_are_safe_and_keep_healthy_siblings()
     });
     owned.providers = owned.providers.for_account(1);
     let job = Job {
+            media_id: None,
         exact_vod: None,
         kind: "movie".into(),
         created: Instant::now(),

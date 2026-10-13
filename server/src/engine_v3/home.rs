@@ -22,11 +22,20 @@ pub(super) async fn load(
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?;
         app.require_profile(&db, profile)?;
-        let queue = continuation::queue(&db, profile, 0, 12)?;
+        let mut queue = continuation::queue(&db, profile, 0, 12)?;
+        queue["items"] = json!(kids::filter_items(
+            &db,
+            &app.identity(),
+            queue["items"].as_array().cloned().unwrap_or_default()
+        )?);
         let allowed = kids::sql_allowed("favorites.type", "favorites.id", "?1");
         let mut q=db.prepare(&format!("SELECT id,type,name,poster FROM favorites WHERE profile_id=?1 AND {allowed} ORDER BY rowid DESC LIMIT 12")).map_err(db_error)?;
         let favorites=q.query_map([profile],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
-        (queue, favorites, configuration_revision)
+        (
+            queue,
+            favorites,
+            configuration_revision.saturating_add(super::history::revision(&db, profile)?),
+        )
     };
     let (configuration, _) = configuration::read(&app, &lease, profile)?;
     let simkl = configuration.browsing_plugin == "simkl";
@@ -35,11 +44,13 @@ pub(super) async fn load(
     } else {
         app.addons.catalogs()?
     };
-    let queue = projection::cards(
-        &app,
-        queue["items"].as_array().cloned().unwrap_or_default(),
-        "library",
-    )?;
+    let queue = queue["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(super::history::record)
+        .map(|record| record.card())
+        .collect();
     let favorites = projection::cards(&app, favorites, "library")?;
     let mut requests = vec![
         RowRequest {
@@ -100,12 +111,13 @@ pub(super) async fn load(
             }),
         });
     }
-    let snapshot = assemble(
-        scope(&lease, profile, revision),
+    let mut snapshot = assemble(
+        scope(&lease, profile, configuration_revision),
         requests,
         Duration::from_secs(2),
     )
     .await;
+    snapshot.revision = revision;
     configuration::validate_revision(&app, profile, configuration_revision)?;
     lease.validate(
         &*app

@@ -16,6 +16,7 @@ pub fn router_with_tv(
         .route("/v3/bootstrap", get(engine_v3::bootstrap))
         .route("/v3/profiles/:id/integrations", get(engine_v3::configuration::get).put(engine_v3::configuration::update))
         .route("/v3/profiles/:id/home", get(engine_v3::home))
+        .route("/v3/profiles/:id/history", get(engine_v3::history::list).delete(engine_v3::history::clear))
         .route("/v3/discover", get(engine_v3::discover))
         .route("/v3/meta/:kind/:id", get(engine_v3::detail))
         .route("/v3/subtitles/:kind/:id", get(engine_v3::subtitles::discover))

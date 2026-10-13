@@ -7,12 +7,15 @@ use viptv_engine::{
 mod catalog;
 pub(crate) mod configuration;
 mod home;
+pub(crate) mod history;
 mod projection;
 mod simkl_catalog;
 pub(crate) mod subtitles;
 pub(crate) use catalog::{detail, discover};
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod history_tests;
 
 pub(crate) async fn bootstrap(
     State(app): State<App>,

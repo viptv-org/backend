@@ -93,7 +93,10 @@ async fn sources_and_subtitles_use_cached_authoritative_ids_and_preserve_canonic
             assert_eq!(exact.season, Some(2));
             assert_eq!(exact.episode, Some(4));
         }
+        assert_eq!(jobs[job_id].media_id.as_deref(), Some(id));
         drop(jobs);
+        let stream = finished["events"][0]["streams"][0]["id"].as_str().unwrap();
+        assert_eq!(app.streams.lock().unwrap()[stream].media_id.as_deref(), Some(id));
         let (status, subs) = request(
             &app,
             "member-token-1",

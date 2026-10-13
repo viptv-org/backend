@@ -74,3 +74,6 @@ pub use routes::{router, router_with_tv};
 
 #[cfg(test)]
 mod remote_qa_fixture;
+
+#[cfg(test)]
+mod real_gateway_qa;

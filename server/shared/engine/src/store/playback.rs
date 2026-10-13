@@ -63,6 +63,7 @@ impl Store {
             && position_millis.saturating_mul(100) >= duration_millis.saturating_mul(95);
         let record = PlaybackRecord {
             identity: card.identity.clone(),
+            parent_identity: card.parent_identity.clone(),
             provider_id: card.provider_id.clone(),
             title: card.title.clone(),
             poster: public_art(card.poster.as_deref()),

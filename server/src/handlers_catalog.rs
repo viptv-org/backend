@@ -141,6 +141,7 @@ pub(crate) async fn start_streams(
         _ => None,
     };
     let job = Arc::new(Job {
+        media_id: Some(id.clone()),
         exact_vod,
         kind: kind.clone(),
         created: Instant::now(),

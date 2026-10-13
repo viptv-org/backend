@@ -1,4 +1,5 @@
 use super::*;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
 pub(crate) async fn status(
     State(app): State<App>,
@@ -40,6 +41,19 @@ pub(crate) async fn authorize(
     let account = lease.principal.account_id().ok_or_else(auth::forbidden)?;
     let auth::Principal::Account { role, .. } = &lease.principal;
     let state = auth::token();
+    let verifier = zeroize::Zeroizing::new(format!("{}{}", auth::token(), auth::token()));
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let sealed_verifier = app
+        .secret_vault
+        .as_ref()
+        .ok_or_else(unavailable)?
+        .seal(
+            account,
+            "simkl-oauth",
+            &auth::hash(&state),
+            verifier.as_bytes(),
+        )
+        .map_err(|_| unavailable())?;
     let mut db = app
         .db
         .lock()
@@ -60,7 +74,7 @@ pub(crate) async fn authorize(
         )
         .map_err(db_error)?;
     tx.execute(
-        "INSERT INTO simkl_oauth_states VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        "INSERT INTO simkl_oauth_states VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![
             auth::hash(&state),
             profile,
@@ -69,18 +83,22 @@ pub(crate) async fn authorize(
             role,
             lease.policy_revision,
             revision,
-            util::now() + 600
+            util::now() + 600,
+            sealed_verifier
         ],
     )
     .map_err(db_error)?;
     tx.commit().map_err(db_error)?;
     let mut url =
-        url::Url::parse("https://simkl.com/oauth/authorize").map_err(|_| unavailable())?;
+        url::Url::parse("https://simkl.com/oauth2/authorize").map_err(|_| unavailable())?;
     url.query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", &config.client_id)
         .append_pair("redirect_uri", &config.redirect)
-        .append_pair("state", &state);
+        .append_pair("state", &state)
+        .append_pair("scope", "media:read media:write")
+        .append_pair("code_challenge", &challenge)
+        .append_pair("code_challenge_method", "S256");
     Ok(axum::Json(
         json!({"authorization_url":url.as_str(),"expires_in_seconds":600}),
     ))
@@ -91,23 +109,24 @@ pub(crate) struct Callback {
     pub(super) state: String,
     pub(super) code: Option<String>,
     pub(super) error: Option<String>,
+    pub(super) iss: Option<String>,
 }
 
 pub(crate) async fn callback(
     State(app): State<App>,
     Query(query): Query<Callback>,
 ) -> Result<Response, ApiError> {
-    if query.state.is_empty() || query.state.len() > 256 {
+    if query.iss.as_deref()!=Some("https://simkl.com") || query.state.is_empty() || query.state.len() > 256 {
         return Err(auth::forbidden());
     }
     let config = app.simkl.config.as_ref().ok_or_else(unavailable)?;
-    let (lease, profile, revision) = {
+    let (lease, profile, revision, sealed_verifier) = {
         let mut db = app
             .db
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?;
         let tx = db.transaction().map_err(db_error)?;
-        let found = tx.query_row("SELECT profile_id,account_id,session_id,role,policy_revision,link_revision FROM simkl_oauth_states WHERE state_hash=?1 AND expires>?2", params![auth::hash(&query.state),util::now()], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,u64>(5)?))).optional().map_err(db_error)?.ok_or_else(auth::forbidden)?;
+        let found = tx.query_row("SELECT profile_id,account_id,session_id,role,policy_revision,link_revision,verifier FROM simkl_oauth_states WHERE state_hash=?1 AND expires>?2", params![auth::hash(&query.state),util::now()], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,i64>(4)?,r.get::<_,u64>(5)?,r.get::<_,String>(6)?))).optional().map_err(db_error)?.ok_or_else(auth::forbidden)?;
         tx.execute(
             "DELETE FROM simkl_oauth_states WHERE state_hash=?1",
             [auth::hash(&query.state)],
@@ -125,7 +144,7 @@ pub(crate) async fn callback(
         };
         tx.commit().map_err(db_error)?;
         lease.validate(&db)?;
-        (lease, found.0, found.5)
+        (lease, found.0, found.5, found.6)
     };
     if query.error.is_some() {
         return Ok(axum::response::Redirect::to("/?simkl=cancelled").into_response());
@@ -136,8 +155,20 @@ pub(crate) async fn callback(
             !code.is_empty() && code.len() <= 1024 && !code.chars().any(char::is_control)
         })
         .ok_or_else(auth::forbidden)?;
+    let verifier = app
+        .secret_vault
+        .as_ref()
+        .ok_or_else(unavailable)?
+        .open(
+            lease.principal.account_id().ok_or_else(auth::forbidden)?,
+            "simkl-oauth",
+            &auth::hash(&query.state),
+            &sealed_verifier,
+        )
+        .map_err(|_| auth::forbidden())?;
+    let verifier = std::str::from_utf8(verifier.expose()).map_err(|_| auth::forbidden())?;
     let scoped = app.clone().with_lease(lease.clone());
-    let response = app.simkl.request_checked("/oauth/token", None, Some(json!({"code":code,"client_id":config.client_id,"client_secret":config.secret.as_str(),"redirect_uri":config.redirect,"grant_type":"authorization_code"})), || {
+    let response = app.simkl.request_checked("/oauth2/token", None, Some(json!({"code":code,"client_id":config.client_id,"client_secret":config.secret.as_str(),"redirect_uri":config.redirect,"grant_type":"authorization_code","code_verifier":verifier})), || {
         require_edit(&scoped, &lease, profile)?;
         let db = app.db.lock().map_err(|_| ApiError::from("Database unavailable"))?;
         lease.validate(&db)?;
@@ -147,13 +178,8 @@ pub(crate) async fn callback(
         }
         Ok(())
     }).await?;
-    let token = response["access_token"]
-        .as_str()
-        .filter(|token| {
-            !token.is_empty() && token.len() <= 2048 && !token.chars().any(char::is_control)
-        })
-        .ok_or_else(|| ApiError::from("Simkl authorization response was invalid"))?;
-    store::save_token(&app, &lease, profile, revision, token)?;
+    let document = tokens::document(&response)?;
+    store::save_token(&app, &lease, profile, revision, document.as_str())?;
     Ok((
         [
             (header::CACHE_CONTROL, "no-store"),

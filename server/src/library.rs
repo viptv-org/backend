@@ -75,7 +75,7 @@ pub async fn history_page(
         let items=db.prepare(&format!("SELECT id,type,name,poster,position,duration,updated_at,context FROM progress WHERE profile_id=?1 AND type!='live' AND {allowed} ORDER BY updated_at DESC,rowid DESC LIMIT ?2 OFFSET ?3")).map_err(db_error)?
             .query_map(params![profile,limit,offset],|r|{
                 let mut item=json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"position":r.get::<_,f64>(4)?,"duration":r.get::<_,f64>(5)?,"updated_at":r.get::<_,i64>(6)?});
-                if let Ok(raw)=serde_json::from_str::<Value>(&r.get::<_,String>(7)?){add_watch_fields(&mut item,&raw);if let Ok(context)=matching_context(&raw){item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());}}
+                if let Ok(raw)=serde_json::from_str::<Value>(&r.get::<_,String>(7)?){add_watch_fields(&mut item,&raw);engine_v3::history::restore(&mut item,&raw);if let Ok(context)=matching_context(&raw){item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());}}
                 Ok(item)
             }).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
         Ok(axum::Json(json!({"items":items,"offset":offset,"total":total,"next_offset":((offset as i64+limit as i64)<total).then_some(offset as i64+limit as i64)})))
@@ -152,7 +152,7 @@ pub async fn series_history(
         let items=db.prepare("SELECT id,position,duration,updated_at,context FROM progress WHERE profile_id=?1 AND type='series' AND title_id=?2 ORDER BY updated_at DESC,rowid DESC LIMIT 2000").map_err(db_error)?
             .query_map(params![profile,query.series_id],|r|{
                 let mut item=json!({"id":r.get::<_,String>(0)?,"type":"series","position":r.get::<_,f64>(1)?,"duration":r.get::<_,f64>(2)?,"updated_at":r.get::<_,i64>(3)?});
-                if let Ok(raw)=serde_json::from_str::<Value>(&r.get::<_,String>(4)?){add_watch_fields(&mut item,&raw);if let Ok(context)=matching_context(&raw){item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());}}
+                if let Ok(raw)=serde_json::from_str::<Value>(&r.get::<_,String>(4)?){add_watch_fields(&mut item,&raw);engine_v3::history::restore(&mut item,&raw);if let Ok(context)=matching_context(&raw){item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());}}
                 Ok(item)
             }).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
         Ok(axum::Json(json!(items)))

@@ -14,6 +14,8 @@ pub struct PlaybackRecord {
     pub duration_millis: u64,
     pub updated_at_millis: u64,
     pub completed_at_millis: Option<u64>,
+    #[serde(default)]
+    pub parent_identity: Option<MediaIdentity>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
@@ -58,6 +60,7 @@ impl PlaybackRecord {
             logo: None,
             progress: self.progress(),
             badges: vec![],
+            parent_identity: self.parent_identity.clone(),
         }
     }
     pub fn can_resume(&self) -> bool {

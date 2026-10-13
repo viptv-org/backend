@@ -104,6 +104,8 @@ pub(crate) struct Start {
     #[serde(default)]
     position: f64,
     #[serde(default)]
+    resume: bool,
+    #[serde(default)]
     force_gateway: bool,
     audio_track: Option<u32>,
     subtitle_track: Option<u32>,
@@ -115,6 +117,7 @@ pub(crate) struct Start {
 }
 #[derive(Clone)]
 struct Proof {
+    media_id: Option<String>,
     live_channel_id: Option<String>,
     lease: ResourceLease,
     producer: String,
@@ -404,8 +407,8 @@ fn gateway_current(db: &Connection, lease: &ResourceLease, id: &str, revision: i
 }
 fn validate_source(db: &Connection, proof: &Proof) -> Result<(), Error> {
     proof.lease.validate(db)?;
-    if let Some(exact) = &proof.exact_vod {
-        crate::kids::require_item(db, &proof.lease.principal, &proof.kind, &exact.title)?;
+    if let Some(media) = proof.media_id.as_deref().or_else(|| proof.exact_vod.as_ref().map(|exact| exact.title.as_str())) {
+        crate::kids::require_item(db, &proof.lease.principal, &proof.kind, media)?;
     }
     let Some((kind, id)) = proof.producer.split_once(':') else {
         return Err(Error::Code("source_not_found"));
@@ -463,6 +466,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
                 .ok_or(Error::Code("source_not_found"))?;
             (
                 Proof {
+                    media_id: entry.media_id.clone(),
                     live_channel_id: entry.live_channel_id.clone(),
                     lease: source_lease,
                     producer: entry.producer.clone(),
@@ -704,7 +708,10 @@ fn core_request(request: &Start) -> Result<viptv_core::dto::PlaybackV2Request, E
         }
     }
     serde_json::to_value(request)
-        .and_then(|v| serde_json::from_value(camel(v)))
+        .and_then(|mut v| {
+            if let Some(fields) = v.as_object_mut() { fields.remove("resume"); }
+            serde_json::from_value(camel(v))
+        })
         .map_err(|_| Error::Code("invalid_playback_request"))
 }
 fn previous_request(
@@ -1316,6 +1323,15 @@ async fn start_mode(
         return Ok((StatusCode::OK, Json(response(&entry))));
     }
     let input = source(&app, &lease, request.stream_id.clone()).await?;
+    if request.resume && request.position == 0.0 && !input.live {
+        let db = app.db.lock().map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        lease.validate(&db)?;
+        validate_source(&db, &input.proof)?;
+        let crate::auth::Principal::Account { profile_id: Some(profile), .. } = &lease.principal else {
+            return Err(Error::Code("profile_required"));
+        };
+        request.position = super::resume::position(&db, *profile, &input.proof.kind, input.proof.media_id.as_deref())?;
+    }
     // Snapshot profile defaults only for a new admission. The idempotency hash
     // above is the caller's body, so later preference edits cannot mutate an
     // existing playback or turn a safe retry into a conflicting request.
@@ -1592,7 +1608,10 @@ async fn prepare(
     if native_candidate {
         return prepare_native(&app, &entry, &source, &request).await;
     }
-    let delivery = if direct {
+    let destination = if direct {
+        app.direct_probe.resolve(&source.url, &source.headers, || validate_entry(&app, &entry)).await?
+    } else { None };
+    let delivery = if let Some(destination) = destination {
         if let Some(provider) = source.provider_id {
             let permit = app
                 .providers
@@ -1601,7 +1620,7 @@ async fn prepare(
                 .map_err(ApiError::from)?;
             *entry.permit.lock().unwrap() = Some(permit);
         }
-        json!({"kind":"direct","url":source.url,"headers":source.headers,"position":request.position,"live":source.live,"format":"original","preferences":{"audio_language":request.preferred_audio_language,"subtitle_language":request.preferred_subtitle_language,"subtitles_enabled":request.preferred_subtitle_language.is_some()}})
+        json!({"kind":"direct","url":destination.url,"headers":destination.headers,"position":request.position,"live":source.live,"format":"original","preferences":{"audio_language":request.preferred_audio_language,"subtitle_language":request.preferred_subtitle_language,"subtitles_enabled":request.preferred_subtitle_language.is_some()}})
     } else {
         if !request
             .client
