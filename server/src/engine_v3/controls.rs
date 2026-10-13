@@ -9,6 +9,7 @@ use viptv_engine::{
 pub(crate) struct ControlsQuery {
     #[serde(rename = "type")]
     kind: Option<String>,
+    genre: Option<String>,
 }
 fn state(availability: Availability, message: Option<&str>) -> Value {
     json!({"availability":availability,"message":message})
@@ -117,7 +118,17 @@ pub(crate) async fn get(
         )
         .await
         {
-            Ok(Ok(extra)) => {
+            Ok(Ok(mut extra)) => {
+                if let Some(genre) = q.genre.as_deref().filter(|g| *g != "all") {
+                    if !extra[0].choices.iter().any(|c| c.value == genre) {
+                        return Err("Unsupported Simkl genre".into());
+                    }
+                    for control in &mut extra {
+                        if control.id == "timeframe" {
+                            control.choices.retain(|c| c.value == "month");
+                        }
+                    }
+                }
                 controls.extend(extra);
                 filter_state = state(Availability::Available, None);
             }
@@ -176,13 +187,17 @@ pub(crate) async fn get(
                     })
                     .collect::<Vec<_>>();
                 let control = if choices.is_empty() {
-                    text(id, id, extra["isRequired"] == true)
+                    text(
+                        id,
+                        id,
+                        extra["isRequired"] == true || extra["is_required"] == true,
+                    )
                 } else {
                     crate::simkl::browse::choice(id, id, choices)
                 };
                 options.push(control);
             }
-            catalogs.push(json!({"id":catalog["id"],"name":catalog["name"],"type":catalog["type"],"addon_id":catalog["addon_id"],"supports_search":catalog["supports_search"],"supports_skip":catalog["supports_skip"],"controls":options}));
+            catalogs.push(json!({"id":catalog["id"],"name":catalog["name"],"type":catalog["type"],"addon_id":catalog["addon_id"],"connection_id":catalog["addon_id"].as_i64().map(|id|format!("addon:{id}")),"supports_search":catalog["supports_search"],"supports_skip":catalog["supports_skip"],"controls":options}));
         }
         if !catalogs.is_empty() {
             filter_state = state(Availability::Available, None);

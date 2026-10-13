@@ -58,6 +58,23 @@ async fn public_calendar_genres_and_scoped_controls_use_v2_data_without_user_tok
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["cards"][0]["identity"]["id"], "simkl:movie:10");
+    let (status, filtered_controls) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v3/discovery-controls?type=movie&genre=science-fiction",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let timeframe = filtered_controls["controls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "timeframe")
+        .unwrap();
+    assert_eq!(timeframe["choices"].as_array().unwrap().len(), 1);
+    assert_eq!(timeframe["choices"][0]["value"], "month");
     assert_eq!(
         request(
             &app,

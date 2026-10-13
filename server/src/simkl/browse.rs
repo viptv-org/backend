@@ -148,10 +148,13 @@ pub(crate) async fn page(
     if extras.len() > 1 || extras.keys().any(|k| k != "timeframe") {
         return Err("Unsupported Simkl catalog options".into());
     }
-    let timeframe = extras
-        .get("timeframe")
-        .map(String::as_str)
-        .unwrap_or(if genre.is_some() { "month" } else { "today" });
+    let timeframe = extras.get("timeframe").map(String::as_str).unwrap_or(
+        if genre.is_some_and(|g| g != "all") {
+            "month"
+        } else {
+            "today"
+        },
+    );
     if !matches!(timeframe, "today" | "week" | "month") || skip > 500 {
         return Err("Invalid Simkl page".into());
     }

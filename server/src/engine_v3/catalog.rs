@@ -27,7 +27,7 @@ pub(crate) async fn discover(
     configuration::validate_revision(&scoped, profile, revision)?;
     let items=value["metas"].as_array().cloned().unwrap_or_default();
     let mut cards=Vec::new();
-    for items in items.chunks(24).take(5){cards.extend(projection::cards(&scoped,items.to_vec(),"stremio")?);}
+    for items in items.chunks(24).take(9){cards.extend(projection::cards(&scoped,items.to_vec(),"stremio")?);}
 
     let page = CatalogPage {
         cards,

@@ -99,7 +99,7 @@ pub(crate) async fn get(
         let Ok(timestamp) = DateTime::parse_from_rfc3339(raw_date) else {
             continue;
         };
-        let day = timestamp.date_naive();
+        let day = timestamp.with_timezone(&chrono::Utc).date_naive();
         if day < start || day > end {
             continue;
         }

@@ -24,7 +24,7 @@ OAuth state is random, stored only as a hash, expires after ten minutes, is sing
 
 ## Current limits and evidence
 
-A configured application and a real user's authorization are required. Isolated real-user OAuth2 linking and authenticated search were qualified on 2026-10-13; production deployment and application playback acceptance remain separate work. Genre/calendar controls, continuous inbound watchlist synchronization, anime episode mappings/tracking, and additional external mapping providers are not implemented or advertised. Anime title metadata is supported; its episode list is intentionally empty until an ordering contract is implemented. Source and subtitle lookup resolve Simkl-qualified movie identities through their authoritative IMDb IDs. TV episodes additionally require an exact match in the provider episode list; supplied coordinates must agree. The original Simkl identity remains attached to playback authority and library state. Missing or conflicting mappings return HTTP 422 with `metadata_mapping_unavailable` before any addon lookup; anime episodes remain unsupported. Public title and TV episode documents share a bounded, coalesced one-hour metadata cache so detail, source, and subtitle requests reuse the same evidence.
+A configured application and a real user's authorization are required. Isolated real-user OAuth2 linking and authenticated search were qualified on 2026-10-13; production deployment and application playback acceptance remain separate work. Public v2 calendar and scoped CDN genre/timeframe controls are implemented. Continuous inbound watchlist synchronization, anime episode mappings/tracking, country/network/year discovery outside the CDN rankings, and additional external mapping providers remain pending. Anime title metadata is supported; its episode list is intentionally empty until an ordering contract is implemented. Source and subtitle lookup resolve Simkl-qualified movie identities through their authoritative IMDb IDs. TV episodes additionally require an exact match in the provider episode list; supplied coordinates must agree. The original Simkl identity remains attached to playback authority and library state. Missing or conflicting mappings return HTTP 422 with `metadata_mapping_unavailable` before any addon lookup; anime episodes remain unsupported. Public title and TV episode documents share a bounded, coalesced one-hour metadata cache so detail, source, and subtitle requests reuse the same evidence.
 
 The generic `/api/v3/bootstrap` and profile Home endpoints assemble Simkl Trending Movies, TV Shows, and Anime when Simkl is selected. One combined public `today_100.json` document serves the three rows, coalesced and cached for one hour without user credentials. Home retains its two-second assembly deadline and presents failed rows for slow or failed upstreams. `/api/v3/discover` routes movie/series/anime discovery and text search to the selected provider; unsupported controls are rejected. Generic `/api/v3/meta/:kind/:id` accepts projected identities such as `simkl:movie:123` and uses the selected provider. Explicit provider switches never merge Stremio and Simkl metadata in one browsing configuration.
 
@@ -62,8 +62,52 @@ Current primary contracts are the official [OAuth2 browser flow](https://api.sim
 
 Native direct preparation performs a bounded media range probe before returning an authorized delivery: at most 32 concurrent probes, eight seconds including capacity/DNS/IO, four redirects, and validated/pinned public DNS addresses. TLS verification remains enabled. Each hop rechecks session/profile/policy/source authority. Cross-origin redirects remove all declared source headers; an HTTPS-to-HTTP redirect is classified before connecting and is never rewritten to an invented HTTPS URL. Unsafe, unavailable or unqualified direct transport selects an enabled account-authorized gateway; without one it fails explicitly rather than publishing an unchecked direct delivery. Generic protocol tests inject an explicit test-only probe stub; `App::new` and the real qualification host use the actual transport.
 
-The production playback-gateway at revision `6cb702c` was built and run in an isolated private directory with fresh scoped integration keys and trusted local viewer HTTPS. A fresh backend device session discovered the actual PenguPlay Ted Lasso source and forced gateway delivery. Real FFprobe/FFmpeg preparation produced HLS with H264/AAC copying; playlist and segment requests returned 200 and a TLS-verified media read decoded a video frame. Playback DELETE and logout returned 200. This was a real gateway service, not the earlier deterministic FFmpeg test peer. Native presentation acknowledgment is a separate application qualification. The source declared no request headers; generalized gateway cross-origin credential mediation still needs qualification.
+The production playback-gateway at revision `6cb702c` was built and run in an isolated private directory with fresh scoped integration keys and trusted local viewer HTTPS. A fresh backend device session discovered the actual PenguPlay Ted Lasso source and forced gateway delivery. Real FFprobe/FFmpeg preparation produced HLS with H264/AAC copying; playlist and segment requests returned 200 and a TLS-verified media read decoded a video frame. Playback DELETE and logout returned 200. This was a real gateway service, not the earlier deterministic FFmpeg test peer. Native presentation acknowledgment is a separate application qualification. The source declared no request headers. Experiment gateway revision `7993210` now mediates header-bearing nonlive binary media through owned ranged capabilities; arbitrary headers are removed on every cross-origin redirect, and a real authenticated MP4 fixture qualified FFprobe/FFmpeg remux and frame decode without source credentials in child arguments. Header-bearing live, manifest and nonranged sources fail closed until their mediators are implemented.
 
 Production gateway control currently requires public destinations and public certificate roots. The isolated `cfg(test)` host maps only control requests to the owned loopback production gateway while leaving its engine, media delivery, account registry, existing database/vault and OAuth unchanged. An operator-scoped trusted control-origin/CA policy for private self-hosted gateways remains pending; no global private-address or TLS bypass was added.
 
 `POST /api/v2/playback` also accepts optional `resume: true` (default false). A zero-position nonlive request reads authoritative progress for the exact selected profile and the source grant's original canonical media ID, before transport/IMDb mapping. Explicit positive positions win. Completed or manually watched items restart at zero; unknown-duration incomplete items retain their actual observed position. Idempotent retries retain the initial admission snapshot even if progress later changes. The client cannot supply a replacement media ID or infer absolute positions from a card progress ratio.
+
+
+## Typed library, calendar and provider controls
+
+`GET /api/v3/profiles/:id/library?offset=0&limit=40` returns a typed `CatalogPage`.
+`PUT` accepts `{ "card": Card }`; `DELETE /api/v3/profiles/:id/library/:kind/:item`
+removes the exact canonical identity. These idempotent operations share existing
+favorites rows with legacy clients, retain typed provider/mapping/parent metadata,
+and fence the selected profile. Kids profiles store and read only approved
+presentation data. Home's My List row uses the same typed cards. The local shared
+engine has matching persistent, paged library operations and UniFFI methods.
+
+`GET /api/v3/calendar?type=series|movie|anime&start=YYYY-MM-DD&end=YYYY-MM-DD&skip=0`
+returns `{ entries, next_cursor, complete }`, with at most 100 entries per page.
+Each entry contains a stable calendar `id`, a typed title `card`, UTC `date`,
+`episode_title`, `season`, and `episode`. Calendar row IDs are separate from
+playback identities; a TV schedule does not invent a provider episode ID, and
+anime sequential coordinates do not become aired episodes. The default window
+is today ±3 days and accepted windows span at most 33 days. One bounded public
+v2 CDN document is coalesced/cached per type, without user authorization.
+Session, selected provider, profile assignments and kids policy are rechecked.
+An unsupported provider returns an explicit availability error.
+
+`GET /api/v3/discovery-controls?type=movie|series|anime` publishes shared
+`QueryControl` values and capability availability for the selected provider.
+Stremio catalogs expose their actual genres and custom options. Simkl genres come
+from the current per-type CDN index; timeframe choices are today/week/month.
+Genre files cover this month only, up to 500 ranked titles; the generic discover
+route accepts `genre` and the `timeframe` option in encoded `extras`, with 24-card
+pages. It rejects unknown genres/options and contradictory genre/timeframe
+combinations. These rankings do not claim exhaustive country/network/year
+coverage. The current official docs request that TV apps avoid thin V1 genre
+endpoints pending provider V2; those broader filters remain pending.
+Primary contracts: [v2 calendars](https://api.simkl.org/api-reference/calendar)
+and [dynamic trending genre files](https://api.simkl.org/api-reference/trending).
+
+Managed gateway HLS delivery reports `position: 0` and additive
+`timeline_offset_seconds` from the gateway's actual applied source seek origin,
+which can differ from requested position when packet copying selects a preceding
+keyframe. `duration` remains the full source duration. Clients add the offset to
+observed presentation time for progress/tracking and never seek it a second time.
+Direct deliveries retain their requested seek position and report offset zero.
+Renewal preserves the initial delivery snapshot. The shared decoder preserves
+this field as optional `timelineOffsetSeconds` for legacy response compatibility.

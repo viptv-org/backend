@@ -98,16 +98,15 @@ impl Card {
                 .badges
                 .iter()
                 .any(|s| s.len() > 128 || s.chars().any(char::is_control))
-            || [
-                &self.poster,
-                &self.landscape,
-                &self.logo,
-                &self.description,
-                &self.subtitle,
-            ]
-            .into_iter()
-            .flatten()
-            .any(|s| s.len() > 4096 || s.chars().any(|c| c.is_control() && c != '\n' && c != '\t'))
+            || self.description.as_ref().is_some_and(|s| {
+                s.len() > 16_384 || s.chars().any(|c| c.is_control() && c != '\n' && c != '\t')
+            })
+            || [&self.poster, &self.landscape, &self.logo, &self.subtitle]
+                .into_iter()
+                .flatten()
+                .any(|s| {
+                    s.len() > 4096 || s.chars().any(|c| c.is_control() && c != '\n' && c != '\t')
+                })
             || self.parent_identity.as_ref().is_some_and(|p| {
                 !valid_identity(p)
                     || self.identity.episode.is_none()
