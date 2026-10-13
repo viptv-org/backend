@@ -269,10 +269,13 @@ pub(crate) async fn save_progress(
         return Err("Invalid playback position".into());
     }
     let context = engine_v3::history::context(&v)?;
-    let db = a.db.lock().unwrap();
+    let mut db = a.db.lock().unwrap();
     a.require_profile(&db, profile)?;
     kids::require_item(&db, &a.identity(), kind, id)?;
-    db.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster,position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,context=json_remove(json_patch(progress.context,excluded.context),'$.watched_override','$.stremio_completion_only','$.stremio_watch_date_unknown'),title_id=CASE WHEN json_extract(excluded.context,'$.series_id') IS NULL AND json_extract(progress.context,'$.series_id') IS NOT NULL THEN json_extract(progress.context,'$.series_id') ELSE excluded.title_id END",params![profile,id,kind,name,v["poster"].as_str(),p,d,library::activity_time(&db,profile)?,context.to_string(),continuation::title_id(&v)]).map_err(db_error)?;
+    let tx=db.transaction().map_err(db_error)?;
+    engine_v3::library_stats::observe(&tx,profile,kind,id,d>0.0&&p/d>=0.95)?;
+    tx.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster,position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,context=json_remove(json_patch(progress.context,excluded.context),'$.watched_override','$.stremio_completion_only','$.stremio_watch_date_unknown'),title_id=CASE WHEN json_extract(excluded.context,'$.series_id') IS NULL AND json_extract(progress.context,'$.series_id') IS NOT NULL THEN json_extract(progress.context,'$.series_id') ELSE excluded.title_id END",params![profile,id,kind,name,v["poster"].as_str(),p,d,library::activity_time(&tx,profile)?,context.to_string(),continuation::title_id(&v)]).map_err(db_error)?;
+    tx.commit().map_err(db_error)?;
     Ok(axum::Json(json!({"ok":true})))
     }).await?;
     crate::simkl::schedule_progress(tracking_app,profile,tracking_value,false);

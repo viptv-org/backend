@@ -13,6 +13,7 @@ pub(crate) mod configuration;
 pub(crate) mod history;
 mod home;
 pub(crate) mod library;
+pub(crate) mod library_stats;
 #[cfg(test)]
 mod library_tests;
 mod projection;
@@ -52,7 +53,7 @@ pub(crate) async fn bootstrap(
     } else {
         None
     };
-    let bootstrap_library=if let Some(profile)=profile_id{Some(library::list(State(app.clone()),Extension(lease.clone()),Path(profile),axum::extract::Query(library::Page{offset:0,limit:Some(100)})).await?.0)}else{None};
+    let bootstrap_library=if let Some(profile)=profile_id{Some(library::list(State(app.clone()),Extension(lease.clone()),Path(profile),axum::extract::Query(library::Page{offset:0,limit:100,..Default::default()})).await?.0)}else{None};
     let bootstrap_preferences=if let Some(profile)=profile_id{Some(preferences::get(State(app.clone()),Extension(lease.clone()),Path(profile)).await?.0)}else{None};
     lease.validate(
         &*app

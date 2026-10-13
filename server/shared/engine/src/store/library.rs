@@ -2,7 +2,7 @@ use super::*;
 use crate::presentation::{Card, CatalogPage};
 
 impl Store {
-    fn library_scope(&self, scope: &Scope, mutate: bool) -> Result<(), Error> {
+    pub(super) fn library_scope(&self, scope: &Scope, mutate: bool) -> Result<(), Error> {
         let profile = self.profile(scope)?.ok_or(Error::Forbidden)?;
         if mutate && profile.scope.revision != scope.revision {
             return Err(Error::Conflict);

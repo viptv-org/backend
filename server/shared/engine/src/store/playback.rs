@@ -67,7 +67,9 @@ impl Store {
         presentation.logo = public_art(card.logo.as_deref());
         presentation.progress = None;
         presentation.added_at_millis = None;
+        let times_watched=match &old{None=>Some(u64::from(completed)),Some(old)=>old.times_watched.map(|count|if completed && !(old.duration_millis>0&&old.position_millis.saturating_mul(100)>=old.duration_millis.saturating_mul(95)){count.saturating_add(1)}else{count})};
         let record = PlaybackRecord {
+            times_watched,
             presentation: Some(presentation),
             identity: card.identity.clone(),
             parent_identity: card.parent_identity.clone(),

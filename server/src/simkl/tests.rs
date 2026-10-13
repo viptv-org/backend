@@ -139,3 +139,5 @@ mod tokens;
 mod token_revocation;
 
 mod history_clear;
+
+mod watchlists;

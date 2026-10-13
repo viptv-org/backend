@@ -43,3 +43,5 @@ pub mod egress;
 pub mod live;
 
 pub mod search;
+
+pub mod library;

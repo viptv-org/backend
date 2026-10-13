@@ -1,5 +1,6 @@
 //! Simkl identities are provider-qualified; title IDs never become episode IDs.
 mod mapping;
+mod description;
 use crate::{
     Error,
     identity::{EpisodeCoordinates, ExternalId, MediaIdentity},
@@ -97,7 +98,7 @@ pub fn card(value: &Value, category: &str) -> Result<Card, Error> {
         provider_id: "simkl".into(),
         title,
         subtitle: year(value).map(|year| year.to_string()),
-        description: text(&value["overview"], 16_384),
+        description: description::text(&value["overview"]),
         poster: image(&value["poster"], "posters", "m"),
         landscape: image(&value["fanart"], "fanart", "w"),
         logo: None,
@@ -156,7 +157,7 @@ pub fn episodes(value: &Value, parent: &Card) -> Result<Vec<Card>, Error> {
         card.title = text(&value["title"], 512).unwrap_or_else(|| format!("Episode {episode}"));
         card.subtitle = Some(format!("S{season} E{episode}"));
         card.description =
-            text(&value["description"], 16_384).or_else(|| text(&value["overview"], 16_384));
+            description::text(&value["description"]).or_else(|| description::text(&value["overview"]));
         card.landscape = image(&value["img"], "episodes", "w");
         cards.push(card);
     }

@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct PlaybackRecord {
     #[serde(default)]
+    pub times_watched: Option<u64>,
+    #[serde(default)]
     pub presentation: Option<Card>,
     pub identity: MediaIdentity,
     pub provider_id: String,

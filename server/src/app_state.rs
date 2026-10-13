@@ -270,6 +270,7 @@ impl App {
         engine_v3::profiles::init(&db).map_err(|_| "Profile presentation initialization failed")?;
         engine_v3::configuration::init(&db).map_err(|_| "Engine configuration initialization failed")?;
         engine_v3::history::init(&db).map_err(|_| "Library revision initialization failed")?;
+        engine_v3::library_stats::init(&db).map_err(|_|"Library statistics schema initialization failed")?;
         simkl::init(&db).map_err(|_| "Simkl schema initialization failed")?;
         let simkl = Arc::new(simkl::Service::from_env()?);
         simkl.warm_discovery();

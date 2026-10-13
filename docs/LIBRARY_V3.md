@@ -1,0 +1,17 @@
+# Scoped library pages
+
+`GET /api/v3/profiles/:id/library` and native `LocalEngine.libraryPage(profile, queryJson)` return `LibrarySnapshot`: cards, cursor, effective query, embedded `QueryControl` choices, list availability, and actual statistics keyed by canonical media identity. Existing `cards`, `next_cursor` and `complete` consumers remain compatible. One page request applies filters and retrieves current choices.
+
+The list selector is `source=favorites|simkl`, labelled **List**. Simkl requires this profile's linked credential and enabled Authorization assignment; it does not change the selected metadata provider. Missing configuration, disabled assignment or unlinked profile returns a typed empty page with the corresponding availability, without expiring the VIPTV session.
+
+Common queries are `sort=last_watched|name_asc|name_desc|times_watched|date_added`, `show=all|watched|not_watched`, `type=all|movie|series|anime`, `genre`, and `added=this_year|this_month|last_7_days`. Simkl additionally supports `status=watching|plantowatch|hold|completed|dropped`, `rated=rated_8_plus|not_rated`, `episodes_left_max=9`, and `show=has_new_episode|not_started|caught_up|episodes_to_air`. Empty optional string choices mean Any; omit empty numeric choices. Offset is bounded at 10,000 and page limit at 100.
+
+Statistics keep unknown historical dates/counts null. Personal `user_rating` comes from the linked watchlist and is independent of catalog ratings. Aired counts use provider total minus not-aired counts. The provider next-unwatched marker determines caught-up status even when the user skipped old episodes. Individual episode completions do not fabricate whole-series rewatch totals. Native and favorites counts record only observed completion transitions, without rewriting legacy history.
+
+The read-only Simkl adapter coalesces private reads per session family, profile, configuration and link revision. It caches for 60 seconds, then checks `/sync/activities`. Changed watchlist buckets merge `date_from` deltas; rating-only changes read `/sync/ratings`; removals reconcile canonical IDs. Null or omitted empty buckets are accepted. Memos are removed before caching. Reads are bounded by 12 seconds and 4 MiB; no external list/history/status writes or expanded OAuth scopes occur.
+
+Simkl all-items does not supply genres, including `extended=full`. Genre hydration runs in the host, using canonical detail reads and the existing coalesced metadata cache. There are at most three worker requests globally, a 3-second per-title deadline, 90-second sweep deadline and 2,000-title limit per sweep. Requests and publication validate profile/configuration/link authority. The initial list does not wait for hydration. Subsequent Apply reads reuse verified cards and expose actual genre choices. While titles remain unknown, `reason` states the verified/total count; a genre-filtered page returns verified matches with `TemporarilyUnavailable`, never silently treating unknown titles as definitive nonmatches. A later Apply retries missing titles after a 10-second retry interval. Libraries larger than one sweep remain explicitly partial until further bounded sweeps finish.
+
+The owned local QA server continues until explicit process termination. It does not have a 24-hour or shorter automatic expiry; session expiry remains normal authentication behavior.
+
+Official provider references: [all-items](https://api.simkl.org/api-reference/simkl/get-all-items), [sync guide](https://api.simkl.org/guides/sync).

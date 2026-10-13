@@ -103,6 +103,7 @@ pub(super) fn record(item: &Value) -> Option<PlaybackRecord> {
                     })
             });
     Some(PlaybackRecord {
+        times_watched:None,
         presentation:None,
         identity,
         parent_identity,

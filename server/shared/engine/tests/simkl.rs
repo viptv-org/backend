@@ -99,3 +99,9 @@ fn source_targets_require_authoritative_ids_and_verified_episode_coordinates() {
         });
     assert!(simkl::source_identity(&conflict, None).is_err());
 }
+
+#[test]
+fn provider_plot_markup_and_entities_normalize_once_with_paragraph_breaks(){
+ let card=viptv_engine::simkl::card(&serde_json::json!({"title":"Naruto","ids":{"simkl":39508},"overview":"A &amp; B<br><br>Note: &quot;忍者&quot; &#8212; &#x1F343; <b>story</b>.<script>hidden</script><p>Next&nbsp;paragraph.</p>"}),"anime").unwrap();assert_eq!(card.description.as_deref(),Some("A & B\n\nNote: \"忍者\" — 🍃 story.\n\nNext paragraph."));
+ let plain=viptv_engine::simkl::card(&serde_json::json!({"title":"Plain","ids":{"simkl":1},"overview":"Two < 3 and 4 > 1\n\nSecond paragraph."}),"movie").unwrap();assert_eq!(plain.description.as_deref(),Some("Two < 3 and 4 > 1\n\nSecond paragraph."));
+}

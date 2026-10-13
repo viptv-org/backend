@@ -200,3 +200,14 @@ async fn library_and_home_reuse_exact_current_family_metadata_without_changing_p
  let page=get(&app,"/api/v3/profiles/1/library").await;assert_eq!(page["cards"][0]["logo"],"https://images.example/transparent.png");assert_eq!(page["cards"][0]["description"],"Host full metadata");assert_eq!(page["cards"][0]["added_at_millis"],added);assert!(page["cards"][0]["progress"].is_null());
  let bootstrap=get(&app,"/api/v3/bootstrap").await;assert_eq!(bootstrap["library"]["cards"][0],bootstrap["home"]["rows"][1]["cards"][0]);assert_eq!(bootstrap["library"]["cards"][0]["logo"],"https://images.example/transparent.png");
 }
+#[tokio::test]
+async fn real_completion_counts_remain_unknown_for_legacy_rows_and_increment_only_on_transitions(){
+ let app=fixture();let db=app.db.lock().unwrap();
+ db.execute("INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at) VALUES(1,'legacy','movie','Legacy',95,100,1)",[]).unwrap();
+ super::library_stats::observe(&db,1,"movie","legacy",true).unwrap();assert_eq!(db.query_row("SELECT count FROM engine_watch_counts WHERE profile_id=1 AND id='legacy'",[],|r|r.get::<_,Option<u64>>(0)).unwrap(),None);
+ for (position,completed) in [(10,false),(95,true),(99,true),(10,false),(96,true)]{
+  super::library_stats::observe(&db,1,"movie","new",completed).unwrap();db.execute("INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at) VALUES(1,'new','movie','New',?1,100,1) ON CONFLICT(profile_id,type,id) DO UPDATE SET position=excluded.position",[position]).unwrap();
+ }
+ assert_eq!(db.query_row("SELECT count FROM engine_watch_counts WHERE profile_id=1 AND id='new'",[],|r|r.get::<_,u64>(0)).unwrap(),2);
+ db.execute("DELETE FROM progress WHERE profile_id=1 AND id='new'",[]).unwrap();assert_eq!(db.query_row("SELECT count(*) FROM engine_watch_counts WHERE profile_id=1 AND id='new'",[],|r|r.get::<_,u64>(0)).unwrap(),0);
+}

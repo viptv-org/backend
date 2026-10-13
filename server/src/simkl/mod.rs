@@ -5,6 +5,7 @@ mod completion;
 pub(crate) use automatic::schedule_progress;
 mod event_fence;
 mod history;
+pub(crate) mod watchlists;
 pub(crate) use history::progress;
 mod lifecycle;
 pub(crate) use lifecycle::playback;

@@ -7,6 +7,7 @@ pub struct Store {
 mod catalog;
 mod connections;
 mod library;
+mod library_stats;
 mod playback;
 mod profiles;
 mod preferences;

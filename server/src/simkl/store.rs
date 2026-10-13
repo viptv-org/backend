@@ -199,3 +199,14 @@ fn configuration_revision(db: &Connection, profile: i64) -> Result<u64, ApiError
     .map_err(db_error)
     .map(|value| value.unwrap_or(0))
 }
+
+pub(super) async fn private_read(app:&App,profile:i64,credential:&Credential,path:&str)->Result<Value,ApiError>{
+    let raw=credential.token.as_ref().ok_or_else(||ApiError(StatusCode::UNAUTHORIZED,"Link Simkl for this profile".into()))?;
+    if let Ok(document)=serde_json::from_slice::<Value>(raw.expose()){
+        if !document["scope"].as_str().is_some_and(|scope|scope.split_whitespace().any(|s|s=="media:read")){return Err(ApiError(StatusCode::FORBIDDEN,"Simkl read authorization is unavailable".into()));}
+    }
+    let token=tokens::access(app,profile,credential).await?.ok_or_else(||ApiError(StatusCode::UNAUTHORIZED,"Link Simkl for this profile".into()))?;
+    validate(app,profile,credential)?;
+    let value=app.simkl.request_checked(path,Some(&token),None,||validate(app,profile,credential)).await?;
+    validate(app,profile,credential)?;Ok(value)
+}
