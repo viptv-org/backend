@@ -25,6 +25,8 @@ pub fn router_with_tv(
         .route("/v3/profiles/:id/simkl/search", get(simkl::search))
         .route("/v3/profiles/:id/simkl/meta/:category/:title", get(simkl::detail))
         .route("/v3/profiles/:id/simkl/watched", post(simkl::watched))
+        .route("/v3/profiles/:id/playback-events", post(simkl::playback))
+        .route("/v3/profiles/:id/progress", axum::routing::put(simkl::progress))
         .route(
             "/profiles",
             get(profiles_authenticated).post(create_profile_authenticated),

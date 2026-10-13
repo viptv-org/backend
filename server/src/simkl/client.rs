@@ -14,6 +14,7 @@ pub(crate) struct Service {
     pub(super) data_base: String,
     pub(super) trending: super::discovery::PublicCache,
     pub(super) metadata: super::cache::Cache,
+    pub(super) tracking: super::automatic::Queue,
     next: tokio::sync::Mutex<tokio::time::Instant>,
 }
 
@@ -70,6 +71,7 @@ impl Service {
             data_base: "https://data.simkl.in".into(),
             trending: Default::default(),
             metadata: Default::default(),
+            tracking: Default::default(),
             next: tokio::sync::Mutex::new(tokio::time::Instant::now()),
         })
     }
@@ -108,15 +110,16 @@ impl Service {
             .await
             .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "Simkl is unavailable".into()))?;
         if !response.status().is_success() {
+            let authorization_required = matches!(response.status().as_u16(), 401 | 403);
             let status = match response.status().as_u16() {
-                401 | 403 => StatusCode::UNAUTHORIZED,
+                401 | 403 => StatusCode::BAD_GATEWAY,
                 409 => StatusCode::CONFLICT,
                 429 => StatusCode::TOO_MANY_REQUESTS,
                 _ => StatusCode::BAD_GATEWAY,
             };
             return Err(ApiError(
                 status,
-                if status == StatusCode::UNAUTHORIZED {
+                if authorization_required {
                     "Simkl authorization is required"
                 } else {
                     "Simkl request was not accepted"

@@ -90,7 +90,9 @@ pub async fn correct(
 ) -> ApiResult {
     use rusqlite::OptionalExtension;
     let app = app.with_lease(lease);
-    blocking(move || {
+    let tracking_app=app.clone();
+    let tracking_item=item.clone();
+    let result=blocking(move || {
         let id=text(&item,"id",512)?; let kind=media_type(&item)?; let name=text(&item,"name",512)?;
         if kind=="live" {return Err("Live channels do not have episode progress".into());}
         let action=text(&item,"action",32)?;
@@ -126,7 +128,9 @@ pub async fn correct(
         let mut response = json!({"ok":true,"position":position,"duration":duration});
         add_watch_fields(&mut response, &merged);
         Ok(axum::Json(response))
-    }).await
+    }).await?;
+    if tracking_item["action"]=="watched" {crate::simkl::schedule_progress(tracking_app,profile,tracking_item,true);}
+    Ok(result)
 }
 
 #[derive(Deserialize)]

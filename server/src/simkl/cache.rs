@@ -46,7 +46,14 @@ pub(super) async fn metadata(
     let value = app
         .simkl
         .metadata_document(path, || store::validate(app, profile, access))
-        .await?;
+        .await;
+    let value = match value {
+        Err(error) if error.1 == "Simkl authorization is required" && access.token.is_some() => {
+            // OAuth-backed responses never enter the shared public metadata cache.
+            Arc::new(store::request(app, profile, access, path, None).await?)
+        }
+        result => result?,
+    };
     store::validate(app, profile, access)?;
     Ok(value)
 }

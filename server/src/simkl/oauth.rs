@@ -22,7 +22,7 @@ pub(crate) async fn status(
         vec![]
     };
     Ok(axum::Json(
-        json!({"configured":configured,"linked":links.first().is_some_and(|c|c.revision > 0),"connection":links.first()}),
+        json!({"configured":configured,"linked":links.first().is_some_and(|c|c.revision > 0),"connection":links.first(),"tracking":automatic::status(&db,profile,links.first().map_or(0,|c|c.revision))?}),
     ))
 }
 

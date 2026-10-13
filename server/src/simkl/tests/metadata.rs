@@ -161,3 +161,115 @@ async fn unlink_invalidates_pending_oauth_and_disabled_assignment_blocks_trackin
     assert_eq!(writes.load(Ordering::SeqCst), 0);
     task.abort();
 }
+
+#[tokio::test]
+async fn upstream_metadata_authorization_failure_does_not_expire_viptv_session() {
+    let (mut app, initial, _) = server().await;
+    initial.abort();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().fallback(|| async { StatusCode::UNAUTHORIZED }),
+        )
+        .await
+        .unwrap();
+    });
+    app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v3/profiles/1/simkl/meta/movie/10",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v3/profiles/1/simkl",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    task.abort();
+}
+
+#[tokio::test]
+async fn oauth_required_metadata_uses_profile_link_without_populating_public_cache() {
+    let (mut app, initial, _) = server().await;
+    link(&app).await;
+    initial.abort();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let routes = axum::Router::new()
+            .route(
+                "/movies/10",
+                get(|headers: axum::http::HeaderMap| async move {
+                    if headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        != Some("Bearer fixture-private-token")
+                    {
+                        return StatusCode::UNAUTHORIZED.into_response();
+                    }
+                    axum::Json(json!({"title":"Movie","ids":{"simkl":10}})).into_response()
+                }),
+            )
+            .route(
+                "/search/movie",
+                get(|headers: axum::http::HeaderMap| async move {
+                    if headers
+                        .get(header::AUTHORIZATION)
+                        .and_then(|v| v.to_str().ok())
+                        != Some("Bearer fixture-private-token")
+                    {
+                        return StatusCode::UNAUTHORIZED.into_response();
+                    }
+                    axum::Json(json!([{"title":"Movie","ids":{"simkl":10}}])).into_response()
+                }),
+            );
+        axum::serve(listener, routes).await.unwrap();
+    });
+    app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
+    for path in [
+        "/api/v3/profiles/1/simkl/search?category=movie&query=Movie",
+        "/api/v3/profiles/1/simkl/meta/movie/10",
+    ] {
+        assert_eq!(
+            request(&app, "member-token-1", "GET", path, json!({}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "DELETE",
+            "/api/v3/profiles/1/simkl",
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/v3/profiles/1/simkl/meta/movie/10",
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::BAD_GATEWAY
+    );
+    task.abort();
+}

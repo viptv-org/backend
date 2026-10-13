@@ -1,5 +1,13 @@
 use crate::*;
 use viptv_engine::{capabilities::Capability, profile::IntegrationConnection};
+mod automatic;
+mod completion;
+pub(crate) use automatic::schedule_progress;
+mod event_fence;
+mod history;
+pub(crate) use history::progress;
+mod lifecycle;
+pub(crate) use lifecycle::playback;
 mod cache;
 mod client;
 mod mapping;

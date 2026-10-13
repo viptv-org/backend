@@ -2,6 +2,7 @@ use super::*;
 
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS simkl_links(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE, revision INTEGER NOT NULL, credential TEXT);
+        CREATE TABLE IF NOT EXISTS simkl_tracking_receipts(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,media_id TEXT NOT NULL,link_revision INTEGER NOT NULL,state TEXT NOT NULL,attempt_at INTEGER NOT NULL,PRIMARY KEY(profile_id,media_id,link_revision));
         CREATE TABLE IF NOT EXISTS simkl_oauth_states(state_hash TEXT PRIMARY KEY,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,account_id INTEGER NOT NULL,session_id TEXT NOT NULL,role TEXT NOT NULL,policy_revision INTEGER NOT NULL,link_revision INTEGER NOT NULL,expires INTEGER NOT NULL);")
 }
 
@@ -55,6 +56,7 @@ pub(super) fn save_token(
 pub(super) struct Credential {
     pub revision: Option<u64>,
     pub capability: Capability,
+    pub configuration_revision: u64,
     pub token: Option<crate::secret_store::SecretBytes>,
 }
 
@@ -77,25 +79,24 @@ pub(super) fn credential(
         "SELECT revision,credential FROM simkl_links WHERE profile_id=?1 AND account_id=?2 AND credential IS NOT NULL", params![profile,account], |r| Ok((r.get(0)?,r.get(1)?))
     ).optional().map_err(db_error)?;
     let revision = record.as_ref().map(|r| r.0);
-    let token = if capability == Capability::Tracking {
-        let (_, sealed) = record.ok_or_else(|| {
-            ApiError(
-                StatusCode::UNAUTHORIZED,
-                "Link Simkl for this profile".into(),
-            )
-        })?;
-        Some(
+    if capability == Capability::Tracking && record.is_none() {
+        return Err(ApiError(
+            StatusCode::UNAUTHORIZED,
+            "Link Simkl for this profile".into(),
+        ));
+    }
+    let token = record
+        .map(|(_, sealed)| {
             app.secret_vault
                 .as_ref()
                 .ok_or_else(unavailable)?
                 .open(account, "simkl", &profile.to_string(), &sealed)
-                .map_err(|_| unavailable())?,
-        )
-    } else {
-        None
-    };
+                .map_err(|_| unavailable())
+        })
+        .transpose()?;
     Ok(Credential {
         revision,
+        configuration_revision: configuration_revision(&db, profile)?,
         capability,
         token,
     })
@@ -108,6 +109,12 @@ pub(super) fn validate(app: &App, profile: i64, credential: &Credential) -> Resu
         .map_err(|_| ApiError::from("Database unavailable"))?;
     app.require_profile(&db, profile)?;
     assigned(&db, profile, credential.capability)?;
+    if configuration_revision(&db, profile)? != credential.configuration_revision {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "Profile configuration changed".into(),
+        ));
+    }
     let revision: Option<u64> = db.query_row("SELECT revision FROM simkl_links WHERE profile_id=?1 AND account_id=?2 AND credential IS NOT NULL",params![profile, app.identity().account_id()], |r| r.get(0)).optional().map_err(db_error)?;
     if revision != credential.revision {
         return Err(ApiError(StatusCode::CONFLICT, "Simkl link changed".into()));
@@ -128,10 +135,28 @@ pub(super) async fn request(
         .map(|token| std::str::from_utf8(token.expose()))
         .transpose()
         .map_err(|_| unavailable())?;
-    let value = app
+    // Public documents stay credential-free unless this application requires OAuth.
+    let initial_token = (credential.capability == Capability::Tracking)
+        .then_some(token)
+        .flatten();
+    let result = app
         .simkl
-        .request_checked(path, token, body, || validate(app, profile, credential))
-        .await?;
+        .request_checked(path, initial_token, body.clone(), || {
+            validate(app, profile, credential)
+        })
+        .await;
+    let value = match result {
+        Err(error)
+            if error.1 == "Simkl authorization is required"
+                && initial_token.is_none()
+                && token.is_some() =>
+        {
+            app.simkl
+                .request_checked(path, token, body, || validate(app, profile, credential))
+                .await?
+        }
+        result => result?,
+    };
     validate(app, profile, credential)?;
     Ok(value)
 }
@@ -158,4 +183,15 @@ fn assigned(db: &Connection, profile: i64, capability: Capability) -> Result<(),
         }
     }
     Ok(())
+}
+
+fn configuration_revision(db: &Connection, profile: i64) -> Result<u64, ApiError> {
+    db.query_row(
+        "SELECT revision FROM engine_profile_configuration WHERE profile_id=?1",
+        [profile],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(db_error)
+    .map(|value| value.unwrap_or(0))
 }
