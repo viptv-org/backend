@@ -190,6 +190,8 @@ pub(crate) async fn detail(
         &app,
         projection::recommendations(&document, &category, &item.identity.id),
     )?;
+    let all=viptv_engine::presentation::canonical_episodes(allowed(&app,all)?);
+    let seasons=viptv_engine::presentation::episode_seasons(&all);
     let next_cursor = (all.len() > q.offset + 24).then(|| (q.offset + 24).to_string());
     let episodes = allowed(&app, all.into_iter().skip(q.offset).take(24).collect())?;
     let _ = tokio::time::timeout(
@@ -204,6 +206,7 @@ pub(crate) async fn detail(
             recommendations,
             episodes,
             next_cursor,
+            seasons,
         })
         .map_err(|_| ApiError::from("Title unavailable"))?,
     ))

@@ -1,6 +1,8 @@
 use crate::{identity::MediaIdentity, profile::Scope};
 use facet::Facet;
 use serde::{Deserialize, Serialize};
+mod episodes;
+pub use episodes::{canonical_episodes, episode_seasons};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Facet)]
 pub struct CardMetadata {
@@ -75,6 +77,14 @@ pub struct DetailSnapshot {
     pub recommendations: Vec<Card>,
     pub episodes: Vec<Card>,
     pub next_cursor: Option<String>,
+    #[serde(default)]
+    pub seasons: Vec<EpisodeSeason>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
+pub struct EpisodeSeason {
+    pub season: Option<u32>,
+    pub episode_count: u32,
+    pub offset: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]

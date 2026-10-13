@@ -137,27 +137,13 @@ pub(crate) async fn detail(
         .into_iter()
         .next()
         .ok_or_else(auth::forbidden)?;
-    let all = meta["videos"].as_array().cloned().unwrap_or_default();
-    let next_cursor = (all.len() > page.offset + 24).then(|| (page.offset + 24).to_string());
-    let videos = all
-        .iter()
-        .skip(page.offset)
-        .take(24)
-        .map(|video| {
-            let mut episode = video.clone();
-            episode["type"] = parent["type"].clone();
-            if episode["name"].is_null() {
-                episode["name"] = episode["title"].clone();
-            }
-            if episode["background"].is_null() {
-                episode["background"] = episode["thumbnail"].clone();
-            }
-            episode
-        })
-        .collect();
-    let mut episodes = projection::cards(&app, videos, "stremio")?;
-    for episode in &mut episodes { episode.parent_identity = Some(item.identity.clone()); }
-    let recommendations=viptv_engine::stremio::detail(&json!({"meta":parent}).to_string(),"stremio",&kind,&id,page.offset).map(|detail|detail.recommendations).map_err(|_|ApiError::from("Invalid related metadata"))?;
+    let mut parent=parent;
+    let videos=parent["videos"].as_array().cloned().unwrap_or_default().into_iter().map(|mut video|{video["type"]=json!("series");video}).collect();
+    {let db=app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;app.require_media(&db)?;
+    parent["videos"]=json!(kids::filter_items(&db,&app.identity(),videos)?);}
+    let mut projected=viptv_engine::stremio::detail(&json!({"meta":parent}).to_string(),"stremio",&kind,&id,page.offset).map_err(|_|ApiError::from("Invalid episode metadata"))?;
+    let seasons=projected.seasons;let episodes=projected.episodes;let next_cursor=projected.next_cursor;
+    let recommendations=std::mem::take(&mut projected.recommendations);
     let mut recommendations=super::projection::allowed_cards(&app,recommendations)?;
     if recommendations.is_empty(){
         if let Some(genre)=item.metadata.as_ref().and_then(|metadata|metadata.genres.first()){
@@ -169,7 +155,7 @@ pub(crate) async fn detail(
         }
     }
     configuration::validate_revision(&app,profile,revision)?;
-    let value=serde_json::to_value(DetailSnapshot{item,recommendations,episodes,next_cursor}).map_err(|_|ApiError::from("Title unavailable"))?;
+    let value=serde_json::to_value(DetailSnapshot{item,recommendations,episodes,next_cursor,seasons}).map_err(|_|ApiError::from("Title unavailable"))?;
     super::source_integrations::cache_detail(&app,&lease,revision,&value);
     Ok(axum::Json(value))
 }
