@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/viptv-org/core",
-  "revision": "01cd412ccc64d343c954242e798ede1b807a9a1e",
+  "revision": "6a9e68521da528fdc7efa2aa16fa74a58c166e94",
   "path": "crates/viptv-engine",
   "manifest_transform": "viptv-provider path ../../provider",
   "files": {

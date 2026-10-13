@@ -186,3 +186,17 @@ async fn favorite_dates_preserve_first_add_and_do_not_invent_legacy_timestamps()
  let(_,page)=request(&app,"member-token-1","GET","/api/v3/profiles/1/library",Value::Null).await;let first=page["cards"].as_array().unwrap().iter().find(|c|c["identity"]["id"]=="new-date").unwrap()["added_at_millis"].as_u64().unwrap();assert!(first>1);assert_eq!(page["cards"][0]["identity"]["id"],"new-date");assert!(page["cards"].as_array().unwrap().iter().find(|c|c["identity"]["id"]=="legacy-date").unwrap()["added_at_millis"].is_null());
  let(status,_)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/library",json!({"card":card})).await;assert_eq!(status,StatusCode::OK);let(_,page)=request(&app,"member-token-1","GET","/api/v3/profiles/1/library",Value::Null).await;assert_eq!(page["cards"][0]["added_at_millis"],first);
 }
+
+#[tokio::test]
+async fn library_and_home_reuse_exact_current_family_metadata_without_changing_personal_state(){
+ let app=fixture();let saved=input("opaque-title","Alpha");assert_eq!(request(&app,"member-token-1","PUT","/api/v3/profiles/1/library",saved.clone()).await.0,StatusCode::OK);
+ let before=get(&app,"/api/v3/profiles/1/library").await;let added=before["cards"][0]["added_at_millis"].clone();
+ let mut full=saved["card"].clone();full["description"]=json!("Host full metadata");full["logo"]=json!("https://images.example/transparent.png");full["metadata"]=json!({"year":2026,"runtime_minutes":120,"genres":["Drama"],"rating":8.4,"rating_votes":100,"certification":null,"alternate_titles":[]});full["added_at_millis"]=json!(1);
+ let mut lease=ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,profile_id:Some(1),role:"member".into(),session_id:Some("different-family".into())},session_id:Some("different-family".into())};
+ super::source_integrations::cache_card(&app,&lease,0,serde_json::from_value(full.clone()).unwrap());assert!(get(&app,"/api/v3/profiles/1/library").await["cards"][0]["logo"].is_null());
+ let auth::Principal::Account{session_id,..}=&mut lease.principal;*session_id=Some("s1".into());lease.session_id=Some("s1".into());
+ super::source_integrations::cache_card(&app,&lease,99,serde_json::from_value(full.clone()).unwrap());assert!(get(&app,"/api/v3/profiles/1/library").await["cards"][0]["logo"].is_null());
+ super::source_integrations::cache_card(&app,&lease,0,serde_json::from_value(full).unwrap());
+ let page=get(&app,"/api/v3/profiles/1/library").await;assert_eq!(page["cards"][0]["logo"],"https://images.example/transparent.png");assert_eq!(page["cards"][0]["description"],"Host full metadata");assert_eq!(page["cards"][0]["added_at_millis"],added);assert!(page["cards"][0]["progress"].is_null());
+ let bootstrap=get(&app,"/api/v3/bootstrap").await;assert_eq!(bootstrap["library"]["cards"][0],bootstrap["home"]["rows"][1]["cards"][0]);assert_eq!(bootstrap["library"]["cards"][0]["logo"],"https://images.example/transparent.png");
+}

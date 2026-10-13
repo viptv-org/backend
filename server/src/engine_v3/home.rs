@@ -128,6 +128,8 @@ pub(super) async fn load(
     ) {
         enrich(&metadata_app, profile, &mut snapshot).await;
     }
+    for row in &mut snapshot.rows{super::source_integrations::merge_cached(&app,&lease,configuration_revision,&mut row.cards);}
+    if let Some(hero)=&mut snapshot.hero{super::source_integrations::merge_cached(&app,&lease,configuration_revision,std::slice::from_mut(hero));}
     snapshot.revision = revision;
     configuration::validate_revision(&app, profile, configuration_revision)?;
     lease.validate(
@@ -193,6 +195,7 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
         let Some(metadata) = result else {
             continue;
         };
+        super::source_integrations::cache_card(app,&app.request_lease(),snapshot.scope.revision,metadata.clone());
         apply_metadata(snapshot, &original, &metadata);
         presented.push((original, metadata));
     }
@@ -213,6 +216,7 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while let Ok(Some((original, metadata))) = tokio::time::timeout_at(deadline, logos.next()).await
     {
+        super::source_integrations::cache_card(app,&app.request_lease(),snapshot.scope.revision,metadata.clone());
         apply_metadata(snapshot, &original, &metadata);
     }
 }

@@ -3,7 +3,7 @@ use super::*;
 use viptv_engine::{
     capabilities::Capability,
     profile::IntegrationConnection,
-    source_integration::{vsources_schema, VsourcesConfiguration},
+    source_integration::{VsourcesConfiguration, vsources_schema},
 };
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_source_integrations(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,revision INTEGER NOT NULL,enabled INTEGER NOT NULL,secret TEXT NOT NULL,UNIQUE(account_id,profile_id));")
@@ -319,21 +319,52 @@ pub(crate) fn cache_detail(app: &App, lease: &ResourceLease, revision: u64, valu
     else {
         return;
     };
+    for card in std::iter::once(detail.item).chain(detail.episodes) {
+        cache_card(app, lease, revision, card);
+    }
+}
+
+pub(crate) fn cache_card(
+    app: &App,
+    lease: &ResourceLease,
+    revision: u64,
+    card: viptv_engine::presentation::Card,
+) {
     let Ok(mut cache) = app.verified_cards.lock() else {
         return;
     };
     if cache.len() > 8192 {
         cache.clear();
     }
-    for card in std::iter::once(detail.item).chain(detail.episodes) {
-        cache.insert(
-            (
-                lease.principal.key(),
-                revision,
-                card.identity.kind.clone(),
-                card.identity.id.clone(),
-            ),
-            card,
-        );
+    cache.insert(
+        (
+            lease.principal.key(),
+            revision,
+            card.identity.kind.clone(),
+            card.identity.id.clone(),
+        ),
+        card,
+    );
+}
+
+pub(crate) fn merge_cached(
+    app: &App,
+    lease: &ResourceLease,
+    revision: u64,
+    cards: &mut [viptv_engine::presentation::Card],
+) {
+    let Ok(cache) = app.verified_cards.lock() else {
+        return;
+    };
+    for card in cards {
+        let identity = card.parent_identity.as_ref().unwrap_or(&card.identity);
+        if let Some(metadata) = cache.get(&(
+            lease.principal.key(),
+            revision,
+            identity.kind.clone(),
+            identity.id.clone(),
+        )) {
+            *card = viptv_engine::presentation::enrich_card(card, metadata);
+        }
     }
 }

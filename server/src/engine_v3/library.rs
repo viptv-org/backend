@@ -52,20 +52,27 @@ pub(crate) async fn list(
     Path(profile): Path<i64>,
     Query(page): Query<Page>,
 ) -> ApiResult {
-    let app = app.with_lease(lease);
-    blocking(move || {
-        let db = app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;
-        app.require_profile(&db, profile)?;
+    let app = app.with_lease(lease.clone());
+    let (configuration,_)=super::configuration::read(&app,&lease,profile)?;
+    let revision=configuration.scope.revision;
+    let task_app=app.clone();let task_lease=lease.clone();
+    let response=blocking(move || {
+        let db = task_app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;
+        task_app.require_profile(&db, profile)?;
         let limit = page.limit.unwrap_or(40).clamp(1, 100);
         let allowed = kids::sql_allowed("favorites.type", "favorites.id", "?1");
         let total: u64 = db.query_row(&format!("SELECT count(*) FROM favorites WHERE profile_id=?1 AND type IN ('movie','series') AND {allowed}"), [profile], |r|r.get(0)).map_err(db_error)?;
         let mut query = db.prepare(&format!("SELECT id,type,name,poster,context,added_at_millis FROM favorites WHERE profile_id=?1 AND type IN ('movie','series') AND {allowed} ORDER BY added_at_millis DESC,name COLLATE NOCASE,type,id LIMIT ?2 OFFSET ?3")).map_err(db_error)?;
         let items = query.query_map(params![profile,limit,page.offset], |r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"added_at_millis":r.get::<_,Option<u64>>(5)?,"engine_favorite":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
-        let cards = cards(&db, &app.identity(), items)?;
+        let mut cards = cards(&db, &task_app.identity(), items)?;
+        super::source_integrations::merge_cached(&task_app,&task_lease,revision,&mut cards);
         let next = u64::from(page.offset) + u64::from(limit);
         let page = CatalogPage {cards, next_cursor:(next < total).then(||next.to_string()), complete:next >= total};
         Ok(axum::Json(serde_json::to_value(page).map_err(|_|ApiError::from("Library unavailable"))?))
-    }).await
+    }).await?;
+    super::configuration::validate_revision(&app,profile,revision)?;
+    lease.validate(&*app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?)?;
+    Ok(response)
 }
 pub(crate) async fn save(
     State(app): State<App>,
