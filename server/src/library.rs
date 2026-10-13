@@ -90,8 +90,8 @@ pub async fn correct(
 ) -> ApiResult {
     use rusqlite::OptionalExtension;
     let app = app.with_lease(lease);
-    let tracking_app=app.clone();
-    let tracking_item=item.clone();
+    let tracking_app = app.clone();
+    let tracking_item = item.clone();
     let result=blocking(move || {
         let id=text(&item,"id",512)?; let kind=media_type(&item)?; let name=text(&item,"name",512)?;
         if kind=="live" {return Err("Live channels do not have episode progress".into());}
@@ -129,7 +129,9 @@ pub async fn correct(
         add_watch_fields(&mut response, &merged);
         Ok(axum::Json(response))
     }).await?;
-    if tracking_item["action"]=="watched" {crate::simkl::schedule_progress(tracking_app,profile,tracking_item,true);}
+    if tracking_item["action"] == "watched" {
+        crate::simkl::schedule_progress(tracking_app, profile, tracking_item, true);
+    }
     Ok(result)
 }
 
@@ -160,6 +162,14 @@ pub async fn series_history(
 }
 
 pub fn init(db: &Connection) -> rusqlite::Result<()> {
+    let has_context: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('favorites') WHERE name='context')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_context {
+        db.execute_batch("ALTER TABLE favorites ADD COLUMN context TEXT NOT NULL DEFAULT '{}'")?;
+    }
     db.execute_batch("CREATE INDEX IF NOT EXISTS favorites_paging ON favorites(profile_id,name COLLATE NOCASE,type,id); CREATE INDEX IF NOT EXISTS progress_paging ON progress(profile_id,updated_at DESC);")
 }
 

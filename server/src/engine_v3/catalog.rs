@@ -25,11 +25,10 @@ pub(crate) async fn discover(
         crate::handlers_catalog::discover(State(scoped.clone()), Extension(lease), Query(q))
             .await?;
     configuration::validate_revision(&scoped, profile, revision)?;
-    let cards = projection::cards(
-        &scoped,
-        value["metas"].as_array().cloned().unwrap_or_default(),
-        "stremio",
-    )?;
+    let items=value["metas"].as_array().cloned().unwrap_or_default();
+    let mut cards=Vec::new();
+    for items in items.chunks(24).take(5){cards.extend(projection::cards(&scoped,items.to_vec(),"stremio")?);}
+
     let page = CatalogPage {
         cards,
         next_cursor: value["next_skip"].as_u64().map(|n| n.to_string()),

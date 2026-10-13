@@ -110,7 +110,20 @@ fn decide_request(
         let p = app.identity();
         match parts.as_slice() {
             ["parent", ..] => return Ok(PolicyDecision::Pass),
-            ["v3", "profiles", _, "history"] if (method == axum::http::Method::GET || method == axum::http::Method::DELETE) => return Ok(PolicyDecision::Pass),
+            ["v3", "calendar" | "discovery-controls"] if method == axum::http::Method::GET => return Ok(PolicyDecision::Pass),
+            ["v3", "profiles", _, "library"]
+                if method == axum::http::Method::GET || method == axum::http::Method::PUT =>
+            {
+                return Ok(PolicyDecision::Pass)
+            }
+            ["v3", "profiles", _, "library", _, _] if method == axum::http::Method::DELETE => {
+                return Ok(PolicyDecision::Pass)
+            }
+            ["v3", "profiles", _, "history"]
+                if (method == axum::http::Method::GET || method == axum::http::Method::DELETE) =>
+            {
+                return Ok(PolicyDecision::Pass)
+            }
             ["profiles"] if method == axum::http::Method::GET => return Ok(PolicyDecision::Pass),
             ["profiles", _, "kids" | "approvals"] => {
                 require_parent(&db, &p)?;

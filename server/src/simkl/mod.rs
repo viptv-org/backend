@@ -13,6 +13,8 @@ mod client;
 mod mapping;
 pub(crate) use mapping::{resolve_id, resolve_request};
 mod discovery;
+pub(crate) mod browse;
+pub(crate) mod calendar;
 mod metadata;
 pub(crate) use discovery::{home_cards, page};
 mod oauth;

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{playback::PlaybackRecord, presentation::Card};
 
-fn public_art(url: Option<&str>) -> Option<String> {
+pub(super) fn public_art(url: Option<&str>) -> Option<String> {
     let value = url?.trim();
     if value.len() > 2048 {
         return None;

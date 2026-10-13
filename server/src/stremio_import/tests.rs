@@ -2298,7 +2298,7 @@ async fn real_file_wal_backup_uses_private_directory_and_contains_no_import_cred
             .run_to_completion(256, Duration::from_millis(1), None)
             .unwrap();
     }
-    disk.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA foreign_keys=ON; INSERT INTO favorites VALUES(1,'tt9999999','movie','Existing WAL title',NULL)").unwrap();
+    disk.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA foreign_keys=ON; INSERT INTO favorites(profile_id,id,type,name,poster) VALUES(1,'tt9999999','movie','Existing WAL title',NULL)").unwrap();
     f.app.db = Arc::new(Mutex::new(disk));
     Arc::get_mut(&mut f.app.stremio_import)
         .unwrap()

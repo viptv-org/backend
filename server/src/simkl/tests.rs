@@ -125,6 +125,7 @@ mod oauth;
 mod revocation;
 
 mod discovery;
+mod calendar_browse;
 
 mod mapping;
 

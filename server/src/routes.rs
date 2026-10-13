@@ -14,20 +14,51 @@ pub fn router_with_tv(
 ) -> Router {
     let api = Router::new()
         .route("/v3/bootstrap", get(engine_v3::bootstrap))
-        .route("/v3/profiles/:id/integrations", get(engine_v3::configuration::get).put(engine_v3::configuration::update))
+        .route(
+            "/v3/profiles/:id/integrations",
+            get(engine_v3::configuration::get).put(engine_v3::configuration::update),
+        )
         .route("/v3/profiles/:id/home", get(engine_v3::home))
-        .route("/v3/profiles/:id/history", get(engine_v3::history::list).delete(engine_v3::history::clear))
+        .route(
+            "/v3/profiles/:id/history",
+            get(engine_v3::history::list).delete(engine_v3::history::clear),
+        )
+        .route(
+            "/v3/profiles/:id/library",
+            get(engine_v3::library::list).put(engine_v3::library::save),
+        )
+        .route(
+            "/v3/profiles/:id/library/:kind/:item",
+            delete(engine_v3::library::remove),
+        )
         .route("/v3/discover", get(engine_v3::discover))
+        .route("/v3/calendar", get(simkl::calendar::get))
+        .route("/v3/discovery-controls", get(engine_v3::discovery_controls))
         .route("/v3/meta/:kind/:id", get(engine_v3::detail))
-        .route("/v3/subtitles/:kind/:id", get(engine_v3::subtitles::discover))
-        .route("/v3/subtitle-content/:id", get(engine_v3::subtitles::content))
-        .route("/v3/profiles/:id/simkl", get(simkl::status).delete(simkl::disconnect))
+        .route(
+            "/v3/subtitles/:kind/:id",
+            get(engine_v3::subtitles::discover),
+        )
+        .route(
+            "/v3/subtitle-content/:id",
+            get(engine_v3::subtitles::content),
+        )
+        .route(
+            "/v3/profiles/:id/simkl",
+            get(simkl::status).delete(simkl::disconnect),
+        )
         .route("/v3/profiles/:id/simkl/authorize", post(simkl::authorize))
         .route("/v3/profiles/:id/simkl/search", get(simkl::search))
-        .route("/v3/profiles/:id/simkl/meta/:category/:title", get(simkl::detail))
+        .route(
+            "/v3/profiles/:id/simkl/meta/:category/:title",
+            get(simkl::detail),
+        )
         .route("/v3/profiles/:id/simkl/watched", post(simkl::watched))
         .route("/v3/profiles/:id/playback-events", post(simkl::playback))
-        .route("/v3/profiles/:id/progress", axum::routing::put(simkl::progress))
+        .route(
+            "/v3/profiles/:id/progress",
+            axum::routing::put(simkl::progress),
+        )
         .route(
             "/profiles",
             get(profiles_authenticated).post(create_profile_authenticated),
@@ -220,7 +251,10 @@ pub fn router_with_tv(
         .layer(middleware::from_fn(gateway::diagnostics::observe));
     let mut r = Router::new()
         .nest("/api", api)
-        .route("/api/v3/simkl/callback", get(simkl::callback).layer(middleware::map_response(private_api_response)))
+        .route(
+            "/api/v3/simkl/callback",
+            get(simkl::callback).layer(middleware::map_response(private_api_response)),
+        )
         .route(
             "/api/health",
             get(|| async {

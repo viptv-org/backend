@@ -96,3 +96,31 @@ async fn unsafe_direct_probe_falls_back_to_registered_gateway_or_fails_without_r
     assert_eq!(ready["delivery"]["kind"], "gateway");
     assert_eq!(peer.inputs.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn gateway_resume_reports_applied_source_clock_and_renew_retains_delivery() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 0);
+    let source = source(&app);
+    let mut body = body(&source, "gateway_source_clock", "android");
+    body["position"] = json!(48.6);
+    body["force_gateway"] = json!(true);
+    let (status, created) = request(&app, "member-token-1", "POST", "/api/v2/playback", body).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let ready = settled(&app, id).await;
+    assert_eq!(ready["delivery"]["kind"], "gateway");
+    assert_eq!(ready["delivery"]["position"], 0.0);
+    assert_eq!(ready["delivery"]["timeline_offset_seconds"], 48.6);
+    assert_eq!(ready["delivery"]["duration"], 600.0);
+    assert_eq!(peer.inputs.lock().unwrap().len(), 1);
+    let (_, renewed) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        &format!("/api/v2/playback/{id}/heartbeat"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(renewed["delivery"], ready["delivery"]);
+}

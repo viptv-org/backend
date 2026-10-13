@@ -1620,7 +1620,7 @@ async fn prepare(
                 .map_err(ApiError::from)?;
             *entry.permit.lock().unwrap() = Some(permit);
         }
-        json!({"kind":"direct","url":destination.url,"headers":destination.headers,"position":request.position,"live":source.live,"format":"original","preferences":{"audio_language":request.preferred_audio_language,"subtitle_language":request.preferred_subtitle_language,"subtitles_enabled":request.preferred_subtitle_language.is_some()}})
+        json!({"kind":"direct","url":destination.url,"headers":destination.headers,"position":request.position,"timeline_offset_seconds":0.0,"live":source.live,"format":"original","preferences":{"audio_language":request.preferred_audio_language,"subtitle_language":request.preferred_subtitle_language,"subtitles_enabled":request.preferred_subtitle_language.is_some()}})
     } else {
         if !request
             .client

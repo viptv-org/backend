@@ -5,17 +5,22 @@ use viptv_engine::{
     profile::Scope,
 };
 mod catalog;
+mod controls;
+pub(crate) use controls::get as discovery_controls;
 pub(crate) mod configuration;
-mod home;
 pub(crate) mod history;
+mod home;
+pub(crate) mod library;
+#[cfg(test)]
+mod library_tests;
 mod projection;
 mod simkl_catalog;
 pub(crate) mod subtitles;
 pub(crate) use catalog::{detail, discover};
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod history_tests;
+#[cfg(test)]
+mod tests;
 
 pub(crate) async fn bootstrap(
     State(app): State<App>,

@@ -195,7 +195,7 @@ impl Session {
             .map(track)
             .collect::<Result<Vec<_>>>()?;
         Ok(Some(
-            json!({"kind":"gateway","url":url.as_str(),"format":media.format,"mode":media.mode,"video_mode":media.video_mode,"audio_mode":media.audio_mode,"position":media.position,"duration":media.duration,"live":media.live,"audio_tracks":audio,"subtitle_tracks":subtitles,"selected_audio":media.selected_audio.as_ref().map(track).transpose()?,"selected_subtitle":media.selected_subtitle.as_ref().map(track).transpose()?,"subtitles_supported":media.subtitles_supported}),
+            json!({"kind":"gateway","url":url.as_str(),"format":media.format,"mode":media.mode,"video_mode":media.video_mode,"audio_mode":media.audio_mode,"position":0.0,"timeline_offset_seconds":if media.live {0.0} else {media.position},"duration":media.duration,"live":media.live,"audio_tracks":audio,"subtitle_tracks":subtitles,"selected_audio":media.selected_audio.as_ref().map(track).transpose()?,"selected_subtitle":media.selected_subtitle.as_ref().map(track).transpose()?,"subtitles_supported":media.subtitles_supported}),
         ))
     }
     pub(crate) fn failure(&self) -> &'static str {

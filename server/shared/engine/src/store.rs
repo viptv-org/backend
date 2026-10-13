@@ -4,8 +4,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub struct Store {
     db: Connection,
 }
-mod connections;
 mod catalog;
+mod connections;
+mod library;
 mod playback;
 mod profiles;
 
@@ -23,6 +24,8 @@ impl Store {
           CREATE TABLE IF NOT EXISTS engine_connections(id TEXT PRIMARY KEY, account TEXT NOT NULL, value TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS engine_catalog_cache(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, revision INTEGER NOT NULL, row_id TEXT NOT NULL, expires_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,row_id));
           CREATE TABLE IF NOT EXISTS engine_playback(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, updated_at_millis INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,kind,id));
+          CREATE TABLE IF NOT EXISTS engine_favorites(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,kind,id), FOREIGN KEY(connection,account,profile) REFERENCES engine_profiles(connection,account,profile) ON DELETE CASCADE);
+          CREATE TABLE IF NOT EXISTS engine_library_revisions(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(connection,account,profile), FOREIGN KEY(connection,account,profile) REFERENCES engine_profiles(connection,account,profile) ON DELETE CASCADE);
           CREATE TABLE IF NOT EXISTS engine_profile_locks(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, pin_hash TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0, blocked_until INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(connection,account,profile));
           CREATE INDEX IF NOT EXISTS engine_playback_recent ON engine_playback(connection,account,profile,updated_at_millis DESC);").map_err(|_| Error::Storage)?;
         Ok(Self { db })

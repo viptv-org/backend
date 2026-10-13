@@ -377,7 +377,9 @@ async fn setup() -> (App, Peer) {
             if state.load(Ordering::SeqCst) == 3 {
                 waiting.notified().await;
             }
+            let position = value["position_seconds"].clone();
             let mut value = remote(&id);
+            value["playback"]["position"] = position;
             if state.load(Ordering::SeqCst) == 1 {
                 value["playback"]["url"] = json!("https://foreign.invalid/private-path");
             }

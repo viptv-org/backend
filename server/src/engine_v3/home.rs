@@ -29,11 +29,11 @@ pub(super) async fn load(
             queue["items"].as_array().cloned().unwrap_or_default()
         )?);
         let allowed = kids::sql_allowed("favorites.type", "favorites.id", "?1");
-        let mut q=db.prepare(&format!("SELECT id,type,name,poster FROM favorites WHERE profile_id=?1 AND {allowed} ORDER BY rowid DESC LIMIT 12")).map_err(db_error)?;
-        let favorites=q.query_map([profile],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
+        let mut q=db.prepare(&format!("SELECT id,type,name,poster,context FROM favorites WHERE profile_id=?1 AND {allowed} ORDER BY rowid DESC LIMIT 12")).map_err(db_error)?;
+        let favorites=q.query_map([profile],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"engine_favorite":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
         (
             queue,
-            favorites,
+            super::library::cards(&db, &app.identity(), favorites)?,
             configuration_revision.saturating_add(super::history::revision(&db, profile)?),
         )
     };
@@ -51,7 +51,6 @@ pub(super) async fn load(
         .filter_map(super::history::record)
         .map(|record| record.card())
         .collect();
-    let favorites = projection::cards(&app, favorites, "library")?;
     let mut requests = vec![
         RowRequest {
             id: "continue".into(),

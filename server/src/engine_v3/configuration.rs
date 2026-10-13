@@ -63,7 +63,7 @@ pub(crate) fn validate_revision(app: &App, profile: i64, expected: u64) -> Resul
     Ok(())
 }
 
-pub(super) fn read(
+pub(crate) fn read(
     app: &App,
     lease: &ResourceLease,
     profile: i64,
