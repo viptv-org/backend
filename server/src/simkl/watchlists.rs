@@ -10,7 +10,7 @@ pub(crate) async fn load(
     app: &App,
     profile: i64,
     lease: &ResourceLease,
-) -> Result<(Vec<Entry>, usize, usize), ApiError> {
+) -> Result<(Vec<Entry>, usize, usize, bool), ApiError> {
     let access = store::credential(app, profile, Capability::Authorization)?;
     if access.token.is_none() {
         return Err(ApiError(
@@ -74,8 +74,8 @@ pub(crate) async fn load(
         .map(|c| (c.identity.kind.clone(), c.identity.id.clone()))
         .collect::<std::collections::HashSet<_>>();
     entries.retain(|e| ids.contains(&(e.card.identity.kind.clone(), e.card.identity.id.clone())));
-    let (known, total) =
+    let (known, total, running) =
         enrichment::apply(app, profile, &access, lease, entry, metadata, &mut entries).await;
     store::validate(app, profile, &access)?;
-    Ok((entries, known, total))
+    Ok((entries, known, total, running))
 }

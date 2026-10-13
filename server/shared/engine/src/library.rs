@@ -63,6 +63,8 @@ pub struct LibrarySnapshot {
     pub statistics: Vec<LibraryStatistics>,
     pub availability: Availability,
     pub reason: Option<String>,
+    #[serde(default)]
+    pub refresh_after_millis: Option<u64>,
 }
 #[derive(Clone)]
 pub struct Entry {

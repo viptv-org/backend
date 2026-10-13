@@ -57,3 +57,31 @@ pub(super) async fn metadata(
     store::validate(app, profile, access)?;
     Ok(value)
 }
+
+/// Public detail snapshots can seed a new private projection without egress.
+pub(super) async fn cached_title(
+    app: &App,
+    category: &str,
+    id: u64,
+) -> Option<viptv_engine::presentation::Card> {
+    let endpoint = if category == "movie" {
+        "movies"
+    } else {
+        category
+    };
+    let entry = app
+        .simkl
+        .metadata
+        .lock()
+        .await
+        .get(&format!("/{endpoint}/{id}?extended=full"))?
+        .clone();
+    let cached = entry.try_lock().ok()?;
+    let (_, value) = cached
+        .as_ref()
+        .filter(|(created, _)| created.elapsed() < Duration::from_secs(3600))?;
+    if viptv_engine::simkl::id(value) != Some(id) {
+        return None;
+    }
+    viptv_engine::simkl::card(value, category).ok()
+}

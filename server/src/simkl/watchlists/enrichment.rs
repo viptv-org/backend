@@ -9,6 +9,26 @@ pub(in crate::simkl) struct State {
 fn key(card: &viptv_engine::presentation::Card) -> (String, String) {
     (card.identity.kind.clone(), card.identity.id.clone())
 }
+fn target(card: &viptv_engine::presentation::Card) -> Option<(&'static str, u64)> {
+    let id = card
+        .identity
+        .ids
+        .iter()
+        .find(|id| id.namespace == "simkl")?
+        .value
+        .parse()
+        .ok()?;
+    Some((
+        if card.category.as_deref() == Some("anime") {
+            "anime"
+        } else if card.identity.kind == "movie" {
+            "movie"
+        } else {
+            "tv"
+        },
+        id,
+    ))
+}
 pub(super) async fn apply(
     app: &App,
     profile: i64,
@@ -17,12 +37,22 @@ pub(super) async fn apply(
     owner: Arc<tokio::sync::Mutex<Option<sync::Snapshot>>>,
     state: Arc<tokio::sync::Mutex<State>>,
     entries: &mut [Entry],
-) -> (usize, usize) {
+) -> (usize, usize, bool) {
     let mut metadata = state.lock().await;
     for entry in entries.iter_mut() {
         if let Some(card) = metadata.cards.get(&key(&entry.card)) {
             entry.card = viptv_engine::presentation::enrich_card(&entry.card, card);
         } else {
+            if let Some((category, id)) = target(&entry.card) {
+                if let Some(card) = cache::cached_title(app, category, id)
+                    .await
+                    .filter(|card| key(card) == key(&entry.card))
+                {
+                    entry.card = viptv_engine::presentation::enrich_card(&entry.card, &card);
+                    metadata.cards.insert(key(&entry.card), card);
+                    continue;
+                }
+            }
             crate::engine_v3::source_integrations::merge_cached(
                 app,
                 lease,
@@ -110,8 +140,14 @@ pub(super) async fn apply(
                 while results.next().await.is_some() {}
             };
             let _ = tokio::time::timeout(Duration::from_secs(90), work).await;
-            state.lock().await.running = false;
+            let mut state = state.lock().await;
+            state.running = false;
+            state.attempted = Some(Instant::now());
         });
     }
-    (known, entries.len())
+    (
+        known,
+        entries.len(),
+        metadata.running && known < entries.len(),
+    )
 }

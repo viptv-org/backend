@@ -136,5 +136,6 @@ pub fn project(
         complete,
         availability: Availability::Available,
         reason: None,
+        refresh_after_millis: None,
     })
 }

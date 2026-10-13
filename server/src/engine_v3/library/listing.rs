@@ -52,13 +52,15 @@ pub(crate) async fn list(
         },
     ];
     let unavailable = page.source == "simkl" && simkl_availability != Availability::Available;
-    let (mut known_genres, mut genre_total) = (0, 0);
+    let (mut known_genres, mut genre_total, mut genre_running) = (0, 0, false);
     let mut entries = if unavailable {
         vec![]
     } else if page.source == "simkl" {
-        let (entries, known, total) = crate::simkl::watchlists::load(&app, profile, &lease).await?;
+        let (entries, known, total, running) =
+            crate::simkl::watchlists::load(&app, profile, &lease).await?;
         known_genres = known;
         genre_total = total;
+        genre_running = running;
         entries
     } else {
         super::library_stats::entries(&app, &lease, profile, configuration.scope.revision)?
@@ -99,8 +101,14 @@ pub(crate) async fn list(
         snapshot.reason = simkl_reason;
     }
     if !unavailable && known_genres < genre_total {
+        snapshot.refresh_after_millis = genre_running.then_some(4000);
         snapshot.reason = Some(format!(
-            "Genre metadata is loading ({known_genres} of {genre_total} titles verified); genre matches are partial until loading completes"
+            "Genre metadata is {} ({known_genres} of {genre_total} titles verified); genre matches are partial",
+            if genre_running {
+                "loading"
+            } else {
+                "incomplete"
+            }
         ));
         if filtering_genre {
             snapshot.availability = Availability::TemporarilyUnavailable;
