@@ -13,6 +13,7 @@ fn setup() -> (App, Arc<Job>) {
     });
     owned.own_resource("job", "wait-job");
     let job = Arc::new(Job {
+        source_slots:std::sync::atomic::AtomicUsize::new(0),
         cancelled: std::sync::atomic::AtomicBool::new(false),
         configuration_revision: None,
         media_id: Some("opaque-movie".into()),
@@ -151,4 +152,9 @@ async fn cancellation_is_owned_idempotent_and_preserves_published_events(){
  for _ in 0..2{let(status,receipt)=request(&app,"member-token-1","DELETE","/api/v2/streams/wait-job",Value::Null).await;assert_eq!(status,StatusCode::OK,"{receipt}");assert_eq!(receipt["cancelled"],true);}
  assert!(job.cancelled.load(std::sync::atomic::Ordering::Acquire));assert_eq!(job.state.lock().unwrap().events[0]["streams"][0]["id"],"published-grant");
  let(status,poll)=request(&app,"member-token-1","GET","/api/v2/streams/wait-job",Value::Null).await;assert_eq!(status,StatusCode::OK);assert_eq!(poll["done"],true);assert_eq!(poll["events"][0]["streams"][0]["id"],"published-grant");
+}
+
+#[tokio::test]
+async fn concurrent_producers_share_one_whole_job_ranking_budget(){
+ let (_,job)=setup();let total=std::thread::scope(|scope|{let workers=(0..64).map(|_|{let job=job.clone();scope.spawn(move||job.reserve_sources(100))}).collect::<Vec<_>>();workers.into_iter().map(|worker|worker.join().unwrap()).sum::<usize>()});assert_eq!(total,crate::app_state::MAX_SOURCES_PER_JOB);assert_eq!(job.reserve_sources(100),0);
 }

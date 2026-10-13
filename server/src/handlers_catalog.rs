@@ -144,6 +144,7 @@ pub(crate) async fn start_streams(
     let lease=a.request_lease();
     let configuration_revision=match lease.principal{auth::Principal::Account{profile_id:Some(profile),..}=>crate::engine_v3::configuration::read(&a,&lease,profile).ok().map(|(c,_)|(profile,c.scope.revision)),_=>None};
     let job = Arc::new(Job {
+        source_slots:std::sync::atomic::AtomicUsize::new(0),
         cancelled: std::sync::atomic::AtomicBool::new(false),
         configuration_revision,
         media_id: Some(id.clone()),

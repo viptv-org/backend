@@ -215,7 +215,9 @@ pub(crate) struct ExactVod {
     pub(crate) season: Option<u32>,
     pub(crate) episode: Option<u32>,
 }
+pub(crate) const MAX_SOURCES_PER_JOB:usize=4096;
 pub(crate) struct Job {
+    pub(crate) source_slots:std::sync::atomic::AtomicUsize,
     pub(crate) cancelled: std::sync::atomic::AtomicBool,
     pub(crate) configuration_revision: Option<(i64,u64)>,
     pub(crate) media_id: Option<String>,
@@ -419,4 +421,12 @@ impl App {
             }
         });
     }
+}
+
+impl Job {
+ pub(crate) fn reserve_sources(&self,requested:usize)->usize{
+  use std::sync::atomic::Ordering;
+  let mut current=self.source_slots.load(Ordering::Relaxed);
+  loop{let reserve=requested.min(MAX_SOURCES_PER_JOB.saturating_sub(current));match self.source_slots.compare_exchange_weak(current,current+reserve,Ordering::AcqRel,Ordering::Relaxed){Ok(_)=>return reserve,Err(next)=>current=next}}
+ }
 }

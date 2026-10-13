@@ -311,6 +311,7 @@ async fn unsupported_required_header_events_are_safe_and_keep_healthy_siblings()
     });
     owned.providers = owned.providers.for_account(1);
     let job = Job {
+        source_slots:std::sync::atomic::AtomicUsize::new(0),
         cancelled: std::sync::atomic::AtomicBool::new(false),
         configuration_revision: None,
             media_id: None,

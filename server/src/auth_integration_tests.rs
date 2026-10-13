@@ -537,6 +537,7 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
     a.jobs.lock().unwrap().insert(
         "profile-job".into(),
         Arc::new(Job {
+        source_slots:std::sync::atomic::AtomicUsize::new(0),
         cancelled: std::sync::atomic::AtomicBool::new(false),
         configuration_revision: None,
             media_id: None,

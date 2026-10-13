@@ -17,6 +17,7 @@ mod library_tests;
 mod projection;
 pub(crate) mod profiles;
 pub(crate) mod preferences;
+pub(crate) mod source_ranking;
 #[cfg(test)]
 mod profile_tests;
 mod simkl_catalog;
@@ -94,3 +95,6 @@ fn scope(lease: &ResourceLease, profile: i64, revision: u64) -> Scope {
         revision,
     }
 }
+
+#[cfg(test)]
+mod source_ranking_tests;

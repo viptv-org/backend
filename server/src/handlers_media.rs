@@ -58,7 +58,8 @@ pub(crate) fn emit_batch(
     if let Some(id)=source.strip_prefix("vsources:").and_then(|id|id.parse::<i64>().ok()){if !crate::engine_v3::source_integrations::available(a,id){let mut state=j.state.lock().unwrap();state.pending=state.pending.saturating_sub(usize::from(complete));drop(state);j.notify.notify_waiters();return;}}
     let (streams, error, registration_error) = match result {
         Ok(r) => {
-            let (streams, error) = a.register(source, r, &j.kind);
+            let limit=j.reserve_sources(r.len().min(100));
+            let (streams, error) = a.register(source, r.into_iter().take(limit).collect(), &j.kind);
             {
                 let mut entries = a.streams.lock().unwrap();
                 for source in &streams {
