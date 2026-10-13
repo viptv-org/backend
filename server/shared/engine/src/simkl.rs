@@ -96,10 +96,7 @@ pub fn card(value: &Value, category: &str) -> Result<Card, Error> {
         metadata: Some(metadata(value)),
         provider_id: "simkl".into(),
         title,
-        subtitle: value["year"]
-            .as_u64()
-            .filter(|year| *year <= 9999)
-            .map(|year| year.to_string()),
+        subtitle: year(value).map(|year| year.to_string()),
         description: text(&value["overview"], 16_384),
         poster: image(&value["poster"], "posters", "m"),
         landscape: image(&value["fanart"], "fanart", "w"),
@@ -205,14 +202,8 @@ fn metadata(value: &Value) -> crate::presentation::CardMetadata {
             .map(|rating| (rating, value["ratings"][key]["votes"].as_u64()))
     });
     crate::presentation::CardMetadata {
-        year: value["year"]
-            .as_u64()
-            .filter(|n| *n <= 9999)
-            .map(|n| n as u32),
-        runtime_minutes: value["runtime"]
-            .as_u64()
-            .filter(|n| *n <= 10000)
-            .map(|n| n as u32),
+        year: year(value),
+        runtime_minutes: runtime_minutes(&value["runtime"]),
         genres: strings(&value["genres"], 16),
         rating: ratings.map(|r| r.0),
         rating_votes: ratings.and_then(|r| r.1),
@@ -246,4 +237,88 @@ pub fn recommendations(value: &Value, parent_category: &str, parent_id: &str) ->
         })
         .take(24)
         .collect()
+}
+
+fn year(value: &Value) -> Option<u32> {
+    if let Some(year) = value["year"]
+        .as_u64()
+        .or_else(|| value["year"].as_str().and_then(|s| s.parse().ok()))
+        .filter(|n| *n > 0 && *n <= 9999)
+    {
+        return Some(year as u32);
+    }
+    for key in ["release_date", "released", "first_aired"] {
+        let Some(date) = value[key].as_str() else {
+            continue;
+        };
+        if !date.is_ascii(){continue;}
+        let parts = if date.len() == 10 && date.as_bytes()[2] == b'/' && date.as_bytes()[5] == b'/'
+        {
+            Some((&date[6..10], &date[0..2], &date[3..5]))
+        } else if date.len() >= 10 && date.as_bytes()[4] == b'-' && date.as_bytes()[7] == b'-' {
+            Some((&date[0..4], &date[5..7], &date[8..10]))
+        } else {
+            None
+        };
+        let Some((year, month, day)) = parts else {
+            continue;
+        };
+        let (Ok(year), Ok(month), Ok(day)) = (
+            year.parse::<u32>(),
+            month.parse::<u32>(),
+            day.parse::<u32>(),
+        ) else {
+            continue;
+        };
+        let max = match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 => {
+                if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+                    29
+                } else {
+                    28
+                }
+            }
+            _ => 0,
+        };
+        if year > 0 && year <= 9999 && day > 0 && day <= max {
+            return Some(year);
+        }
+    }
+    None
+}
+fn runtime_minutes(value: &Value) -> Option<u32> {
+    if let Some(n) = value.as_u64().filter(|n| *n > 0 && *n <= 10000) {
+        return Some(n as u32);
+    }
+    let s = value.as_str()?.trim();
+    if s.len() > 64 {
+        return None;
+    }
+    if let Ok(n) = s.parse::<u32>() {
+        return (n > 0 && n <= 10000).then_some(n);
+    }
+    let mut hours = None;
+    let mut minutes = None;
+    for word in s.split_whitespace() {
+        if let Some(n) = word.strip_suffix('h') {
+            if hours.is_some() {
+                return None;
+            }
+            hours = Some(n.parse::<u32>().ok()?);
+        } else if let Some(n) = word.strip_suffix('m') {
+            if minutes.is_some() {
+                return None;
+            }
+            minutes = Some(n.parse::<u32>().ok()?);
+        } else {
+            return None;
+        }
+    }
+    let total = hours
+        .unwrap_or(0)
+        .checked_mul(60)?
+        .checked_add(minutes.unwrap_or(0))?;
+    (total > 0 && total <= 10000).then_some(total)
 }

@@ -62,6 +62,8 @@ pub struct HomeSnapshot {
     pub scope: Scope,
     pub revision: u64,
     pub hero: Option<Card>,
+    #[serde(default)]
+    pub featured: Vec<Card>,
     pub rows: Vec<HomeRow>,
     pub complete: bool,
 }

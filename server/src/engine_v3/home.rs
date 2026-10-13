@@ -128,8 +128,29 @@ pub(super) async fn load(
     ) {
         enrich(&metadata_app, profile, &mut snapshot).await;
     }
-    for row in &mut snapshot.rows{super::source_integrations::merge_cached(&app,&lease,configuration_revision,&mut row.cards);}
-    if let Some(hero)=&mut snapshot.hero{super::source_integrations::merge_cached(&app,&lease,configuration_revision,std::slice::from_mut(hero));}
+    for row in &mut snapshot.rows {
+        super::source_integrations::merge_cached(
+            &app,
+            &lease,
+            configuration_revision,
+            &mut row.cards,
+        );
+    }
+    if let Some(hero) = &mut snapshot.hero {
+        super::source_integrations::merge_cached(
+            &app,
+            &lease,
+            configuration_revision,
+            std::slice::from_mut(hero),
+        );
+    }
+    super::source_integrations::merge_cached(
+        &app,
+        &lease,
+        configuration_revision,
+        &mut snapshot.featured,
+    );
+    snapshot.hero = snapshot.featured.first().cloned();
     snapshot.revision = revision;
     configuration::validate_revision(&app, profile, configuration_revision)?;
     lease.validate(
@@ -143,7 +164,12 @@ pub(super) async fn load(
 
 async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
     use futures::StreamExt;
-    let mut candidates = snapshot.hero.iter().cloned().collect::<Vec<_>>();
+    let mut candidates = snapshot
+        .featured
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>();
     candidates.extend(
         snapshot
             .rows
@@ -188,14 +214,19 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
             (card, result)
         }
     }))
-    .buffer_unordered(4);
+    .buffer_unordered(3);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
     let mut presented = Vec::new();
     while let Ok(Some((original, result))) = tokio::time::timeout_at(deadline, tasks.next()).await {
         let Some(metadata) = result else {
             continue;
         };
-        super::source_integrations::cache_card(app,&app.request_lease(),snapshot.scope.revision,metadata.clone());
+        super::source_integrations::cache_card(
+            app,
+            &app.request_lease(),
+            snapshot.scope.revision,
+            metadata.clone(),
+        );
         apply_metadata(snapshot, &original, &metadata);
         presented.push((original, metadata));
     }
@@ -212,11 +243,16 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
                 }
             }),
     )
-    .buffer_unordered(4);
+    .buffer_unordered(3);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while let Ok(Some((original, metadata))) = tokio::time::timeout_at(deadline, logos.next()).await
     {
-        super::source_integrations::cache_card(app,&app.request_lease(),snapshot.scope.revision,metadata.clone());
+        super::source_integrations::cache_card(
+            app,
+            &app.request_lease(),
+            snapshot.scope.revision,
+            metadata.clone(),
+        );
         apply_metadata(snapshot, &original, &metadata);
     }
 }
@@ -229,12 +265,17 @@ fn apply_metadata(
         .parent_identity
         .as_ref()
         .unwrap_or(&original.identity);
-    for card in snapshot.hero.iter_mut().chain(
-        snapshot
-            .rows
-            .iter_mut()
-            .flat_map(|row| row.cards.iter_mut()),
-    ) {
+    for card in snapshot
+        .hero
+        .iter_mut()
+        .chain(snapshot.featured.iter_mut())
+        .chain(
+            snapshot
+                .rows
+                .iter_mut()
+                .flat_map(|row| row.cards.iter_mut()),
+        )
+    {
         let target = card.parent_identity.as_ref().unwrap_or(&card.identity);
         if target.id == identity.id && target.kind == identity.kind {
             *card = viptv_engine::presentation::enrich_card(card, metadata);

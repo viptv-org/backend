@@ -148,3 +148,10 @@ Optional `Card.metadata` carries year, runtime minutes, genres, rating/votes, ce
 Initial Home heroes exclude personal library rows and prioritize trending catalogs. Hero and Continue Watching share bounded, coalesced metadata fetches. Continue cards display the parent title, overview and logo while retaining their exact episode identity, progress and resume subtitle. Public artwork is optional and uses only an explicit verified IMDb mapping; it does not change metadata ownership. A slow artwork request cannot discard completed metadata.
 
 One credential-free public trending document warms at server startup. Home allows a four-second assembly budget while startup warming is active (otherwise two), then up to four seconds for metadata and two for optional artwork. Existing profile/revision/kids checks still fence the final response. Bootstrap also includes the first typed library page and preferences snapshot to avoid separate initial hydration requests.
+
+
+### Five featured titles and episode resume captions
+
+Home includes additive `featured: Card[]` (default empty), with at most five distinct movie/series/anime titles from trending catalogs. Personal rows, live channels and episodes are excluded. `hero` mirrors the first featured card for older clients. Native enrichment batches at most seventeen deduplicated parents (five featured plus twelve continuation titles). Server title/artwork fetches run with concurrency three, within four-/two-second request budgets; startup warms five public records independently. Logos are verified as real PNG/WebP assets from explicit IMDb mappings, without downloading an entire alternate-provider series record just for artwork.
+
+Simkl trending runtime strings and structured release dates normalize directly into typed metadata. Continued episodes format verified coordinates before remaining time (`S1 E1 · 22m left`); absent seasons use `E1`, and movies display only remaining time. Metadata enrichment preserves this caption and exact playback identity.

@@ -18,6 +18,7 @@ pub async fn assemble(scope: Scope, requests: Vec<RowRequest>, budget: Duration)
         revision: scope.revision,
         scope,
         hero: None,
+        featured: vec![],
         rows: vec![],
         complete: false,
     };
@@ -61,25 +62,66 @@ pub async fn assemble(scope: Scope, requests: Vec<RowRequest>, budget: Duration)
         }
     }
     snapshot.complete = true;
-    snapshot.hero = select_hero(&snapshot.rows);
+    snapshot.featured = select_featured(&snapshot.rows);
+    snapshot.hero = snapshot.featured.first().cloned();
     snapshot
 }
 
 /// Personal rows can never become the initial featured title.
 pub fn select_hero(rows: &[HomeRow]) -> Option<Card> {
+    select_featured(rows).into_iter().next()
+}
+
+/// Stable diversity across trending catalogs; no personal rows or duplicate canonical titles.
+pub fn select_featured(rows: &[HomeRow]) -> Vec<Card> {
     let eligible = |row: &&HomeRow| {
         row.provider_id != "library" && !matches!(row.id.as_str(), "continue" | "favorites")
     };
-    let featured = |row: &&HomeRow| {
+    let trending = |row: &&HomeRow| {
         row.id.ends_with(":trending")
             || row.id.ends_with(":top")
             || row.title.to_lowercase().contains("trending")
     };
-    rows.iter()
+    let mut selected = rows
+        .iter()
         .filter(eligible)
-        .filter(featured)
-        .chain(rows.iter().filter(eligible))
-        .flat_map(|r| &r.cards)
-        .find(|c| c.landscape.is_some() && c.identity.episode.is_none())
-        .cloned()
+        .filter(trending)
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        selected = rows.iter().filter(eligible).collect();
+    }
+    let catalogs = selected
+        .into_iter()
+        .map(|row| {
+            let mut cards = row
+                .cards
+                .iter()
+                .filter(|card| {
+                    card.landscape.is_some()
+                        && card.identity.episode.is_none()
+                        && matches!(card.identity.kind.as_str(), "movie" | "series")
+                })
+                .collect::<Vec<_>>();
+            // Prefer actual logo evidence or explicit artwork mappings without fetching each row card.
+            cards.sort_by_key(|card| {
+                !(card.logo.is_some() || card.identity.ids.iter().any(|id| id.namespace == "imdb"))
+            });
+            cards
+        })
+        .collect::<Vec<_>>();
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for index in 0..24 {
+        for cards in &catalogs {
+            if let Some(card) = cards.get(index) {
+                if seen.insert((card.identity.kind.clone(), card.identity.id.clone())) {
+                    result.push((*card).clone());
+                    if result.len() == 5 {
+                        return result;
+                    }
+                }
+            }
+        }
+    }
+    result
 }

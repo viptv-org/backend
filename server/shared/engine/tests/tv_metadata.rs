@@ -123,3 +123,105 @@ fn continue_episode_uses_parent_title_and_logo_without_changing_exact_episode_or
     assert_eq!(enriched.subtitle.as_deref(), Some("20m left"));
     assert_eq!(enriched.description.as_deref(), Some("Parent overview"));
 }
+#[cfg(feature = "runtime")]
+#[test]
+fn five_featured_titles_round_robin_trending_categories_and_exclude_personal_rows() {
+    let card = |category: &str, id| {
+        simkl::card(
+            &json!({"title":"Trending title","ids":{"simkl":id},"fanart":"12/345"}),
+            category,
+        )
+        .unwrap()
+    };
+    let row = |id: &str, provider: &str, cards: Vec<Card>| HomeRow {
+        id: id.into(),
+        title: id.into(),
+        provider_id: provider.into(),
+        state: RowState::Ready,
+        cards,
+        next_cursor: None,
+        message: None,
+    };
+    let rows = vec![
+        row("continue", "library", vec![card("tv", 900)]),
+        row("favorites", "library", vec![card("movie", 901)]),
+        row(
+            "simkl:movie:trending",
+            "simkl",
+            vec![card("movie", 1), card("movie", 2)],
+        ),
+        row(
+            "simkl:tv:trending",
+            "simkl",
+            vec![card("tv", 3), card("tv", 4)],
+        ),
+        row(
+            "simkl:anime:trending",
+            "simkl",
+            vec![card("anime", 5), card("anime", 6)],
+        ),
+    ];
+    let featured = viptv_engine::home::select_featured(&rows);
+    assert_eq!(
+        featured
+            .iter()
+            .map(|c| c.identity.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "simkl:movie:1",
+            "simkl:tv:3",
+            "simkl:anime:5",
+            "simkl:movie:2",
+            "simkl:tv:4"
+        ]
+    );
+    assert_eq!(
+        viptv_engine::home::select_hero(&rows).unwrap().identity,
+        featured[0].identity
+    );
+}
+#[cfg(feature = "runtime")]
+#[test]
+fn featured_titles_are_unique_never_live_or_episodes_and_old_home_payloads_default_empty() {
+    let parent = simkl::card(
+        &json!({"title":"Show","ids":{"simkl":1},"fanart":"12/345"}),
+        "tv",
+    )
+    .unwrap();
+    let episode = simkl::episodes(
+        &json!([{"title":"Pilot","season":1,"episode":1,"ids":{"simkl":2}}]),
+        &parent,
+    )
+    .unwrap()
+    .remove(0);
+    let live = viptv_engine::live::live_card(
+        "channel".into(),
+        "Live".into(),
+        Some("https://image.example/live.png".into()),
+        "live".into(),
+    );
+    let row = HomeRow {
+        id: "provider:top".into(),
+        title: "Trending".into(),
+        provider_id: "provider".into(),
+        state: RowState::Ready,
+        cards: vec![parent.clone(), parent.clone(), episode, live],
+        next_cursor: None,
+        message: None,
+    };
+    let featured = viptv_engine::home::select_featured(&[row]);
+    assert_eq!(featured.len(), 1);
+    assert_eq!(featured[0].identity, parent.identity);
+    let old:HomeSnapshot=serde_json::from_value(json!({"scope":{"connection_id":"local","account_id":"local","profile_id":"default","revision":0},"revision":0,"hero":null,"rows":[],"complete":true})).unwrap();
+    assert!(old.featured.is_empty());
+}
+#[cfg(feature="runtime")]
+#[test]
+fn featured_shortlist_prefers_real_artwork_mapping_without_fetching_every_title(){
+ let unknown=simkl::card(&json!({"title":"Unmapped","ids":{"simkl":1},"fanart":"12/345"}),"anime").unwrap();let known=simkl::card(&json!({"title":"Mapped","ids":{"simkl":2,"imdb":"tt123"},"fanart":"12/345"}),"anime").unwrap();let row=HomeRow{id:"simkl:anime:trending".into(),title:"Trending Anime".into(),provider_id:"simkl".into(),state:RowState::Ready,cards:vec![unknown,known],next_cursor:None,message:None};let featured=viptv_engine::home::select_featured(&[row]);assert_eq!(featured[0].title,"Mapped");assert_eq!(featured.len(),2);
+}
+#[test]
+fn trending_structured_release_date_and_runtime_normalize_without_extra_detail_requests(){
+ let card=simkl::card(&json!({"title":"Movie","ids":{"simkl":1},"release_date":"07/29/2026","runtime":"2h 25m"}),"movie").unwrap();let metadata=card.metadata.unwrap();assert_eq!(metadata.year,Some(2026));assert_eq!(metadata.runtime_minutes,Some(145));assert_eq!(card.subtitle.as_deref(),Some("2026"));
+ let card=simkl::card(&json!({"title":"Unknown","ids":{"simkl":2},"release_date":"02/31/2026","runtime":"N/A"}),"movie").unwrap();assert!(card.metadata.unwrap().year.is_none());
+}

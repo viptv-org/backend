@@ -5,14 +5,7 @@ use viptv_engine::presentation::Card;
 pub(crate) async fn enrich(app: &App, card: &mut Card) {
     enrich_service(&app.simkl, card).await;
 }
-pub(super) async fn warm_hero(service: &Service, document: &Value) {
-    for value in document["movies"].as_array().into_iter().flatten().take(1) {
-        if let Ok(mut card) = viptv_engine::simkl::card(value, "movie") {
-            enrich_service(service, &mut card).await;
-        }
-    }
-}
-async fn enrich_service(service: &Service, card: &mut Card) {
+pub(super) async fn enrich_service(service: &Service, card: &mut Card) {
     if card.logo.is_some() || !service.public_artwork() {
         return;
     }
@@ -53,22 +46,26 @@ async fn enrich_service(service: &Service, card: &mut Card) {
     {
         value.clone()
     } else {
+        // This is the canonical public logo asset path returned by Cinemeta.
+        // Verify the image itself; fetching full series metadata just for artwork is unnecessary.
         let Ok(url) = url::Url::parse(&format!(
-            "https://v3-cinemeta.strem.io/meta/{kind}/{imdb}.json"
+            "https://images.metahub.space/logo/medium/{imdb}/img"
         )) else {
             return;
         };
-        let Ok(value) =
-            crate::source_http::json(url, 2 * 1024 * 1024, Duration::from_secs(3), false, false)
-                .await
+        let Ok(bytes) =
+            crate::source_http::bytes(url, 512 * 1024, Duration::from_secs(2), false, true).await
         else {
             return;
         };
-        if value["meta"]["id"].as_str() != Some(imdb) {
+        let png = bytes.starts_with(b"\x89PNG\r\n\x1a\n");
+        let webp = bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP");
+        if !png && !webp {
             return;
         }
-        // Cache only public artwork, never add this provider's title/IDs/episodes.
-        let value = Arc::new(json!({"logo":value["meta"]["logo"]}));
+        let value = Arc::new(
+            json!({"logo":format!("https://images.metahub.space/logo/medium/{imdb}/img")}),
+        );
         *cached = Some((Instant::now(), value.clone()));
         value
     };
@@ -112,6 +109,38 @@ mod tests {
             "https://secret@images.metahub.space/a",
         ] {
             assert!(verified_logo(Some(raw)).is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod qualification {
+    use super::*;
+    #[tokio::test]
+    #[ignore = "Owned public artwork egress qualification"]
+    async fn public_logo_asset_reader_returns_real_image_without_metadata_payload() {
+        let service = Service::fixture("https://api.simkl.com");
+        let mut card = viptv_engine::simkl::card(
+            &json!({"title":"Public movie","ids":{"simkl":1902343,"imdb":"tt22084616"}}),
+            "movie",
+        )
+        .unwrap();
+        enrich_service(&service, &mut card).await;
+        assert!(card.logo.is_some(), "verified PNG must project a logo");
+        let url =
+            url::Url::parse("https://images.metahub.space/logo/medium/tt22084616/img").unwrap();
+        match crate::source_http::bytes(url, 512 * 1024, Duration::from_secs(2), false, true).await
+        {
+            Ok(bytes) => {
+                println!(
+                    "Artwork bytes={} png={} webp={}",
+                    bytes.len(),
+                    bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+                    bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP")
+                );
+                assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n") || bytes.starts_with(b"RIFF"));
+            }
+            Err(error) => panic!("Artwork egress failure: {}", error.provider_code()),
         }
     }
 }

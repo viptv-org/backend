@@ -40,12 +40,10 @@ impl From<&PlaybackRecord> for HistoryEntry {
 impl PlaybackRecord {
     pub fn card(&self) -> Card {
         let subtitle = if self.can_resume() {
-            let remaining = self.duration_millis.saturating_sub(self.position_millis);
-            if remaining < 60_000 {
-                Some(format!("{}s left", remaining.div_ceil(1_000)))
-            } else {
-                Some(format!("{}m left", remaining.div_ceil(60_000)))
-            }
+            Some(resume_caption(
+                &self.identity,
+                self.duration_millis.saturating_sub(self.position_millis),
+            ))
         } else if self.completed_at_millis.is_some() {
             Some("Watched".into())
         } else {
@@ -82,5 +80,25 @@ impl PlaybackRecord {
     pub fn progress(&self) -> Option<f64> {
         (self.duration_millis > 0)
             .then(|| (self.position_millis as f64 / self.duration_millis as f64).clamp(0.0, 1.0))
+    }
+}
+
+/// Captions use typed episode coordinates, never provider identifier or title parsing.
+pub fn resume_caption(identity: &MediaIdentity, remaining_millis: u64) -> String {
+    let remaining = if remaining_millis < 60000 {
+        format!("{}s left", remaining_millis.div_ceil(1000))
+    } else {
+        format!("{}m left", remaining_millis.div_ceil(60000))
+    };
+    match identity
+        .episode
+        .as_ref()
+        .filter(|episode| identity.kind == "series" && episode.episode > 0)
+    {
+        Some(episode) => match episode.season {
+            Some(season) => format!("S{season} E{} · {remaining}", episode.episode),
+            None => format!("E{} · {remaining}", episode.episode),
+        },
+        None => remaining,
     }
 }

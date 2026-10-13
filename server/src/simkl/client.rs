@@ -39,13 +39,53 @@ impl Service {
                 .startup_warming
                 .store(false, std::sync::atomic::Ordering::Release);
             if let Ok(document) = document {
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    super::artwork::warm_hero(&service, &document),
-                )
-                .await;
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(6), service.warm_featured(&document))
+                        .await;
             }
         });
+    }
+    async fn warm_featured(&self, document: &Value) {
+        use futures::StreamExt;
+        let rows = [("movies", "movie"), ("tv", "tv"), ("anime", "anime")]
+            .into_iter()
+            .map(|(key, category)| viptv_engine::presentation::HomeRow {
+                id: format!("simkl:{category}:trending"),
+                title: "Trending".into(),
+                provider_id: "simkl".into(),
+                state: viptv_engine::presentation::RowState::Ready,
+                cards: document[key]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .take(24)
+                    .filter_map(|v| viptv_engine::simkl::card(v, category).ok())
+                    .collect(),
+                next_cursor: None,
+                message: None,
+            })
+            .collect::<Vec<_>>();
+        let cards = viptv_engine::home::select_featured(&rows);
+        futures::stream::iter(cards.into_iter().map(|mut card| async move {
+            let parts = card.identity.id.split(':').collect::<Vec<_>>();
+            if parts.len() == 3 {
+                let endpoint = if parts[1] == "movie" {
+                    "movies"
+                } else {
+                    parts[1]
+                };
+                let _ = self
+                    .metadata_document(
+                        &format!("/{endpoint}/{}?extended=full", parts[2]),
+                        || Ok(()),
+                    )
+                    .await;
+            }
+            super::artwork::enrich_service(self, &mut card).await;
+        }))
+        .buffer_unordered(3)
+        .collect::<Vec<_>>()
+        .await;
     }
     pub(crate) fn home_budget(&self) -> Duration {
         if self

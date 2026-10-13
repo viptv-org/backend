@@ -120,3 +120,8 @@ fn opaque_episode_parent_survives_local_history_and_legacy_json_defaults() {
             .is_none()
     );
 }
+#[test]
+fn resume_caption_uses_typed_episode_coordinates_before_remaining_time_and_never_invents_season(){
+ use viptv_engine::{identity::EpisodeCoordinates,playback::resume_caption};
+ let mut identity=card().identity;assert_eq!(resume_caption(&identity,22*60000),"22m left");identity.kind="series".into();identity.episode=Some(EpisodeCoordinates{order:"aired".into(),season:Some(1),episode:1});assert_eq!(resume_caption(&identity,22*60000),"S1 E1 · 22m left");identity.episode.as_mut().unwrap().season=None;assert_eq!(resume_caption(&identity,3000),"E1 · 3s left");identity.kind="movie".into();assert_eq!(resume_caption(&identity,22*60000),"22m left");
+}

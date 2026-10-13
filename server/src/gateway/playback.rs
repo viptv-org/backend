@@ -223,8 +223,15 @@ struct StateData {
     delivery: Option<Value>,
     error: Option<&'static str>,
     touched: Instant,
+    local_expires_at: u64,
     remote: Option<Remote>,
     preparing_gateway: Option<GatewayPreparation>,
+}
+impl StateData {
+    fn touch(&mut self) {
+        self.touched = Instant::now();
+        self.local_expires_at = util::now() as u64 + LEASE.as_secs();
+    }
 }
 struct Entry {
     id: String,
@@ -563,7 +570,7 @@ fn response(entry: &Entry) -> Value {
         }
     }
     let error = state.error.map(crate::account_api::description);
-    let local_expiry = util::now() as u64 + LEASE.saturating_sub(state.touched.elapsed()).as_secs();
+    let local_expiry = state.local_expires_at;
     let expires_at = if matches!(state.status, "starting" | "ready") {
         state.native.as_ref().map_or_else(
             || {
@@ -606,7 +613,7 @@ fn terminate(entry: &Entry, status: &'static str, error: Option<&'static str>) -
     if let Some(native) = state.native.as_mut() {
         native.grant = None;
     }
-    state.touched = Instant::now();
+    state.touch();
     state.remote.take()
 }
 async fn release_remote(client: &Client, target: &AuthorizedGateway, viewer: &str) {
@@ -1502,6 +1509,7 @@ async fn start_mode(
                 delivery: None,
                 error: None,
                 touched: Instant::now(),
+                local_expires_at: util::now() as u64 + LEASE.as_secs(),
                 remote: None,
                 preparing_gateway: None,
             }),
@@ -1776,7 +1784,7 @@ async fn prepare(
         state.delivery = Some(delivery);
     state.status = "ready";
     tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), "Playback ready");
-        state.touched = Instant::now();
+        state.touch();
         Ok(())
     }).await.map_err(|_| Error::Code("provider_storage_unavailable"))?
 }
@@ -1959,7 +1967,7 @@ pub(crate) async fn renew(
             }
             native.expires_at = next_expiry;
             native.last_server_time = now;
-            state.touched = Instant::now();
+            state.touch();
             Ok(())
         })();
         if let Err(error) = renewed {
@@ -1968,7 +1976,7 @@ pub(crate) async fn renew(
         }
         return Ok(Json(response(&entry)));
     }
-    entry.state.lock().unwrap().touched = Instant::now();
+    entry.state.lock().unwrap().touch();
     let remote = entry.state.lock().unwrap().remote.clone();
     if let Some(Remote { target, viewer, .. }) = remote {
         let value = app
@@ -2006,7 +2014,7 @@ pub(crate) async fn renew(
         }
         validate_entry(&app, &entry).await?;
     }
-    entry.state.lock().unwrap().touched = Instant::now();
+    entry.state.lock().unwrap().touch();
     Ok(Json(response(&entry)))
 }
 pub(crate) async fn stop(
