@@ -47,6 +47,7 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
         crate::util::now(),
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     );
+    let event_trace = trace.clone();
     let started = Instant::now();
     let span = tracing::info_span!("playback_api", %trace, operation = op, session_tag = %session, %method);
     TRACE
@@ -57,9 +58,9 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
                 let status = response.status().as_u16();
                 let elapsed_ms = started.elapsed().as_millis() as u64;
                 if status >= 400 {
-                    tracing::warn!(status, elapsed_ms, "API request failed");
+                    tracing::warn!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, "API request failed");
                 } else if op != "api_other" {
-                    tracing::info!(status, elapsed_ms, "API request completed");
+                    tracing::info!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, "API request completed");
                 }
                 response
             }
@@ -94,6 +95,7 @@ mod tests {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let writer = Capture(bytes.clone());
         let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
             .with_ansi(false)
             .with_writer(move || writer.clone())
             .finish();
