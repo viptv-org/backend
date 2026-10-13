@@ -14,7 +14,7 @@ pub(crate) async fn catalogs_revision(
     let a = a.with_lease(lease);
     blocking(move || Ok(axum::Json(json!({"revision":a.addons.revision()?})))).await
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(crate) struct Discover {
     #[serde(rename = "type", default = "movie")]
     pub(crate) kind: String,

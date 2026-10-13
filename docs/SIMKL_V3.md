@@ -80,7 +80,7 @@ presentation data. Home's My List row uses the same typed cards. The local share
 engine has matching persistent, paged library operations and UniFFI methods.
 
 `GET /api/v3/calendar?type=series|movie|anime&start=YYYY-MM-DD&end=YYYY-MM-DD&skip=0`
-returns `{ entries, next_cursor, complete }`, with at most 100 entries per page.
+returns `{ entries, next_cursor, complete }`, with 100 entries by default and an optional `limit` of 1–500 per page.
 Each entry contains a stable calendar `id`, a typed title `card`, UTC `date`,
 `episode_title`, `season`, and `episode`. Calendar row IDs are separate from
 playback identities; a TV schedule does not invent a provider episode ID, and
@@ -111,3 +111,29 @@ observed presentation time for progress/tracking and never seek it a second time
 Direct deliveries retain their requested seek position and report offset zero.
 Renewal preserves the initial delivery snapshot. The shared decoder preserves
 this field as optional `timelineOffsetSeconds` for legacy response compatibility.
+
+
+`GET /api/v3/discover?type=all&search=...` combines at most three advertised
+media types from the selected metadata integration into one canonical
+`CatalogPage`; it never selects or mixes another browsing plugin. Broad text
+search starts at offset zero and rejects ambiguous catalog/filter/paging input.
+The total result projection is bounded to 200 cards and the complete operation
+has a 12-second deadline. Specific-type discovery keeps existing pagination.
+
+Source job reads accept optional `wait_ms` up to 10,000 milliseconds alongside
+`after`. A read returns immediately for pending events or a terminal job; otherwise
+it awaits the job notification and returns partial events as soon as a provider
+finishes. The server revalidates session/profile/job authority once a second while
+waiting and again before projection. Timeout yields the ordinary current event
+snapshot, never fabricated source success.
+
+`GET /api/v3/profiles` returns typed profile cards, CRUD/avatar availability,
+account parent-PIN state and explicit unsupported per-profile-PIN availability.
+Bootstrap includes the same object as `profile_management`. Restricted sessions
+mark other targets `locked: true`, `lock_kind: "parent"`, and
+`selection_requires_parent: true`; unlocking the existing account parent PIN
+permits the selection without claiming a local per-profile PIN. POST/PATCH use
+`name` and optional `avatar_id` from the published preset IDs; DELETE protects the
+primary profile and preserves exact account ownership. The v3 parent aliases
+retain existing PIN hashing, rate limits, short session-bound grants and rotation
+invalidation. Kids bootstrap remains a scoped, policy-filtered read.

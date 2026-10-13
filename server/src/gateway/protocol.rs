@@ -147,10 +147,6 @@ impl Session {
         }
         Ok(session)
     }
-    #[cfg(test)]
-    pub(crate) fn delivery(&self, endpoint: &str) -> Result<Option<Value>> {
-        self.delivery_for(endpoint,false)
-    }
     pub(crate) fn delivery_for(&self, endpoint:&str, native_mp4:bool)->Result<Option<Value>> {
         if self.status != "ready" {
             return Ok(None);

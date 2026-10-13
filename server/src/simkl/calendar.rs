@@ -13,6 +13,7 @@ pub(crate) struct CalendarQuery {
     end: Option<String>,
     #[serde(default)]
     skip: usize,
+    limit:Option<usize>,
 }
 fn default_kind() -> String {
     "series".into()
@@ -69,6 +70,8 @@ pub(crate) async fn get(
     if end < start || (end - start).num_days() > 33 || q.skip > 10_000 {
         return Err("Invalid calendar window".into());
     }
+    let limit=q.limit.unwrap_or(100);
+    if !(1..=500).contains(&limit){return Err("Invalid calendar page size".into());}
     let access = store::credential(&app, profile, Capability::Discovery)?;
     let doc = app
         .simkl
@@ -149,7 +152,7 @@ pub(crate) async fn get(
     }
     entries.sort_by(|a, b| a.date.cmp(&b.date).then(a.id.cmp(&b.id)));
     let total = entries.len();
-    let entries: Vec<_> = entries.into_iter().skip(q.skip).take(100).collect();
+    let entries: Vec<_> = entries.into_iter().skip(q.skip).take(limit).collect();
     let next = q.skip + entries.len();
     store::validate(&app, profile, &access)?;
     Ok(axum::Json(

@@ -27,6 +27,9 @@ async fn public_calendar_genres_and_scoped_controls_use_v2_data_without_user_tok
         assert!(entry["card"]["identity"]["episode"].is_null());
         assert_eq!(entry["date"], "2026-10-13T04:00:00Z");
     }
+    let (status,limited)=request(&app,"member-token-1","GET",&format!("{path}&limit=1"),json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(limited["entries"].as_array().unwrap().len(),1);assert_eq!(limited["next_cursor"],"1");
+    let (status,larger)=request(&app,"member-token-1","GET",&format!("{path}&limit=500"),json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(larger,page);
+    assert_eq!(request(&app,"member-token-1","GET",&format!("{path}&limit=501"),json!({})).await.0,StatusCode::BAD_REQUEST);
     let (_, again) = request(&app, "member-token-1", "GET", path, json!({})).await;
     assert_eq!(again, page);
     assert_eq!(count.load(Ordering::SeqCst), 1);
@@ -147,4 +150,65 @@ async fn calendar_configuration_date_window_and_session_revocation_are_not_empty
             .0,
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn all_types_search_aggregates_only_selected_metadata_provider_and_rejects_ambiguous_paging()
+{
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let router=Router::new().route("/search/:category",get({let calls=calls.clone();move|Path(category):Path<String>|{let calls=calls.clone();async move{
+        calls.lock().unwrap().push(category.clone());
+        axum::Json(json!([{"title":format!("Actual {category} title"),"ids":{"simkl_id":match category.as_str(){"movie"=>10,"tv"=>20,_=>30}}}]))
+    }}}));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut app = fixture();
+    app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/v3/discover?type=all&search=Actual",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let cards = page["cards"].as_array().unwrap();
+    assert_eq!(cards.len(), 3);
+    for id in ["simkl:movie:10", "simkl:tv:20", "simkl:anime:30"] {
+        assert!(cards.iter().any(|c| c["identity"]["id"] == id));
+    }
+    assert!(cards.iter().all(|c| c["provider_id"] == "simkl"));
+    assert_eq!(calls.lock().unwrap().len(), 3);
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/v3/discover?type=all&search=Actual&skip=24",
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/v3/discover?type=all",
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        calls.lock().unwrap().len(),
+        3,
+        "invalid broad requests must not dispatch provider calls"
+    );
+    task.abort();
 }

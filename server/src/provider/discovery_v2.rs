@@ -64,6 +64,8 @@ pub(crate) async fn start(
 pub(crate) struct PollQuery {
     #[serde(default)]
     after: usize,
+    #[serde(default)]
+    wait_ms:u64,
 }
 
 pub(crate) async fn poll(
@@ -73,7 +75,26 @@ pub(crate) async fn poll(
     query: Result<Query<PollQuery>, QueryRejection>,
 ) -> Result<axum::Json<Value>, Error> {
     let Query(query) = query.map_err(|_| Error::Code("invalid_discovery_cursor"))?;
+    if query.wait_ms>10_000{return Err(Error::Code("invalid_discovery_cursor"));}
     let app = scoped(app, lease).await?;
+    if query.wait_ms>0 {
+        let initial=app.clone();let id=path.0.clone();
+        let waiting_job=blocking(move||{initial.check_resource(&initial.identity(),"job",&id)?;let job=job(&initial,&id)?;initial.require_media(&initial.db.lock().unwrap())?;Ok(job)}).await.map_err(boundary)?;
+        let notified=waiting_job.notify.notified();tokio::pin!(notified);notified.as_mut().enable();
+        let waiting={let state=waiting_job.state.lock().unwrap();state.pending>0&&state.events.len()<=query.after};
+        if waiting {
+            let deadline=tokio::time::sleep(Duration::from_millis(query.wait_ms));tokio::pin!(deadline);
+            let mut guard=tokio::time::interval(Duration::from_secs(1));guard.tick().await;
+            loop {tokio::select!{
+                _=&mut notified=>break,
+                _=&mut deadline=>break,
+                _=guard.tick()=>{
+                    let current=app.clone();let id=path.0.clone();
+                    blocking(move||{current.check_resource(&current.identity(),"job",&id)?;let _=job(&current,&id)?;current.require_media(&current.db.lock().unwrap())}).await.map_err(boundary)?;
+                }
+            }}
+        }
+    }
     blocking(move || {
     app.check_resource(&app.identity(), "job", &path.0)?;
     let job = job(&app,&path.0)?;
@@ -233,3 +254,7 @@ pub(crate) async fn live_source(
     .await
     .map_err(|_| Error::Code("provider_storage_unavailable"))?
 }
+
+#[cfg(test)]
+#[path="discovery_wait_tests.rs"]
+mod wait_tests;

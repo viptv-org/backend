@@ -1,7 +1,39 @@
 use super::*;
 use viptv_engine::presentation::{CatalogPage, DetailSnapshot};
 
-pub(crate) async fn discover(
+pub(crate) async fn discover(State(app):State<App>,Extension(lease):Extension<ResourceLease>,Query(q):Query<crate::handlers_catalog::Discover>)->ApiResult{
+    if q.kind!="all" {return discover_one(State(app),Extension(lease),Query(q)).await;}
+    if !q.is_search() || q.skip!=0 || q.catalog.is_some() || q.addon_id.is_some() || q.genre.is_some() || q.extras.as_deref().is_some_and(|s|s!="{}") || q.search.as_ref().is_some_and(|s|s.chars().count()>256){return Err("All-types search requires an unfiltered text query at offset zero".into());}
+    let auth::Principal::Account {profile_id:Some(profile),..}=lease.principal else{return Err(auth::forbidden());};
+    let scoped=app.clone().with_lease(lease.clone());
+    let (configuration,_)=configuration::read(&scoped,&lease,profile)?;
+    let kinds=if configuration.browsing_plugin=="simkl"{vec!["movie".to_owned(),"series".to_owned(),"anime".to_owned()]}else{
+        let (selected,_)=configuration::apply(scoped.clone(),&lease,profile,viptv_engine::capabilities::Capability::Search)?;
+        let mut kinds=std::collections::BTreeSet::new();
+        for catalog in selected.addons.catalogs()?.as_array().into_iter().flatten(){
+            if catalog["supports_search"]!=true{continue;}
+            if let Some(kind)=catalog["type"].as_str().filter(|kind|matches!(*kind,"movie"|"series")){kinds.insert(kind.to_owned());}
+        }
+        kinds.into_iter().collect()
+    };
+    if kinds.is_empty(){return Err(ApiError(StatusCode::UNPROCESSABLE_ENTITY,"Search is not configured for this profile".into()));}
+    let tasks=kinds.into_iter().take(3).map(|kind|{
+        let mut query=q.clone();query.kind=kind;
+        discover_one(State(app.clone()),Extension(lease.clone()),Query(query))
+    });
+    let pages=tokio::time::timeout(Duration::from_secs(12),futures::future::join_all(tasks)).await.map_err(|_|ApiError(StatusCode::GATEWAY_TIMEOUT,"Search exceeded its response deadline".into()))?;
+    let mut cards=Vec::new();let mut seen=std::collections::HashSet::new();let mut complete=true;
+    for result in pages {
+        let axum::Json(value)=result?;
+        let page:CatalogPage=serde_json::from_value(value).map_err(|_|ApiError::from("Search response was invalid"))?;
+        complete&=page.complete;
+        for card in page.cards {if cards.len()<200 && seen.insert((card.identity.kind.clone(),card.identity.id.clone())){cards.push(card);}}
+    }
+    configuration::validate_revision(&scoped,profile,configuration.scope.revision)?;
+    Ok(axum::Json(serde_json::to_value(CatalogPage{cards,next_cursor:None,complete}).map_err(|_|ApiError::from("Search unavailable"))?))
+}
+
+async fn discover_one(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Query(q): Query<crate::handlers_catalog::Discover>,
