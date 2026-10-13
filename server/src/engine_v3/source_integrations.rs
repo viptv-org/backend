@@ -61,8 +61,18 @@ pub(crate) async fn schemas(
     }
     drop(db);
     let (configuration, connections) = configuration::read(&app, &lease, profile)?;
+    let mut schemas = vec![schema];
+    for plugin in ["xtream", "m3u"] {
+        let connection = connections.iter().find(|c| c.plugin_id == plugin);
+        schemas.push(viptv_engine::source_integration::live_schema(
+            plugin,
+            connection.is_some(),
+            connection.map(|c| c.id.clone()),
+            plugin == "xtream" || cfg!(feature = "live-runtime"),
+        ));
+    }
     Ok(axum::Json(
-        json!({"schemas":[schema],"revision":configuration.scope.revision,"connections":connections.into_iter().filter(|c|c.plugin_id=="vsources").collect::<Vec<_>>()}),
+        json!({"schemas":schemas,"revision":configuration.scope.revision,"connections":connections.into_iter().filter(|c|["vsources","xtream","m3u"].contains(&c.plugin_id.as_str())).collect::<Vec<_>>()}),
     ))
 }
 #[derive(Deserialize)]
@@ -70,7 +80,7 @@ pub(crate) async fn schemas(
 pub(crate) struct Configure {
     revision: u64,
     plugin_id: String,
-    configuration: VsourcesConfiguration,
+    configuration: Value,
 }
 pub(crate) async fn configure(
     State(app): State<App>,
@@ -78,19 +88,31 @@ pub(crate) async fn configure(
     Path(profile): Path<i64>,
     axum::Json(update): axum::Json<Configure>,
 ) -> ApiResult {
+    if update.plugin_id == "xtream" || update.plugin_id == "m3u" {
+        return super::live::configure(
+            app,
+            lease,
+            profile,
+            update.revision,
+            &update.plugin_id,
+            update.configuration,
+        )
+        .await;
+    }
+    let credentials: VsourcesConfiguration = serde_json::from_value(update.configuration)
+        .map_err(|_| ApiError::from("Invalid integration configuration"))?;
     if !cfg!(feature = "vsources-runtime") || update.plugin_id != "vsources" {
         return Err(ApiError(
             StatusCode::SERVICE_UNAVAILABLE,
             "Integration runtime unavailable".into(),
         ));
     }
-    update
-        .configuration
+    credentials
         .validate()
         .map_err(|_| ApiError::from("Invalid integration configuration"))?;
     #[cfg(feature = "vsources-runtime")]
     viptv_engine::vsources_runtime::engine(
-        &update.configuration,
+        &credentials,
         Arc::new(viptv_engine::vsources_runtime::ScopedFetcher::new(
             Arc::new(|| false),
         )),
@@ -151,7 +173,7 @@ pub(crate) async fn configure(
             account,
             "vsources",
             &record,
-            serde_json::to_vec(&update.configuration)
+            serde_json::to_vec(&credentials)
                 .map_err(|_| ApiError::from("Invalid configuration"))?
                 .as_slice(),
         )
@@ -178,7 +200,7 @@ pub(crate) async fn configure(
     tx.commit().map_err(db_error)?;
     Ok(axum::Json(json!({"configuration":config})))
 }
-fn save_revision(
+pub(crate) fn save_revision(
     tx: &Connection,
     config: &mut viptv_engine::profile::ProfileConfiguration,
     account: i64,
@@ -201,6 +223,9 @@ pub(crate) async fn remove(
     Path((profile, id)): Path<(i64, String)>,
     Query(remove): Query<Remove>,
 ) -> ApiResult {
+    if !id.starts_with("vsources:") {
+        return super::live::remove(app, lease, profile, id, remove.revision).await;
+    }
     let id = id
         .strip_prefix("vsources:")
         .and_then(|id| id.parse::<i64>().ok())

@@ -163,6 +163,7 @@ impl App {
             entries.insert(
                 id.clone(),
                 StreamEntry {
+                    profile_revision:None,
                     media_id: None,
                     exact_vod: None,
                     live_channel_id: None,
@@ -230,6 +231,7 @@ pub(crate) fn source_configuration(
             let (route,join)=if provider::egress::table_exists(db).map_err(ApiError::from)? {("COALESCE(r.warp,0)","LEFT JOIN provider_routes r ON r.provider_id=p.id")}else{("0","")};
             db.query_row(&format!("SELECT json_array(p.url,p.username,p.password,p.enabled,p.enable_live,p.enable_movies,p.enable_series,{route},o.account_id,p.credentials_version,c.account_id,c.secret) FROM providers p {join} LEFT JOIN provider_ownership o ON o.provider_id=p.id LEFT JOIN provider_credentials_v2 c ON c.provider_id=p.id WHERE p.id=?1"),[id],|row|row.get(0)).optional().map_err(db_error)?
         },
+        "m3u"=>db.query_row("SELECT json_array(c.account_id,c.profile_id,c.revision,c.enabled,c.secret,p.revision,p.value) FROM engine_m3u_connections c LEFT JOIN engine_profile_configuration p ON p.profile_id=c.profile_id WHERE c.id=?1",[id],|r|r.get(0)).optional().map_err(db_error)?,
         "vsources"=>db.query_row("SELECT json_array(s.account_id,s.profile_id,s.revision,s.enabled,s.secret,p.revision,p.value) FROM engine_source_integrations s LEFT JOIN engine_profile_configuration p ON p.profile_id=s.profile_id WHERE s.id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
         "addon"=>db.query_row("SELECT json_array(manifest_url,enabled,account_id,credentials_version,credentials_revision) FROM addons WHERE id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
         _=>None,

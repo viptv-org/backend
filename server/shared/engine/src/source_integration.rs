@@ -113,3 +113,7 @@ fn provider_choices() -> Vec<ProviderChoice> {
         vec![]
     }
 }
+pub fn live_schema(plugin:&str,configured:bool,connection_id:Option<String>,enabled:bool)->SourceIntegrationSchema{
+ let (name,fields)=if plugin=="xtream"{("Xtream live TV",vec![("server_url","Server URL",true,false),("username","Username",true,false),("password","Password",true,true)])}else{("M3U live TV",vec![("playlist_url","Playlist URL",true,true),("epg_url","XMLTV guide URL",false,true)])};
+ SourceIntegrationSchema{plugin_id:plugin.into(),name:name.into(),state:if !enabled{IntegrationState::Unavailable}else if configured{IntegrationState::Ready}else{IntegrationState::NeedsConfiguration},runtime_enabled:enabled,credential_fields:fields.into_iter().map(|(id,label,required,secret)|CredentialField{id:id.into(),label:label.into(),required,secret}).collect(),connection_id,provider_choices:vec![],maximum_providers:0}
+}

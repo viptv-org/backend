@@ -121,6 +121,7 @@ pub struct App {
     pub(crate) simkl: Arc<simkl::Service>,
     pub(crate) stremio_import: Arc<stremio_import::Service>,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
+    pub(crate) live_cache: Arc<tokio::sync::Mutex<HashMap<String,engine_v3::live::Cache>>>,
     pub(crate) verified_cards: Arc<Mutex<HashMap<(String,u64,String,String),viptv_engine::presentation::Card>>>,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
     // Request-local identity travels with discovery producers; ownership is never upstream-authored.
@@ -233,6 +234,7 @@ pub(crate) struct JobState {
     pub(crate) pending: usize,
 }
 pub(crate) struct StreamEntry {
+    pub(crate) profile_revision:Option<(i64,u64)>,
     pub(crate) media_id: Option<String>,
     pub(crate) exact_vod: Option<ExactVod>,
     // Set only by exact, account-authorized raw live-channel resolution.
@@ -263,6 +265,7 @@ impl App {
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
         engine_v3::source_integrations::init(&db).map_err(|_| "Source integration initialization failed")?;
+        engine_v3::live::init(&db).map_err(|_| "Live connections initialization failed")?;
         engine_v3::preferences::init(&db).map_err(|_| "Profile preferences initialization failed")?;
         engine_v3::profiles::init(&db).map_err(|_| "Profile presentation initialization failed")?;
         engine_v3::configuration::init(&db).map_err(|_| "Engine configuration initialization failed")?;
@@ -296,6 +299,7 @@ impl App {
             stremio_import,
             jobs: Default::default(),
             verified_cards: Default::default(),
+            live_cache: Default::default(),
             streams: Default::default(),
             principal: None,
             resource_owners: Default::default(),

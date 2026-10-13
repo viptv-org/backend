@@ -5,18 +5,10 @@ use crate::{
     source_integration::VsourcesConfiguration,
 };
 use async_trait::async_trait;
-use futures::StreamExt;
-use std::{
-    collections::BTreeMap,
-    net::IpAddr,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
-use url::{Host, Url};
-use vsources::error::{BlockedReason, FetchError};
+use std::{sync::Arc, time::Duration};
+#[cfg(test)]
+use url::Url;
+use vsources::error::FetchError;
 use vsources::traits::{FetchRequest, FetchResponse, Fetcher, ProbeResponse};
 use vsources::{MediaId, MediaRef, MediaType};
 
@@ -81,228 +73,22 @@ pub fn media_ref(
     })
 }
 
-pub fn public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            let [a, b, c, _] = ip.octets();
-            !ip.is_private()
-                && !ip.is_loopback()
-                && !ip.is_link_local()
-                && !ip.is_multicast()
-                && !ip.is_broadcast()
-                && !ip.is_unspecified()
-                && a != 0
-                && a < 224
-                && !(a == 100 && (64..=127).contains(&b))
-                && !(a == 192 && b == 0 && (c == 0 || c == 2))
-                && !(a == 192 && b == 88 && c == 99)
-                && !(a == 198 && (b == 18 || b == 19))
-                && !(a == 198 && b == 51 && c == 100)
-                && !(a == 203 && b == 0 && c == 113)
-        }
-        IpAddr::V6(ip) => {
-            if let Some(v4) = ip.to_ipv4_mapped() {
-                return public_ip(v4.into());
-            }
-            let w = ip.segments();
-            (w[0] & 0xe000) == 0x2000
-                && w[0] != 0x2002
-                && !(w[0] == 0x2001 && (w[1] < 0x200 || w[1] == 0xdb8))
-        }
-    }
-}
-pub fn public_url(url: &Url) -> bool {
-    let h = url
-        .host_str()
-        .unwrap_or_default()
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    url.as_str().len() <= 16384
-        && matches!(url.scheme(), "http" | "https")
-        && !h.is_empty()
-        && url.username().is_empty()
-        && url.password().is_none()
-        && url.fragment().is_none()
-        && url.port_or_known_default() != Some(0)
-        && h != "localhost"
-        && !h.ends_with(".localhost")
-        && !h.ends_with(".local")
-        && !h.ends_with(".internal")
-        && !matches!(url.host(),Some(Host::Ipv4(ip)) if !public_ip(ip.into()))
-        && !matches!(url.host(),Some(Host::Ipv6(ip)) if !public_ip(ip.into()))
-}
-/// Each engine is scoped to a single job; SDK caches cannot cross accounts or revisions.
-pub struct ScopedFetcher {
-    authorize: Arc<dyn Fn() -> bool + Send + Sync>,
-    requests: AtomicUsize,
-    permits: tokio::sync::Semaphore,
-    deadline: tokio::time::Instant,
-}
+pub use crate::egress::{public_ip, public_url};
+pub struct ScopedFetcher(crate::egress::ScopedHttp);
 impl ScopedFetcher {
     pub fn new(authorize: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
-        Self {
-            authorize,
-            requests: AtomicUsize::new(0),
-            permits: tokio::sync::Semaphore::new(4),
-            deadline: tokio::time::Instant::now() + Duration::from_secs(45),
-        }
+        Self(crate::egress::ScopedHttp::new(authorize))
     }
-    fn check(&self, url: &Url) -> Result<(), FetchError> {
-        if !(self.authorize)() || tokio::time::Instant::now() >= self.deadline || !public_url(url) {
-            Err(FetchError::Blocked {
-                url: url.clone(),
-                reason: BlockedReason::Unknown,
-            })
-        } else {
-            Ok(())
-        }
-    }
-    async fn fetch(
-        &self,
-        mut request: FetchRequest,
-        limit: usize,
-        prefix: bool,
-    ) -> Result<ProbeResponse, FetchError> {
-        self.check(&request.url)?;
-        let denied = || FetchError::Blocked {
-            url: request.url.clone(),
-            reason: BlockedReason::Unknown,
-        };
-        if !matches!(request.method.as_str(), "GET" | "POST" | "HEAD")
-            || request
-                .binary_body
-                .as_ref()
-                .map(Vec::len)
-                .unwrap_or_else(|| request.body.as_ref().map(String::len).unwrap_or(0))
-                > 1024 * 1024
-            || request.headers.len() > 32
-            || request.headers.iter().any(|(k, v)| {
-                k.len() > 128
-                    || v.len() > 8192
-                    || k.eq_ignore_ascii_case("host")
-                    || k.eq_ignore_ascii_case("content-length")
-                    || k.eq_ignore_ascii_case("transfer-encoding")
-            })
-        {
-            return Err(denied());
-        }
-        if self.requests.fetch_add(1, Ordering::Relaxed) >= 96 {
-            return Err(denied());
-        }
-        let _permit = self.permits.acquire().await.map_err(|_| denied())?;
-        let redirects = request.max_redirects.unwrap_or(8).min(8);
-        for hop in 0..=redirects {
-            self.check(&request.url)?;
-            let err = || FetchError::Transport {
-                url: request.url.clone(),
-                message: "Source request unavailable".into(),
-            };
-            let host = request.url.host_str().ok_or_else(err)?;
-            let addresses: Vec<_> = tokio::net::lookup_host((
-                host,
-                request.url.port_or_known_default().ok_or_else(err)?,
-            ))
-            .await
-            .map_err(|_| err())?
-            .take(17)
-            .collect();
-            if addresses.is_empty()
-                || addresses.len() > 16
-                || addresses.iter().any(|a| !public_ip(a.ip()))
-            {
-                return Err(FetchError::Blocked {
-                    url: request.url.clone(),
-                    reason: BlockedReason::Unknown,
-                });
-            }
-            let client = reqwest::Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .resolve_to_addrs(host, &addresses)
-                .connect_timeout(Duration::from_secs(3))
-                .timeout(
-                    request
-                        .timeout
-                        .unwrap_or(Duration::from_secs(8))
-                        .min(Duration::from_secs(10)),
-                )
-                .build()
-                .map_err(|_| err())?;
-            let method =
-                reqwest::Method::from_bytes(request.method.as_bytes()).map_err(|_| err())?;
-            let mut outgoing = client.request(method, request.url.clone());
-            for (k, v) in &request.headers {
-                outgoing = outgoing.header(k, v);
-            }
-            if let Some(body) = &request.binary_body {
-                outgoing = outgoing.body(body.clone());
-            } else if let Some(body) = &request.body {
-                outgoing = outgoing.body(body.clone());
-            }
-            let response = outgoing.send().await.map_err(|_| err())?;
-            self.check(&request.url)?;
-            let status = response.status().as_u16();
-            let headers: BTreeMap<_, _> = response
-                .headers()
-                .iter()
-                .filter_map(|(k, v)| {
-                    v.to_str()
-                        .ok()
-                        .map(|v| (k.as_str().to_ascii_lowercase(), v.to_string()))
-                })
-                .collect();
-            if matches!(status, 301 | 302 | 303 | 307 | 308) && hop < redirects {
-                let next = request
-                    .url
-                    .join(headers.get("location").ok_or_else(err)?)
-                    .map_err(|_| err())?;
-                if request.url.scheme() == "https" && next.scheme() != "https" {
-                    return Err(err());
-                }
-                if request.url.origin() != next.origin() {
-                    // A redirect recipient never inherits declared credentials or POST data.
-                    if request.body.is_some() || request.binary_body.is_some() {
-                        return Err(err());
-                    }
-                    request.headers.clear();
-                }
-                if status == 303 || ((status == 301 || status == 302) && request.method == "POST") {
-                    request.method = "GET".into();
-                    request.body = None;
-                    request.binary_body = None;
-                }
-                request.url = next;
-                continue;
-            }
-            let mut bytes = Vec::new();
-            let mut truncated = false;
-            let mut stream = response.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                self.check(&request.url)?;
-                let chunk = chunk.map_err(|_| err())?;
-                if bytes.len() + chunk.len() > limit {
-                    if !prefix {
-                        return Err(err());
-                    }
-                    bytes.extend_from_slice(&chunk[..limit.saturating_sub(bytes.len())]);
-                    truncated = true;
-                    break;
-                }
-                bytes.extend_from_slice(&chunk);
-            }
-            self.check(&request.url)?;
-            return Ok(ProbeResponse {
-                url: request.url,
-                status,
-                headers,
-                body: bytes,
-                truncated,
-            });
-        }
-        Err(FetchError::Transport {
-            url: request.url,
-            message: "Redirect budget exceeded".into(),
-        })
+}
+fn http_request(request: FetchRequest) -> crate::egress::HttpRequest {
+    crate::egress::HttpRequest {
+        url: request.url,
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+        binary_body: request.binary_body,
+        timeout: request.timeout,
+        max_redirects: request.max_redirects,
     }
 }
 #[async_trait]
@@ -310,9 +96,13 @@ impl Fetcher for ScopedFetcher {
     async fn request(&self, request: FetchRequest) -> Result<FetchResponse, FetchError> {
         let url = request.url.clone();
         let response =
-            tokio::time::timeout_at(self.deadline, self.fetch(request, 3 * 1024 * 1024, false))
+            self.0
+                .request(http_request(request))
                 .await
-                .map_err(|_| FetchError::Timeout { url })??;
+                .map_err(|_| FetchError::Transport {
+                    url,
+                    message: "Scoped source request rejected".into(),
+                })?;
         Ok(FetchResponse {
             url: response.url,
             status: response.status,
@@ -326,13 +116,21 @@ impl Fetcher for ScopedFetcher {
         max_bytes: usize,
     ) -> Result<Option<ProbeResponse>, FetchError> {
         let url = request.url.clone();
-        tokio::time::timeout_at(
-            self.deadline,
-            self.fetch(request, max_bytes.clamp(1, 8192), true),
-        )
-        .await
-        .map_err(|_| FetchError::Timeout { url })?
-        .map(Some)
+        let response = self
+            .0
+            .probe(http_request(request), max_bytes)
+            .await
+            .map_err(|_| FetchError::Transport {
+                url,
+                message: "Scoped media probe rejected".into(),
+            })?;
+        Ok(Some(ProbeResponse {
+            url: response.url,
+            status: response.status,
+            headers: response.headers,
+            body: response.body,
+            truncated: response.truncated,
+        }))
     }
 }
 pub fn engine(
@@ -378,7 +176,7 @@ pub async fn resolve_progressive(
     let deadline = tokio::time::sleep(Duration::from_secs(45));
     tokio::pin!(deadline);
     let mut seen = std::collections::HashSet::new();
-    let mut guard=tokio::time::interval(Duration::from_millis(250));
+    let mut guard = tokio::time::interval(Duration::from_millis(250));
     loop {
         tokio::select! {
             _=guard.tick()=>{if !authorize(){return Err(Error::Forbidden);}},

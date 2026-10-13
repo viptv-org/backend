@@ -5,6 +5,7 @@ use viptv_engine::{
     profile::Scope,
 };
 mod catalog;
+pub(crate) mod live;
 pub(crate) mod source_integrations;
 mod controls;
 pub(crate) use controls::get as discovery_controls;
@@ -98,3 +99,6 @@ fn scope(lease: &ResourceLease, profile: i64, revision: u64) -> Scope {
 
 #[cfg(test)]
 mod source_ranking_tests;
+
+#[cfg(test)]
+mod live_tests;

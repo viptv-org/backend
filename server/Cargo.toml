@@ -8,6 +8,7 @@ rust-version = "1.90"
 
 [features]
 default = []
+live-runtime = ["viptv-engine/source-runtime"]
 vsources-runtime = ["viptv-engine/vsources-runtime"]
 
 [dependencies]

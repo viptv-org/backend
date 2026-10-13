@@ -1,5 +1,6 @@
 //! Backend-owned playback leases. Video bytes travel directly to the selected
 //! delivery endpoint; this module never invokes or relays the embedded engine.
+use rusqlite::OptionalExtension;
 use super::{
     client::Client,
     protocol,
@@ -117,6 +118,7 @@ pub(crate) struct Start {
 }
 #[derive(Clone)]
 struct Proof {
+    profile_revision:Option<(i64,u64)>,
     media_id: Option<String>,
     live_channel_id: Option<String>,
     lease: ResourceLease,
@@ -407,6 +409,7 @@ fn gateway_current(db: &Connection, lease: &ResourceLease, id: &str, revision: i
 }
 fn validate_source(db: &Connection, proof: &Proof) -> Result<(), Error> {
     proof.lease.validate(db)?;
+    if let Some((profile,expected))=proof.profile_revision{let revision:u64=db.query_row("SELECT revision FROM engine_profile_configuration WHERE profile_id=?1",[profile],|r|r.get(0)).optional().map_err(|_|Error::Code("provider_storage_unavailable"))?.unwrap_or(0);if revision!=expected{return Err(Error::Code("source_configuration_changed"));}}
     if let Some(media) = proof.media_id.as_deref().or_else(|| proof.exact_vod.as_ref().map(|exact| exact.title.as_str())) {
         crate::kids::require_item(db, &proof.lease.principal, &proof.kind, media)?;
     }
@@ -418,6 +421,7 @@ fn validate_source(db: &Connection, proof: &Proof) -> Result<(), Error> {
         .map_err(|_| Error::Code("source_not_found"))?;
     let allowed:bool=match kind {
         "iptv"=>db.query_row("SELECT EXISTS(SELECT 1 FROM providers p JOIN provider_ownership o ON o.provider_id=p.id WHERE p.id=?1 AND o.account_id=?2 AND p.enabled=1 AND ((?3='live' AND p.enable_live=1) OR (?3='movie' AND p.enable_movies=1) OR (?3='series' AND p.enable_series=1)))",params![id,account(&proof.lease),proof.kind],|row|row.get(0)),
+        "m3u"=>Ok(proof.kind=="live" && crate::engine_v3::live::available_m3u(db,&proof.lease,id)),
         "vsources"=>Ok(crate::engine_v3::source_integrations::available_db(db,&proof.lease,id)),
         "addon"=>db.query_row("SELECT EXISTS(SELECT 1 FROM addons WHERE id=?1 AND account_id=?2 AND enabled=1)",params![id,account(&proof.lease)],|row|row.get(0)),
         _=>return Err(Error::Code("source_not_found")),
@@ -467,6 +471,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
                 .ok_or(Error::Code("source_not_found"))?;
             (
                 Proof {
+                    profile_revision:entry.profile_revision,
                     media_id: entry.media_id.clone(),
                     live_channel_id: entry.live_channel_id.clone(),
                     lease: source_lease,
@@ -573,7 +578,7 @@ fn response(entry: &Entry) -> Value {
         util::now() as u64
     };
     tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), status = state.status, expires_at, error_code = state.error.unwrap_or("none"), gateway_session_tag = %state.remote.as_ref().map(|remote| super::diagnostics::tag(&remote.viewer)).unwrap_or_default(), "Playback lease state");
-    json!({"id":entry.id,"status":state.status,"delivery":state.delivery,"error_code":state.error,"error":error,"expires_at":expires_at,"renew_after_seconds":20})
+    json!({"id":entry.id,"status":state.status,"delivery":state.delivery,"live":entry.proof.kind=="live","error_code":state.error,"error":error,"expires_at":expires_at,"renew_after_seconds":20})
 }
 fn expired(state: &StateData) -> bool {
     state.touched.elapsed() >= LEASE

@@ -36,3 +36,8 @@ pub mod source_integration;
 pub mod vsources_runtime;
 
 pub mod preferences;
+
+#[cfg(feature="source-runtime")]
+pub mod egress;
+
+pub mod live;

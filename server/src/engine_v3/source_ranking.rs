@@ -68,7 +68,7 @@ pub(crate) async fn rank(
         {
             return Err(auth::forbidden());
         }
-        if grant.producer.starts_with("addon:") || grant.producer.starts_with("vsources:") {
+        if grant.producer.starts_with("addon:") || grant.producer.starts_with("vsources:") || grant.producer.starts_with("m3u:") {
             if !allowed.contains(grant.producer.as_str()) {
                 return Err(auth::forbidden());
             }

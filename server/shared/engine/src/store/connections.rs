@@ -130,8 +130,12 @@ impl Store {
     ) -> Result<(), Error> {
         if connection.account_id != "local"
             || !((connection.id.starts_with("addon:") && connection.plugin_id == "stremio")
-                || (connection.id.starts_with("vsources:")
-                    && connection.plugin_id == "vsources"
+                || ((connection.plugin_id == "vsources"
+                    || connection.plugin_id == "xtream"
+                    || connection.plugin_id == "m3u")
+                    && connection
+                        .id
+                        .starts_with(&format!("{}:", connection.plugin_id))
                     && connection.private_profile_id.as_deref() == Some(profile_id)))
         {
             return Err(Error::InvalidQuery);
@@ -183,8 +187,8 @@ impl Store {
             .into_iter()
             .find(|c| c.id == connection.id)
             .ok_or(Error::Forbidden)?;
-        if existing.plugin_id != "vsources"
-            || connection.plugin_id != "vsources"
+        if !["vsources", "xtream", "m3u"].contains(&existing.plugin_id.as_str())
+            || connection.plugin_id != existing.plugin_id
             || existing.private_profile_id.as_deref() != Some(profile_id)
             || connection.private_profile_id != existing.private_profile_id
             || connection.account_id != "local"

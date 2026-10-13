@@ -166,9 +166,13 @@ pub(crate) fn spawn(
         else {
             return;
         };
-        let auth_job=job.clone();
+        let auth_job = job.clone();
         let authorize: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
-            if auth_job.cancelled.load(std::sync::atomic::Ordering::Acquire) || configuration::validate_revision(&auth_app, profile, revision).is_err() {
+            if auth_job
+                .cancelled
+                .load(std::sync::atomic::Ordering::Acquire)
+                || configuration::validate_revision(&auth_app, profile, revision).is_err()
+            {
                 return false;
             }
             let db = auth_app.db.lock().unwrap();

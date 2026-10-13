@@ -1,0 +1,9 @@
+use viptv_engine::live::*;
+#[test]
+fn m3u_channels_are_typed_and_private_uris_do_not_cross_public_contract(){
+ let base=url::Url::parse("https://provider.example/subscription/list.m3u?token=private").unwrap();let body="#EXTM3U\n#EXTINF:-1 tvg-id=\"news\" tvg-logo=\"https://images.example/news.png\" group-title=\"News\",News TV\n#EXTVLCOPT:http-referrer=https://provider.example/\nhttps://media.example/live.m3u8?token=private\n#EXTINF:-1 tvg-id=\"news\" group-title=\"News\",News TV\nhttps://media.example/backup.m3u8\n";let channels=parse_m3u(body,&base,"m3u:opaque").unwrap();assert_eq!(channels.len(),1);assert_eq!(channels[0].sources.len(),2);assert_eq!(channels[0].channel.card.identity.kind,"live");let public=serde_json::to_string(&channels[0].channel).unwrap();assert!(!public.contains("private"));assert!(!public.contains("media.example"));assert_eq!(channels[0].sources[0].headers["Referer"],"https://provider.example/");assert!(parse_m3u("#EXTM3U\n#EXT-X-TARGETDURATION:6\nsegment.ts",&base,"m3u:opaque").is_err());
+}
+#[test]
+fn xmltv_preserves_timezone_entities_and_rejects_external_entity_documents(){
+ let xml=r#"<tv><programme channel="news" start="20261013000000 +0200" stop="20261013013000 +0200"><title>News &amp; weather</title><desc><![CDATA[Actual <guide>]]></desc></programme><programme channel="other" start="20261013000000 +0000" stop="20261013010000 +0000"><title>Other</title></programme></tv>"#;let programs=parse_xmltv(xml,"news","opaque-channel").unwrap();assert_eq!(programs.len(),1);assert_eq!(programs[0].title,"News & weather");assert_eq!(programs[0].end_millis-programs[0].start_millis,90*60*1000);assert_eq!(programs[0].description.as_deref(),Some("Actual <guide>"));assert!(parse_xmltv(r#"<!DOCTYPE tv SYSTEM "file:///private"><tv/>"#,"news","opaque").is_err());assert!(parse_xmltv("<tv><programme>","news","opaque").is_err());
+}
