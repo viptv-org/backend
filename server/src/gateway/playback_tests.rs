@@ -377,9 +377,11 @@ async fn setup() -> (App, Peer) {
             if state.load(Ordering::SeqCst) == 3 {
                 waiting.notified().await;
             }
+            let native_mp4=state.load(Ordering::SeqCst)==9 && value["output"]["protocol"]=="native_mp4";
             let position = value["position_seconds"].clone();
             let mut value = remote(&id);
             value["playback"]["position"] = position;
+            if native_mp4 {value["playback"]["format"]=json!("mp4");value["playback"]["mode"]=json!("direct");value["playback"]["url"]=json!(format!("/media/{id}/pgm_fixture/source.mp4"));}
             if state.load(Ordering::SeqCst) == 1 {
                 value["playback"]["url"] = json!("https://foreign.invalid/private-path");
             }
@@ -390,7 +392,7 @@ async fn setup() -> (App, Peer) {
         let first=headers.get("authorization").and_then(|value|value.to_str().ok()).is_some_and(|value|value.ends_with('a'));
         let capacity=if mode.load(Ordering::SeqCst)==4 && first{0}else{2};
         let scopes=if mode.load(Ordering::SeqCst)==6 {json!(["capabilities","create"])}else{json!(["capabilities","create","read","renew","release"])};
-        Json(json!({"version":1,"ready":true,"torrent":mode.load(Ordering::SeqCst)!=5,"protocols":["hls"],"namespaces":["first","second"],"scopes":scopes,"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
+        Json(json!({"version":1,"ready":true,"torrent":mode.load(Ordering::SeqCst)!=5,"protocols":if mode.load(Ordering::SeqCst)==9{json!(["hls","native_mp4"])}else{json!(["hls"])},"namespaces":["first","second"],"scopes":scopes,"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
     }}))
         .route("/v1/preparations/:id",axum::routing::get(||async{Json(json!({"stage":"fetching_metadata","private_extra":"never-forward"}))}))
         .route("/v1/sessions", create.clone())

@@ -1648,6 +1648,10 @@ async fn prepare(
         )
         .await?;
         validate_entry(&app, &entry).await?;
+        let native_mp4 = request.client.can_play_direct
+            && matches!(request.client.platform,Platform::Android|Platform::AndroidTv|Platform::Desktop)
+            && request.conversion==Conversion::Auto && !source.live && !source.requires_torrent_gateway
+            && app.gateway_client.capabilities(&target.gateway.endpoint,target.key.expose(),&target.gateway.namespace).await?.protocols.iter().any(|p|p=="native_mp4");
         if source.requires_torrent_gateway {
             entry.state.lock().unwrap().preparing_gateway = Some(GatewayPreparation {
                 target: target.clone(),
@@ -1661,7 +1665,7 @@ async fn prepare(
         if source.requires_torrent_gateway && !source.trackers.is_empty() {
             input["trackers"] = json!(source.trackers);
         }
-        let body = json!({"namespace":target.gateway.namespace,"input":input,"output":{"protocol":"hls","video_codecs":request.client.video_codecs,"audio_codecs":request.client.audio_codecs,"max_width":request.client.max_width,"max_height":request.client.max_height,"audio_track":request.audio_track,"subtitle_track":request.subtitle_track,"conversion":request.conversion,"audio_language":request.audio_language,"preferred_audio_language":request.preferred_audio_language,"preferred_subtitle_language":request.preferred_subtitle_language,"subtitles_off":request.subtitles_off},"position_seconds":request.position});
+        let body = json!({"namespace":target.gateway.namespace,"input":input,"output":{"protocol":if native_mp4 {"native_mp4"} else {"hls"},"video_codecs":request.client.video_codecs,"audio_codecs":request.client.audio_codecs,"max_width":request.client.max_width,"max_height":request.client.max_height,"audio_track":request.audio_track,"subtitle_track":request.subtitle_track,"conversion":request.conversion,"audio_language":request.audio_language,"preferred_audio_language":request.preferred_audio_language,"preferred_subtitle_language":request.preferred_subtitle_language,"subtitles_off":request.subtitles_off},"position_seconds":request.position});
         let value = app
             .gateway_client
             .request(
@@ -1732,7 +1736,7 @@ async fn prepare(
             }
         }
         let delivery = remote
-            .delivery(&target.gateway.endpoint)?
+            .delivery_for(&target.gateway.endpoint,native_mp4)?
             .ok_or(Error::Code("gateway_protocol_invalid"))?;
         cleanup.armed = false;
         delivery

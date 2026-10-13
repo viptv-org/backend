@@ -147,13 +147,17 @@ impl Session {
         }
         Ok(session)
     }
+    #[cfg(test)]
     pub(crate) fn delivery(&self, endpoint: &str) -> Result<Option<Value>> {
+        self.delivery_for(endpoint,false)
+    }
+    pub(crate) fn delivery_for(&self, endpoint:&str, native_mp4:bool)->Result<Option<Value>> {
         if self.status != "ready" {
             return Ok(None);
         }
         let media = self.playback.as_ref().ok_or("gateway_protocol_invalid")?;
         if media.id != self.id
-            || media.format != "hls"
+            || !(media.format=="hls" || (native_mp4 && media.format=="mp4" && media.mode=="direct" && media.video_mode=="copy" && matches!(media.audio_mode.as_str(),"copy"|"none") && !media.live))
             || !matches!(media.mode.as_str(), "direct" | "remux" | "transcode")
             || !matches!(media.video_mode.as_str(), "copy" | "encode")
             || !matches!(media.audio_mode.as_str(), "copy" | "encode" | "none")
@@ -195,7 +199,7 @@ impl Session {
             .map(track)
             .collect::<Result<Vec<_>>>()?;
         Ok(Some(
-            json!({"kind":"gateway","url":url.as_str(),"format":media.format,"mode":media.mode,"video_mode":media.video_mode,"audio_mode":media.audio_mode,"position":0.0,"timeline_offset_seconds":if media.live {0.0} else {media.position},"duration":media.duration,"live":media.live,"audio_tracks":audio,"subtitle_tracks":subtitles,"selected_audio":media.selected_audio.as_ref().map(track).transpose()?,"selected_subtitle":media.selected_subtitle.as_ref().map(track).transpose()?,"subtitles_supported":media.subtitles_supported}),
+            json!({"kind":"gateway","url":url.as_str(),"format":media.format,"mode":media.mode,"video_mode":media.video_mode,"audio_mode":media.audio_mode,"position":if media.format=="mp4" {media.position} else {0.0},"timeline_offset_seconds":if media.live || media.format=="mp4" {0.0} else {media.position},"duration":media.duration,"live":media.live,"audio_tracks":audio,"subtitle_tracks":subtitles,"selected_audio":media.selected_audio.as_ref().map(track).transpose()?,"selected_subtitle":media.selected_subtitle.as_ref().map(track).transpose()?,"subtitles_supported":media.subtitles_supported}),
         ))
     }
     pub(crate) fn failure(&self) -> &'static str {

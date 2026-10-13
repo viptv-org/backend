@@ -124,3 +124,18 @@ async fn gateway_resume_reports_applied_source_clock_and_renew_retains_delivery(
     .await;
     assert_eq!(renewed["delivery"], ready["delivery"]);
 }
+
+#[tokio::test]
+async fn native_mp4_is_capability_negotiated_and_preserves_one_native_seek() {
+    let (app,peer)=setup().await;gateway(&app,"first",0);peer.mode.store(9,Ordering::SeqCst);
+    let source=source(&app);
+    for (index,platform,expected) in [(0,"android","mp4"),(1,"android_tv","mp4"),(2,"desktop","mp4"),(3,"web","hls"),(4,"roku","hls")] {
+        let mut input=body(&source,&format!("native_mp4_{index}"),platform);input["force_gateway"]=json!(true);input["position"]=json!(48.6);
+        let (_,created)=request(&app,"member-token-1","POST","/api/v2/playback",input).await;
+        let ready=settled(&app,created["id"].as_str().unwrap()).await;
+        assert_eq!(ready["delivery"]["format"],expected,"{ready}");
+        assert_eq!(ready["delivery"]["position"],if expected=="mp4"{48.6}else{0.0});
+        assert_eq!(ready["delivery"]["timeline_offset_seconds"],if expected=="mp4"{0.0}else{48.6});
+        assert_eq!(peer.outputs.lock().unwrap()[index]["protocol"],if expected=="mp4"{"native_mp4"}else{"hls"});
+    }
+}
