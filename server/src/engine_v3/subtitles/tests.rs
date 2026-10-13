@@ -24,7 +24,15 @@ async fn subtitle_discovery_hides_urls_content_is_session_scoped_and_configurati
         )
         .route(
             "/private-subtitle-secret.srt",
-            get(|| async { "1\r\n00:00:01,000 --> 00:00:03,000\r\nHello\r\n" }),
+            get(|| async {
+                (
+                    [(
+                        header::CONTENT_TYPE,
+                        "application/x-subrip; charset=Windows-1252",
+                    )],
+                    b"1\r\n00:00:01,000 --> 00:00:03,000\r\nCaf\xe9\r\n".to_vec(),
+                )
+            }),
         );
     let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
     let mut app = fixture();
@@ -74,7 +82,7 @@ async fn subtitle_discovery_hides_urls_content_is_session_scoped_and_configurati
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
     assert_eq!(
         std::str::from_utf8(&body).unwrap(),
-        "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHello\n\n"
+        "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nCafé\n\n"
     );
     let (status, _) = request(
         &app,

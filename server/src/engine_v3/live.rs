@@ -5,7 +5,9 @@ use viptv_engine::{
     profile::IntegrationConnection,
 };
 mod configuration;
+mod fetch_gates;
 pub(crate) use configuration::{available_m3u, configure, connections, init, remove};
+pub(crate) use fetch_gates::FetchGates;
 #[cfg(feature = "live-runtime")]
 mod m3u;
 #[derive(Clone)]
@@ -15,6 +17,7 @@ pub(crate) struct Cache {
     pub channels: Vec<PrivateChannel>,
     pub groups: Vec<LiveGroup>,
     pub guides: HashMap<String, (Instant, LiveGuide)>,
+    pub xmltv: Option<(Instant, Arc<str>)>,
 }
 fn scope(
     app: &App,
@@ -70,7 +73,7 @@ pub(crate) async fn channels(
     };
     if connection.plugin_id == "m3u" {
         #[cfg(feature = "live-runtime")]
-        return m3u::page(
+        return bounded(m3u::page(
             app,
             lease,
             profile,
@@ -78,7 +81,7 @@ pub(crate) async fn channels(
             connection.clone(),
             connections,
             query,
-        )
+        ))
         .await;
         #[cfg(not(feature = "live-runtime"))]
         return Err("Live runtime unavailable".into());
@@ -123,6 +126,7 @@ pub(crate) async fn channels(
                     ),
                     group_id: r.get(3)?,
                     group_name: r.get(4)?,
+                    group_ids: r.get::<_, Option<String>>(3)?.into_iter().collect(),
                 })
             },
         )
@@ -187,7 +191,10 @@ pub(crate) async fn guide(
     let (revision, connection) = connection_for(&app, &lease, profile, &channel).await?;
     if connection.plugin_id == "m3u" {
         #[cfg(feature = "live-runtime")]
-        return m3u::guide(app, lease, profile, revision, connection, channel).await;
+        return bounded(m3u::guide(
+            app, lease, profile, revision, connection, channel,
+        ))
+        .await;
         #[cfg(not(feature = "live-runtime"))]
         return Err("Live runtime unavailable".into());
     }
@@ -235,7 +242,10 @@ pub(crate) async fn sources(
     let (revision, connection) = connection_for(&app, &lease, profile, &channel).await?;
     if connection.plugin_id == "m3u" {
         #[cfg(feature = "live-runtime")]
-        return m3u::sources(app, lease, profile, revision, connection, channel).await;
+        return bounded(m3u::sources(
+            app, lease, profile, revision, connection, channel,
+        ))
+        .await;
         #[cfg(not(feature = "live-runtime"))]
         return Err("Live runtime unavailable".into());
     }
@@ -247,14 +257,71 @@ pub(crate) async fn sources(
     .await
     .map_err(|_| ApiError::from("Live source unavailable"))?;
     super::configuration::validate_revision(&app, profile, revision)?;
-    if let Some(id)=value["source"]["id"].as_str(){if let Some(entry)=app.streams.lock().unwrap().get_mut(id){entry.profile_revision=Some((profile,revision));}}
-    remember_sources(&app,profile,revision,&channel,&connection.id,&[value["source"].clone()]);
+    if let Some(id) = value["source"]["id"].as_str() {
+        if let Some(entry) = app.streams.lock().unwrap().get_mut(id) {
+            entry.profile_revision = Some((profile, revision));
+        }
+    }
+    remember_sources(
+        &app,
+        profile,
+        revision,
+        &channel,
+        &connection.id,
+        &[value["source"].clone()],
+    );
     Ok(axum::Json(
         json!({"streams":[value["source"].clone()],"live":true}),
     ))
 }
 
-pub(super) fn remember_sources(app:&App,profile:i64,revision:u64,channel:&str,connection:&str,cards:&[Value]){
- let job=Arc::new(Job{source_slots:std::sync::atomic::AtomicUsize::new(cards.len()),cancelled:std::sync::atomic::AtomicBool::new(false),configuration_revision:Some((profile,revision)),media_id:Some(channel.into()),exact_vod:None,kind:"live".into(),created:Instant::now(),state:Mutex::new(JobState{events:vec![json!({"seq":1,"source":connection,"streams":cards})],pending:0}),notify:Notify::new()});
- app.prune();let mut jobs=app.jobs.lock().unwrap();if jobs.len()>=256{if let Some(oldest)=jobs.iter().filter(|(_,job)|job.state.lock().unwrap().pending==0).min_by_key(|(_,job)|job.created).map(|(id,_)|id.clone()){jobs.remove(&oldest);}else{return;}}jobs.insert(Uuid::new_v4().to_string(),job);
+pub(super) fn remember_sources(
+    app: &App,
+    profile: i64,
+    revision: u64,
+    channel: &str,
+    connection: &str,
+    cards: &[Value],
+) {
+    let job = Arc::new(Job {
+        source_slots: std::sync::atomic::AtomicUsize::new(cards.len()),
+        cancelled: std::sync::atomic::AtomicBool::new(false),
+        configuration_revision: Some((profile, revision)),
+        media_id: Some(channel.into()),
+        exact_vod: None,
+        kind: "live".into(),
+        created: Instant::now(),
+        state: Mutex::new(JobState {
+            events: vec![json!({"seq":1,"source":connection,"streams":cards})],
+            pending: 0,
+        }),
+        notify: Notify::new(),
+    });
+    app.prune();
+    let mut jobs = app.jobs.lock().unwrap();
+    if jobs.len() >= 256 {
+        if let Some(oldest) = jobs
+            .iter()
+            .filter(|(_, job)| job.state.lock().unwrap().pending == 0)
+            .min_by_key(|(_, job)| job.created)
+            .map(|(id, _)| id.clone())
+        {
+            jobs.remove(&oldest);
+        } else {
+            return;
+        }
+    }
+    jobs.insert(Uuid::new_v4().to_string(), job);
+}
+
+#[cfg(feature = "live-runtime")]
+async fn bounded(future: impl std::future::Future<Output = ApiResult>) -> ApiResult {
+    tokio::time::timeout(Duration::from_secs(10), future)
+        .await
+        .map_err(|_| {
+            ApiError(
+                StatusCode::GATEWAY_TIMEOUT,
+                "Live data temporarily unavailable".into(),
+            )
+        })?
 }

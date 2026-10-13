@@ -152,14 +152,28 @@ pub fn parse_m3u(raw: &str, base: &Url, connection: &str) -> Result<Vec<PrivateC
         let url = base.join(line).map_err(|_| Error::InvalidQuery)?;
         viptv_provider::validate_url(url.as_str()).map_err(|_| Error::InvalidQuery)?;
         let epg = attrs.get("tvg-id").filter(|s| !s.is_empty()).cloned();
-        let group = attrs
+        let mut seen_groups = std::collections::HashSet::new();
+        // IPTV-org public M3U playlists use semicolons for category memberships.
+        let groups: Vec<LiveGroup> = attrs
+            .get("group-title")
+            .into_iter()
+            .flat_map(|s| s.split(';'))
+            .map(label)
+            .filter(|name| !name.is_empty() && seen_groups.insert(name.clone()))
+            .take(32)
+            .map(|label| LiveGroup {
+                id: channel_id(connection, &format!("group:{label}")),
+                label,
+            })
+            .collect();
+        let original_group = attrs
             .get("group-title")
             .map(|s| label(s))
-            .filter(|s| !s.is_empty());
+            .unwrap_or_default();
         let identity = format!(
             "{}\0{name}\0{}",
             epg.as_deref().unwrap_or(""),
-            group.as_deref().unwrap_or("")
+            original_group
         );
         let source = LiveSource {
             url: url.to_string(),
@@ -192,11 +206,11 @@ pub fn parse_m3u(raw: &str, base: &Url, connection: &str) -> Result<Vec<PrivateC
                     artwork(attrs.get("tvg-logo").map(String::as_str)),
                     connection.into(),
                 ),
-                group_id: group
-                    .as_ref()
-                    .map(|name| channel_id(connection, &format!("group:{name}"))),
-                group_name: group,
+                group_id: groups.first().map(|group| group.id.clone()),
+                group_name: groups.first().map(|group| group.label.clone()),
+                group_ids: groups.iter().map(|group| group.id.clone()).collect(),
             },
+            groups,
             epg_id: epg,
             stream_id: None,
             sources: vec![source],

@@ -2,27 +2,39 @@
 use crate::{
     Error, capabilities::Availability, presentation::Card, profile::IntegrationConnection,
 };
+use facet::Facet;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use url::Url;
 mod guide;
+#[cfg(feature = "source-runtime")]
+mod xmltv_body;
+#[cfg(feature = "source-runtime")]
+pub use xmltv_body::decode_xmltv_body;
 mod m3u;
 pub use guide::{parse_xmltv, parse_xtream_guide};
 pub use m3u::parse_m3u;
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct LiveGroup {
     pub id: String,
     pub label: String,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct LiveChannel {
     pub id: String,
     pub connection_id: String,
     pub card: Card,
     pub group_id: Option<String>,
     pub group_name: Option<String>,
+    #[serde(default)]
+    pub group_ids: Vec<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl LiveChannel {
+    pub fn in_group(&self, id: &str) -> bool {
+        self.group_id.as_deref() == Some(id) || self.group_ids.iter().any(|group| group == id)
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct LivePage {
     pub channels: Vec<LiveChannel>,
     pub groups: Vec<LiveGroup>,
@@ -32,7 +44,7 @@ pub struct LivePage {
     pub availability: Availability,
     pub reason: Option<String>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct LiveProgram {
     pub id: String,
     pub title: String,
@@ -40,14 +52,14 @@ pub struct LiveProgram {
     pub start_millis: u64,
     pub end_millis: u64,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct LiveGuide {
     pub channel_id: String,
     pub programs: Vec<LiveProgram>,
     pub availability: Availability,
     pub reason: Option<String>,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Facet)]
 #[serde(deny_unknown_fields)]
 pub struct LiveQuery {
     pub connection_id: Option<String>,
@@ -85,6 +97,8 @@ pub struct PrivateChannel {
     pub epg_id: Option<String>,
     pub stream_id: Option<String>,
     pub sources: Vec<LiveSource>,
+    #[serde(default)]
+    pub groups: Vec<LiveGroup>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -152,8 +166,8 @@ pub fn live_card(id: String, name: String, logo: Option<String>, provider_id: St
         badges: vec![],
         parent_identity: None,
         added_at_millis: None,
-        category:Some("live".into()),
-        metadata:None,
+        category: Some("live".into()),
+        metadata: None,
     }
 }
 pub fn artwork(raw: Option<&str>) -> Option<String> {
@@ -228,12 +242,16 @@ pub fn parse_xtream(
                 ),
                 group_id: viptv_provider::normalize::scalar(&value["category_id"]),
                 group_name: None,
+                group_ids: viptv_provider::normalize::scalar(&value["category_id"])
+                    .into_iter()
+                    .collect(),
             },
             epg_id: value["epg_channel_id"]
                 .as_str()
                 .filter(|s| !s.is_empty() && s.len() <= 256)
                 .map(str::to_owned),
             stream_id: Some(stream),
+            groups: vec![],
             sources: vec![LiveSource {
                 url,
                 headers: BTreeMap::new(),
@@ -243,4 +261,17 @@ pub fn parse_xtream(
     Ok(output)
 }
 
-pub fn xtream_groups(raw:&str)->Result<Vec<LiveGroup>,Error>{let values:Vec<serde_json::Value>=serde_json::from_str(raw).map_err(|_|Error::InvalidQuery)?;Ok(values.into_iter().take(1000).filter_map(|v|Some(LiveGroup{id:viptv_provider::normalize::scalar(&v["category_id"])?,label:v["category_name"].as_str()?.to_owned()})).collect())}
+pub fn xtream_groups(raw: &str) -> Result<Vec<LiveGroup>, Error> {
+    let values: Vec<serde_json::Value> =
+        serde_json::from_str(raw).map_err(|_| Error::InvalidQuery)?;
+    Ok(values
+        .into_iter()
+        .take(1000)
+        .filter_map(|v| {
+            Some(LiveGroup {
+                id: viptv_provider::normalize::scalar(&v["category_id"])?,
+                label: v["category_name"].as_str()?.to_owned(),
+            })
+        })
+        .collect())
+}

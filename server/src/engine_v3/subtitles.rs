@@ -143,27 +143,31 @@ pub(crate) async fn content(
     let selected = app.subtitle_selections.get(&id, &lease)?;
     validate(&app, &selected)?;
     let url = url::Url::parse(&selected.url).map_err(|_| ApiError::from("Subtitle unavailable"))?;
-    let bytes = crate::source_http::bytes(
-        url,
-        2 * 1024 * 1024,
+    let response = tokio::time::timeout(
         Duration::from_secs(10),
-        app.addons.fixture_transport(),
-        true,
+        crate::source_http::bytes_with_content_type(
+            url,
+            2 * 1024 * 1024,
+            Duration::from_secs(10),
+            app.addons.fixture_transport(),
+            true,
+        ),
     )
     .await
+    .map_err(|_| {
+        ApiError(
+            StatusCode::GATEWAY_TIMEOUT,
+            "Subtitle fetch timed out".into(),
+        )
+    })?
     .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "Subtitle file unavailable".into()))?;
-    let text = std::str::from_utf8(&bytes).map_err(|_| {
-        ApiError(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Subtitle encoding is unsupported".into(),
-        )
-    })?;
-    let vtt = stremio::subtitle_vtt(text).map_err(|_| {
-        ApiError(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Subtitle format is unsupported".into(),
-        )
-    })?;
+    let vtt = stremio::subtitle_bytes_vtt(&response.body, response.content_type.as_deref())
+        .map_err(|_| {
+            ApiError(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Subtitle encoding or format is unsupported".into(),
+            )
+        })?;
     validate(&app, &selected)?;
     Ok((
         [

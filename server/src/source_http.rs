@@ -151,12 +151,29 @@ pub(crate) async fn json(
 /// The same pinned, bounded egress is used for subtitle text. URLs/response
 /// errors are never copied into public error messages.
 pub(crate) async fn bytes(
-    mut target: Url,
+    target: Url,
     limit: usize,
     timeout: Duration,
     fixture: bool,
     redirects: bool,
 ) -> Result<zeroize::Zeroizing<Vec<u8>>, Failure> {
+    Ok(
+        bytes_with_content_type(target, limit, timeout, fixture, redirects)
+            .await?
+            .body,
+    )
+}
+pub(crate) struct ResponseBytes {
+    pub(crate) body: zeroize::Zeroizing<Vec<u8>>,
+    pub(crate) content_type: Option<String>,
+}
+pub(crate) async fn bytes_with_content_type(
+    mut target: Url,
+    limit: usize,
+    timeout: Duration,
+    fixture: bool,
+    redirects: bool,
+) -> Result<ResponseBytes, Failure> {
     tokio::time::timeout(timeout + Duration::from_secs(5), async {
         for hop in 0..=10 {
             validate(&target, fixture)?;
@@ -222,6 +239,12 @@ pub(crate) async fn bytes(
             if response.content_length().is_some_and(|n| n > limit as u64) {
                 return Err(Failure::TooLarge);
             }
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .filter(|v| v.len() <= 256)
+                .map(str::to_owned);
             let mut bytes = zeroize::Zeroizing::new(Vec::new());
             while let Some(chunk) = response
                 .chunk()
@@ -233,7 +256,10 @@ pub(crate) async fn bytes(
                 }
                 bytes.extend_from_slice(&chunk);
             }
-            return Ok(bytes);
+            return Ok(ResponseBytes {
+                body: bytes,
+                content_type,
+            });
         }
         Err(Failure::Redirect)
     })

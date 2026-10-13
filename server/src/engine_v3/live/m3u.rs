@@ -1,5 +1,7 @@
 use super::*;
 use std::sync::Arc;
+#[cfg(test)]
+mod tests;
 fn id(connection: &IntegrationConnection) -> Result<i64, ApiError> {
     connection
         .id
@@ -42,6 +44,7 @@ async fn request(
     revision: u64,
     connection: &IntegrationConnection,
     url: &str,
+    limit: usize,
 ) -> Result<(String, String), ApiError> {
     let owner = app.clone();
     let lease = lease.clone();
@@ -54,16 +57,23 @@ async fn request(
         lease.validate(&db).is_ok() && configuration::available_m3u(&db, &lease, id)
     });
     let uri = url::Url::parse(url).map_err(|_| ApiError::from("Invalid live endpoint"))?;
-    let response = viptv_engine::egress::ScopedHttp::new(authorize)
-        .request(viptv_engine::egress::HttpRequest::get(uri))
-        .await
-        .map_err(|_| ApiError::from("Live data temporarily unavailable"))?;
+    let mut input = viptv_engine::egress::HttpRequest::get(uri);
+    input.timeout = Some(Duration::from_secs(8));
+    input.max_redirects = Some(4);
+    let response = tokio::time::timeout(
+        Duration::from_secs(10),
+        viptv_engine::egress::ScopedHttp::new(authorize).fetch(input, limit, false),
+    )
+    .await
+    .map_err(|_| ApiError::from("Live data temporarily unavailable"))?
+    .map_err(|_| ApiError::from("Live data temporarily unavailable"))?;
     if !(200..300).contains(&response.status) {
         return Err("Live data temporarily unavailable".into());
     }
     Ok((
         response.url.to_string(),
-        String::from_utf8_lossy(&response.body).into_owned(),
+        viptv_engine::live::decode_xmltv_body(&response.body)
+            .map_err(|_| ApiError::from("Live data temporarily unavailable"))?,
     ))
 }
 async fn directory(
@@ -73,8 +83,14 @@ async fn directory(
     revision: u64,
     connection: &IntegrationConnection,
 ) -> Result<Cache, ApiError> {
-    let mut caches = app.live_cache.lock().await;
-    if let Some(cache) = caches
+    let gate = app.live_fetch_gates.connection(&connection.id)?;
+    let _gate = tokio::time::timeout(Duration::from_secs(10), gate.lock())
+        .await
+        .map_err(|_| ApiError::from("Live data temporarily unavailable"))?;
+    if let Some(cache) = app
+        .live_cache
+        .lock()
+        .await
         .get(&connection.id)
         .filter(|cache| cache.revision == revision as i64 && Instant::now() < cache.expires)
     {
@@ -88,6 +104,7 @@ async fn directory(
         revision,
         connection,
         &credentials.playlist_url,
+        3 * 1024 * 1024,
     )
     .await?;
     let channels = parse_m3u(
@@ -99,14 +116,9 @@ async fn directory(
     let mut groups = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for channel in &channels {
-        if let Some((id, label)) = channel
-            .channel
-            .group_id
-            .clone()
-            .zip(channel.channel.group_name.clone())
-        {
-            if seen.insert(id.clone()) {
-                groups.push(LiveGroup { id, label });
+        for group in &channel.groups {
+            if seen.insert(group.id.clone()) {
+                groups.push(group.clone());
             }
         }
     }
@@ -116,7 +128,9 @@ async fn directory(
         channels,
         groups,
         guides: Default::default(),
+        xmltv: None,
     };
+    let mut caches = app.live_cache.lock().await;
     caches.retain(|_, cache| Instant::now() < cache.expires);
     if caches.len() >= 256 {
         return Err("Live refresh capacity reached".into());
@@ -141,7 +155,7 @@ pub(crate) async fn page(
             query
                 .group_id
                 .as_ref()
-                .is_none_or(|g| c.channel.group_id.as_ref() == Some(g))
+                .is_none_or(|g| c.channel.in_group(g))
                 && query.search.as_ref().is_none_or(|s| {
                     c.channel
                         .card
@@ -204,8 +218,14 @@ pub(crate) async fn guide(
             reason: Some("No XMLTV guide configured for this channel".into())
         })));
     };
-    let mut caches = app.live_cache.lock().await;
-    if let Some((expiry, guide)) = caches
+    let gate = app.live_fetch_gates.connection(&connection.id)?;
+    let _gate = tokio::time::timeout(Duration::from_secs(10), gate.lock())
+        .await
+        .map_err(|_| ApiError::from("Guide temporarily unavailable"))?;
+    if let Some((expiry, guide)) = app
+        .live_cache
+        .lock()
+        .await
         .get(&connection.id)
         .and_then(|c| c.guides.get(&channel))
         .filter(|(expiry, _)| Instant::now() < *expiry)
@@ -213,8 +233,54 @@ pub(crate) async fn guide(
         let _ = expiry;
         return Ok(axum::Json(json!(guide)));
     }
-    let response = request(&app, &lease, profile, revision, &connection, &url).await;
-    let mut guide = match response.and_then(|(_, body)| {
+    let cached = app
+        .live_cache
+        .lock()
+        .await
+        .get(&connection.id)
+        .and_then(|c| c.xmltv.as_ref())
+        .filter(|(expiry, _)| Instant::now() < *expiry)
+        .map(|(_, body)| body.clone());
+    let fetched = cached.is_none();
+    let response = if let Some(body) = cached {
+        Ok(body)
+    } else {
+        request(
+            &app,
+            &lease,
+            profile,
+            revision,
+            &connection,
+            &url,
+            16 * 1024 * 1024,
+        )
+        .await
+        .map(|(_, body)| Arc::<str>::from(body))
+    };
+    if let Some(body) = response.as_ref().ok().filter(|_| fetched) {
+        let mut caches = app.live_cache.lock().await;
+        let mut total = caches
+            .values()
+            .filter_map(|c| c.xmltv.as_ref())
+            .map(|(_, body)| body.len())
+            .sum::<usize>();
+        if total.saturating_add(body.len()) > 32 * 1024 * 1024 {
+            for (other, cache) in caches.iter_mut() {
+                if other != &connection.id {
+                    if let Some((_, old)) = cache.xmltv.take() {
+                        total = total.saturating_sub(old.len());
+                    }
+                    if total.saturating_add(body.len()) <= 32 * 1024 * 1024 {
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(cache) = caches.get_mut(&connection.id) {
+            cache.xmltv = Some((Instant::now() + Duration::from_secs(60), body.clone()));
+        }
+    }
+    let mut guide = match response.and_then(|body| {
         parse_xmltv(&body, epg, &channel).map_err(|_| ApiError::from("Guide data unsupported"))
     }) {
         Ok(programs) => LiveGuide {
@@ -237,7 +303,7 @@ pub(crate) async fn guide(
     });
     guide.programs.truncate(100);
     super::super::configuration::validate_revision(&app, profile, revision)?;
-    if let Some(cache) = caches.get_mut(&connection.id) {
+    if let Some(cache) = app.live_cache.lock().await.get_mut(&connection.id) {
         cache.guides.insert(
             channel,
             (Instant::now() + Duration::from_secs(60), guide.clone()),
@@ -271,13 +337,13 @@ pub(crate) async fn sources(
     for card in &cards {
         if let Some(entry) = card["id"].as_str().and_then(|id| entries.get_mut(id)) {
             entry.media_id = Some(channel.clone());
-            entry.profile_revision=Some((profile,revision));
+            entry.profile_revision = Some((profile, revision));
             entry.created = Instant::now()
                 .checked_sub(Duration::from_secs(1500))
                 .unwrap_or_else(Instant::now);
         }
     }
     drop(entries);
-    super::remember_sources(&app,profile,revision,&channel,&connection.id,&cards);
+    super::remember_sources(&app, profile, revision, &channel, &connection.id, &cards);
     Ok(axum::Json(json!({"streams":cards,"live":true})))
 }
