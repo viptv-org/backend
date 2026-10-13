@@ -146,6 +146,7 @@ impl Store {
             "engine_observations",
             "engine_playback",
             "engine_profile_locks",
+            "engine_catalog_cache",
         ] {
             tx.execute(
                 &format!("DELETE FROM {table} WHERE connection=?1 AND account=?2 AND profile=?3"),

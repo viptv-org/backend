@@ -8,6 +8,8 @@ mod catalog;
 pub(crate) mod configuration;
 mod home;
 mod projection;
+mod simkl_catalog;
+pub(crate) mod subtitles;
 pub(crate) use catalog::{detail, discover};
 #[cfg(test)]
 mod tests;
@@ -40,13 +42,19 @@ pub(crate) async fn bootstrap(
             .map_err(|_| ApiError::from("Database unavailable"))?,
     )?;
     // Only implemented integrations are advertised, even though the engine registry has more descriptors.
-    let integrations: Vec<_> = builtins()
+    let mut integrations: Vec<_> = builtins()
         .into_iter()
         .filter(|p| {
             p.locations.contains(&ExecutionMode::Server)
                 && matches!(p.id.as_str(), "stremio" | "xtream")
         })
         .collect();
+    if app.simkl.configured() && app.secret_vault.is_some() {
+        if let Some(mut simkl) = builtins().into_iter().find(|p| p.id == "simkl") {
+            simkl.capabilities = crate::simkl::capabilities();
+            integrations.push(simkl);
+        }
+    }
     Ok(axum::Json(
         json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial}),
     ))

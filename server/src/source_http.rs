@@ -134,12 +134,29 @@ fn redirect_target(target: &Url, location: &str, fixture: bool) -> Result<Url, F
 /// pinned independently, without Referer, cookies, copied credentials or proxies.
 /// Provider callers retain their canonical-endpoint/no-redirect contract.
 pub(crate) async fn json(
-    mut target: Url,
+    target: Url,
     limit: usize,
     timeout: Duration,
     fixture: bool,
     redirects: bool,
 ) -> Result<Value, Failure> {
+    let bytes = bytes(target, limit, timeout, fixture, redirects).await?;
+    tokio::task::spawn_blocking(move || {
+        serde_json::from_slice(&bytes).map_err(|_| Failure::Protocol)
+    })
+    .await
+    .map_err(|_| Failure::Unavailable)?
+}
+
+/// The same pinned, bounded egress is used for subtitle text. URLs/response
+/// errors are never copied into public error messages.
+pub(crate) async fn bytes(
+    mut target: Url,
+    limit: usize,
+    timeout: Duration,
+    fixture: bool,
+    redirects: bool,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, Failure> {
     tokio::time::timeout(timeout + Duration::from_secs(5), async {
         for hop in 0..=10 {
             validate(&target, fixture)?;
@@ -216,11 +233,7 @@ pub(crate) async fn json(
                 }
                 bytes.extend_from_slice(&chunk);
             }
-            return tokio::task::spawn_blocking(move || {
-                serde_json::from_slice(&bytes).map_err(|_| Failure::Protocol)
-            })
-            .await
-            .map_err(|_| Failure::Unavailable)?;
+            return Ok(bytes);
         }
         Err(Failure::Redirect)
     })

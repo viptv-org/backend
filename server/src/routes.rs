@@ -18,6 +18,13 @@ pub fn router_with_tv(
         .route("/v3/profiles/:id/home", get(engine_v3::home))
         .route("/v3/discover", get(engine_v3::discover))
         .route("/v3/meta/:kind/:id", get(engine_v3::detail))
+        .route("/v3/subtitles/:kind/:id", get(engine_v3::subtitles::discover))
+        .route("/v3/subtitle-content/:id", get(engine_v3::subtitles::content))
+        .route("/v3/profiles/:id/simkl", get(simkl::status).delete(simkl::disconnect))
+        .route("/v3/profiles/:id/simkl/authorize", post(simkl::authorize))
+        .route("/v3/profiles/:id/simkl/search", get(simkl::search))
+        .route("/v3/profiles/:id/simkl/meta/:category/:title", get(simkl::detail))
+        .route("/v3/profiles/:id/simkl/watched", post(simkl::watched))
         .route(
             "/profiles",
             get(profiles_authenticated).post(create_profile_authenticated),
@@ -210,6 +217,7 @@ pub fn router_with_tv(
         .layer(middleware::from_fn(gateway::diagnostics::observe));
     let mut r = Router::new()
         .nest("/api", api)
+        .route("/api/v3/simkl/callback", get(simkl::callback).layer(middleware::map_response(private_api_response)))
         .route(
             "/api/health",
             get(|| async {

@@ -12,6 +12,7 @@ use tokio::sync::Semaphore;
 pub(crate) mod credentials_v2;
 mod discover;
 mod engine;
+mod subtitles;
 mod extras;
 pub(crate) mod http_v2;
 #[cfg(test)]

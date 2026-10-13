@@ -24,6 +24,7 @@ impl ApiError {
     /// Stable recovery reasons shared by all platform clients.
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
+            "Verified source mapping is unavailable for this title or episode" => Some("metadata_mapping_unavailable"),
             "client_update_required" => Some("client_update_required"),
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),
@@ -115,6 +116,8 @@ pub struct App {
     pub(crate) secret_vault: Option<Arc<secret_store::Vault>>,
     pub(crate) gateway_client: gateway::client::Client,
     pub(crate) gateway_playbacks: Arc<gateway::playback::Registry>,
+    pub(crate) subtitle_selections: Arc<engine_v3::subtitles::Selections>,
+    pub(crate) simkl: Arc<simkl::Service>,
     pub(crate) stremio_import: Arc<stremio_import::Service>,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
@@ -252,6 +255,8 @@ impl App {
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
         engine_v3::configuration::init(&db).map_err(|_| "Engine configuration initialization failed")?;
+        simkl::init(&db).map_err(|_| "Simkl schema initialization failed")?;
+        let simkl = Arc::new(simkl::Service::from_env()?);
         provider::v2::init(&db).map_err(|_| "Account IPTV schema initialization failed")?;
         provider::refresh_v2::prepare(&db).map_err(|_| "IPTV refresh initialization failed")?;
         gateway::playback::init(&db)
@@ -273,6 +278,8 @@ impl App {
             secret_vault,
             gateway_client: Default::default(),
             gateway_playbacks,
+            subtitle_selections: Default::default(),
+            simkl,
             stremio_import,
             jobs: Default::default(),
             streams: Default::default(),

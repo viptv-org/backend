@@ -1,0 +1,33 @@
+# Simkl server integration (experimental v3)
+
+Simkl credentials stay on the backend and are encrypted with the existing secret vault, bound to both account and profile. The server must have `SIMKL_CLIENT_ID`, `SIMKL_CLIENT_SECRET`, `VIPTV_SECRETS_KEYRING`, and its existing pinned HTTPS browser origin configured. Register `/api/v3/simkl/callback` on that origin as the Simkl OAuth redirect URI. Application secrets are never returned to clients. Configuration does not create a Simkl user link; the user must authorize each profile in a browser/dashboard session.
+
+The server advertises only Discovery, Authorization, Search, Metadata, and Tracking for this adapter. Simkl is absent from bootstrap descriptors when the application or vault is unconfigured. A private metadata connection is available for each selected profile when the server is configured; user authorization is required only for tracking. A saved profile configuration must explicitly assign the corresponding Simkl capabilities; profiles without a saved override use their enabled connections. Profiles without an explicit saved browsing choice default to Simkl on a configured server and to Stremio otherwise. An explicit Stremio choice stays Stremio. PUT the existing profile integrations endpoint with `browsing_plugin` set to `simkl` or `stremio`; Simkl selection requires an enabled Discovery assignment.
+
+## API
+
+Every profile route requires a live VIPTV session with that exact selected profile. Parent restrictions apply. OAuth initiation and unlinking additionally require a browser account session, keeping credential management in the dashboard.
+
+| Method and route | Input / result |
+|---|---|
+| GET `/api/v3/profiles/:profile/simkl` | `{configured, linked, connection}`; no credential material |
+| POST `/api/v3/profiles/:profile/simkl/authorize` | `{authorization_url, expires_in_seconds}`; navigate in a browser |
+| GET `/api/v3/simkl/callback` | Simkl `state`, `code` or `error`; redirects to `/?simkl=linked` or `/?simkl=cancelled` |
+| DELETE `/api/v3/profiles/:profile/simkl` | Unlinks that profile locally and invalidates outstanding authorization states |
+| GET `/api/v3/profiles/:profile/simkl/search?category=movie&query=…&page=1` | Engine `CatalogPage`; categories `movie`, `tv`, `anime`; 24 results/page, pages 1–20 |
+| GET `/api/v3/profiles/:profile/simkl/meta/:category/:id?offset=0` | Engine `DetailSnapshot`; positive numeric Simkl title ID; TV episodes paged by 24 |
+| POST `/api/v3/profiles/:profile/simkl/watched` | `{category:"movie",id:123}` or `{category:"tv",id:456,season:1,episode:2}`; `{recorded:true,…}` only after upstream confirmation |
+
+A watch action is explicit; no passive playback hook uploads history. TV watch updates first verify the requested season/episode in Simkl's own episode list. Unnumbered specials and conflicting identities are not inferred. Movie IDs and episode IDs remain distinct in the engine's projections. Metadata calls validate the returned title ID. Disabling a profile capability, unlinking, changing the selected profile, expiring a session, or changing policy invalidates work before a queued request is sent and again before its result is returned. An upstream mutation already dispatched cannot be recalled.
+
+OAuth state is random, stored only as a hash, expires after ten minutes, is single-use, and is bound to the originating session, account, profile policy, and link revision. The link token is not placed in Home, public metadata, or any client response. Public metadata operations do not require or forward a user token. Disconnect removes local authorization; it does not call Simkl's account-wide application revocation endpoint.
+
+## Current limits and evidence
+
+The fixture-backed implementation is not a claim of end-to-end user OAuth qualification. A configured application and a real user's authorization remain necessary. Dashboard linking UI and application consumers are separate work. Genre/calendar controls, continuous inbound watchlist synchronization, automatic playback tracking, anime episode mappings/tracking, and additional external mapping providers are not implemented or advertised. Anime title metadata is supported; its episode list is intentionally empty until an ordering contract is implemented. Source and subtitle lookup resolve Simkl-qualified movie identities through their authoritative IMDb IDs. TV episodes additionally require an exact match in the provider episode list; supplied coordinates must agree. The original Simkl identity remains attached to playback authority and library state. Missing or conflicting mappings return HTTP 422 with `metadata_mapping_unavailable` before any addon lookup; anime episodes remain unsupported. Public title and TV episode documents share a bounded, coalesced one-hour metadata cache so detail, source, and subtitle requests reuse the same evidence.
+
+The generic `/api/v3/bootstrap` and profile Home endpoints assemble Simkl Trending Movies, TV Shows, and Anime when Simkl is selected. One combined public `today_100.json` document serves the three rows, coalesced and cached for one hour without user credentials. Home retains its two-second assembly deadline and presents failed rows for slow or failed upstreams. `/api/v3/discover` routes movie/series/anime discovery and text search to the selected provider; unsupported controls are rejected. Generic `/api/v3/meta/:kind/:id` accepts projected identities such as `simkl:movie:123` and uses the selected provider. Explicit provider switches never merge Stremio and Simkl metadata in one browsing configuration.
+
+The engine tests cover stable title/episode identities, missing and conflicting IDs, duplicate episode coordinates, type mismatches, and exact source mappings. In-process server fixtures cover routed OAuth, encrypted storage, account/profile isolation, expired/revoked/single-use state, disabled configuration, exact episode tracking, metadata mismatch, unlinking, default provider routing, public cache coalescing, explicit provider selection, bounded slow Home assembly, canonical playback identity, and mapped movie/TV addon source and subtitle requests. No production server or real account was modified.
+
+API schemas were checked with Context7 `/simkl/api` against the official [authentication](https://github.com/simkl/api/blob/master/_autodocs/api-reference/authentication.md), [content discovery](https://github.com/simkl/api/blob/master/_autodocs/api-reference/content-discovery.md), and [sync](https://github.com/simkl/api/blob/master/_autodocs/api-reference/sync.md) documentation. Simkl's current documentation is at [api.simkl.org](https://api.simkl.org).

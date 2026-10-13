@@ -43,8 +43,20 @@ pub(crate) async fn start(
     value: Result<axum::Json<Value>, JsonRejection>,
 ) -> Result<axum::Json<Value>, Error> {
     let value = value.map_err(|_| Error::Code("invalid_discovery_request"))?;
-    let app = scoped(app, lease).await?;
-    start_streams(State(app), value).await.map_err(boundary)
+    let app = scoped(app, lease.clone()).await?;
+    let auth::Principal::Account { profile_id, .. } = &lease.principal;
+    let profile = profile_id.ok_or_else(auth::forbidden)?;
+    let (app, revision) = crate::engine_v3::configuration::apply(
+        app,
+        &lease,
+        profile,
+        viptv_engine::capabilities::Capability::Sources,
+    )?;
+    let result = start_streams(State(app.clone()), value)
+        .await
+        .map_err(boundary)?;
+    crate::engine_v3::configuration::validate_revision(&app, profile, revision)?;
+    Ok(result)
 }
 
 #[derive(Deserialize)]

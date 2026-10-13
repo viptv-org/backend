@@ -163,3 +163,25 @@ device/UI acceptance. Subsequent strict-read and legacy-POST refusal evidence is
 recorded in V2_OPERATIONS.md; historical tests of unkeyed behavior do not define
 today's contract. Client pin adoption, production migration/rollback, private-
 network exceptions and key rotation must each retain their own evidence boundary.
+# Experimental v3 subtitle execution
+
+`GET /api/v3/subtitles/{kind}/{id}` aggregates the active profile's enabled
+Stremio subtitle connections. Optional `videoHash`, `videoSize` and `filename`
+query parameters carry actual file evidence; omit them when unknown. The
+bounded two-second discovery returns the shared `SubtitleSnapshot`: scope,
+opaque candidates (id/provider_id/language/label), provider Ready/Empty/Failed
+states and complete=true. No upstream subtitle URL is returned or persisted.
+
+`GET /api/v3/subtitle-content/{candidateId}` uses the same authenticated session
+to fetch a selected file through DNS-pinned, bounded, redirect-validated egress.
+It returns `text/vtt; charset=utf-8`, converting UTF-8 SRT to WebVTT. Other text
+encodings and non-SRT/VTT formats fail explicitly. Selections expire after ten
+minutes and profile/addon configuration changes revoke them; authorization and
+kids policy are checked before and after the fetch. Browser clients can attach
+this same-origin endpoint as a track; native remote clients must authenticate
+their content request. Players still need the client integration.
+
+The real in-process HTTP fixture covers discovery with one failed provider,
+URL privacy, cross-session rejection, SRT delivery and configuration revocation.
+Protected-egress redirect regression tests pass. External addon timing and
+actual browser/native track rendering remain unqualified.

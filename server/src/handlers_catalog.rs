@@ -17,21 +17,23 @@ pub(crate) async fn catalogs_revision(
 #[derive(Deserialize)]
 pub(crate) struct Discover {
     #[serde(rename = "type", default = "movie")]
-    kind: String,
-    catalog: Option<String>,
-    addon_id: Option<i64>,
+    pub(crate) kind: String,
+    pub(crate) catalog: Option<String>,
+    pub(crate) addon_id: Option<i64>,
     #[serde(default)]
-    skip: usize,
-    search: Option<String>,
-    genre: Option<String>,
-    extras: Option<String>,
+    pub(crate) skip: usize,
+    pub(crate) search: Option<String>,
+    pub(crate) genre: Option<String>,
+    pub(crate) extras: Option<String>,
 }
 fn movie() -> String {
     "movie".into()
 }
 impl Discover {
     pub(crate) fn is_search(&self) -> bool {
-        self.search.as_deref().is_some_and(|term| !term.trim().is_empty())
+        self.search
+            .as_deref()
+            .is_some_and(|term| !term.trim().is_empty())
     }
 }
 pub(crate) async fn discover(
@@ -100,19 +102,23 @@ pub(crate) async fn start_streams(
     if only_addons && only_provider.is_some() {
         return Err("Conflicting discovery scopes".into());
     }
+    let resolved_lookup = crate::simkl::resolve_request(&a, &mut v).await?;
     let context = matching_context(&v)?;
     v.as_object_mut()
         .ok_or("Invalid stream request")?
         .extend(context.as_object().unwrap().clone());
     let kind = media_type(&v)?.to_string();
     let id = text(&v, "id", 512)?.to_string();
+    let lookup_id = resolved_lookup.unwrap_or_else(|| id.clone());
     a.prune();
     let addons = a.addons.clone();
     let (sources, source_errors) = blocking(move || Ok(addons.entries_with_errors()?)).await?;
     let source_errors = source_errors.into_iter().take(32).collect::<Vec<_>>();
     let sources = sources
         .into_iter()
-        .filter(|(_, _, m)| only_provider.is_none() && addon::supports(m, "stream", &kind, &id))
+        .filter(|(_, _, m)| {
+            only_provider.is_none() && addon::supports(m, "stream", &kind, &lookup_id)
+        })
         .take(32)
         .collect::<Vec<_>>();
     a.require_media(&a.db.lock().unwrap())?;
@@ -171,7 +177,7 @@ pub(crate) async fn start_streams(
         let a = a.clone();
         let j = job.clone();
         let kind = kind.clone();
-        let id = id.clone();
+        let id = lookup_id.clone();
         tokio::spawn(async move {
             let source = format!("addon:{aid}");
             let r = tokio::time::timeout(Duration::from_secs(30), a.addons.streams(&u, &kind, &id))
@@ -184,6 +190,7 @@ pub(crate) async fn start_streams(
         tokio::spawn(async move {
             enrich_matching(&mut v, &Value::Null);
             if only_provider.is_none()
+                && !id.starts_with("simkl:")
                 && kind != "live"
                 && (blank_name(&v)
                     || v["year"].is_null()

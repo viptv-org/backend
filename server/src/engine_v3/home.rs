@@ -28,7 +28,13 @@ pub(super) async fn load(
         let favorites=q.query_map([profile],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
         (queue, favorites, configuration_revision)
     };
-    let catalogs = app.addons.catalogs()?;
+    let (configuration, _) = configuration::read(&app, &lease, profile)?;
+    let simkl = configuration.browsing_plugin == "simkl";
+    let catalogs = if simkl {
+        json!([])
+    } else {
+        app.addons.catalogs()?
+    };
     let queue = projection::cards(
         &app,
         queue["items"].as_array().cloned().unwrap_or_default(),
@@ -49,6 +55,21 @@ pub(super) async fn load(
             load: Box::pin(async move { Ok(favorites) }),
         },
     ];
+    if simkl {
+        for (category, title) in [
+            ("movie", "Simkl Trending Movies"),
+            ("tv", "Simkl Trending TV Shows"),
+            ("anime", "Simkl Trending Anime"),
+        ] {
+            let task_app = app.clone();
+            requests.push(RowRequest {
+                id: format!("simkl:{category}:trending"),
+                title: title.into(),
+                provider_id: "simkl".into(),
+                load: Box::pin(crate::simkl::home_cards(task_app, profile, category)),
+            });
+        }
+    }
     for c in catalogs.as_array().into_iter().flatten().take(6) {
         let Some(catalog) = c["id"].as_str().map(str::to_owned) else {
             continue;

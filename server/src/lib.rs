@@ -14,6 +14,7 @@ pub mod provider;
 mod secret_store;
 mod service_errors;
 mod source_http;
+mod simkl;
 mod stremio_import;
 pub mod util;
 
@@ -70,3 +71,6 @@ pub(crate) use handlers_profiles::*;
 pub(crate) use http_middleware::*;
 pub(crate) use matching_context::*;
 pub use routes::{router, router_with_tv};
+
+#[cfg(test)]
+mod remote_qa_fixture;

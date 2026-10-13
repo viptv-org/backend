@@ -9,6 +9,7 @@ pub mod playback;
 pub mod query;
 pub mod registry;
 pub mod stremio;
+pub mod simkl;
 #[cfg(feature = "runtime")]
 pub mod store;
 

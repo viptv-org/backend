@@ -52,6 +52,15 @@ pub async fn assemble(scope: Scope, requests: Vec<RowRequest>, budget: Duration)
             }
         }
     }
+    // There is no continuation after this function returns: remaining futures
+    // are dropped. Expose a terminal retry state instead of a permanent spinner.
+    for row in &mut snapshot.rows {
+        if row.state == RowState::Pending {
+            row.state = RowState::Failed;
+            row.message = Some("This row took too long. Try again.".into());
+        }
+    }
+    snapshot.complete = true;
     snapshot.hero = snapshot
         .rows
         .iter()

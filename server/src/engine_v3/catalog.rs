@@ -6,15 +6,21 @@ pub(crate) async fn discover(
     Extension(lease): Extension<ResourceLease>,
     Query(q): Query<crate::handlers_catalog::Discover>,
 ) -> ApiResult {
-    let capability=if q.is_search() {viptv_engine::capabilities::Capability::Search} else {viptv_engine::capabilities::Capability::Discovery};
+    let capability = if q.is_search() {
+        viptv_engine::capabilities::Capability::Search
+    } else {
+        viptv_engine::capabilities::Capability::Discovery
+    };
     let auth::Principal::Account { profile_id, .. } = &lease.principal;
     let profile = profile_id.ok_or_else(auth::forbidden)?;
-    let (scoped, revision) = configuration::apply(
-        app.with_lease(lease.clone()),
-        &lease,
-        profile,
-        capability,
-    )?;
+    let scoped = app.with_lease(lease.clone());
+    let (configuration, _) = configuration::read(&scoped, &lease, profile)?;
+    if configuration.browsing_plugin == "simkl" {
+        let result = super::simkl_catalog::discover(scoped.clone(), lease, profile, q).await?;
+        configuration::validate_revision(&scoped, profile, configuration.scope.revision)?;
+        return Ok(result);
+    }
+    let (scoped, revision) = configuration::apply(scoped, &lease, profile, capability)?;
     let axum::Json(value) =
         crate::handlers_catalog::discover(State(scoped.clone()), Extension(lease), Query(q))
             .await?;
@@ -46,13 +52,26 @@ pub(crate) async fn detail(
     Path((kind, id)): Path<(String, String)>,
     Query(page): Query<DetailPage>,
 ) -> ApiResult {
-    if id.len() > 512 || !["movie", "series"].contains(&kind.as_str()) {
+    if id.is_empty()
+        || id.len() > 512
+        || !["movie", "series"].contains(&kind.as_str())
+        || page.offset > 100_000
+    {
         return Err("Invalid metadata request".into());
     }
     let auth::Principal::Account { profile_id, .. } = &lease.principal;
     let profile = profile_id.ok_or_else(auth::forbidden)?;
+    let app = app.with_lease(lease.clone());
+    let (configuration, _) = configuration::read(&app, &lease, profile)?;
+    if configuration.browsing_plugin == "simkl" {
+        let result =
+            super::simkl_catalog::detail(app.clone(), lease, profile, kind, id, page.offset)
+                .await?;
+        configuration::validate_revision(&app, profile, configuration.scope.revision)?;
+        return Ok(result);
+    }
     let (app, revision) = configuration::apply(
-        app.with_lease(lease.clone()),
+        app,
         &lease,
         profile,
         viptv_engine::capabilities::Capability::Metadata,
@@ -72,6 +91,12 @@ pub(crate) async fn detail(
     } else {
         value
     };
+    if meta["id"].as_str() != Some(id.as_str()) {
+        return Err(ApiError(
+            StatusCode::BAD_GATEWAY,
+            "Provider returned a different title".into(),
+        ));
+    }
     let mut parent = meta.clone();
     parent["type"] = json!(kind);
     parent["id"] = json!(id);
@@ -79,9 +104,6 @@ pub(crate) async fn detail(
         .into_iter()
         .next()
         .ok_or_else(auth::forbidden)?;
-    if page.offset > 100_000 {
-        return Err("Invalid episode page".into());
-    }
     let all = meta["videos"].as_array().cloned().unwrap_or_default();
     let next_cursor = (all.len() > page.offset + 24).then(|| (page.offset + 24).to_string());
     let videos = all

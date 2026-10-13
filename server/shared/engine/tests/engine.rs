@@ -181,9 +181,10 @@ async fn home_deadline_does_not_wait_for_slow_rows_or_leak_provider_errors() {
         },
     ];
     let result = assemble(p.scope, requests, Duration::from_secs(2)).await;
-    assert!(!result.complete);
+    assert!(result.complete);
     assert_eq!(result.rows[0].state, RowState::Empty);
-    assert_eq!(result.rows[1].state, RowState::Pending);
+    assert_eq!(result.rows[1].state, RowState::Failed);
+    assert!(result.rows[1].message.as_deref().unwrap().contains("Try again"));
     assert_eq!(result.rows[2].state, RowState::Failed);
     assert!(!serde_json::to_string(&result).unwrap().contains("secret"));
 }

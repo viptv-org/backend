@@ -9,7 +9,7 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_profile_configuration(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,account_id INTEGER NOT NULL,revision INTEGER NOT NULL,value TEXT NOT NULL);")
 }
 
-pub(super) fn apply(
+pub(crate) fn apply(
     mut app: App,
     lease: &ResourceLease,
     profile: i64,
@@ -24,15 +24,22 @@ pub(super) fn apply(
     let allowed = Registry::builtin()
         .connections_for(&effective, &connections, cap)
         .map_err(|_| ApiError::from("Integration unavailable"))?;
-    let ids = allowed
+    let mut ids: Vec<i64> = allowed
         .iter()
         .filter_map(|c| c.id.strip_prefix("addon:")?.parse().ok())
         .collect();
+    if configuration.scope.revision == 0 && cap == viptv_engine::capabilities::Capability::Sources {
+        // Default assignments include enabled account addons. An unreadable legacy
+        // credential must still publish its safe migration error without egress.
+        // Explicit saved assignments continue to exclude unassigned connections.
+        let (_, errors) = app.addons.entries_with_errors()?;
+        ids.extend(errors.into_iter().map(|(id, _)| id));
+    }
     app.addons = app.addons.with_engine_ids(ids);
     Ok((app, configuration.scope.revision))
 }
 
-pub(super) fn validate_revision(app: &App, profile: i64, expected: u64) -> Result<(), ApiError> {
+pub(crate) fn validate_revision(app: &App, profile: i64, expected: u64) -> Result<(), ApiError> {
     let db = app
         .db
         .lock()
@@ -62,12 +69,15 @@ pub(super) fn read(
     profile: i64,
 ) -> Result<(ProfileConfiguration, Vec<IntegrationConnection>), ApiError> {
     let account = lease.principal.account_id().ok_or_else(auth::forbidden)?;
-    let connections = app.addons.engine_connections(account)?;
+    let mut connections = app.addons.engine_connections(account)?;
     let db = app
         .db
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
     app.require_profile(&db, profile)?;
+    if app.simkl.configured() && app.secret_vault.is_some() {
+        connections.extend(crate::simkl::connections(&db, account, profile)?);
+    }
     let stored: Option<String> = db
         .query_row(
             "SELECT value FROM engine_profile_configuration WHERE profile_id=?1 AND account_id=?2",
@@ -89,7 +99,12 @@ pub(super) fn read(
                 })
                 .map_err(db_error)?,
             avatar_id: None,
-            browsing_plugin: "stremio".into(),
+            browsing_plugin: if connections.iter().any(|c| c.plugin_id == "simkl") {
+                "simkl"
+            } else {
+                "stremio"
+            }
+            .into(),
             assignments: connections
                 .iter()
                 .map(|c| ProfileAssignment {
@@ -130,8 +145,22 @@ pub(crate) async fn update(
 ) -> ApiResult {
     let app = app.with_lease(lease.clone());
     let (mut configuration, connections) = read(&app, &lease, profile)?;
-    if update.assignments.len() > 128 || update.browsing_plugin != "stremio" {
+    if update.assignments.len() > 128
+        || !matches!(update.browsing_plugin.as_str(), "stremio" | "simkl")
+    {
         return Err("Integration is not available".into());
+    }
+    if update.browsing_plugin == "simkl"
+        && !connections.iter().any(|c| {
+            c.plugin_id == "simkl"
+                && update.assignments.iter().any(|a| {
+                    a.connection_id == c.id
+                        && a.enabled
+                            .contains(&viptv_engine::capabilities::Capability::Discovery)
+                })
+        })
+    {
+        return Err("Enable Simkl discovery for this profile first".into());
     }
     configuration.browsing_plugin = update.browsing_plugin;
     configuration.assignments = update.assignments;
@@ -143,10 +172,6 @@ pub(crate) async fn update(
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
     app.require_profile(&db, profile)?;
-    let auth::Principal::Account { role, .. } = &lease.principal;
-    if role == "device" {
-        return Err(auth::forbidden());
-    }
     kids::require_parent(&db, &lease.principal)?;
     let tx = db.transaction().map_err(db_error)?;
     let revision: u64 = tx
