@@ -52,6 +52,8 @@ pub(crate) async fn bootstrap(
     } else {
         None
     };
+    let bootstrap_library=if let Some(profile)=profile_id{Some(library::list(State(app.clone()),Extension(lease.clone()),Path(profile),axum::extract::Query(library::Page{offset:0,limit:Some(100)})).await?.0)}else{None};
+    let bootstrap_preferences=if let Some(profile)=profile_id{Some(preferences::get(State(app.clone()),Extension(lease.clone()),Path(profile)).await?.0)}else{None};
     lease.validate(
         &*app
             .db
@@ -74,7 +76,7 @@ pub(crate) async fn bootstrap(
     }
     if cfg!(feature="vsources-runtime") && app.secret_vault.is_some(){if let Some(plugin)=builtins().into_iter().find(|p|p.id=="vsources"){integrations.push(plugin);}}
     let axum::Json(management)=profiles::list(State(app),Extension(lease)).await?;
-    Ok(axum::Json(json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management})))
+    Ok(axum::Json(json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences})))
 }
 
 pub(crate) async fn home(

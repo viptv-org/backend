@@ -5,8 +5,8 @@ use viptv_engine::presentation::{Card, CatalogPage};
 #[derive(Default, Deserialize)]
 pub(crate) struct Page {
     #[serde(default)]
-    offset: u32,
-    limit: Option<u32>,
+    pub(crate) offset: u32,
+    pub(crate) limit: Option<u32>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
