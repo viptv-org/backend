@@ -34,17 +34,23 @@ pub(super) async fn tracking_server_with_failed_stop(
         .route("/movies/10",get(||async{axum::Json(json!({"title":"Movie","ids":{"simkl":10}}))}))
         .route("/tv/20",get(||async{axum::Json(json!({"title":"Show","ids":{"simkl":20}}))}))
         .route("/tv/episodes/20",get(||async{axum::Json(json!([{"season":1,"episode":2,"ids":{"simkl":30}}]))}))
+        .route("/anime/40",get(||async{axum::Json(json!({"title":"Anime","anime_type":"tv","ids":{"simkl":40}}))}))
+        .route("/anime/50",get(||async{axum::Json(json!({"title":"Anime Film","anime_type":"movie","ids":{"simkl":50}}))}))
+        .route("/anime/episodes/40",get(||async{axum::Json(json!([
+            {"episode":36,"type":"episode","aired":true,"tvdb":{"season":2,"episode":1},"ids":{"simkl_id":60}},
+            {"type":"episode","aired":true,"tvdb":{"season":2,"episode":2},"ids":{"simkl_id":61}}
+        ]))}))
         .route("/sync/history",post(move|headers:axum::http::HeaderMap,axum::Json(body):axum::Json<Value>|{let history=history.clone();async move{
             assert_eq!(headers[header::AUTHORIZATION],"Bearer fixture-private-token");
-            let movie=body["movies"].is_array();
+            let movie=body["movies"].is_array();let anime_film=body["anime"].is_array()&&body["anime"][0]["seasons"].is_null();
             history.lock().unwrap().push(json!({"path":"history","body":body}));
-            axum::Json(if movie{json!({"added":{"movies":1}})}else{json!({"added":{"episodes":1}})})
+            axum::Json(if movie{json!({"added":{"movies":1}})}else if anime_film{json!({"added":{"shows":1}})}else{json!({"added":{"episodes":1}})})
         }}))
         .route("/scrobble/:action",post(move|Path(action):Path<String>,headers:axum::http::HeaderMap,axum::Json(body):axum::Json<Value>|{let scrobble=scrobble.clone();async move{
             assert_eq!(headers[header::AUTHORIZATION],"Bearer fixture-private-token");
             scrobble.lock().unwrap().push(json!({"path":action,"body":body}));
             if fail_stop && action=="stop" {return StatusCode::BAD_GATEWAY.into_response();}
-            let mut response=json!({"action":if action=="stop"{"scrobble"}else{&action},"movie":body["movie"],"show":body["show"],"episode":body["episode"]});
+            let mut response=json!({"action":if action=="stop"{"scrobble"}else{&action},"movie":body["movie"],"show":body["show"],"anime":body["anime"],"episode":body["episode"]});
             if body["movie"].is_null(){response.as_object_mut().unwrap().remove("movie");}
             axum::Json(response).into_response()
         }}));

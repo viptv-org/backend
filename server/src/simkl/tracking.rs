@@ -13,8 +13,9 @@ impl Watched {
     pub(super) fn canonical(value: &Value) -> Result<Self, ApiError> {
         let id = text(value, "id", 512)?;
         let parts: Vec<_> = id.split(':').collect();
-        let movie = parts.len() == 3 && parts[0] == "simkl" && parts[1] == "movie";
-        let tv = parts.len() == 5 && parts[0] == "simkl" && parts[1] == "tv";
+        let movie =
+            parts.len() == 3 && parts[0] == "simkl" && matches!(parts[1], "movie" | "anime");
+        let tv = parts.len() == 5 && parts[0] == "simkl" && matches!(parts[1], "tv" | "anime");
         if !movie && !tv {
             return Err("An exact Simkl movie or TV episode is required".into());
         }
@@ -53,7 +54,7 @@ impl Watched {
         if tv
             && value["series_id"]
                 .as_str()
-                .is_some_and(|s| s != format!("simkl:tv:{}", q.id))
+                .is_some_and(|s| s != format!("simkl:{}:{}", q.category, q.id))
         {
             return Err("Conflicting Simkl title identity".into());
         }
@@ -68,14 +69,25 @@ pub(super) async fn verify(
     credential: &store::Credential,
 ) -> Result<viptv_engine::presentation::Card, ApiError> {
     if q.id == 0
-        || !matches!(q.category.as_str(), "movie" | "tv")
+        || !matches!(q.category.as_str(), "movie" | "tv" | "anime")
         || (q.category == "movie" && (q.season.is_some() || q.episode.is_some()))
-        || (q.category == "tv" && (q.season.is_none() || q.episode.unwrap_or(0) == 0))
+        || (q.category == "tv" && q.season.is_none())
+        || (q.season.is_some() != q.episode.is_some())
+        || q.episode == Some(0)
     {
         return Err("An exact movie or TV episode is required".into());
     }
     let parent = metadata::title(app, profile, credential, &q.category, q.id).await?;
-    let selected = if q.category == "tv" {
+    if parent.identity.kind
+        != if q.episode.is_some() {
+            "series"
+        } else {
+            "movie"
+        }
+    {
+        return Err("Conflicting Simkl content type".into());
+    }
+    let selected = if q.episode.is_some() {
         metadata::episodes(app, profile, credential, q.id, &parent)
             .await?
             .into_iter()
@@ -110,17 +122,31 @@ pub(super) async fn record(
     credential: &store::Credential,
     watched_at: Option<&str>,
 ) -> Result<(), ApiError> {
-    verify(app, profile, q, credential).await?;
+    let verified = verify(app, profile, q, credential).await?;
     let mut body = if q.category == "movie" {
         json!({"movies":[{"ids":{"simkl":q.id}}]})
+    } else if q.category == "anime" {
+        if q.episode.is_none() {
+            json!({"anime":[{"ids":{"simkl":q.id}}]})
+        } else {
+            let number = anime_number(app, profile, q, credential, &verified).await?;
+            json!({"anime":[{"ids":{"simkl":q.id},"seasons":[{"number":1,"episodes":[{"number":number}]}]}]})
+        }
     } else {
         json!({"shows":[{"ids":{"simkl":q.id},"seasons":[{"number":q.season,"episodes":[{"number":q.episode}]}]}]})
     };
     if let Some(at) = watched_at {
         if q.category == "movie" {
             body["movies"][0]["watched_at"] = json!(at);
+        } else if q.category == "anime" && q.episode.is_none() {
+            body["anime"][0]["watched_at"] = json!(at);
         } else {
-            body["shows"][0]["seasons"][0]["episodes"][0]["watched_at"] = json!(at);
+            let field = if q.category == "anime" {
+                "anime"
+            } else {
+                "shows"
+            };
+            body[field][0]["seasons"][0]["episodes"][0]["watched_at"] = json!(at);
         }
     }
     let result = store::request(app, profile, credential, "/sync/history", Some(body)).await?;
@@ -130,6 +156,8 @@ pub(super) async fn record(
     });
     let field = if q.category == "movie" {
         "movies"
+    } else if q.category == "anime" && q.episode.is_none() {
+        "shows"
     } else {
         "episodes"
     };
@@ -154,4 +182,51 @@ pub(crate) async fn watched(
     Ok(axum::Json(
         json!({"recorded":true,"category":q.category,"id":q.id,"season":q.season,"episode":q.episode}),
     ))
+}
+
+/// Translate only an exact verified provider episode ID. UI coordinates and
+/// list position cannot stand in for AniDB's sequential episode number.
+pub(super) async fn anime_number(
+    app: &App,
+    profile: i64,
+    q: &Watched,
+    credential: &store::Credential,
+    verified: &viptv_engine::presentation::Card,
+) -> Result<u32, ApiError> {
+    let episode_id = verified
+        .identity
+        .ids
+        .iter()
+        .find(|id| id.namespace == "simkl_episode")
+        .and_then(|id| id.value.parse::<u64>().ok())
+        .ok_or("Simkl anime episode mapping is unavailable")?;
+    let value = cache::metadata(
+        app,
+        profile,
+        credential,
+        &format!("/anime/episodes/{}", q.id),
+    )
+    .await?;
+    let mut matches = value
+        .as_array()
+        .ok_or("Simkl anime episode mapping is unavailable")?
+        .iter()
+        .filter(|v| viptv_engine::simkl::id(v) == Some(episode_id));
+    let episode = matches
+        .next()
+        .ok_or("Simkl anime episode mapping is unavailable")?;
+    if matches.next().is_some()
+        || episode["type"] != "episode"
+        || episode["tvdb"]["season"].as_u64() != q.season.map(u64::from)
+        || episode["tvdb"]["episode"].as_u64() != q.episode.map(u64::from)
+    {
+        return Err("Simkl anime episode mapping is unavailable".into());
+    }
+    let number = episode["episode"]
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| *n > 0)
+        .ok_or("Simkl anime episode mapping is unavailable")?;
+    store::validate(app, profile, credential)?;
+    Ok(number)
 }

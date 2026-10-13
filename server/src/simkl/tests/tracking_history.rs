@@ -245,3 +245,73 @@ async fn ended_unknown_runtime_retains_observed_position_without_completion_or_t
     assert!(writes.lock().unwrap().is_empty());
     task.abort();
 }
+
+#[tokio::test]
+async fn anime_progress_preserves_tvdb_identity_and_history_uses_verified_native_number() {
+    let (app, task, writes) = tracking_server().await;
+    let mut body = history_body("simkl:anime:40:2:1", 94_000, 100_000);
+    body["record"]["identity"] = media_identity(
+        "simkl:anime:40:2:1",
+        "series",
+        Some(json!({"order":"aired","season":2,"episode":1})),
+    );
+    body["parent_identity"] = media_identity("simkl:anime:40", "series", None);
+    let endpoint = "/api/v3/profiles/1/progress";
+    let (status, result) = request(&app, "member-token-1", "PUT", endpoint, body.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert!(writes.lock().unwrap().is_empty());
+    body["record"]["position_millis"] = json!(95_000);
+    let (status, result) = request(&app, "member-token-1", "PUT", endpoint, body.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    receipt(&app, "simkl:anime:40:2:1", "done").await;
+    let history = writes.lock().unwrap()[0]["body"].clone();
+    assert!(history["shows"].is_null());
+    assert_eq!(history["anime"][0]["ids"]["simkl"], 40);
+    assert_eq!(history["anime"][0]["seasons"][0]["number"], 1);
+    assert_eq!(
+        history["anime"][0]["seasons"][0]["episodes"][0]["number"],
+        36
+    );
+    assert_eq!(
+        app.db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT id FROM progress WHERE profile_id=1 AND id='simkl:anime:40:2:1'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "simkl:anime:40:2:1"
+    );
+    body["parent_identity"] = media_identity("simkl:tv:40", "series", None);
+    assert_eq!(
+        request(&app, "member-token-1", "PUT", endpoint, body)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(writes.lock().unwrap().len(), 1);
+    task.abort();
+}
+
+#[tokio::test]
+async fn verified_anime_film_progress_uses_anime_title_without_episode() {
+    let (app, task, writes) = tracking_server().await;
+    let body = history_body("simkl:anime:50", 95_000, 100_000);
+    let (status, result) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/v3/profiles/1/progress",
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    receipt(&app, "simkl:anime:50", "done").await;
+    let body = writes.lock().unwrap()[0]["body"].clone();
+    assert_eq!(body["anime"][0]["ids"]["simkl"], 50);
+    assert!(body["anime"][0]["seasons"].is_null());
+    assert!(body["movies"].is_null());
+    task.abort();
+}
