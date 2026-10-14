@@ -78,7 +78,8 @@ pub(super) async fn prepare(
         .iter()
         .filter(|row| {
             let coordinates = row;
-            coordinates["episode"].as_u64() == Some(u64::from(next.episode))
+            (category != "anime" || row["type"] == "episode")
+                && coordinates["episode"].as_u64() == Some(u64::from(next.episode))
                 && (next.order == "anidb"
                     || coordinates["season"].as_u64() == next.season.map(u64::from))
         })
