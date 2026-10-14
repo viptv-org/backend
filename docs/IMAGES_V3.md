@@ -13,3 +13,5 @@ Qualification found the real Season 2 episode paths valid as `_w.webp`; direct t
 Provider reference: [official image conventions](https://api.simkl.org/conventions/images).
 
 Regression coverage holds every fetch permit for longer than the previous one-second queue limit, then verifies successful image delivery; it also exhausts the total queue deadline and immediately retries the same descriptor successfully without waiting for negative-cache expiry. A 72-image public catalog burst reproduced four 502 responses under the old queue behavior. No arbitrary proxy URL, new image host, redirect relaxation or TLS exception is introduced.
+
+After the backpressure fix and a cold owned API restart, the same 72-descriptor burst returned 72/72 HTTP200 bodies with valid image signatures (maximum 2,246 ms). Canonical and LAN trusted-HTTPS reads returned actual WebP bytes with `Access-Control-Allow-Origin: *` and `nosniff`; warm reads measured 9 ms and 4 ms. These are host delivery measurements; browser traversal/rendering is independently checked by the consuming client. The full runtime-feature server suite passed 406 tests with 10 intentionally ignored.
