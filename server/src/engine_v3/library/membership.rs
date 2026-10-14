@@ -6,8 +6,17 @@ pub(crate) fn snapshot(app: &App, lease: &ResourceLease, profile: i64) -> Result
         .db
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
-    app.require_profile(&db, profile)?;
-    lease.validate(&db)?;
+    snapshot_db(app, lease, profile, &db)
+}
+/// The caller already owns the connection (or a mutation transaction). Never relock it.
+pub(super) fn snapshot_db(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    db: &Connection,
+) -> Result<Value, ApiError> {
+    app.require_profile(db, profile)?;
+    lease.validate(db)?;
     let allowed = kids::sql_allowed("f.type", "f.id", "?1");
     let mut query=db.prepare(&format!("SELECT f.id,f.type FROM favorites f WHERE f.profile_id=?1 AND f.type IN ('movie','series') AND {allowed} ORDER BY f.type,f.id LIMIT 10001")).map_err(db_error)?;
     let keys = query
@@ -46,7 +55,7 @@ pub(crate) fn snapshot(app: &App, lease: &ResourceLease, profile: i64) -> Result
         {
             for provenance in statistics.provenance {
                 let id = provenance.external_identity;
-                if kids::require_item(&db, &lease.principal, &id.kind, &id.id).is_ok()
+                if kids::require_item(db, &lease.principal, &id.kind, &id.id).is_ok()
                     && seen.insert((id.id.clone(), id.kind.clone()))
                 {
                     identities.push(id);
@@ -54,7 +63,7 @@ pub(crate) fn snapshot(app: &App, lease: &ResourceLease, profile: i64) -> Result
             }
         }
     }
-    let revision = super::super::history::revision(&db, profile)?;
+    let revision = super::super::history::revision(db, profile)?;
     let configuration: u64 = db
         .query_row(
             "SELECT revision FROM engine_profile_configuration WHERE profile_id=?1",

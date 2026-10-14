@@ -118,20 +118,30 @@ async fn cheap_membership_contains_verified_aliases_and_alias_removal_targets_on
             .0,
         StatusCode::FORBIDDEN
     );
-    assert_eq!(
-        request(
-            &app,
-            "member-token-1",
-            "DELETE",
-            "/api/v3/profiles/1/library/movie/simkl:movie:10",
-            Value::Null
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
+    let alias_card = viptv_engine::simkl::card(
+        &json!({"title":"Remote","ids":{"simkl":10,"imdb":"tt1234567"}}), "movie"
+    ).unwrap();
+    let (status, saved) = request(&app, "member-token-1", "PUT",
+        "/api/v3/profiles/1/library", json!({"card":alias_card})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["saved"], true);
+    assert_eq!(saved["library_membership"]["complete"], true);
+    assert_eq!(saved["library_membership"]["identities"], first["identities"]);
+    assert!(saved["library_membership"]["revision"].as_u64().unwrap() > first["revision"].as_u64().unwrap());
+    assert_eq!(request(&app,"member-token-1","GET",path,Value::Null).await.1, saved["library_membership"]);
+    let (status, removed) = request(&app, "member-token-1", "DELETE",
+        "/api/v3/profiles/1/library/movie/simkl:movie:10", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(removed["saved"], false);
+    assert_eq!(removed["library_membership"]["complete"], true);
+    assert!(removed["library_membership"]["identities"].as_array().unwrap().is_empty());
+    assert!(removed["library_membership"]["revision"].as_u64().unwrap() > saved["library_membership"]["revision"].as_u64().unwrap());
     let (_, empty) = request(&app, "member-token-1", "GET", path, Value::Null).await;
-    assert!(empty["identities"].as_array().unwrap().is_empty());
+    assert_eq!(empty, removed["library_membership"]);
+    let (status, repeated) = request(&app, "member-token-1", "DELETE",
+        "/api/v3/profiles/1/library/movie/simkl:movie:10", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(repeated["library_membership"], empty);
 }
 
 #[tokio::test]

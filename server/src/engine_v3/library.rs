@@ -54,7 +54,7 @@ pub(crate) async fn save(
     let app = app.with_lease(lease);
     blocking(move || {
         validate(&input.card)?;
-        let db = app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;
+        let mut db = app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;
         app.require_profile(&db, profile)?;
         kids::require_item(&db, &app.identity(), &input.card.identity.kind, &input.card.identity.id)?;
         let mut card = input.card;
@@ -67,8 +67,11 @@ pub(crate) async fn save(
             let approved = kids::filter_items(&db, &app.identity(), vec![item])?;
             card = approved.first().and_then(|item| projection::card(item, "library")).ok_or_else(auth::forbidden)?;
         }
-        db.execute("INSERT INTO favorites(profile_id,id,type,name,poster,context,added_at_millis) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster,context=excluded.context",params![profile,card.identity.id,card.identity.kind,card.title,card.poster,serde_json::to_string(&card).map_err(|_|ApiError::from("Invalid library card"))?,util::now_millis()]).map_err(db_error)?;
-        Ok(axum::Json(json!({"ok":true,"saved":true})))
+        let tx = db.transaction().map_err(db_error)?;
+        tx.execute("INSERT INTO favorites(profile_id,id,type,name,poster,context,added_at_millis) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster,context=excluded.context",params![profile,card.identity.id,card.identity.kind,card.title,card.poster,serde_json::to_string(&card).map_err(|_|ApiError::from("Invalid library card"))?,util::now_millis()]).map_err(db_error)?;
+        let membership = membership::snapshot_db(&app, &app.request_lease(), profile, &tx)?;
+        tx.commit().map_err(db_error)?;
+        Ok(axum::Json(json!({"ok":true,"saved":true,"library_membership":membership})))
     }).await
 }
 pub(crate) async fn remove(
@@ -85,19 +88,27 @@ pub(crate) async fn remove(
         {
             return Err("Invalid library identity".into());
         }
-        let db = app
+        let mut db = app
             .db
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?;
         app.require_profile(&db, profile)?;
         kids::require_item(&db, &app.identity(), &kind, &id)?;
-        let id=membership::resolve(&db,profile,&kind,&id)?;
-        db.execute(
+        let id = membership::resolve(&db, profile, &kind, &id)?;
+        let tx = db.transaction().map_err(db_error)?;
+        tx.execute(
             "DELETE FROM favorites WHERE profile_id=?1 AND type=?2 AND id=?3",
             params![profile, kind, id],
         )
         .map_err(db_error)?;
-        Ok(axum::Json(json!({"ok":true,"saved":false})))
+        let membership = membership::snapshot_db(&app, &app.request_lease(), profile, &tx)?;
+        tx.commit().map_err(db_error)?;
+        Ok(axum::Json(
+            json!({"ok":true,"saved":false,"library_membership":membership}),
+        ))
     })
     .await
 }
+
+#[cfg(test)]
+mod receipt_tests;
