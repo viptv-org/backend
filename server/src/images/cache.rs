@@ -82,6 +82,7 @@ impl Service {
             let target = fixture
                 .clone()
                 .unwrap_or_else(|| url::Url::parse(&image.direct()).unwrap());
+            let started = Instant::now();
             let bytes = tokio::time::timeout(
                 Duration::from_secs(3),
                 crate::source_http::bytes(
@@ -93,9 +94,9 @@ impl Service {
                 ),
             )
             .await
-            .map_err(|_| ())?
-            .map_err(|_| ())?;
-            let content_type = signature(&bytes).ok_or(())?;
+            .map_err(|_| {tracing::warn!(image_folder=%image.folder,failure_class="deadline",elapsed_ms=started.elapsed().as_millis() as u64,"Public image fetch failed");()})?
+            .map_err(|failure| {tracing::warn!(image_folder=%image.folder,failure_class=failure.provider_code(),elapsed_ms=started.elapsed().as_millis() as u64,"Public image fetch failed");()})?;
+            let content_type = signature(&bytes).ok_or_else(|| {tracing::warn!(image_folder=%image.folder,failure_class="image_signature",elapsed_ms=started.elapsed().as_millis() as u64,"Public image fetch failed");()})?;
             Ok(Asset {
                 bytes: Arc::from(bytes.as_slice()),
                 content_type,

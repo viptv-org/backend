@@ -5,6 +5,9 @@ use viptv_engine::{
     profile::Scope,
 };
 mod catalog;
+mod bootstrap_facts;
+#[cfg(test)]
+mod bootstrap_facts_tests;
 mod controls;
 pub(crate) mod live;
 pub(crate) mod source_integrations;
@@ -88,6 +91,9 @@ pub(crate) async fn bootstrap(
             )
         })
         .transpose()?;
+    let subtitle_availability = profile_id
+        .map(|profile|bootstrap_facts::subtitles(&app,&lease,profile))
+        .transpose()?;
     let bootstrap_preferences = if let Some(profile) = profile_id {
         Some(
             preferences::get(State(app.clone()), Extension(lease.clone()), Path(profile))
@@ -134,7 +140,7 @@ pub(crate) async fn bootstrap(
         .map(|s| s.json());
     let axum::Json(management) = profiles::list(State(app), Extension(lease)).await?;
     Ok(axum::Json(
-        json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation}),
+        json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability}),
     ))
 }
 
