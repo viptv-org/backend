@@ -1,3 +1,5 @@
+#[path = "paused_identity.rs"]
+mod identity;
 use super::*;
 use viptv_engine::presentation::Card;
 pub(super) struct Pause {
@@ -69,34 +71,11 @@ pub(super) async fn pause(
         verified.clone()
     } else {
         let episode = &value["episode"];
-        let number = episode["number"]
-            .as_u64()
-            .or_else(|| episode["episode"].as_u64())?;
         let all = metadata::episodes(app, profile, access, id, &verified)
             .await
             .ok()?;
-        if category == "anime" {
-            // The paused record must carry explicit aired mapping or an exact Simkl episode ID.
-            let episode_id = episode["ids"]["simkl"].as_u64().map(|n| n.to_string());
-            all.into_iter().find(|card| {
-                episode_id.as_ref().is_some_and(|id| {
-                    card.identity
-                        .ids
-                        .iter()
-                        .any(|i| i.namespace == "simkl_episode" && &i.value == id)
-                }) || card.identity.episode.as_ref().is_some_and(|e| {
-                    episode["tvdb_season"].as_u64() == e.season.map(u64::from)
-                        && episode["tvdb_number"].as_u64() == Some(u64::from(e.episode))
-                })
-            })?
-        } else {
-            let season = episode["season"].as_u64()?;
-            all.into_iter().find(|card| {
-                card.identity.episode.as_ref().is_some_and(|e| {
-                    e.season.map(u64::from) == Some(season) && u64::from(e.episode) == number
-                })
-            })?
-        }
+        // Supplied Simkl IDs and aired-coordinate hints must agree.
+        identity::select(episode, all, category == "anime")?
     };
     let duration = card
         .metadata
