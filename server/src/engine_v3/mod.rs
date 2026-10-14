@@ -54,6 +54,7 @@ pub(crate) async fn bootstrap(
         None
     };
     let bootstrap_library=if let Some(profile)=profile_id{Some(library::list(State(app.clone()),Extension(lease.clone()),Path(profile),axum::extract::Query(library::Page{offset:0,limit:100,..Default::default()})).await?.0)}else{None};
+    let membership=profile_id.map(|profile|library::membership::snapshot(&app.clone().with_lease(lease.clone()),&lease,profile)).transpose()?;
     let bootstrap_preferences=if let Some(profile)=profile_id{Some(preferences::get(State(app.clone()),Extension(lease.clone()),Path(profile)).await?.0)}else{None};
     lease.validate(
         &*app
@@ -76,8 +77,9 @@ pub(crate) async fn bootstrap(
         }
     }
     if cfg!(feature="vsources-runtime") && app.secret_vault.is_some(){if let Some(plugin)=builtins().into_iter().find(|p|p.id=="vsources"){integrations.push(plugin);}}
+    let import=profile_id.and_then(|profile|crate::simkl::imports::schedule(&app.clone().with_lease(lease.clone()),&lease,profile)).map(|s|s.json());
     let axum::Json(management)=profiles::list(State(app),Extension(lease)).await?;
-    Ok(axum::Json(json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences})))
+    Ok(axum::Json(json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership})))
 }
 
 pub(crate) async fn home(

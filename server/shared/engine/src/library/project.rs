@@ -10,7 +10,7 @@ pub fn project(
     added_lower: Option<u64>,
 ) -> Result<LibrarySnapshot, Error> {
     query.validate()?;
-    if query.source == "favorites"
+    if query.source == "favorites" && !entries.iter().any(|e|e.statistics.status.is_some()||e.statistics.total_episode_count.is_some()||!e.statistics.provenance.is_empty())
         && (query.status.is_some()
             || query.rated.is_some()
             || query.episodes_left_max.is_some()

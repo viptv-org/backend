@@ -23,6 +23,7 @@ pub(crate) use metadata::home_metadata;
 pub(crate) use discovery::{home_cards, page};
 mod oauth;
 mod store;
+pub(crate) mod imports;
 #[cfg(test)]
 mod tests;
 mod tracking;

@@ -160,6 +160,7 @@ impl App {
                 &headers,
                 &input.private_values
             ));
+            if source.starts_with("addon:") { public["presentation"]["provider_name"] = public["source_name"].clone(); }
             entries.insert(
                 id.clone(),
                 StreamEntry {
@@ -348,6 +349,16 @@ fn source_card(
         .filter(|text| !text.is_empty())
         .unwrap_or(source);
     let mut card = json!({"id":id,"source":source,"name":clean(name,256),"title":clean(title,1024),"description":description,"audio_language_status":"unknown"});
+    if let Some(presentation) = viptv_engine::stremio::SourcePresentation::read(&raw["presentation"]) {
+        let mut value = serde_json::to_value(presentation).unwrap_or(Value::Null);
+        if let Some(fields) = value.as_object_mut() {
+            for field in fields.values_mut() {
+                if let Some(text) = field.as_str() { *field = json!(clean(text, 128)); }
+                else if let Some(values) = field.as_array_mut() { for item in values { if let Some(text) = item.as_str() { *item = json!(clean(text, 64)); } } }
+            }
+        }
+        card["presentation"] = value;
+    }
     if let Some(height)=raw["quality_height"].as_u64().filter(|h|(144..=4320).contains(h)){card["quality_height"]=json!(height);}
     let audio=raw["audio_languages"].as_array().map(|languages|languages.iter().take(16).filter_map(|v|v.as_str().filter(|tag|viptv_engine::preferences::language_tag(tag))).collect::<Vec<_>>()).unwrap_or_default();
     if !audio.is_empty(){card["audio_languages"]=json!(audio);}
@@ -387,6 +398,7 @@ fn source_card(
         .filter(|n| *n > 0 && *n <= (1_u64 << 50))
     {
         card["size_bytes"] = json!(size);
+        card["presentation"]["size_bytes"] = json!(size);
     }
     let mut languages = Vec::new();
     for key in ["language", "languages"] {

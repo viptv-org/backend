@@ -42,6 +42,7 @@ fn validate(card: &Card) -> Result<(), ApiError> {
         .map_err(|_| ApiError::from("Invalid library card"))
 }
 mod listing;
+pub(crate) mod membership;
 pub(crate) use listing::list;
 
 pub(crate) async fn save(
@@ -57,6 +58,7 @@ pub(crate) async fn save(
         app.require_profile(&db, profile)?;
         kids::require_item(&db, &app.identity(), &input.card.identity.kind, &input.card.identity.id)?;
         let mut card = input.card;
+        card.identity.id=membership::resolve(&db,profile,&card.identity.kind,&card.identity.id)?;
         card.progress = None;
         card.added_at_millis=None;
         if kids::restricted(&db, &app.identity())? {
@@ -89,6 +91,7 @@ pub(crate) async fn remove(
             .map_err(|_| ApiError::from("Database unavailable"))?;
         app.require_profile(&db, profile)?;
         kids::require_item(&db, &app.identity(), &kind, &id)?;
+        let id=membership::resolve(&db,profile,&kind,&id)?;
         db.execute(
             "DELETE FROM favorites WHERE profile_id=?1 AND type=?2 AND id=?3",
             params![profile, kind, id],

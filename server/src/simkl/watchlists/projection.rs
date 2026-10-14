@@ -3,7 +3,7 @@ fn millis(value: &Value) -> Option<u64> {
     let date = chrono::DateTime::parse_from_rfc3339(value.as_str()?).ok()?;
     u64::try_from(date.timestamp_millis()).ok()
 }
-pub(super) fn entries(value: &Value) -> Result<Vec<Entry>, ApiError> {
+pub(in crate::simkl) fn entries(value: &Value) -> Result<Vec<Entry>, ApiError> {
     let mut entries = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for (key, category, field) in [

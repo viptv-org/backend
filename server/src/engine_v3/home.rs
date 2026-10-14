@@ -16,6 +16,7 @@ pub(super) async fn load(
         profile,
         viptv_engine::capabilities::Capability::Discovery,
     )?;
+    crate::simkl::imports::schedule(&app,&lease,profile);
     let (queue, favorites, revision) = {
         let db = app
             .db

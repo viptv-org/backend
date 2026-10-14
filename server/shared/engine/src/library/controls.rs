@@ -16,7 +16,7 @@ fn control(id: &str, label: &str, choices: Vec<(&str, &str)>) -> QueryControl {
         maximum: None,
     }
 }
-pub fn controls(entries: &[Entry], sources: &[LibrarySource], source: &str) -> Vec<QueryControl> {
+pub fn controls(entries: &[Entry], sources: &[LibrarySource], _source: &str) -> Vec<QueryControl> {
     let mut result = vec![
         control(
             "source",
@@ -49,7 +49,7 @@ pub fn controls(entries: &[Entry], sources: &[LibrarySource], source: &str) -> V
             ],
         ),
     ];
-    if source == "simkl" && entries.iter().all(|e| e.statistics.times_watched.is_none()) {
+    if entries.iter().all(|e| e.statistics.times_watched.is_none()) {
         result[1].choices.retain(|choice| choice.value != "times_watched");
     }
     let mut shows = vec![
@@ -57,7 +57,7 @@ pub fn controls(entries: &[Entry], sources: &[LibrarySource], source: &str) -> V
         ("watched", "Watched"),
         ("not_watched", "Not watched"),
     ];
-    if source == "simkl" {
+    if entries.iter().any(|e|e.statistics.status.is_some()||e.statistics.total_episode_count.is_some()||!e.statistics.provenance.is_empty()) {
         shows.extend([
             ("has_new_episode", "Has a new episode"),
             ("not_started", "Not started"),
@@ -122,5 +122,6 @@ pub fn controls(entries: &[Entry], sources: &[LibrarySource], source: &str) -> V
             ("last_7_days", "Last 7 days"),
         ],
     ));
+    if sources.len()<=1 {result.retain(|control|control.id!="source");}
     result
 }

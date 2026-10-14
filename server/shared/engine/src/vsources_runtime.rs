@@ -186,6 +186,16 @@ pub async fn resolve_progressive(
         }
     }
 }
+/// Project SDK declarations without inferring codecs or containers from labels/URLs.
+pub fn presentation(stream: &vsources::Stream) -> crate::stremio::SourcePresentation {
+    let meta = &stream.meta;
+    crate::stremio::SourcePresentation {
+        provider_name: meta.source_label.clone(), source_id: meta.source_id.clone(),
+        delivery_format: match stream.format { vsources::types::Format::Hls => Some("hls".into()), vsources::types::Format::Mp4 => Some("progressive".into()), _ => None },
+        container: None, quality: meta.quality.clone(), video_codec: meta.codec.clone(),
+        audio_codecs: meta.audio.clone(), size_bytes: meta.size, size_label: meta.size_label.clone(),
+    }
+}
 fn publish_new(
     streams: Vec<vsources::Stream>,
     seen: &mut std::collections::HashSet<String>,

@@ -79,9 +79,10 @@ pub(crate) fn entries(
     if history.len() > 50000 {
         return Err("History exceeds its bounded item limit".into());
     }
-    Ok(cards
+    cards
         .into_iter()
-        .map(|card| {
+        .map(|mut card| {
+            crate::simkl::imports::enrich(&db,profile,&mut card)?;
             let mut statistics = LibraryStatistics::empty(card.identity.clone());
             let matched = history
                 .iter()
@@ -149,7 +150,8 @@ pub(crate) fn entries(
                         .count() as u64,
                 );
             }
-            Entry { card, statistics }
+            crate::simkl::imports::merge(&db,profile,&mut statistics)?;
+            Ok(Entry { card, statistics })
         })
-        .collect())
+        .collect()
 }

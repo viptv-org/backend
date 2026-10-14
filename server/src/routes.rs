@@ -15,6 +15,8 @@ pub fn router_with_tv(
     let api = Router::new()
         .route("/v3/profiles/:id/source-integrations",get(engine_v3::source_integrations::schemas).put(engine_v3::source_integrations::configure))
         .route("/v3/profiles/:id/source-integrations/:connection",delete(engine_v3::source_integrations::remove))
+        .route("/v3/profiles/:id/library/membership",get(engine_v3::library::membership::get))
+        .route("/v3/profiles/:id/imports/simkl",get(simkl::imports::read).post(simkl::imports::read))
         .route("/v3/profiles/:id/preferences",get(engine_v3::preferences::get).put(engine_v3::preferences::update))
         .route("/v3/profiles/:id/source-ranking",post(engine_v3::source_ranking::rank))
         .route("/v3/profiles/:id/live/channels",get(engine_v3::live::channels))

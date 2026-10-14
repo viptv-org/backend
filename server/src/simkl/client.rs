@@ -16,6 +16,7 @@ pub(crate) struct Service {
     pub(super) public_documents:
         tokio::sync::Mutex<std::collections::HashMap<String, (Instant, Arc<Value>)>>,
     pub(super) metadata: super::cache::Cache,
+    pub(super) imports: super::imports::Jobs,
     pub(super) watchlists:super::watchlists::Cache,
     pub(super) watchlist_metadata_limit:tokio::sync::Semaphore,
     pub(super) tracking: super::automatic::Queue,
@@ -157,6 +158,7 @@ impl Service {
             public_documents: Default::default(),
             metadata: Default::default(),
             watchlists:Default::default(),
+            imports:Default::default(),
             watchlist_metadata_limit:tokio::sync::Semaphore::new(3),
             tracking: Default::default(),
             startup_warming: std::sync::atomic::AtomicBool::new(false),

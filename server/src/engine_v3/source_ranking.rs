@@ -82,6 +82,7 @@ pub(crate) async fn rank(
         }
         let card = cards.get(&id).ok_or_else(auth::forbidden)?;
         candidates.push(SourceCandidate {
+            presentation: viptv_engine::stremio::SourcePresentation::read(&card["presentation"]),
             id,
             provider_id: grant.producer.clone(),
             label: card["name"].as_str().unwrap_or("Stream").into(),

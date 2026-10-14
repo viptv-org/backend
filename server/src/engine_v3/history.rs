@@ -191,6 +191,7 @@ pub(crate) async fn clear(
         app.require_profile(&db,profile)?;
         let transaction=db.transaction().map_err(db_error)?;
         app.require_profile(&transaction,profile)?;
+        transaction.execute("INSERT INTO simkl_import_history_floors VALUES(?1,?2) ON CONFLICT(profile_id) DO UPDATE SET cutoff_millis=MAX(cutoff_millis,excluded.cutoff_millis)",params![profile,util::now_millis()]).map_err(db_error)?;
         transaction.execute("DELETE FROM progress WHERE profile_id=?1",[profile]).map_err(db_error)?;
         transaction.execute("DELETE FROM continuation_cache WHERE profile_id=?1",[profile]).map_err(db_error)?;
         transaction.commit().map_err(db_error)?;

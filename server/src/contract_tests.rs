@@ -362,7 +362,8 @@ async fn pengu_fetch_context_retains_only_explicit_safe_headers_privately() {
     assert!(!serialized.contains("private-fixture"));
     assert!(!serialized.contains("private-source-token"));
     assert!(!serialized.contains("must-not-forward"));
-    assert_eq!(public[0].as_object().unwrap().len(), 9);
+    assert_eq!(public[0].as_object().unwrap().len(), 10);
+    assert_eq!(public[0]["presentation"]["provider_name"],public[0]["source_name"]);
     assert!(public[0]["source_name"].is_string());
     assert_eq!(public[0]["description"], "1080p source");
     assert_eq!(public[0]["audio_language_status"], "unknown");

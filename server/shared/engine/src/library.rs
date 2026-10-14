@@ -10,8 +10,18 @@ use crate::{
 use facet::Facet;
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
+pub struct LibraryProvenance {
+    pub provider_id:String,
+    pub external_identity:MediaIdentity,
+    pub imported_at_millis:u64,
+    pub source_updated_at_millis:Option<u64>,
+    pub link_revision:Option<u64>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct LibraryStatistics {
     pub identity: MediaIdentity,
+    #[serde(default)]
+    pub provenance:Vec<LibraryProvenance>,
     pub watched: bool,
     pub last_watched_millis: Option<u64>,
     pub times_watched: Option<u64>,
@@ -29,6 +39,7 @@ impl LibraryStatistics {
     pub fn empty(identity: MediaIdentity) -> Self {
         Self {
             identity,
+            provenance:vec![],
             watched: false,
             last_watched_millis: None,
             times_watched: None,
@@ -78,3 +89,26 @@ mod query;
 pub use controls::controls;
 pub use project::project;
 pub use query::{LibraryQuery, added_lower_bound};
+
+/// A bounded remote import's refresh receipt, never a request to export local history.
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
+pub struct LibraryImportStatus {
+    pub provider_id: String,
+    pub running: bool,
+    pub checked_at_millis: Option<u64>,
+    pub library_revision: Option<u64>,
+    pub added_titles: u64,
+    pub imported_history: u64,
+    pub preserved_local: u64,
+    pub unresolved: u64,
+    pub availability: Availability,
+    pub refresh_after_millis: Option<u64>,
+}
+
+/// Complete saved-title membership without card projection or provider requests.
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
+pub struct LibraryMembershipSnapshot {
+    pub identities: Vec<MediaIdentity>,
+    pub revision: u64,
+    pub complete: bool,
+}

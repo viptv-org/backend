@@ -1,6 +1,7 @@
 use super::*;
 
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
+    super::imports::init(db)?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS simkl_links(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE, revision INTEGER NOT NULL, credential TEXT);
         CREATE TABLE IF NOT EXISTS simkl_tracking_receipts(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,media_id TEXT NOT NULL,link_revision INTEGER NOT NULL,state TEXT NOT NULL,attempt_at INTEGER NOT NULL,PRIMARY KEY(profile_id,media_id,link_revision));
         CREATE TABLE IF NOT EXISTS simkl_oauth_states(state_hash TEXT PRIMARY KEY,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,account_id INTEGER NOT NULL,session_id TEXT NOT NULL,role TEXT NOT NULL,policy_revision INTEGER NOT NULL,link_revision INTEGER NOT NULL,expires INTEGER NOT NULL);")?;
