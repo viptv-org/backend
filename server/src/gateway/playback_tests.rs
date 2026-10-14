@@ -1592,3 +1592,6 @@ async fn decoder_start_refuses_gateway_without_frame_protocol_before_source_crea
 
 #[path = "playback_resume_tests.rs"]
 mod resume_tests;
+
+#[path="discovery_cancel_tests.rs"]
+mod discovery_cancel_tests;
