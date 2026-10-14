@@ -187,3 +187,22 @@ async fn paired_device_can_change_selected_profile_integrations_but_not_restrict
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn bootstrap_advertises_m3u_only_with_live_runtime_and_credential_vault() {
+    use base64::Engine;
+    for vault_available in [false,true] {
+        let mut app=fixture();
+        app.secret_vault=if vault_available {Some(std::sync::Arc::new(crate::secret_store::Vault::from_json(
+            &json!({"active":"test","keys":{"test":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string()).unwrap()))}else{None};
+        let (status,body)=request(&app,"member-token-1","GET","/api/v3/bootstrap",Value::Null).await;
+        assert_eq!(status,StatusCode::OK,"{body}");
+        let descriptor=body["integrations"].as_array().unwrap().iter().find(|p|p["id"]=="m3u");
+        assert_eq!(descriptor.is_some(),vault_available && cfg!(feature="live-runtime"));
+        if let Some(descriptor)=descriptor {
+            assert_eq!(descriptor["capabilities"],json!(["LiveTv","Sources"]));
+            assert!(descriptor["locations"].as_array().unwrap().contains(&json!("Server")));
+            assert!(!descriptor["capabilities"].as_array().unwrap().contains(&json!("Metadata")));
+        }
+    }
+}

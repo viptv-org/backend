@@ -70,6 +70,8 @@ Persist actual VOD presentation using `PUT /api/v3/profiles/:id/progress` with `
 
 Negotiate image delivery with `x-viptv-image-delivery: direct` for native, `proxy` for browser. Resolve returned `/api/v3/images/...` references against the active API origin. Keep verified direct transparent logos unchanged. [Image delivery](IMAGES_V3.md) documents validation and bounds.
 
+Bootstrap advertises the M3U plugin only when the Live runtime and credential vault are available, matching the implemented profile-owned configuration path. It advertises LiveTv/Sources, never metadata ownership.
+
 Live uses `GET /api/v3/profiles/:id/live/channels` with advertised connection/group/search/cursor/limit, `GET /api/v3/profiles/:id/live/:channel/guide` for the selected channel only, and `POST /api/v3/profiles/:id/live/:channel/sources` before the same opaque v2 admission. Typed channels expose group memberships, guide availability and explicit live identity. No startup per-channel guide flood or client URL construction is required. Legacy Roku recent/favorite IPTV collection routes are not generalized to all M3U integrations in this checkpoint; migrate the real channel/guide/source path first rather than assuming collection parity.
 
 ## Qualification boundary

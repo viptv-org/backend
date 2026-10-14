@@ -122,6 +122,11 @@ pub(crate) async fn bootstrap(
             integrations.push(plugin);
         }
     }
+    if cfg!(feature = "live-runtime") && app.secret_vault.is_some() {
+        if let Some(plugin) = builtins().into_iter().find(|p| p.id == "m3u") {
+            integrations.push(plugin);
+        }
+    }
     let import = profile_id
         .and_then(|profile| {
             crate::simkl::imports::schedule(&app.clone().with_lease(lease.clone()), &lease, profile)

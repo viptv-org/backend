@@ -222,6 +222,7 @@ struct GatewayPreparation {
     client: Client,
 }
 struct StateData {
+    retained_subtitles: Vec<String>,
     native: Option<NativeState>,
     status: &'static str,
     delivery: Option<Value>,
@@ -569,6 +570,7 @@ fn response(entry: &Entry) -> Value {
             state.status = "expired";
             state.error = Some("playback_expired");
             state.delivery = None;
+            state.retained_subtitles.clear();
             state.native.as_mut().unwrap().grant = None;
             entry.cancelled.store(true, Ordering::Release);
         }
@@ -614,6 +616,7 @@ fn terminate(entry: &Entry, status: &'static str, error: Option<&'static str>) -
     state.status = status;
     state.error = error;
     state.delivery = None;
+    state.retained_subtitles.clear();
     if let Some(native) = state.native.as_mut() {
         native.grant = None;
     }
@@ -1498,6 +1501,7 @@ async fn start_mode(
             cancelled: AtomicBool::new(false),
             cancel_signal: tokio::sync::Notify::new(),
             state: Mutex::new(StateData {
+                retained_subtitles: vec![],
                 native: native_candidate.then(|| NativeState {
                     expires_at: native_expiry,
                     last_server_time: issued_at,
@@ -2019,6 +2023,8 @@ pub(crate) async fn renew(
         validate_entry(&app, &entry).await?;
     }
     entry.state.lock().unwrap().touch();
+    let retained = entry.state.lock().unwrap().retained_subtitles.clone();
+    app.subtitle_selections.keep_alive(&retained, &lease)?;
     Ok(Json(response(&entry)))
 }
 pub(crate) async fn stop(

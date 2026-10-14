@@ -32,6 +32,15 @@ pub(crate) async fn attach(
             )
             .into());
         }
+        if !state.retained_subtitles.contains(&input.subtitle_id)
+            && state.retained_subtitles.len() >= 8
+        {
+            return Err(ApiError(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Playback subtitle selection limit reached".into(),
+            )
+            .into());
+        }
         state.remote.clone().ok_or_else(|| {
             ApiError(
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -53,7 +62,7 @@ pub(crate) async fn attach(
     )
     .await?;
     validate_entry(&app, &entry).await?;
-    let body = json!({"content_vtt":caption.content_vtt});
+    let body = json!({"content_vtt":caption.content_vtt.as_ref()});
     let value = remote
         .client
         .request(
@@ -93,6 +102,27 @@ pub(crate) async fn attach(
         .unwrap_or(0.0);
     if !valid || value["format"] != "srt" || offset.is_none_or(|v| (v - expected).abs() > 0.001) {
         return Err(Error::Code("gateway_protocol_invalid"));
+    }
+    app.subtitle_selections.retain_content(
+        &input.subtitle_id,
+        &lease,
+        caption.content_vtt.clone(),
+    )?;
+    {
+        let mut state = entry.state.lock().unwrap();
+        if entry.cancelled.load(Ordering::Acquire) || state.status != "ready" {
+            return Err(Error::Code("playback_expired"));
+        }
+        if !state.retained_subtitles.contains(&input.subtitle_id) {
+            if state.retained_subtitles.len() >= 8 {
+                return Err(ApiError(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Playback subtitle selection limit reached".into(),
+                )
+                .into());
+            }
+            state.retained_subtitles.push(input.subtitle_id);
+        }
     }
     let url = super::super::client::endpoint(&remote.target.gateway.endpoint)?
         .join(relative.trim_start_matches('/'))

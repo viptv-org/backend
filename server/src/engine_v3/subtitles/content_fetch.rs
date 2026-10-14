@@ -1,6 +1,6 @@
 use super::*;
 pub(crate) struct Caption {
-    pub content_vtt: String,
+    pub content_vtt: Arc<str>,
     pub language: String,
     pub label: String,
 }
@@ -16,6 +16,13 @@ pub(crate) async fn load(
         .is_some_and(|(kind, media_id)| selected.kind != kind || selected.media_id != media_id)
     {
         return Err(auth::forbidden());
+    }
+    if let Some(content) = selected.content_vtt.as_ref() {
+        return Ok(Caption {
+            content_vtt: content.clone(),
+            language: selected.language,
+            label: selected.label,
+        });
     }
     let url = url::Url::parse(&selected.url).map_err(|_| ApiError::from("Subtitle unavailable"))?;
     let response = tokio::time::timeout(
@@ -45,7 +52,7 @@ pub(crate) async fn load(
         })?;
     validate(app, &selected)?;
     Ok(Caption {
-        content_vtt: vtt,
+        content_vtt: Arc::from(vtt),
         language: selected.language,
         label: selected.label,
     })

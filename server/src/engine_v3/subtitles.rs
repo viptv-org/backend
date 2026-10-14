@@ -100,6 +100,8 @@ pub(crate) async fn discover(
                     language: file.language.clone(),
                     label: format!("{} · {}", file.language, provider.name),
                     created: Instant::now(),
+                    content_vtt: None,
+                    retained_until: None,
                 },
             ));
         }
@@ -150,7 +152,7 @@ pub(crate) async fn content(
             (header::CACHE_CONTROL, "private, no-store"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
-        caption.content_vtt,
+        caption.content_vtt.to_string(),
     )
         .into_response())
 }

@@ -97,6 +97,54 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
     assert_eq!(uploads.len(), 1);
     assert!(uploads[0]["content_vtt"].as_str().unwrap().contains("Café"));
     drop(uploads);
+    let _replacement_discovery = subtitles(&app, "tt2").await;
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "POST",
+            &endpoint,
+            json!({"subtitle_id":selected})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        1,
+        "retained normalized content avoids another provider request"
+    );
+    let (_, replacement) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/v2/playback",
+        body(&source, "caption-replacement", "roku"),
+    )
+    .await;
+    let replacement = replacement["id"].as_str().unwrap();
+    assert_eq!(
+        settled(&app, replacement).await["delivery"]["external_subtitles_supported"],
+        true
+    );
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "POST",
+            &format!("/api/v2/playback/{replacement}/subtitles"),
+            json!({"subtitle_id":selected})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        1,
+        "new viewer reuses the same retained selection and text"
+    );
     assert_eq!(
         request(
             &app,
@@ -155,7 +203,7 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
         .0,
         StatusCode::GONE
     );
-    assert_eq!(peer.captions.lock().unwrap().len(), 1);
+    assert_eq!(peer.captions.lock().unwrap().len(), 3);
     assert_eq!(
         app.db
             .lock()
@@ -163,6 +211,24 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
             .query_row("SELECT COUNT(*) FROM progress", [], |r| r.get::<_, u64>(0))
             .unwrap(),
         0
+    );
+    app.db.lock().unwrap().execute("INSERT INTO engine_profile_configuration(profile_id,account_id,value,revision) VALUES(1,1,'{}',1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",[]).unwrap();
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "POST",
+            &format!("/api/v2/playback/{replacement}/subtitles"),
+            json!({"subtitle_id":selected})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        1,
+        "cached content cannot bypass configuration revocation"
     );
     addon.abort();
 }
