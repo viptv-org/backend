@@ -106,7 +106,15 @@ pub(crate) async fn action(
         drop(permit);
         let mut db = app.db.lock().map_err(|_| unauthorized())?;
         let tx = db.transaction().map_err(crate::db_error)?;
-        let result = dispatch_prepared(&tx, &path, p.map(|p| p.0), &h, &v, &prepared);
+        // Authentication can precede queued/expensive work. A revoked family
+        // must not authorize a later mutation (including a fresh device grant).
+        let authority = match p.as_ref() {
+            Some(principal) => principal.0.validate_scope(&tx),
+            None => Ok(()), // Public login/refresh/recovery verify their own credentials.
+        };
+        let result = authority.and_then(|()| {
+            dispatch_prepared(&tx, &path, p.map(|p| p.0), &h, &v, &prepared)
+        });
         match result {
             Ok(result) => {
                 tx.commit().map_err(crate::db_error)?;
