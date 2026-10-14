@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::Arc;
 #[cfg(test)]
+#[path="m3u/tests.rs"]
 mod tests;
 fn id(connection: &IntegrationConnection) -> Result<i64, ApiError> {
     connection
@@ -37,7 +38,7 @@ fn credential(
     serde_json::from_slice(secret.expose())
         .map_err(|_| ApiError::from("Live credentials unavailable"))
 }
-async fn request(
+pub(super) async fn request(
     app: &App,
     lease: &ResourceLease,
     profile: i64,
@@ -48,13 +49,13 @@ async fn request(
 ) -> Result<(String, String), ApiError> {
     let owner = app.clone();
     let lease = lease.clone();
-    let id = id(connection)?;
+    let connection = connection.clone();
     let authorize: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
         if super::super::configuration::validate_revision(&owner, profile, revision).is_err() {
             return false;
         }
         let db = owner.db.lock().unwrap();
-        lease.validate(&db).is_ok() && configuration::available_m3u(&db, &lease, id)
+        lease.validate(&db).is_ok() && configuration::available_private(&db, &lease, &connection)
     });
     let uri = url::Url::parse(url).map_err(|_| ApiError::from("Invalid live endpoint"))?;
     let mut input = viptv_engine::egress::HttpRequest::get(uri);
@@ -83,6 +84,7 @@ async fn directory(
     revision: u64,
     connection: &IntegrationConnection,
 ) -> Result<Cache, ApiError> {
+    if connection.id.starts_with("xtream:") { return super::xtream::directory(app,lease,profile,revision,connection).await; }
     let gate = app.live_fetch_gates.connection(&connection.id)?;
     let _gate = tokio::time::timeout(Duration::from_secs(10), gate.lock())
         .await
@@ -191,6 +193,7 @@ pub(crate) async fn guide(
     connection: IntegrationConnection,
     channel: String,
 ) -> ApiResult {
+    if connection.id.starts_with("xtream:") { return super::xtream::guide(app,lease,profile,revision,connection,channel).await; }
     let cache = directory(&app, &lease, profile, revision, &connection).await?;
     let selected = cache
         .channels
@@ -327,7 +330,7 @@ pub(crate) async fn sources(
         .ok_or_else(auth::forbidden)?;
     let proof = crate::sources::source_configuration(&app.db.lock().unwrap(), &connection.id)?
         .ok_or_else(auth::forbidden)?;
-    let raw=selected.sources.iter().map(|source|json!({"url":source.url,"name":selected.channel.card.title,"requestHeaders":source.headers})).collect();
+    let raw=selected.sources.iter().map(|source|json!({"url":source.url,"name":selected.channel.card.title,"behaviorHints":{"proxyHeaders":{"request":source.headers}}})).collect();
     let (cards, error) = app.register_with_configuration(&connection.id, raw, "live", Some(proof));
     if error.is_some() {
         return Err("Live source unavailable".into());

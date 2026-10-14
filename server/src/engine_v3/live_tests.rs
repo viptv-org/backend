@@ -125,7 +125,7 @@ async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_
         .unwrap()["id"]
         .as_str()
         .unwrap();
-    let channels=viptv_engine::live::parse_m3u("#EXTM3U\n#EXTINF:-1 tvg-id=\"news\",News TV\nhttps://media.example/live.m3u8?token=private\n",&url::Url::parse("https://provider.example/list.m3u").unwrap(),connection).unwrap();
+    let channels=viptv_engine::live::parse_m3u("#EXTM3U\n#EXTINF:-1 tvg-id=\"news\",News TV\n#EXTVLCOPT:http-referrer=https://headers.example/source-context\nhttps://media.example/live.m3u8?token=private\n",&url::Url::parse("https://provider.example/list.m3u").unwrap(),connection).unwrap();
     let id = channels[0].channel.id.clone();
     app.live_cache.lock().await.insert(
         connection.into(),
@@ -182,6 +182,9 @@ async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_
         StatusCode::OK
     );
     assert!(!source.to_string().contains("token=private"));
+    let grant=source["streams"][0]["id"].as_str().unwrap();
+    assert_eq!(app.streams.lock().unwrap()[grant].headers["referer"],"https://headers.example/source-context");
+    assert!(!source.to_string().contains("source-context"));
 }
 #[cfg(feature = "live-runtime")]
 #[tokio::test]

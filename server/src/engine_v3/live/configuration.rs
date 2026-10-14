@@ -1,6 +1,6 @@
 use super::*;
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
-    db.execute_batch("CREATE TABLE IF NOT EXISTS engine_m3u_connections(id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER NOT NULL,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,revision INTEGER NOT NULL,enabled INTEGER NOT NULL,secret TEXT NOT NULL,UNIQUE(account_id,profile_id))")
+    db.execute_batch("CREATE TABLE IF NOT EXISTS engine_xtream_connections(id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER NOT NULL,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,revision INTEGER NOT NULL,enabled INTEGER NOT NULL,secret TEXT NOT NULL,UNIQUE(account_id,profile_id));CREATE TABLE IF NOT EXISTS engine_m3u_connections(id INTEGER PRIMARY KEY AUTOINCREMENT,account_id INTEGER NOT NULL,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,revision INTEGER NOT NULL,enabled INTEGER NOT NULL,secret TEXT NOT NULL,UNIQUE(account_id,profile_id))")
 }
 pub(crate) fn connections(
     db: &Connection,
@@ -28,6 +28,8 @@ pub(crate) fn connections(
         .map_err(db_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
+    #[cfg(feature = "live-runtime")]
+    { connections.splice(0..0, super::xtream_configuration::connections(db,account,profile)?); }
     if cfg!(feature = "live-runtime") {
         let mut statement=db.prepare("SELECT id,revision,enabled FROM engine_m3u_connections WHERE account_id=?1 AND profile_id=?2").map_err(db_error)?;
         let m3u = statement
@@ -76,6 +78,8 @@ pub(crate) async fn configure(
         .secret_vault
         .clone()
         .ok_or("Credential vault unavailable")?;
+    #[cfg(feature = "live-runtime")]
+    if plugin == "xtream" { return super::xtream_configuration::save(&app,&lease,profile,revision,config,value); }
     if plugin == "xtream" {
         let credentials: XtreamConfiguration = serde_json::from_value(value)
             .map_err(|_| ApiError::from("Invalid Xtream configuration"))?;
@@ -226,8 +230,13 @@ pub(crate) async fn remove(
         ));
     }
     let (kind, id) = connection.split_once(':').ok_or_else(auth::forbidden)?;
+    // Paired devices manage profile-private inputs; account-shared providers
+    // retain the same account-session boundary as provider management v2.
+    if kind == "iptv" && matches!(&lease.principal, auth::Principal::Account { role, .. } if role == "device") {
+        return Err(auth::forbidden());
+    }
     let id = id.parse::<i64>().map_err(|_| auth::forbidden())?;
-    let changed=if kind=="m3u"{tx.execute("DELETE FROM engine_m3u_connections WHERE id=?1 AND account_id=?2 AND profile_id=?3",params![id,account,profile])}else if kind=="iptv"{tx.execute("DELETE FROM providers WHERE id=?1 AND EXISTS(SELECT 1 FROM provider_ownership WHERE provider_id=?1 AND account_id=?2)",params![id,account])}else{return Err(auth::forbidden());}.map_err(db_error)?;
+    let changed=if kind=="xtream"{tx.execute("DELETE FROM engine_xtream_connections WHERE id=?1 AND account_id=?2 AND profile_id=?3",params![id,account,profile])}else if kind=="m3u"{tx.execute("DELETE FROM engine_m3u_connections WHERE id=?1 AND account_id=?2 AND profile_id=?3",params![id,account,profile])}else if kind=="iptv"{tx.execute("DELETE FROM providers WHERE id=?1 AND EXISTS(SELECT 1 FROM provider_ownership WHERE provider_id=?1 AND account_id=?2)",params![id,account])}else{return Err(auth::forbidden());}.map_err(db_error)?;
     if changed != 1 {
         return Err(auth::forbidden());
     }
@@ -245,4 +254,11 @@ pub(crate) fn available_m3u(db: &Connection, lease: &ResourceLease, id: i64) -> 
         return false;
     };
     cfg!(feature="live-runtime") && db.query_row("SELECT EXISTS(SELECT 1 FROM engine_m3u_connections c JOIN engine_profile_configuration p ON p.profile_id=c.profile_id JOIN json_each(p.value,'$.assignments') a WHERE c.id=?1 AND c.account_id=?2 AND c.profile_id=?3 AND c.enabled=1 AND json_extract(a.value,'$.connection_id')=?4 AND EXISTS(SELECT 1 FROM json_each(a.value,'$.enabled') f WHERE f.value='LiveTv'))",params![id,lease.principal.account_id(),profile,format!("m3u:{id}")],|r|r.get::<_,bool>(0)).unwrap_or(false)
+}
+
+#[cfg(feature="live-runtime")]
+pub(super) fn available_private(db: &Connection, lease: &ResourceLease, connection: &IntegrationConnection) -> bool {
+    let Some((kind,id))=connection.id.split_once(':')else{return false;};
+    let Ok(id)=id.parse::<i64>()else{return false;};
+    match kind {"m3u"=>available_m3u(db,lease,id),"xtream"=>super::available_xtream(db,lease,id),_=>false}
 }

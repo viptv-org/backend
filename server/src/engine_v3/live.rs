@@ -5,11 +5,15 @@ use viptv_engine::{
     profile::IntegrationConnection,
 };
 mod configuration;
+#[cfg(feature="live-runtime")]
+mod xtream_configuration;
+#[cfg(feature="live-runtime")]
+mod xtream;
 mod fetch_gates;
 pub(crate) use configuration::{available_m3u, configure, connections, init, remove};
 pub(crate) use fetch_gates::FetchGates;
 #[cfg(feature = "live-runtime")]
-mod m3u;
+mod native;
 #[derive(Clone)]
 pub(crate) struct Cache {
     pub revision: i64,
@@ -71,9 +75,9 @@ pub(crate) async fn channels(
             reason: Some("Assign a live TV connection".into())
         })));
     };
-    if connection.plugin_id == "m3u" {
+    if connection.plugin_id == "m3u" || connection.id.starts_with("xtream:") {
         #[cfg(feature = "live-runtime")]
-        return bounded(m3u::page(
+        return bounded(native::page(
             app,
             lease,
             profile,
@@ -189,9 +193,9 @@ pub(crate) async fn guide(
 ) -> ApiResult {
     let app = app.with_lease(lease.clone());
     let (revision, connection) = connection_for(&app, &lease, profile, &channel).await?;
-    if connection.plugin_id == "m3u" {
+    if connection.plugin_id == "m3u" || connection.id.starts_with("xtream:") {
         #[cfg(feature = "live-runtime")]
-        return bounded(m3u::guide(
+        return bounded(native::guide(
             app, lease, profile, revision, connection, channel,
         ))
         .await;
@@ -240,9 +244,9 @@ pub(crate) async fn sources(
 ) -> ApiResult {
     let app = app.with_lease(lease.clone());
     let (revision, connection) = connection_for(&app, &lease, profile, &channel).await?;
-    if connection.plugin_id == "m3u" {
+    if connection.plugin_id == "m3u" || connection.id.starts_with("xtream:") {
         #[cfg(feature = "live-runtime")]
-        return bounded(m3u::sources(
+        return bounded(native::sources(
             app, lease, profile, revision, connection, channel,
         ))
         .await;
@@ -325,3 +329,22 @@ async fn bounded(future: impl std::future::Future<Output = ApiResult>) -> ApiRes
             )
         })?
 }
+
+#[cfg(all(test, feature = "live-runtime"))]
+#[path = "live/xtream_profile_tests.rs"]
+mod xtream_profile_tests;
+
+pub(crate) fn available_xtream(db: &Connection, lease: &ResourceLease, id: i64) -> bool {
+    #[cfg(feature="live-runtime")]
+    return xtream_configuration::available(db,lease,id);
+    #[cfg(not(feature="live-runtime"))]
+    {let _=(db,lease,id);false}
+}
+
+#[cfg(all(test,feature="live-runtime"))]
+#[path="live/xtream_projection_tests.rs"]
+mod xtream_projection_tests;
+
+#[cfg(all(test,feature="live-runtime"))]
+#[path="live/xtream_authority_tests.rs"]
+mod xtream_authority_tests;

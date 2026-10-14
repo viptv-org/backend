@@ -437,6 +437,7 @@ fn validate_source(db: &Connection, proof: &Proof) -> Result<(), Error> {
     let allowed:bool=match kind {
         "iptv"=>db.query_row("SELECT EXISTS(SELECT 1 FROM providers p JOIN provider_ownership o ON o.provider_id=p.id WHERE p.id=?1 AND o.account_id=?2 AND p.enabled=1 AND ((?3='live' AND p.enable_live=1) OR (?3='movie' AND p.enable_movies=1) OR (?3='series' AND p.enable_series=1)))",params![id,account(&proof.lease),proof.kind],|row|row.get(0)),
         "m3u"=>Ok(proof.kind=="live" && crate::engine_v3::live::available_m3u(db,&proof.lease,id)),
+        "xtream"=>Ok(proof.kind=="live" && crate::engine_v3::live::available_xtream(db,&proof.lease,id)),
         "vsources"=>Ok(crate::engine_v3::source_integrations::available_db(db,&proof.lease,id)),
         "addon"=>db.query_row("SELECT EXISTS(SELECT 1 FROM addons WHERE id=?1 AND account_id=?2 AND enabled=1)",params![id,account(&proof.lease)],|row|row.get(0)),
         _=>return Err(Error::Code("source_not_found")),
