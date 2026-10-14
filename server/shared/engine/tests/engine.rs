@@ -100,6 +100,7 @@ fn filters_are_validated_instead_of_silently_ignored() {
         choices: vec![],
         minimum: Some(1900.),
         maximum: Some(2100.),
+        maximum_selections: None,
     };
     let query = |id: &str, v: &str| QueryValue {
         id: id.into(),

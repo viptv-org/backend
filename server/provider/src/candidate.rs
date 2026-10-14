@@ -1,5 +1,5 @@
-//! Xtream candidate parsing, validation, and ranking shared by the backend's
-//! provider service and any fat client that needs to produce playable candidates.
+//! Xtream candidate parsing, validation, and ranking for the backend's provider
+//! service.
 use crate::normalize::{
     canonical_id, extension, imdb_id, normalize, required_string, scalar, stream_id, text,
     timestamp, title_year, tmdb_id, valid_year,
@@ -87,10 +87,10 @@ pub fn validated_details(c: &Candidate, details: &Value) -> Option<Candidate> {
     .flatten()
     {
         for key in ["stream_id", "vod_id", "series_id"] {
-            if let Some(value) = object.get(key) {
-                if scalar(value).as_deref() != Some(c.stream_id.as_str()) {
-                    return None;
-                }
+            if let Some(value) = object.get(key)
+                && scalar(value).as_deref() != Some(c.stream_id.as_str())
+            {
+                return None;
             }
         }
         for key in ["name", "title"] {
@@ -193,18 +193,18 @@ impl MatchRequest {
         if kind == "series" {
             // Strip only two numeric suffixes, preserving namespaced IDs such as tmdb:123.
             let pieces: Vec<&str> = id.rsplitn(3, ':').collect();
-            if pieces.len() == 3 {
-                if let (Ok(e), Ok(s)) = (pieces[0].parse::<i64>(), pieces[1].parse::<i64>()) {
-                    if s < 0 || e < 0 {
-                        return Err("Invalid season or episode".into());
-                    }
-                    if season.is_some_and(|v| v != s) || episode.is_some_and(|v| v != e) {
-                        return Err("Episode ID conflicts with season or episode".into());
-                    }
-                    season = Some(s);
-                    episode = Some(e);
-                    id = pieces[2].to_owned();
+            if pieces.len() == 3
+                && let (Ok(e), Ok(s)) = (pieces[0].parse::<i64>(), pieces[1].parse::<i64>())
+            {
+                if s < 0 || e < 0 {
+                    return Err("Invalid season or episode".into());
                 }
+                if season.is_some_and(|v| v != s) || episode.is_some_and(|v| v != e) {
+                    return Err("Episode ID conflicts with season or episode".into());
+                }
+                season = Some(s);
+                episode = Some(e);
+                id = pieces[2].to_owned();
             }
         }
         let mut ids = HashSet::from([canonical_id(&id)]);

@@ -3,7 +3,7 @@ use viptv_engine::presentation::{CatalogPage, DetailSnapshot};
 
 pub(crate) async fn discover(State(app):State<App>,Extension(lease):Extension<ResourceLease>,Query(q):Query<crate::handlers_catalog::Discover>)->ApiResult{
     if q.kind!="all" {return discover_one(State(app),Extension(lease),Query(q)).await;}
-    if !q.is_search() || q.skip!=0 || q.catalog.is_some() || q.addon_id.is_some() || q.genre.is_some() || q.extras.as_deref().is_some_and(|s|s!="{}") || q.search.as_ref().is_some_and(|s|s.chars().count()>256){return Err("All-types search requires an unfiltered text query at offset zero".into());}
+    if !q.is_search() || q.skip!=0 || q.catalog.is_some() || q.addon_id.is_some() || q.genre.is_some() || !q.selections()?.is_empty() || q.extras.as_deref().is_some_and(|s|s!="{}") || q.search.as_ref().is_some_and(|s|s.chars().count()>256){return Err("All-types search requires an unfiltered text query at offset zero".into());}
     let auth::Principal::Account {profile_id:Some(profile),..}=lease.principal else{return Err(auth::forbidden());};
     let scoped=app.clone().with_lease(lease.clone());
     let (configuration,_)=configuration::read(&scoped,&lease,profile)?;

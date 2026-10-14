@@ -66,6 +66,7 @@ pub(crate) fn choice(id: &str, label: &str, choices: Vec<Choice>) -> QueryContro
         choices,
         minimum: None,
         maximum: None,
+        maximum_selections: None,
     }
 }
 pub(crate) async fn controls(

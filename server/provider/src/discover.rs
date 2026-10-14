@@ -1,12 +1,12 @@
 //! Addon catalog discovery planning and aggregation, plus episode artwork
-//! enrichment, shared by the backend and fat clients.
+//! enrichment, for the backend.
 use crate::extras::{catalog_extras, extra_name};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use url::Url;
 
-/// The wire shape of a catalog browse/search request. Fat clients serialize
-/// this into the native core bridge; the backend constructs it from the API.
+/// The wire shape of a catalog browse/search request, constructed by the
+/// backend from its API.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DiscoveryRequest {
     pub kind: String,
@@ -16,6 +16,8 @@ pub struct DiscoveryRequest {
     pub search: Option<String>,
     pub genre: Option<String>,
     pub extras: HashMap<String, String>,
+    #[serde(default)]
+    pub values: Vec<crate::discovery_values::ExtraValues>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -41,6 +43,7 @@ pub fn plan_discovery(
         search,
         genre,
         extras: custom,
+        values,
     } = request.clone();
     if kind.is_empty()
         || kind.len() > 64
@@ -59,7 +62,8 @@ pub fn plan_discovery(
     {
         return Err("Invalid catalog options".into());
     }
-    if !custom.is_empty() && (catalog.is_none() || addon.is_none()) {
+    crate::discovery_values::validate_input(&values, &custom, genre.as_deref())?;
+    if (!custom.is_empty() || !values.is_empty()) && (catalog.is_none() || addon.is_none()) {
         return Err("Choose a catalog for custom options".into());
     }
     let search = search
@@ -83,8 +87,6 @@ pub fn plan_discovery(
     }
     let mut tasks = vec![];
     let mut pageable = false;
-    let mut genre_unsupported = false;
-    let mut genre_invalid = false;
     'addons: for (id, u, m) in entries {
         if addon.is_some_and(|a| a != *id) {
             continue;
@@ -101,38 +103,17 @@ pub fn plan_discovery(
             if search.is_some() && !declared_extras.iter().any(|extra| extra.name == "search") {
                 continue;
             }
-            if let Some(requested) = &genre {
-                let Some(capability) = declared_extras.iter().find(|extra| extra.name == "genre")
-                else {
-                    genre_unsupported = true;
-                    continue;
-                };
-                if !capability.options.is_empty()
-                    && !capability.options.iter().any(|option| option == requested)
-                {
-                    genre_invalid = true;
-                    continue;
-                }
-            }
-            if custom.iter().any(|(key, value)| {
-                !declared_extras
-                    .iter()
-                    .any(|e| e.name == *key && (e.options.is_empty() || e.options.contains(value)))
-            }) {
-                return Err("Option is not advertised by the selected catalog".into());
-            }
-            // Every required extra must be one this request can actually supply.
-            if declared_extras.iter().any(|extra| {
-                extra.required
-                    && match extra.name.as_str() {
-                        "skip" => false,
-                        "search" => search.is_none(),
-                        "genre" => genre.is_none(),
-                        _ => custom.get(&extra.name).is_none_or(|v| v.trim().is_empty()),
-                    }
-            }) {
-                continue;
-            }
+            let supplied = match crate::discovery_values::resolve(
+                &declared_extras,
+                &values,
+                &custom,
+                genre.as_deref(),
+                search.as_deref(),
+            ) {
+                Ok(values) => values,
+                Err(error) if catalog.is_some() && addon.is_some() => return Err(error),
+                Err(_) => continue,
+            };
             let mut extras = Vec::new();
             let supports_skip = declared_extras.iter().any(|extra| extra.name == "skip");
             if supports_skip {
@@ -146,14 +127,8 @@ pub fn plan_discovery(
                     url::form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>()
                 ));
             }
-            if let Some(value) = &genre {
-                extras.push(format!(
-                    "genre={}",
-                    url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>()
-                ));
-            }
-            for (name, value) in &custom {
-                if !value.trim().is_empty() {
+            for (name, values) in supplied {
+                for value in values {
                     extras.push(format!(
                         "{}={}",
                         name,
@@ -173,13 +148,8 @@ pub fn plan_discovery(
             }
         }
     }
-    if tasks.is_empty() {
-        if genre_invalid {
-            return Err("Genre is not one of the catalog's advertised options".into());
-        }
-        if genre_unsupported {
-            return Err("Selected catalog does not advertise genre filtering".into());
-        }
+    if tasks.is_empty() && (!values.is_empty() || !custom.is_empty() || genre.is_some()) {
+        return Err("No selected catalog supports these options".into());
     }
     Ok(DiscoveryPlan {
         single_catalog: !aggregated && tasks.len() == 1,
@@ -324,12 +294,10 @@ pub fn enrich_episode_art(primary: &mut Value, alternate: &Value) {
                     && !video["episode"].is_null()
                     && candidate["season"] == video["season"]
                     && candidate["episode"] == video["episode"])
-        }) {
-            if let Some(image) = public_episode_art(&candidate["thumbnail"]) {
-                if !image.contains("episodes.metahub.space") {
-                    video["thumbnail"] = json!(image);
-                }
-            }
+        }) && let Some(image) = public_episode_art(&candidate["thumbnail"])
+            && !image.contains("episodes.metahub.space")
+        {
+            video["thumbnail"] = json!(image);
         }
     }
 }

@@ -25,11 +25,19 @@ pub(crate) struct Discover {
     pub(crate) search: Option<String>,
     pub(crate) genre: Option<String>,
     pub(crate) extras: Option<String>,
+    pub(crate) values: Option<String>,
 }
 fn movie() -> String {
     "movie".into()
 }
 impl Discover {
+    pub(crate) fn selections(&self) -> Result<Vec<viptv_provider::discovery_values::ExtraValues>, ApiError> {
+        match self.values.as_deref() {
+            Some(value) if value.len() <= 8192 => serde_json::from_str(value).map_err(|_| ApiError::from("Invalid catalog selections")),
+            Some(_) => Err("Catalog selections too large".into()),
+            None => Ok(vec![]),
+        }
+    }
     pub(crate) fn is_search(&self) -> bool {
         self.search
             .as_deref()
@@ -48,6 +56,7 @@ pub(crate) async fn discover(
     if q.genre.as_ref().is_some_and(|s| s.chars().count() > 128) {
         return Err("Genre too long".into());
     }
+    let values = q.selections()?;
     let extras = match q.extras {
         Some(value) if value.len() <= 8192 => {
             serde_json::from_str::<HashMap<String, String>>(&value)
@@ -66,6 +75,7 @@ pub(crate) async fn discover(
                 search: q.search,
                 genre: q.genre,
                 extras,
+                values,
             })
             .await?,
     ))

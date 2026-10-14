@@ -172,3 +172,6 @@ mod live_tests;
 
 #[cfg(test)]
 mod episode_page_tests;
+
+#[cfg(test)]
+mod discovery_choice_tests;

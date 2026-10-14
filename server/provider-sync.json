@@ -1,12 +1,13 @@
 {
   "source": "viptv-org/core",
-  "revision": "8214882a4914f39eea461857d97eb986de4a2bb0",
+  "revision": "47b85b5386617f455ade8b294a7a844b54f537c0",
   "files": {
-    "Cargo.toml": "4d47743642d342a95c2548c743e46c01f293361c214d1390cd301c6d206b68d0",
-    "src/candidate.rs": "9df07c8a1c44545b29fb594b2254ed9460ac0fb49cf268fd9fc9dec56fffe883",
-    "src/discover.rs": "646009141d9855d3fce0b7c4ba1856e9030b3b0e7e91d88c8e86b4accef256bd",
-    "src/extras.rs": "29c13b160b2e502ab95bccab21458662cf44ce8b8e94ac188725bcdf81490351",
-    "src/lib.rs": "a1b3eea899a779e5105fa825465e65e80a9ba627575542187f6c880ce2dad88e",
-    "src/normalize.rs": "3f5f727b8864d02ac30c1b857c84ea737fe7b898ee390089fdf5f7fe683b1d2f"
+    "Cargo.toml": "9948397f580c7b5e17c31ab2a93d1fb18efde52838374ff0d0ad55b36bc70786",
+    "src/candidate.rs": "44c308ed1f54f08dcfe3f8c23c2c92e0e1d1c97d8d42ad5480dc2bc434566d9a",
+    "src/discover.rs": "365a1b85455a6dd989f5a1b38383d9c2cf36d185bf4ebbb1f334da94c423674b",
+    "src/discovery_values.rs": "04970a1b85d7e284af857361a7a4472aa4562518439314102ecf5b20353b81b9",
+    "src/extras.rs": "4f8ad0ffc5f345912900e7fe81bdf7d2e9ed417e902c98f73677f3d5c1f10e7a",
+    "src/lib.rs": "1613eb47ba2a7ceee822ab479ef94d414c5f460c8a94c186a13605ca58984a23",
+    "src/normalize.rs": "d697b4f01d26dacf808767dbb23ca706ea582c7260f45f69fff49b5511902a12"
   }
 }

@@ -1,6 +1,6 @@
-//! Pure addon/provider client logic shared between the VIPTV backend server and
-//! the shared Crux core so both sides validate, normalize, plan, and aggregate
-//! the same catalog/media requests.
+//! Pure addon/provider client logic for the VIPTV backend server, which vendors
+//! this crate with `scripts/sync-provider.sh`. The Crux core no longer depends
+//! on it: the application-facing provider bridge was retired (BE-002).
 //!
 //! No networking or storage lives here: consumers fetch bytes and feed the
 //! parsed JSON back in. Modules are feature-gated so each consumer pulls only
@@ -17,5 +17,7 @@ pub mod candidate;
 
 #[cfg(feature = "discovery")]
 pub mod discover;
+#[cfg(feature = "discovery")]
+pub mod discovery_values;
 
 pub use normalize::validate_url;

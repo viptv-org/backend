@@ -12,6 +12,7 @@ use viptv_provider::{
 pub use viptv_provider::discover::{
     DiscoveryPlan as CatalogPlan, DiscoveryRequest as CatalogQuery,
 };
+pub use viptv_provider::discovery_values::ExtraValues;
 pub fn discovery_plan(
     manifest_url: &str,
     manifest: &Value,
@@ -32,26 +33,33 @@ pub fn discovery_urls(
 pub fn catalog_controls(catalog: &Value) -> Vec<QueryControl> {
     catalog_extras(catalog)
         .into_iter()
-        .filter(|e| e.name != "skip")
+        .filter(|e| e.name != "skip" && e.options_limit != Some(0))
         .map(|e| QueryControl {
             id: e.name.clone(),
             label: e.name,
             kind: if e.options.is_empty() {
                 ControlKind::Text
+            } else if e.options_limit.unwrap_or(1) > 1 {
+                ControlKind::MultiChoice
             } else {
                 ControlKind::SingleChoice
             },
             required: e.required && e.default.is_none(),
             choices: e
                 .options
-                .into_iter()
+                .iter()
                 .map(|v| Choice {
                     label: v.clone(),
-                    value: v,
+                    value: v.clone(),
                 })
                 .collect(),
             minimum: None,
             maximum: None,
+            maximum_selections: Some(if e.options.is_empty() {
+                1
+            } else {
+                e.options_limit.unwrap_or(1).min(64) as u32
+            }),
         })
         .collect()
 }

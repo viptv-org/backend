@@ -14,6 +14,7 @@ fn control(id: &str, label: &str, choices: Vec<(&str, &str)>) -> QueryControl {
             .collect(),
         minimum: None,
         maximum: None,
+        maximum_selections: None,
     }
 }
 pub fn controls(entries: &[Entry], sources: &[LibrarySource], _source: &str) -> Vec<QueryControl> {

@@ -23,6 +23,7 @@ fn text(id: &str, label: &str, required: bool) -> QueryControl {
         choices: vec![],
         minimum: None,
         maximum: None,
+        maximum_selections: None,
     }
 }
 pub(crate) async fn get(
@@ -153,51 +154,9 @@ pub(crate) async fn get(
             if catalog["type"] != kind {
                 continue;
             }
-            let mut options = Vec::new();
-            if let Some(genres) = catalog["genres"].as_array() {
-                let choices = genres
-                    .iter()
-                    .filter_map(|g| g.as_str())
-                    .take(128)
-                    .map(|g| Choice {
-                        value: g.into(),
-                        label: g.into(),
-                    })
-                    .collect::<Vec<_>>();
-                if !choices.is_empty() {
-                    options.push(crate::simkl::browse::choice("genre", "Genre", choices));
-                }
-            }
-            for extra in catalog["extra"].as_array().into_iter().flatten().take(16) {
-                let Some(id) = extra["name"].as_str().filter(|s| s.len() <= 128) else {
-                    continue;
-                };
-                if matches!(id, "genre" | "search" | "skip") {
-                    continue;
-                }
-                let choices = extra["options"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|v| v.as_str())
-                    .take(128)
-                    .map(|s| Choice {
-                        value: s.into(),
-                        label: s.into(),
-                    })
-                    .collect::<Vec<_>>();
-                let control = if choices.is_empty() {
-                    text(
-                        id,
-                        id,
-                        extra["isRequired"] == true || extra["is_required"] == true,
-                    )
-                } else {
-                    crate::simkl::browse::choice(id, id, choices)
-                };
-                options.push(control);
-            }
-            catalogs.push(json!({"id":catalog["id"],"name":catalog["name"],"type":catalog["type"],"addon_id":catalog["addon_id"],"connection_id":catalog["addon_id"].as_i64().map(|id|format!("addon:{id}")),"supports_search":catalog["supports_search"],"supports_skip":catalog["supports_skip"],"controls":options}));
+            let options = viptv_engine::stremio::catalog_controls(catalog)
+                .into_iter().filter(|c| c.id != "search").collect::<Vec<_>>();
+            catalogs.push(json!({"id":catalog["id"],"name":catalog["name"],"type":catalog["type"],"addon_id":catalog["addon_id"],"connection_name":catalog["addon_name"],"connection_id":catalog["addon_id"].as_i64().map(|id|format!("addon:{id}")),"supports_search":catalog["supports_search"],"supports_skip":catalog["supports_skip"],"controls":options}));
         }
         if !catalogs.is_empty() {
             filter_state = state(Availability::Available, None);

@@ -122,6 +122,7 @@ pub fn search_urls(
         search: Some(term.into()),
         genre: None,
         extras: Default::default(),
+        values: vec![],
     };
     Ok(
         plan_discovery(&[(1, manifest_url.into(), manifest.clone())], &query)

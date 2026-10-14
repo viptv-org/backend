@@ -1,5 +1,5 @@
-//! Catalog "extra" capability negotiation shared by the backend and fat clients.
-use serde_json::{json, Value};
+//! Catalog "extra" capability negotiation for the backend.
+use serde_json::{Value, json};
 use std::collections::HashSet;
 
 const MAX_CATALOG_EXTRAS: usize = 16;
@@ -102,21 +102,24 @@ pub fn catalog_extras(catalog: &Value) -> Vec<CatalogExtra> {
         } else {
             (
                 extra_name(&value["name"]),
-                value["isRequired"].as_bool().unwrap_or(false),
+                value["isRequired"]
+                    .as_bool()
+                    .or_else(|| value["is_required"].as_bool())
+                    .unwrap_or(false),
                 bounded_options(&value["options"]),
                 value["optionsLimit"]
                     .as_u64()
+                    .or_else(|| value["options_limit"].as_u64())
                     .map(|number| number.min(1000) as usize),
             )
         };
         if let Some(name) = name {
             merge_extra(&mut extras, name.clone(), required, options, limit);
-            if let Some(default) = bounded_exact_text(&value["default"], MAX_EXTRA_OPTION) {
-                if let Some(extra) = extras.iter_mut().find(|e| e.name == name) {
-                    if extra.options.is_empty() || extra.options.contains(&default) {
-                        extra.default = Some(default);
-                    }
-                }
+            if let Some(default) = bounded_exact_text(&value["default"], MAX_EXTRA_OPTION)
+                && let Some(extra) = extras.iter_mut().find(|e| e.name == name)
+                && (extra.options.is_empty() || extra.options.contains(&default))
+            {
+                extra.default = Some(default);
             }
         }
     }

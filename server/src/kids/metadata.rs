@@ -256,6 +256,7 @@ pub(crate) async fn search(
             search: Some(query.search.trim().into()),
             genre: None,
             extras: HashMap::new(),
+            values: vec![],
         }),
     )
     .await

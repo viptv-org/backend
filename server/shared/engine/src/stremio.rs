@@ -1,7 +1,7 @@
 //! Bounded Stremio manifest and media projections shared by native and server hosts.
 mod manifest;
 mod browse;
-pub use browse::{CatalogQuery,catalog_controls,discovery_urls,catalog_page,catalog_pageable,discovery_plan};
+pub use browse::{ExtraValues, CatalogQuery,catalog_controls,discovery_urls,catalog_page,catalog_pageable,discovery_plan};
 mod media;
 mod streams;
 mod subtitle_text;

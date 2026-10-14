@@ -35,6 +35,7 @@ impl Addons {
             search,
             genre,
             extras: HashMap::new(),
+            values: vec![],
         })
         .await
     }

@@ -7,6 +7,7 @@ pub(super) async fn discover(
     profile: i64,
     q: crate::handlers_catalog::Discover,
 ) -> ApiResult {
+    if !q.selections()?.is_empty() {return Err("Simkl does not advertise multiple catalog selections".into());}
     let category = match q.kind.as_str() {
         "movie" => "movie",
         "series" => "tv",

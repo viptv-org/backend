@@ -28,9 +28,13 @@ pub struct QueryControl {
     pub choices: Vec<Choice>,
     pub minimum: Option<f64>,
     pub maximum: Option<f64>,
+    /// Maximum selected values, independent of numeric value bounds.
+    #[serde(default)]
+    pub maximum_selections: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
+#[serde(deny_unknown_fields)]
 pub struct QueryValue {
     pub id: String,
     pub values: Vec<String>,
@@ -47,6 +51,15 @@ pub fn validate(controls: &[QueryControl], values: &[QueryValue]) -> Result<(), 
             .find(|c| c.id == input.id)
             .ok_or(Error::InvalidQuery)?;
         if input.values.len() > 64
+            || control
+                .maximum_selections
+                .is_some_and(|n| input.values.len() > n as usize)
+            || input
+                .values
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                != input.values.len()
             || (!matches!(control.kind, ControlKind::MultiChoice) && input.values.len() > 1)
         {
             return Err(Error::InvalidQuery);

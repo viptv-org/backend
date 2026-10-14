@@ -1,7 +1,7 @@
 //! Pure Xtream-provider normalization and validation primitives.
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::Value;
-use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 use url::Url;
 
 pub const MAX_ITEMS: usize = 300_000;
@@ -179,23 +179,23 @@ pub fn valid_year(v: &Value) -> Option<i64> {
 pub fn title_year(name: &str) -> (String, Option<i64>) {
     let name = name.trim();
     for (open, close) in [('(', ')'), ('[', ']')] {
-        if name.ends_with(close) {
-            if let Some(start) = name.rfind(open) {
-                let year_text = &name[start + 1..name.len() - 1];
-                if year_text.len() == 4 {
-                    if let Some(year) = valid_year(&Value::String(year_text.to_string())) {
-                        return (name[..start].trim().to_owned(), Some(year));
-                    }
-                }
+        if name.ends_with(close)
+            && let Some(start) = name.rfind(open)
+        {
+            let year_text = &name[start + 1..name.len() - 1];
+            if year_text.len() == 4
+                && let Some(year) = valid_year(&Value::String(year_text.to_string()))
+            {
+                return (name[..start].trim().to_owned(), Some(year));
             }
         }
     }
-    if let Some((title, last)) = name.rsplit_once(' ') {
-        if !title.trim().is_empty() && last.len() == 4 {
-            if let Some(year) = valid_year(&Value::String(last.to_owned())) {
-                return (title.trim().to_owned(), Some(year));
-            }
-        }
+    if let Some((title, last)) = name.rsplit_once(' ')
+        && !title.trim().is_empty()
+        && last.len() == 4
+        && let Some(year) = valid_year(&Value::String(last.to_owned()))
+    {
+        return (title.trim().to_owned(), Some(year));
     }
     (name.to_owned(), None)
 }

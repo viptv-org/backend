@@ -1,10 +1,13 @@
 [package]
 name = "viptv-provider"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.88"
+# Literal values (not `.workspace = true`): backend/scripts/sync-provider.sh
+# vendors this manifest outside this workspace. Keep them equal to
+# [workspace.package] in the root Cargo.toml.
+edition = "2024"
+rust-version = "1.90"
 license = "GPL-2.0-only"
-description = "Pure Xtream/addon client logic shared between the VIPTV backend server and the shared core"
+description = "Pure Xtream/addon client logic for the VIPTV backend server (vendored from viptv-org/core)"
 
 [features]
 default = ["extras", "candidate"]

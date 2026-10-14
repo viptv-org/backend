@@ -860,6 +860,7 @@ async fn custom_catalog_types_options_and_explicit_search_pages_work() {
         search: None,
         genre: None,
         extras,
+        values: vec![],
     };
     let endpoint = viptv_provider::discover::addon_extra_endpoint(
         base,
