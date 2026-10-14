@@ -33,6 +33,20 @@ impl Service {
         image: descriptor::Image,
         fixture: Option<url::Url>,
     ) -> Result<Asset, ApiError> {
+        tokio::time::timeout(Duration::from_secs(8), self.fetch_inner(image, fixture))
+            .await
+            .map_err(|_| {
+                ApiError(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Image request exceeded its deadline".into(),
+                )
+            })?
+    }
+    async fn fetch_inner(
+        &self,
+        image: descriptor::Image,
+        fixture: Option<url::Url>,
+    ) -> Result<Asset, ApiError> {
         let entry = {
             let mut records = self.records.lock().await;
             if !records.entries.contains_key(&image) && records.entries.len() >= 128 {
@@ -46,14 +60,9 @@ impl Service {
             }
             records.entries.entry(image.clone()).or_default().clone()
         };
-        let mut cached = tokio::time::timeout(Duration::from_secs(4), entry.lock())
-            .await
-            .map_err(|_| {
-                ApiError(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Image request exceeded its deadline".into(),
-                )
-            })?;
+        // Both coalescing and permit waiting share the outer deadline. Local
+        // backpressure must never become a cached upstream image failure.
+        let mut cached = entry.lock().await;
         if let Some(value) = cached.value.as_ref().filter(|value| {
             cached.at.is_some_and(|at| {
                 at.elapsed() < Duration::from_secs(if value.is_ok() { 3600 } else { 10 })
@@ -69,10 +78,7 @@ impl Service {
             .and_then(|value| value.as_ref().ok())
             .map_or(0, |asset| asset.bytes.len());
         let result = async {
-            let _permit = tokio::time::timeout(Duration::from_secs(1), self.limit.acquire())
-                .await
-                .map_err(|_| ())?
-                .map_err(|_| ())?;
+            let _permit = self.limit.acquire().await.map_err(|_| ())?;
             let target = fixture
                 .clone()
                 .unwrap_or_else(|| url::Url::parse(&image.direct()).unwrap());
@@ -153,95 +159,5 @@ fn signature(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[tokio::test]
-    async fn fetches_are_bounded_coalesced_cached_and_never_forward_inbound_credentials() {
-        use axum::routing::get;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let reads = Arc::new(AtomicUsize::new(0));
-        let count = reads.clone();
-        let router = axum::Router::new()
-            .route(
-                "/image",
-                get(move |headers: axum::http::HeaderMap| {
-                    let count = count.clone();
-                    async move {
-                        assert!(!headers.contains_key(header::AUTHORIZATION));
-                        assert!(!headers.contains_key(header::COOKIE));
-                        count.fetch_add(1, Ordering::SeqCst);
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                        (
-                            [(header::CONTENT_TYPE, "text/html")],
-                            b"RIFF\x10\0\0\0WEBPtest".to_vec(),
-                        )
-                    }
-                }),
-            )
-            .route("/large", get(|| async { vec![0u8; 2 * 1024 * 1024 + 1] }))
-            .route(
-                "/html",
-                get(|| async { b"<html>access denied</html>".to_vec() }),
-            )
-            .route(
-                "/redirect",
-                get(|| async {
-                    (
-                        StatusCode::FOUND,
-                        [(header::LOCATION, "http://127.0.0.1/private")],
-                    )
-                }),
-            );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let image = descriptor::Image::parts("episodes", "12/abcdef_w.webp").unwrap();
-        let service = Service::new();
-        let target = url::Url::parse(&format!("http://{address}/image")).unwrap();
-        let (a, b) = tokio::join!(
-            service.fetch(image.clone(), Some(target.clone())),
-            service.fetch(image.clone(), Some(target))
-        );
-        assert_eq!(a.unwrap().content_type, "image/webp");
-        assert_eq!(b.unwrap().bytes.len(), 16);
-        assert_eq!(reads.load(Ordering::SeqCst), 1);
-        // An active saturated cache cannot exceed its strict byte budget.
-        let full = Service::new();
-        full.records.lock().await.bytes = 32 * 1024 * 1024;
-        let bounded = full
-            .fetch(
-                descriptor::Image::parts("episodes", "budget_w.webp").unwrap(),
-                Some(url::Url::parse(&format!("http://{address}/image")).unwrap()),
-            )
-            .await
-            .unwrap();
-        assert_eq!(bounded.bytes.len(), 16);
-        assert_eq!(full.records.lock().await.bytes, 32 * 1024 * 1024);
-        assert!(
-            full.records
-                .lock()
-                .await
-                .entries
-                .values()
-                .next()
-                .unwrap()
-                .lock()
-                .await
-                .value
-                .is_none()
-        );
-        for path in ["html", "redirect", "large"] {
-            let image = descriptor::Image::parts("episodes", &format!("{path}_w.webp")).unwrap();
-            assert!(
-                service
-                    .fetch(
-                        image,
-                        Some(url::Url::parse(&format!("http://{address}/{path}")).unwrap())
-                    )
-                    .await
-                    .is_err()
-            );
-        }
-        task.abort();
-    }
-}
+#[path = "cache_tests.rs"]
+mod tests;

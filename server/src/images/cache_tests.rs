@@ -1,0 +1,144 @@
+use super::*;
+#[tokio::test]
+async fn fetches_are_bounded_coalesced_cached_and_never_forward_inbound_credentials() {
+    use axum::routing::get;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let reads = Arc::new(AtomicUsize::new(0));
+    let count = reads.clone();
+    let router = axum::Router::new()
+        .route(
+            "/image",
+            get(move |headers: axum::http::HeaderMap| {
+                let count = count.clone();
+                async move {
+                    assert!(!headers.contains_key(header::AUTHORIZATION));
+                    assert!(!headers.contains_key(header::COOKIE));
+                    count.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    (
+                        [(header::CONTENT_TYPE, "text/html")],
+                        b"RIFF\x10\0\0\0WEBPtest".to_vec(),
+                    )
+                }
+            }),
+        )
+        .route("/large", get(|| async { vec![0u8; 2 * 1024 * 1024 + 1] }))
+        .route(
+            "/html",
+            get(|| async { b"<html>access denied</html>".to_vec() }),
+        )
+        .route(
+            "/redirect",
+            get(|| async {
+                (
+                    StatusCode::FOUND,
+                    [(header::LOCATION, "http://127.0.0.1/private")],
+                )
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let image = descriptor::Image::parts("episodes", "12/abcdef_w.webp").unwrap();
+    let service = Service::new();
+    let target = url::Url::parse(&format!("http://{address}/image")).unwrap();
+    let (a, b) = tokio::join!(
+        service.fetch(image.clone(), Some(target.clone())),
+        service.fetch(image.clone(), Some(target))
+    );
+    assert_eq!(a.unwrap().content_type, "image/webp");
+    assert_eq!(b.unwrap().bytes.len(), 16);
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    // An active saturated cache cannot exceed its strict byte budget.
+    let full = Service::new();
+    full.records.lock().await.bytes = 32 * 1024 * 1024;
+    let bounded = full
+        .fetch(
+            descriptor::Image::parts("episodes", "budget_w.webp").unwrap(),
+            Some(url::Url::parse(&format!("http://{address}/image")).unwrap()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bounded.bytes.len(), 16);
+    assert_eq!(full.records.lock().await.bytes, 32 * 1024 * 1024);
+    assert!(full
+        .records
+        .lock()
+        .await
+        .entries
+        .values()
+        .next()
+        .unwrap()
+        .lock()
+        .await
+        .value
+        .is_none());
+    for path in ["html", "redirect", "large"] {
+        let image = descriptor::Image::parts("episodes", &format!("{path}_w.webp")).unwrap();
+        assert!(service
+            .fetch(
+                image,
+                Some(url::Url::parse(&format!("http://{address}/{path}")).unwrap())
+            )
+            .await
+            .is_err());
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn queued_images_wait_for_a_slot_and_local_deadlines_never_poison_the_cache() {
+    let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = reads.clone();
+    let routes = axum::Router::new().route(
+        "/image",
+        axum::routing::get(move || {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                b"RIFF\x10\0\0\0WEBPtest".to_vec()
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    let service = Arc::new(Service::new());
+    let target = url::Url::parse(&format!("http://{address}/image")).unwrap();
+    let held = service.limit.acquire_many(6).await.unwrap();
+    let queued = service.clone();
+    let target_copy = target.clone();
+    let first = descriptor::Image::parts("posters", "queued_m.webp").unwrap();
+    let image_copy = first.clone();
+    let worker = tokio::spawn(async move { queued.fetch(image_copy, Some(target_copy)).await });
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(
+        !worker.is_finished(),
+        "queue capacity is backpressure, not an image failure"
+    );
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(held);
+    assert_eq!(worker.await.unwrap().unwrap().content_type, "image/webp");
+    let held = service.limit.acquire_many(6).await.unwrap();
+    let second = descriptor::Image::parts("posters", "retry_m.webp").unwrap();
+    let started = Instant::now();
+    let result = service.fetch(second.clone(), Some(target.clone())).await;
+    assert_eq!(result.err().unwrap().0, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(started.elapsed() < Duration::from_secs(9));
+    let entry = service.records.lock().await.entries[&second].clone();
+    assert!(
+        entry.lock().await.value.is_none(),
+        "local timeout must not be negative cached"
+    );
+    drop(held);
+    assert_eq!(
+        service
+            .fetch(second, Some(target))
+            .await
+            .unwrap()
+            .content_type,
+        "image/webp"
+    );
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 2);
+    server.abort();
+}
