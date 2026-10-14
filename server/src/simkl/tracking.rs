@@ -200,6 +200,9 @@ pub(super) async fn anime_number(
         .find(|id| id.namespace == "simkl_episode")
         .and_then(|id| id.value.parse::<u64>().ok())
         .ok_or("Simkl anime episode mapping is unavailable")?;
+    if q.season.is_none() || q.episode.is_none() {
+        return Err("Simkl anime episode mapping is unavailable".into());
+    }
     let value = cache::metadata(
         app,
         profile,
@@ -207,21 +210,8 @@ pub(super) async fn anime_number(
         &format!("/anime/episodes/{}", q.id),
     )
     .await?;
-    let mut matches = value
-        .as_array()
-        .ok_or("Simkl anime episode mapping is unavailable")?
-        .iter()
-        .filter(|v| viptv_engine::simkl::id(v) == Some(episode_id));
-    let episode = matches
-        .next()
+    let episode = anime_episode::select(&value, Some(episode_id), None, q.season, q.episode)
         .ok_or("Simkl anime episode mapping is unavailable")?;
-    if matches.next().is_some()
-        || episode["type"] != "episode"
-        || episode["tvdb"]["season"].as_u64() != q.season.map(u64::from)
-        || episode["tvdb"]["episode"].as_u64() != q.episode.map(u64::from)
-    {
-        return Err("Simkl anime episode mapping is unavailable".into());
-    }
     let number = episode["episode"]
         .as_u64()
         .and_then(|n| u32::try_from(n).ok())

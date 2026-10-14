@@ -1,3 +1,5 @@
+#[path = "anime_pause_identity.rs"]
+mod anime_identity;
 #[path = "paused_identity.rs"]
 mod identity;
 use super::*;
@@ -22,36 +24,20 @@ pub(super) async fn pause(
         .filter(|p| p.is_finite() && *p > 0.0 && *p < 100.0)?;
     let updated =
         progress::millis(&value["paused_at"]).or_else(|| progress::millis(&value["watched_at"]))?;
-    let data = ["movie", "show", "anime"]
+    // The payload's category is identity evidence; a numeric ID alone is not.
+    let mut titles = [("movie", "movie"), ("show", "tv"), ("anime", "anime")]
         .into_iter()
-        .find_map(|key| value[key].is_object().then_some(&value[key]))?;
-    let id = data["ids"]["simkl"].as_u64()?;
-    let parent =
-        entries
-            .iter()
-            .find(|e| {
-                e.card.identity.ids.iter().any(|external| {
-                    external.namespace == "simkl" && external.value == id.to_string()
-                })
-            })
-            .map(|e| e.card.clone())
-            .or_else(|| {
-                let category = if value["movie"].is_object() {
-                    "movie"
-                } else if value["anime"].is_object() {
-                    "anime"
-                } else {
-                    "tv"
-                };
-                viptv_engine::simkl::card(data, category).ok()
-            })?;
-    let category = if parent.category.as_deref() == Some("anime") {
-        "anime"
-    } else if parent.identity.kind == "movie" {
-        "movie"
-    } else {
-        "tv"
-    };
+        .filter_map(|(key, category)| value[key].is_object().then_some((&value[key], category)));
+    let (data, category) = titles.next()?;
+    if titles.next().is_some() {
+        return None;
+    }
+    let id = viptv_engine::simkl::id(data)?;
+    let parent = entries
+        .iter()
+        .find(|entry| entry.card.identity.id == format!("simkl:{category}:{id}"))
+        .map(|entry| entry.card.clone())
+        .or_else(|| viptv_engine::simkl::card(data, category).ok())?;
     let verified = metadata::title(app, profile, access, category, id)
         .await
         .ok()?;
@@ -71,11 +57,15 @@ pub(super) async fn pause(
         verified.clone()
     } else {
         let episode = &value["episode"];
-        let all = metadata::episodes(app, profile, access, id, &verified)
+        let document = cache::metadata(app, profile, access, &format!("/{category}/episodes/{id}"))
             .await
             .ok()?;
-        // Supplied Simkl IDs and aired-coordinate hints must agree.
-        identity::select(episode, all, category == "anime")?
+        let all = viptv_engine::simkl::episodes(&document, &verified).ok()?;
+        if category == "anime" {
+            anime_identity::select(episode, &document, all)?
+        } else {
+            identity::select(episode, all, false)?
+        }
     };
     let duration = card
         .metadata

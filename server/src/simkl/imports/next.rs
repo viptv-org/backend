@@ -74,20 +74,26 @@ pub(super) async fn prepare(
         .await
         .ok()?;
     let rows = document.as_array()?;
-    let candidates = rows
-        .iter()
-        .filter(|row| {
-            let coordinates = row;
-            (category != "anime" || row["type"] == "episode")
-                && coordinates["episode"].as_u64() == Some(u64::from(next.episode))
-                && (next.order == "anidb"
-                    || coordinates["season"].as_u64() == next.season.map(u64::from))
-        })
-        .collect::<Vec<_>>();
-    if candidates.len() != 1 || !aired(candidates[0], entry.statistics.next_air_millis) {
+    let candidate = if category == "anime" {
+        if next.order != "anidb" {
+            return None;
+        }
+        super::super::anime_episode::select(&document, None, Some(next.episode), None, None)?
+    } else {
+        let mut candidates = rows.iter().filter(|row| {
+            row["episode"].as_u64() == Some(u64::from(next.episode))
+                && row["season"].as_u64() == next.season.map(u64::from)
+        });
+        let candidate = candidates.next()?;
+        if candidates.next().is_some() {
+            return None;
+        }
+        candidate
+    };
+    if !aired(candidate, entry.statistics.next_air_millis) {
         return None;
     }
-    let mut cards = viptv_engine::simkl::episodes(&json!([candidates[0]]), &parent).ok()?;
+    let mut cards = viptv_engine::simkl::episodes(&json!([candidate]), &parent).ok()?;
     let mut target = cards.pop()?;
     let coordinates = target.identity.episode.as_ref()?;
     let mut parent = parent;
