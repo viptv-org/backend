@@ -8,6 +8,8 @@ pub(super) struct Selection {
     pub kind: String,
     pub media_id: String,
     pub url: String,
+    pub language: String,
+    pub label: String,
     pub created: Instant,
 }
 

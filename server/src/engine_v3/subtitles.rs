@@ -4,7 +4,9 @@ use viptv_engine::{
     presentation::RowState,
     stremio::{self, SubtitleCandidate, SubtitleExtras, SubtitleProvider, SubtitleSnapshot},
 };
+mod content_fetch;
 mod selections;
+pub(crate) use content_fetch::load;
 use selections::Selection;
 #[cfg(test)]
 mod tests;
@@ -95,6 +97,8 @@ pub(crate) async fn discover(
                     kind: kind.clone(),
                     media_id: id.clone(),
                     url: file.url,
+                    language: file.language.clone(),
+                    label: format!("{} · {}", file.language, provider.name),
                     created: Instant::now(),
                 },
             ));
@@ -139,43 +143,14 @@ pub(crate) async fn content(
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<String>,
 ) -> Result<axum::response::Response, ApiError> {
-    let app = app.with_lease(lease.clone());
-    let selected = app.subtitle_selections.get(&id, &lease)?;
-    validate(&app, &selected)?;
-    let url = url::Url::parse(&selected.url).map_err(|_| ApiError::from("Subtitle unavailable"))?;
-    let response = tokio::time::timeout(
-        Duration::from_secs(10),
-        crate::source_http::bytes_with_content_type(
-            url,
-            2 * 1024 * 1024,
-            Duration::from_secs(10),
-            app.addons.fixture_transport(),
-            true,
-        ),
-    )
-    .await
-    .map_err(|_| {
-        ApiError(
-            StatusCode::GATEWAY_TIMEOUT,
-            "Subtitle fetch timed out".into(),
-        )
-    })?
-    .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "Subtitle file unavailable".into()))?;
-    let vtt = stremio::subtitle_bytes_vtt(&response.body, response.content_type.as_deref())
-        .map_err(|_| {
-            ApiError(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Subtitle encoding or format is unsupported".into(),
-            )
-        })?;
-    validate(&app, &selected)?;
+    let caption = load(&app.with_lease(lease.clone()), &lease, &id, None).await?;
     Ok((
         [
             (header::CONTENT_TYPE, "text/vtt; charset=utf-8"),
             (header::CACHE_CONTROL, "private, no-store"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
-        vtt,
+        caption.content_vtt,
     )
         .into_response())
 }

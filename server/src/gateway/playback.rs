@@ -30,6 +30,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "playback_captions.rs"]
+mod captions;
+pub(crate) use captions::attach as attach_subtitle;
+
 const LEASE: Duration = Duration::from_secs(60);
 const REQUEST_QUOTA: usize = 4096;
 const MAX_NATIVE_GRANTS_PER_SESSION: usize = 2;
@@ -2113,6 +2117,8 @@ pub(crate) async fn control_deadline(
     let seconds =
         if path.ends_with("playback-protocol") || path.ends_with("torrent-runtime-protocol") {
             5
+        } else if path.ends_with("/subtitles") {
+            20
         } else {
             10
         };

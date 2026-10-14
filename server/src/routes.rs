@@ -253,6 +253,7 @@ pub fn router_with_tv(
                     "/v2/playback-decoder-start",
                     post(gateway::playback::decoder_start),
                 )
+                .route("/v2/playback/:id/subtitles", post(gateway::playback::attach_subtitle))
                 .route(
                     "/v2/playback/:id/first-frame",
                     post(gateway::playback::first_frame),

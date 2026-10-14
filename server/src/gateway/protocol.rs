@@ -51,6 +51,8 @@ pub(crate) struct Session {
     pub expires_at: u64,
     pub error_code: Option<String>,
     pub playback: Option<Playback>,
+    #[serde(default)]
+    pub external_captions: Vec<String>,
 }
 #[derive(Deserialize)]
 pub(crate) struct Playback {
@@ -195,7 +197,7 @@ impl Session {
             .map(track)
             .collect::<Result<Vec<_>>>()?;
         Ok(Some(
-            json!({"kind":"gateway","url":url.as_str(),"format":media.format,"mode":media.mode,"video_mode":media.video_mode,"audio_mode":media.audio_mode,"position":if media.format=="mp4" {media.position} else {0.0},"timeline_offset_seconds":if media.live || media.format=="mp4" {0.0} else {media.position},"duration":media.duration,"live":media.live,"audio_tracks":audio,"subtitle_tracks":subtitles,"selected_audio":media.selected_audio.as_ref().map(track).transpose()?,"selected_subtitle":media.selected_subtitle.as_ref().map(track).transpose()?,"subtitles_supported":media.subtitles_supported}),
+            json!({"kind":"gateway","url":url.as_str(),"format":media.format,"mode":media.mode,"video_mode":media.video_mode,"audio_mode":media.audio_mode,"position":if media.format=="mp4" {media.position} else {0.0},"timeline_offset_seconds":if media.live || media.format=="mp4" {0.0} else {media.position},"duration":media.duration,"live":media.live,"audio_tracks":audio,"subtitle_tracks":subtitles,"selected_audio":media.selected_audio.as_ref().map(track).transpose()?,"selected_subtitle":media.selected_subtitle.as_ref().map(track).transpose()?,"subtitles_supported":media.subtitles_supported,"external_subtitles_supported":!media.live && self.external_captions.iter().any(|format|format=="srt")}),
         ))
     }
     pub(crate) fn failure(&self) -> &'static str {

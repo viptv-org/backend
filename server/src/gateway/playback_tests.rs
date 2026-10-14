@@ -15,6 +15,7 @@ use std::{
 
 struct Peer {
     frames: Arc<Mutex<Vec<String>>>,
+    captions: Arc<Mutex<Vec<Value>>>,
     inputs: Arc<Mutex<Vec<Value>>>,
     outputs: Arc<Mutex<Vec<Value>>>,
     task: tokio::task::JoinHandle<()>,
@@ -341,6 +342,8 @@ async fn setup() -> (App, Peer) {
     let state = mode.clone();
     let waiting = hold.clone();
     let capacity_mode = mode.clone();
+    let captions = Arc::new(Mutex::new(Vec::new()));
+    let received_captions = captions.clone();
     let frames = Arc::new(Mutex::new(Vec::new()));
     let received_frames = frames.clone();
     let protocol_mode = mode.clone();
@@ -380,6 +383,7 @@ async fn setup() -> (App, Peer) {
             let native_mp4=state.load(Ordering::SeqCst)==9 && value["output"]["protocol"]=="native_mp4";
             let position = value["position_seconds"].clone();
             let mut value = remote(&id);
+            if state.load(Ordering::SeqCst)==10 {value["external_captions"]=json!(["srt"]);}
             value["playback"]["position"] = position;
             if native_mp4 {value["playback"]["format"]=json!("mp4");value["playback"]["mode"]=json!("direct");value["playback"]["url"]=json!(format!("/media/{id}/pgm_fixture/source.mp4"));}
             if state.load(Ordering::SeqCst) == 1 {
@@ -400,6 +404,12 @@ async fn setup() -> (App, Peer) {
         .route("/v2/torrent-runtime-protocol", axum::routing::get(move || { let mode=protocol_mode.clone(); async move { Json(if mode.load(Ordering::SeqCst)==8 { json!({"version":2,"first_frame_ack":false}) } else { json!({"version":2,"first_frame_ack":true}) }) }}))
         .route("/v2/torrent-sessions/:id/first-frame", axum::routing::post(move |Path(id):Path<String>, Json(body):Json<Value>| { let frames=received_frames.clone(); async move { assert_eq!(body,json!({}));frames.lock().unwrap().push(id);StatusCode::NO_CONTENT }}))
         .route("/v1/sessions/:id",axum::routing::get(|Path(id):Path<String>|async move{Json(remote(&id))}).delete(move||{let deleted=deleted.clone();async move{deleted.fetch_add(1,Ordering::SeqCst);StatusCode::NO_CONTENT}}))
+        .route("/v1/sessions/:id/captions",axum::routing::post(move |Path(id):Path<String>,headers:axum::http::HeaderMap,Json(body):Json<Value>|{let received=received_captions.clone();async move {
+            assert!(headers["authorization"].to_str().unwrap().starts_with("Bearer pgk_"));
+            assert!(!headers.contains_key("cookie"));assert_eq!(body.as_object().unwrap().len(),1);
+            received.lock().unwrap().push(body);
+            Json(json!({"url":format!("/media/{id}/pgm_fixture/caption_{}.srt","c".repeat(64)),"format":"srt","timeline_offset_seconds":0.0}))
+        }}))
         .route("/v1/sessions/:id/renew",axum::routing::post(|Path(id):Path<String>|async move{Json(remote(&id))}));
     let task = tokio::spawn(async move {
         axum::serve(listener, routes).await.unwrap();
@@ -407,6 +417,7 @@ async fn setup() -> (App, Peer) {
     (
         app,
         Peer {
+            captions,
             frames,
             inputs,
             outputs,
@@ -1595,3 +1606,6 @@ mod resume_tests;
 
 #[path="discovery_cancel_tests.rs"]
 mod discovery_cancel_tests;
+
+#[path = "playback_caption_tests.rs"]
+mod caption_tests;
