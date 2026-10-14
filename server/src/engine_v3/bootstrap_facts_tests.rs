@@ -82,3 +82,17 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
     assert_eq!(reads.load(Ordering::SeqCst), 0);
     server.abort();
 }
+
+#[tokio::test]
+async fn bootstrap_negotiates_required_audio_api_without_an_extra_request_or_selected_profile() {
+    let app = fixture();
+    for profile in [Some(1_i64), None] {
+        app.db.lock().unwrap().execute("UPDATE auth_sessions SET profile_id=?1 WHERE id='s1'", [profile]).unwrap();
+        let(status,body)=request(&app,"member-token-1","GET","/api/v3/bootstrap",Value::Null).await;
+        assert_eq!(status,StatusCode::OK);
+        assert_eq!(body["playback_capabilities"],json!({"required_audio_index":true}));
+    }
+    let(status,body)=request(&app,"invalid-token","GET","/api/v3/bootstrap",Value::Null).await;
+    assert_eq!(status,StatusCode::UNAUTHORIZED);
+    assert!(body.get("playback_capabilities").is_none());
+}

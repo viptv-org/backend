@@ -140,7 +140,7 @@ pub(crate) async fn bootstrap(
         .map(|s| s.json());
     let axum::Json(management) = profiles::list(State(app), Extension(lease)).await?;
     Ok(axum::Json(
-        json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability}),
+        json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true}}),
     ))
 }
 
