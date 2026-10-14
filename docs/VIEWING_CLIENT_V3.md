@@ -11,10 +11,10 @@ After authentication/profile selection, **one** `GET /api/v3/bootstrap` supplies
 Every `HomeRow` has optional `browse: HomeBrowseAction`, default null for old snapshots. Its exact shape is:
 
 ```json
-{"target":"Discover","query":[{"key":"type","value":"series"},{"key":"catalog","value":"simkl-trending"}]}
+{"target":"Discover","query":[{"id":"type","values":["series"]},{"id":"catalog","values":["simkl-trending"]}]}
 ```
 
-`Discover` query pairs are serialized unchanged into `/api/v3/discover`; a Stremio row also supplies its authoritative `addon_id` (native plans use `connection_id` internally). `Library` uses `/api/v3/profiles/:id/library` and supplies the actual default pairs `source=favorites`, `sort=date_added`, `type=all`, `show=all`. `Continue` uses `/api/v3/profiles/:id/continue`, with an empty query by default. Append only the endpoint's cursor parameter when paging. A missing action means that row has no advertised drill action. Display labels and row IDs are never executable queries.
+`QueryValue` uses `{id,values:string[]}` as generated. Current row actions have one value per field: serialize `id=values[0]` into `/api/v3/discover`; a Stremio row also supplies its authoritative `addon_id` (native plans use `connection_id` internally). `Library` uses `/api/v3/profiles/:id/library` and supplies the actual default pairs `source=favorites`, `sort=date_added`, `type=all`, `show=all`. `Continue` uses `/api/v3/profiles/:id/continue`, with an empty query by default. Append only the endpoint's cursor parameter when paging. A missing action means that row has no advertised drill action. Display labels and row IDs are never executable queries.
 
 Open Browse with `/api/v3/discovery-controls` and `/api/v3/discover`; choices and compatible defaults are host-owned. Text search is one `/api/v3/discover?type=all&search=...` request using the selected metadata owner. Details use `/api/v3/meta/:kind/:id`, initially 24 episodes; automatically load selected-season windows with `offset` and `limit=96` or `128` using the authoritative `seasons` index. [Episode windows](EPISODES_V3.md) define canonical cursors and limits. Related cards and complete featured presentation are included in existing aggregates; no per-card client metadata fanout is needed.
 
@@ -75,3 +75,5 @@ Live uses `GET /api/v3/profiles/:id/live/channels` with advertised connection/gr
 ## Qualification boundary
 
 Focused host fixtures cover scope replacement during metadata IO, canonical 1242-episode next lookup, honest airing statuses, restricted-profile reads/mutations, visibility undo, Next's real history anchor, explicit Home browse queries and both discovery-cancellation grant lifecycles. Full server runtime-feature suite: 405 passed, 10 intentionally ignored. Local trusted HTTPS runtime checks are recorded separately from builds. This is not production deployment, a Roku decoder claim, or evidence that an HTTP200 source contains the requested title.
+
+Read-only trusted-HTTPS qualification on the owned fixture returned bootstrap in 348 ms, twelve continuation entries including eight prepared Next targets, five explicit row actions, and 24 cards from an executed server-authored Discover action. The forty-entry continuation page retained real anchor identities. A Naruto next lookup exactly matched the following authoritative metadata episode. Progress, favorite and tracking receipt counts were unchanged. The existing browser session was reused; no login, user-device approval or playback mutation was needed. These measured warm results are not a cold-latency guarantee.
