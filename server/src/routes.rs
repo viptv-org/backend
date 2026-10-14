@@ -95,6 +95,8 @@ pub fn router_with_tv(
             "/v3/profiles/:id/library/:kind/:item",
             delete(engine_v3::library::remove),
         )
+        .route("/v3/account/devices", get(engine_v3::account_devices::get).delete(engine_v3::account_devices::remove_all))
+        .route("/v3/account/devices/:id", delete(engine_v3::account_devices::remove))
         .route("/v3/discover", get(engine_v3::discover))
         .route("/v3/calendar", get(simkl::calendar::get))
         .route("/v3/discovery-controls", get(engine_v3::discovery_controls))

@@ -5,6 +5,7 @@ use viptv_engine::{
     profile::Scope,
 };
 mod catalog;
+pub(crate) mod account_devices;
 mod bootstrap_facts;
 #[cfg(test)]
 mod bootstrap_facts_tests;
