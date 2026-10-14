@@ -85,6 +85,8 @@ pub(crate) struct Facts {
     platform: Platform,
     #[serde(default)]
     can_play_direct: bool,
+    #[serde(default)]
+    supports_required_audio_index: bool,
     max_width: u32,
     max_height: u32,
     video_codecs: Vec<String>,
@@ -139,6 +141,7 @@ struct Source {
     trackers: Vec<String>,
     requires_torrent_gateway: bool,
     headers: BTreeMap<String, String>,
+    required_audio_index: Option<u32>,
     live: bool,
     provider_id: Option<i64>,
     identity: [u8; 32],
@@ -473,6 +476,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
             trackers,
             requires_torrent_gateway,
             headers,
+            required_audio_index,
             live,
             provider_id,
         ) = {
@@ -502,6 +506,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
                     .iter()
                     .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
                     .collect::<BTreeMap<_, _>>(),
+                entry.required_audio_index,
                 entry.live,
                 entry.provider_id,
             )
@@ -520,6 +525,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
                 account(&proof.lease),
                 url,
                 headers,
+                required_audio_index,
                 live,
                 file_index,
                 info_hash,
@@ -541,6 +547,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
             trackers,
             requires_torrent_gateway,
             headers,
+            required_audio_index,
             live,
             provider_id,
             identity,
@@ -730,6 +737,9 @@ fn core_request(request: &Start) -> Result<viptv_core::dto::PlaybackV2Request, E
     serde_json::to_value(request)
         .and_then(|mut v| {
             if let Some(fields) = v.as_object_mut() { fields.remove("resume"); }
+            // Delivery-only native-player negotiation is outside torrent policy.
+            // The complete request (including this fact) remains in the admission hash.
+            if let Some(fields) = v["client"].as_object_mut() { fields.remove("supports_required_audio_index"); }
             serde_json::from_value(camel(v))
         })
         .map_err(|_| Error::Code("invalid_playback_request"))
@@ -1388,6 +1398,7 @@ async fn start_mode(
         && (!matches!(request.client.platform, Platform::Web | Platform::Webos)
             || (input.url.starts_with("https://") && input.headers.is_empty()));
     let direct = native
+        && (input.required_audio_index.is_none() || request.client.supports_required_audio_index)
         && !request.force_gateway
         && request.conversion == Conversion::Auto
         && request.audio_track.is_none()
@@ -1642,7 +1653,9 @@ async fn prepare(
                 .map_err(ApiError::from)?;
             *entry.permit.lock().unwrap() = Some(permit);
         }
-        json!({"kind":"direct","url":destination.url,"headers":destination.headers,"position":request.position,"timeline_offset_seconds":0.0,"live":source.live,"format":"original","preferences":{"audio_language":request.preferred_audio_language,"subtitle_language":request.preferred_subtitle_language,"subtitles_enabled":request.preferred_subtitle_language.is_some()}})
+        let mut delivery = json!({"kind":"direct","url":destination.url,"headers":destination.headers,"position":request.position,"timeline_offset_seconds":0.0,"live":source.live,"format":"original","preferences":{"audio_language":request.preferred_audio_language,"subtitle_language":request.preferred_subtitle_language,"subtitles_enabled":request.preferred_subtitle_language.is_some()}});
+        if let Some(index) = source.required_audio_index { delivery["required_audio_index"] = json!(index); }
+        delivery
     } else {
         if !request
             .client
@@ -1670,10 +1683,18 @@ async fn prepare(
         )
         .await?;
         validate_entry(&app, &entry).await?;
-        let native_mp4 = request.client.can_play_direct
+        let requires_audio = source.required_audio_index.is_some() && request.audio_track.is_none();
+        let native_mp4_candidate = request.client.can_play_direct
+            && source.required_audio_index.is_none()
             && matches!(request.client.platform,Platform::Android|Platform::AndroidTv|Platform::Desktop)
-            && request.conversion==Conversion::Auto && !source.live && !source.requires_torrent_gateway
-            && app.gateway_client.capabilities(&target.gateway.endpoint,target.key.expose(),&target.gateway.namespace).await?.protocols.iter().any(|p|p=="native_mp4");
+            && request.conversion==Conversion::Auto && !source.live && !source.requires_torrent_gateway;
+        let capabilities = if requires_audio || native_mp4_candidate {
+            Some(app.gateway_client.capabilities(&target.gateway.endpoint,target.key.expose(),&target.gateway.namespace).await?)
+        } else { None };
+        if requires_audio && !capabilities.as_ref().is_some_and(|caps|caps.required_audio_index) {
+            return Err(Error::Code("delivery_unsupported"));
+        }
+        let native_mp4 = native_mp4_candidate && capabilities.as_ref().is_some_and(|caps|caps.protocols.iter().any(|p|p=="native_mp4"));
         if source.requires_torrent_gateway {
             entry.state.lock().unwrap().preparing_gateway = Some(GatewayPreparation {
                 target: target.clone(),
@@ -1687,7 +1708,12 @@ async fn prepare(
         if source.requires_torrent_gateway && !source.trackers.is_empty() {
             input["trackers"] = json!(source.trackers);
         }
-        let body = json!({"namespace":target.gateway.namespace,"input":input,"output":{"protocol":if native_mp4 {"native_mp4"} else {"hls"},"video_codecs":request.client.video_codecs,"audio_codecs":request.client.audio_codecs,"max_width":request.client.max_width,"max_height":request.client.max_height,"audio_track":request.audio_track,"subtitle_track":request.subtitle_track,"conversion":request.conversion,"audio_language":request.audio_language,"preferred_audio_language":request.preferred_audio_language,"preferred_subtitle_language":request.preferred_subtitle_language,"subtitles_off":request.subtitles_off},"position_seconds":request.position});
+        let mut body = json!({"namespace":target.gateway.namespace,"input":input,"output":{"protocol":if native_mp4 {"native_mp4"} else {"hls"},"video_codecs":request.client.video_codecs,"audio_codecs":request.client.audio_codecs,"max_width":request.client.max_width,"max_height":request.client.max_height,"audio_track":request.audio_track,"subtitle_track":request.subtitle_track,"conversion":request.conversion,"audio_language":request.audio_language,"preferred_audio_language":request.preferred_audio_language,"preferred_subtitle_language":request.preferred_subtitle_language,"subtitles_off":request.subtitles_off},"position_seconds":request.position});
+        if request.audio_track.is_none() {
+            if let Some(index) = source.required_audio_index {
+                body["output"]["required_audio_index"] = json!(index);
+            }
+        }
         let value = app
             .gateway_client
             .request(

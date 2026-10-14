@@ -396,7 +396,7 @@ async fn setup() -> (App, Peer) {
         let first=headers.get("authorization").and_then(|value|value.to_str().ok()).is_some_and(|value|value.ends_with('a'));
         let capacity=if mode.load(Ordering::SeqCst)==4 && first{0}else{2};
         let scopes=if mode.load(Ordering::SeqCst)==6 {json!(["capabilities","create"])}else{json!(["capabilities","create","read","renew","release"])};
-        Json(json!({"version":1,"ready":true,"torrent":mode.load(Ordering::SeqCst)!=5,"protocols":if mode.load(Ordering::SeqCst)==9{json!(["hls","native_mp4"])}else{json!(["hls"])},"namespaces":["first","second"],"scopes":scopes,"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
+        Json(json!({"version":1,"ready":true,"torrent":mode.load(Ordering::SeqCst)!=5,"required_audio_index":mode.load(Ordering::SeqCst)!=11,"protocols":if mode.load(Ordering::SeqCst)==9{json!(["hls","native_mp4"])}else{json!(["hls"])},"namespaces":["first","second"],"scopes":scopes,"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
     }}))
         .route("/v1/preparations/:id",axum::routing::get(||async{Json(json!({"stage":"fetching_metadata","private_extra":"never-forward"}))}))
         .route("/v1/sessions", create.clone())
@@ -1609,3 +1609,6 @@ mod discovery_cancel_tests;
 
 #[path = "playback_caption_tests.rs"]
 mod caption_tests;
+
+#[path = "playback_required_audio_tests.rs"]
+mod required_audio_tests;

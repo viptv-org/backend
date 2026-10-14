@@ -252,6 +252,7 @@ pub(crate) struct StreamEntry {
     pub(crate) info_hash: Option<String>,
     pub(crate) requires_torrent_gateway: bool,
     pub(crate) headers: HashMap<String, String>,
+    pub(crate) required_audio_index: Option<u32>,
     pub(crate) created: Instant,
 }
 impl App {

@@ -62,6 +62,17 @@ impl App {
         let mut unsupported_headers = false;
         let mut entries = self.streams.lock().unwrap();
         for r in raw.into_iter().take(100) {
+            // Only the host SDK producer authors this requirement. An add-on
+            // cannot use a display field to acquire a different playback policy.
+            let required_audio_index = if source.starts_with("vsources:") {
+                match r.get("required_audio_index").filter(|value| !value.is_null()) {
+                    Some(value) => match value.as_u64().filter(|index| *index <= 65535) {
+                        Some(index) => Some(index as u32),
+                        None => { unsupported += 1; continue; }
+                    },
+                    None => None,
+                }
+            } else { None };
             let Some(input) = input::Input::parse(&r, source.starts_with("addon:"), kind == "live")
             else {
                 unsupported += 1;
@@ -149,6 +160,9 @@ impl App {
             if source.starts_with("addon:") || source.starts_with("iptv:") || source.starts_with("vsources:") {
                 public["source_addon_id"] = json!(source);
             }
+            if let Some(index) = required_audio_index {
+                identity = json!([identity, index]);
+            }
             public["source_fingerprint"] = json!(format!(
                 "{:x}",
                 Sha256::digest(identity.to_string().as_bytes())
@@ -179,6 +193,7 @@ impl App {
                     info_hash: input.info_hash.clone(),
                     requires_torrent_gateway: input.requires_gateway,
                     headers,
+                    required_audio_index,
                     created: Instant::now(),
                 },
             );

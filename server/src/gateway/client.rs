@@ -74,6 +74,8 @@ pub(crate) struct Capabilities {
     pub ready: bool,
     #[serde(default)]
     pub torrent: bool,
+    #[serde(default)]
+    pub required_audio_index: bool,
     pub protocols: Vec<String>,
     pub namespaces: Vec<String>,
     #[serde(default)]

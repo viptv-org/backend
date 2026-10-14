@@ -11,6 +11,7 @@ use url::Url;
 use vsources::error::FetchError;
 use vsources::traits::{FetchRequest, FetchResponse, Fetcher, ProbeResponse};
 use vsources::{MediaId, MediaRef, MediaType};
+pub use vsources::Stream as SdkStream;
 
 /// Canonical metadata IDs are authoritative. Opaque title IDs and title text are never parsed.
 pub fn media_ref(
@@ -217,7 +218,7 @@ fn publish_new(
         {
             continue;
         }
-        let key = serde_json::to_string(&(stream.url.as_str(), &stream.meta.request_headers))
+        let key = serde_json::to_string(&(stream.url.as_str(), &stream.meta.request_headers, &stream.meta.audio_selection))
             .unwrap_or_default();
         if seen.insert(key) {
             batch.push(stream);
@@ -239,6 +240,24 @@ mod tests {
             episode: None,
             edition: None,
         }
+    }
+    #[test]
+    fn distinct_required_audio_selections_are_not_deduplicated_as_same_source() {
+        let mut first = vsources::Stream::new(
+            Url::parse("https://media.example/master.m3u8").unwrap(),
+            vsources::types::Format::Hls,
+        );
+        first.meta.audio_selection = Some(vsources::types::AudioSelection {
+            language: vsources::types::CountryCode::En, audio_index: 1,
+        });
+        let mut second = first.clone();
+        second.meta.audio_selection.as_mut().unwrap().audio_index = 2;
+        let mut seen = std::collections::HashSet::new();
+        let mut output = Vec::new();
+        publish_new(vec![first.clone(), second, first], &mut seen, &mut |batch| output.extend(batch));
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0].meta.audio_selection.as_ref().unwrap().audio_index, 1);
+        assert_eq!(output[1].meta.audio_selection.as_ref().unwrap().audio_index, 2);
     }
     #[test]
     fn canonical_mapping_requires_exact_parent_episode_and_rejects_private_addresses() {
