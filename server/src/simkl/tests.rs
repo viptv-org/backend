@@ -141,6 +141,7 @@ mod token_revocation;
 mod history_clear;
 
 mod watchlists;
+mod import_continuation;
 
 mod episode_pages;
 

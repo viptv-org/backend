@@ -1,7 +1,10 @@
 //! Profile-scoped, read-only remote import into the existing library and history.
 use super::*;
+mod aliases;
 mod history;
+pub(crate) use aliases::remote as remote_identity;
 mod membership;
+mod next;
 mod original;
 mod paused;
 mod progress;

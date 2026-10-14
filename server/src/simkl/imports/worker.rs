@@ -116,5 +116,6 @@ pub(super) async fn run(
         }
         tx.commit().map_err(db_error)?;
     }
+    status.unresolved += next::batch(app, lease, profile, access, &entries).await;
     Ok(status)
 }

@@ -62,14 +62,16 @@ pub(super) async fn detail(
     offset: usize,
     limit:Option<usize>,
 ) -> ApiResult {
-    let parts: Vec<_> = id.split(':').collect();
+    let mapped=if id.starts_with("simkl:"){None}else{crate::simkl::imports::remote_identity(&app,profile,&kind,&id)?};
+    let lookup=mapped.as_deref().unwrap_or(&id);
+    let parts: Vec<_> = lookup.split(':').collect();
     let ["simkl", category, title] = parts.as_slice() else {
         return Err("A Simkl title identity is required".into());
     };
     let title = title
         .parse::<u64>()
         .map_err(|_| ApiError::from("Invalid Simkl title identity"))?;
-    let axum::Json(value) = crate::simkl::detail(
+    let axum::Json(mut value) = crate::simkl::detail(
         State(app),
         Extension(lease),
         Path((profile, category.to_string(), title)),
@@ -78,6 +80,17 @@ pub(super) async fn detail(
     .await?;
     if value["item"]["identity"]["kind"].as_str() != Some(kind.as_str()) {
         return Err("Simkl title type does not match".into());
+    }
+    if mapped.is_some() {
+        let mut detail: viptv_engine::presentation::DetailSnapshot=serde_json::from_value(value).map_err(|_|ApiError::from("Invalid mapped detail"))?;
+        if !detail.item.identity.ids.iter().any(|external|external.namespace=="imdb"&&external.value==id){return Err(ApiError(StatusCode::UNPROCESSABLE_ENTITY,"Verified title mapping changed".into()));}
+        detail.item.identity.id=id.clone();
+        for episode in &mut detail.episodes {
+            let coordinates=episode.identity.episode.as_ref().ok_or_else(||ApiError::from("Invalid mapped episode"))?;
+            let season=coordinates.season.ok_or_else(||ApiError::from("Invalid mapped season"))?;
+            episode.identity.id=format!("{id}:{season}:{}",coordinates.episode);episode.parent_identity=Some(detail.item.identity.clone());
+        }
+        value=serde_json::to_value(detail).map_err(|_|ApiError::from("Invalid mapped detail"))?;
     }
     Ok(axum::Json(value))
 }

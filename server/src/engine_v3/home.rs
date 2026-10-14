@@ -49,8 +49,17 @@ pub(super) async fn load(
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(super::history::record)
-        .map(|record| record.card())
+        .filter_map(|item| {
+            let record=super::history::record(item)?;
+            let mut card=record.card();
+            if item["queue_status"]=="next" {
+                if let Ok(verified)=serde_json::from_value::<viptv_engine::presentation::Card>(item["engine_presentation"].clone()) {
+                    if verified.identity==card.identity {card=viptv_engine::presentation::enrich_card(&card,&verified);card.metadata=verified.metadata;card.subtitle=verified.subtitle;}
+                }
+                card.progress=None;
+            }
+            Some(card)
+        })
         .collect();
     let mut requests = vec![
         RowRequest {
@@ -192,7 +201,7 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
                 .as_ref()
                 .unwrap_or(&card.identity)
                 .id
-                .starts_with("simkl:")
+                .starts_with("simkl:") || crate::simkl::imports::remote_identity(&app,profile,&card.parent_identity.as_ref().unwrap_or(&card.identity).kind,&card.parent_identity.as_ref().unwrap_or(&card.identity).id).ok().flatten().is_some()
             {
                 crate::simkl::home_metadata(&app, profile, card.clone())
                     .await

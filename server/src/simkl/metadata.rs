@@ -223,7 +223,9 @@ pub(crate) async fn home_metadata(
         .parent_identity
         .as_ref()
         .unwrap_or(&original.identity);
-    let parts = identity.id.split(':').collect::<Vec<_>>();
+    let mapped=if identity.id.starts_with("simkl:"){None}else{imports::remote_identity(app,profile,&identity.kind,&identity.id)?};
+    let lookup=mapped.as_deref().unwrap_or(&identity.id);
+    let parts = lookup.split(':').collect::<Vec<_>>();
     let ["simkl", category, id] = parts.as_slice() else {
         return Ok(original);
     };
@@ -232,9 +234,13 @@ pub(crate) async fn home_metadata(
         .map_err(|_| ApiError::from("Invalid Simkl identity"))?;
     let access = store::credential(app, profile, Capability::Metadata)?;
     let detail = title(app, profile, &access, category, id).await?;
-    let detail = allowed(app, vec![detail])?
+    let mut detail = allowed(app, vec![detail])?
         .into_iter()
         .next()
         .ok_or_else(auth::forbidden)?;
+    if mapped.is_some() {
+        if !detail.identity.ids.iter().any(|external|external.namespace=="imdb"&&external.value==identity.id){return Err(ApiError::from("Verified title mapping changed"));}
+        detail.identity.id=identity.id.clone();
+    }
     Ok(detail)
 }
