@@ -124,8 +124,8 @@ mod oauth;
 
 mod revocation;
 
-mod discovery;
 mod calendar_browse;
+mod discovery;
 
 mod mapping;
 
@@ -140,9 +140,11 @@ mod token_revocation;
 
 mod history_clear;
 
-mod watchlists;
 mod import_continuation;
+mod watchlists;
 
 mod episode_pages;
 
 mod large_episode_pages;
+
+mod continuation_v3;

@@ -17,8 +17,8 @@ pub(crate) struct Service {
         tokio::sync::Mutex<std::collections::HashMap<String, (Instant, Arc<Value>)>>,
     pub(super) metadata: super::cache::Cache,
     pub(super) imports: super::imports::Jobs,
-    pub(super) watchlists:super::watchlists::Cache,
-    pub(super) watchlist_metadata_limit:tokio::sync::Semaphore,
+    pub(super) watchlists: super::watchlists::Cache,
+    pub(super) watchlist_metadata_limit: tokio::sync::Semaphore,
     pub(super) tracking: super::automatic::Queue,
     startup_warming: std::sync::atomic::AtomicBool,
     next: tokio::sync::Mutex<tokio::time::Instant>,
@@ -53,6 +53,7 @@ impl Service {
         let rows = [("movies", "movie"), ("tv", "tv"), ("anime", "anime")]
             .into_iter()
             .map(|(key, category)| viptv_engine::presentation::HomeRow {
+                browse: None,
                 id: format!("simkl:{category}:trending"),
                 title: "Trending".into(),
                 provider_id: "simkl".into(),
@@ -157,9 +158,9 @@ impl Service {
             trending: Default::default(),
             public_documents: Default::default(),
             metadata: Default::default(),
-            watchlists:Default::default(),
-            imports:Default::default(),
-            watchlist_metadata_limit:tokio::sync::Semaphore::new(3),
+            watchlists: Default::default(),
+            imports: Default::default(),
+            watchlist_metadata_limit: tokio::sync::Semaphore::new(3),
             tracking: Default::default(),
             startup_warming: std::sync::atomic::AtomicBool::new(false),
             next: tokio::sync::Mutex::new(tokio::time::Instant::now()),

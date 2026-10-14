@@ -129,12 +129,16 @@ pub(crate) fn enrich(
     profile: i64,
     card: &mut viptv_engine::presentation::Card,
 ) -> Result<(), ApiError> {
+    let target = card
+        .parent_identity
+        .as_ref()
+        .unwrap_or(&card.identity)
+        .clone();
     let mut query=db.prepare("SELECT card FROM simkl_import_entries WHERE profile_id=?1 AND local_kind=?2 AND local_id=?3 ORDER BY remote_id").map_err(db_error)?;
     for value in query
-        .query_map(
-            params![profile, card.identity.kind, card.identity.id],
-            |r| r.get::<_, String>(0),
-        )
+        .query_map(params![profile, target.kind, target.id], |r| {
+            r.get::<_, String>(0)
+        })
         .map_err(db_error)?
     {
         if let Ok(metadata) =

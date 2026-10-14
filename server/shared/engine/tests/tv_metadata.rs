@@ -69,7 +69,7 @@ fn initial_hero_is_trending_and_never_personal_even_if_only_personal_rows_exist(
         )
         .unwrap()
     };
-    let row = |id: &str, provider: &str, card: Card| HomeRow {
+    let row = |id: &str, provider: &str, card: Card| HomeRow {browse:None,
         id: id.into(),
         title: id.into(),
         provider_id: provider.into(),
@@ -133,7 +133,7 @@ fn five_featured_titles_round_robin_trending_categories_and_exclude_personal_row
         )
         .unwrap()
     };
-    let row = |id: &str, provider: &str, cards: Vec<Card>| HomeRow {
+    let row = |id: &str, provider: &str, cards: Vec<Card>| HomeRow {browse:None,
         id: id.into(),
         title: id.into(),
         provider_id: provider.into(),
@@ -200,7 +200,7 @@ fn featured_titles_are_unique_never_live_or_episodes_and_old_home_payloads_defau
         Some("https://image.example/live.png".into()),
         "live".into(),
     );
-    let row = HomeRow {
+    let row = HomeRow {browse:None,
         id: "provider:top".into(),
         title: "Trending".into(),
         provider_id: "provider".into(),
@@ -218,7 +218,7 @@ fn featured_titles_are_unique_never_live_or_episodes_and_old_home_payloads_defau
 #[cfg(feature="runtime")]
 #[test]
 fn featured_shortlist_prefers_real_artwork_mapping_without_fetching_every_title(){
- let unknown=simkl::card(&json!({"title":"Unmapped","ids":{"simkl":1},"fanart":"12/345"}),"anime").unwrap();let known=simkl::card(&json!({"title":"Mapped","ids":{"simkl":2,"imdb":"tt123"},"fanart":"12/345"}),"anime").unwrap();let row=HomeRow{id:"simkl:anime:trending".into(),title:"Trending Anime".into(),provider_id:"simkl".into(),state:RowState::Ready,cards:vec![unknown,known],next_cursor:None,message:None};let featured=viptv_engine::home::select_featured(&[row]);assert_eq!(featured[0].title,"Mapped");assert_eq!(featured.len(),2);
+ let unknown=simkl::card(&json!({"title":"Unmapped","ids":{"simkl":1},"fanart":"12/345"}),"anime").unwrap();let known=simkl::card(&json!({"title":"Mapped","ids":{"simkl":2,"imdb":"tt123"},"fanart":"12/345"}),"anime").unwrap();let row=HomeRow {browse:None,id:"simkl:anime:trending".into(),title:"Trending Anime".into(),provider_id:"simkl".into(),state:RowState::Ready,cards:vec![unknown,known],next_cursor:None,message:None};let featured=viptv_engine::home::select_featured(&[row]);assert_eq!(featured[0].title,"Mapped");assert_eq!(featured.len(),2);
 }
 #[test]
 fn trending_structured_release_date_and_runtime_normalize_without_extra_detail_requests(){

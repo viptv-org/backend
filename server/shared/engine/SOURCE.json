@@ -1,15 +1,17 @@
 {
   "repository": "https://github.com/viptv-org/core",
-  "revision": "701e444a33c08e0d70058a4c6b56e66acbc87c83",
+  "revision": "a7495e753ba9bdace3eb83d7cf99d86b9ed7f200",
   "path": "crates/viptv-engine",
   "manifest_transform": "viptv-provider path ../../provider",
   "files": {
     "Cargo.toml": "f6615d130dfbf592cb4a99f984e406ff842237d1bce07238a81815e682e852e8",
     "src/capabilities.rs": "79905a097058b43742381c916958c0d88a2ff878d55139d08c2b94e40baa3656",
+    "src/continuation.rs": "6d28b8d542f0a47ec72360c3f78ba5549f8db421ecaeb1a236077b95e709eef2",
     "src/egress.rs": "da6a756c86afc810c784fe26da8b668894de4dbbf129460d7ae0a0d7e2295ef1",
-    "src/home.rs": "30f88113a2455116bfe451158a83fde202f83457bf0ac357298030fd9daa9b8f",
+    "src/home.rs": "bbc3a1f5e461fd1defd53aac5230c4d0c281d5c6da26aae718a6ce9d2b757ab3",
+    "src/home_browse.rs": "747615ea4f61848e03a70bb6fc40a02ac4c3f8cee7089ab4cd9c552ffd155ac5",
     "src/identity.rs": "cccd856e2f472c535a7e2c55717a421cc0f977b1a02e1ac828118cd3841a48e1",
-    "src/lib.rs": "b44b75325fdac0f83628a0de5b0d2a46390baec0003b06b5a8a295014c9958b4",
+    "src/lib.rs": "06ad4415236fe1558be4c29723e69d8f241ed5eae05aca85ff45c3a45eaa3acd",
     "src/library/controls.rs": "c6d3c985b94960191f69d17ba90f2388c7d69a96ba3e062768e11b71fbbc430a",
     "src/library/project.rs": "fc7154920ba14c2e5d63b6627f8fa9a1fb13b1966b2b8af88c2af6b57378142a",
     "src/library/query.rs": "17370c291a7e56dadf781b3e47a686821053f42a73fe5f42ba82352f9a4da2d4",
@@ -21,7 +23,7 @@
     "src/playback.rs": "7a06bf0163b0a1c828d59440462845d249768058bfcb7b49699aaaccfd611f0a",
     "src/preferences.rs": "c9fa78a82543b17e98ff4de5a385e1377c9f1c7a8c38e38a20618c15a35de6b1",
     "src/presentation/episodes.rs": "15d891362f0d60b885778fa7355a4557d84e93c497cf22dddd27c5e4054f6863",
-    "src/presentation.rs": "0669cf16930a7dbfbb3f0ad4e0955f908d22a535ea7a7cb31e0ed60548930da1",
+    "src/presentation.rs": "3b1450aceb87786559219bafb9401eccaea1cc5420b2a174afa8935d9d0faa3b",
     "src/profile.rs": "d181bb662293562dc2cf9ba3d97cb3730499232924178f3546b60e99f74ffe48",
     "src/query.rs": "4441aaf57e0aebef9bab17896977c9f94116d79b364c1c5d73188d43d264196f",
     "src/registry.rs": "f4b54e9d7a3236f556daf3f348d6122e9eb538bf2c240ca7b8350dc4f37154fd",
@@ -48,6 +50,7 @@
     "src/stremio.rs": "db62942f2d5935f75ea7af4905ef3da61bf72c54bf2394873a28572b1b0a3c85",
     "src/vsources_runtime.rs": "d77d68692a3a9363aa58e076598cb5a75a7946db887d3049bf57dfa0ff9d6821",
     "tests/catalog_cache.rs": "2073e5b34bde48b6e5cda0426e80a3eb4a5e2e016384f57cd4280c5db4e1b142",
+    "tests/continuation.rs": "90b2d1323e02c5d52382706b2a88ca81de71c2e6d1b865f9e0837d66c6854129",
     "tests/engine.rs": "5d94df3b117b30301622c36cacdb5eafd7734adf1be9d92a91ab1bf743859ee0",
     "tests/history.rs": "4db38966b7ef8585f7da0041b8ef7c5d02aac71cb4b1ee7ab61bbc168f3eee23",
     "tests/library.rs": "5019dea51f058c909a9234198e3c048fdf478fe85517026f6c7da4c00ac1e3bd",
@@ -59,7 +62,7 @@
     "tests/streams.rs": "62da24b7667de0b508c284fecead4067f53783527038bf6965a9356916013c5d",
     "tests/stremio.rs": "1837d51877aabed1005ed06a8d86cd0383b6b16802ad57f0298c2ec7dec045b9",
     "tests/subtitles.rs": "8ec84003da01f4aa1c404971678c7d96796e9bf50b6547408f3409e52da20386",
-    "tests/tv_metadata.rs": "23493a821536dcc50e7b64ece154eceec802771996e0fc7c566658c5baf12717"
+    "tests/tv_metadata.rs": "e74b5e96aa20ced7451d7f6cb94de00bb7e06fd047533628b51f627c31ceb436"
   },
   "working_tree_changes": false
 }

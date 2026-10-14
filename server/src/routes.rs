@@ -13,25 +13,74 @@ pub fn router_with_tv(
     tv_dashboard: Option<std::path::PathBuf>,
 ) -> Router {
     let api = Router::new()
-        .route("/v3/profiles/:id/source-integrations",get(engine_v3::source_integrations::schemas).put(engine_v3::source_integrations::configure))
-        .route("/v3/profiles/:id/source-integrations/:connection",delete(engine_v3::source_integrations::remove))
-        .route("/v3/profiles/:id/library/membership",get(engine_v3::library::membership::get))
-        .route("/v3/profiles/:id/imports/simkl",get(simkl::imports::read).post(simkl::imports::read))
-        .route("/v3/profiles/:id/preferences",get(engine_v3::preferences::get).put(engine_v3::preferences::update))
-        .route("/v3/profiles/:id/source-ranking",post(engine_v3::source_ranking::rank))
-        .route("/v3/profiles/:id/live/channels",get(engine_v3::live::channels))
-        .route("/v3/profiles/:id/live/:channel/guide",get(engine_v3::live::guide))
-        .route("/v3/profiles/:id/live/:channel/sources",post(engine_v3::live::sources))
+        .route(
+            "/v3/profiles/:id/source-integrations",
+            get(engine_v3::source_integrations::schemas)
+                .put(engine_v3::source_integrations::configure),
+        )
+        .route(
+            "/v3/profiles/:id/source-integrations/:connection",
+            delete(engine_v3::source_integrations::remove),
+        )
+        .route(
+            "/v3/profiles/:id/library/membership",
+            get(engine_v3::library::membership::get),
+        )
+        .route(
+            "/v3/profiles/:id/imports/simkl",
+            get(simkl::imports::read).post(simkl::imports::read),
+        )
+        .route(
+            "/v3/profiles/:id/preferences",
+            get(engine_v3::preferences::get).put(engine_v3::preferences::update),
+        )
+        .route(
+            "/v3/profiles/:id/source-ranking",
+            post(engine_v3::source_ranking::rank),
+        )
+        .route(
+            "/v3/profiles/:id/live/channels",
+            get(engine_v3::live::channels),
+        )
+        .route(
+            "/v3/profiles/:id/live/:channel/guide",
+            get(engine_v3::live::guide),
+        )
+        .route(
+            "/v3/profiles/:id/live/:channel/sources",
+            post(engine_v3::live::sources),
+        )
         .route("/v3/bootstrap", get(engine_v3::bootstrap))
-        .route("/v3/profiles",get(engine_v3::profiles::list).post(engine_v3::profiles::create))
-        .route("/v3/profiles/:id",axum::routing::patch(engine_v3::profiles::update).delete(delete_profile_authenticated))
-        .route("/v3/profiles/:id/pin",get(engine_v3::profiles::pin_status).put(engine_v3::profiles::unsupported_pin))
-        .route("/v3/parent/status",get(kids::status))
-        .route("/v3/parent/unlock",post(kids::unlock))
-        .route("/v3/parent/pin",axum::routing::put(kids::set_pin))
+        .route(
+            "/v3/profiles",
+            get(engine_v3::profiles::list).post(engine_v3::profiles::create),
+        )
+        .route(
+            "/v3/profiles/:id",
+            axum::routing::patch(engine_v3::profiles::update).delete(delete_profile_authenticated),
+        )
+        .route(
+            "/v3/profiles/:id/pin",
+            get(engine_v3::profiles::pin_status).put(engine_v3::profiles::unsupported_pin),
+        )
+        .route("/v3/parent/status", get(kids::status))
+        .route("/v3/parent/unlock", post(kids::unlock))
+        .route("/v3/parent/pin", axum::routing::put(kids::set_pin))
         .route(
             "/v3/profiles/:id/integrations",
             get(engine_v3::configuration::get).put(engine_v3::configuration::update),
+        )
+        .route(
+            "/v3/profiles/:id/continue",
+            get(engine_v3::continuation::get),
+        )
+        .route(
+            "/v3/profiles/:id/continue/next",
+            post(engine_v3::continuation::resolve),
+        )
+        .route(
+            "/v3/profiles/:id/continue/visibility",
+            axum::routing::put(engine_v3::continuation::update),
         )
         .route("/v3/profiles/:id/home", get(engine_v3::home))
         .route(
@@ -130,7 +179,10 @@ pub fn router_with_tv(
                 .post(provider::refresh_v2::request)
                 .delete(provider::refresh_v2::cancel),
         )
-        .route("/v2/streams/:id", get(provider::discovery_v2::poll).delete(provider::discovery_v2::cancel))
+        .route(
+            "/v2/streams/:id",
+            get(provider::discovery_v2::poll).delete(provider::discovery_v2::cancel),
+        )
         .route("/v2/iptv/guide/:id", get(provider::discovery_v2::guide))
         .route(
             "/v2/iptv/live/:id/source",
@@ -266,7 +318,10 @@ pub fn router_with_tv(
         .layer(middleware::from_fn(gateway::diagnostics::observe))
         .layer(middleware::from_fn(images::negotiate));
     let mut r = Router::new()
-        .route("/api/v3/images/simkl/:folder/*asset",get(images::get).options(images::options))
+        .route(
+            "/api/v3/images/simkl/:folder/*asset",
+            get(images::get).options(images::options),
+        )
         .nest("/api", api)
         .route(
             "/api/v3/simkl/callback",

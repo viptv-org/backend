@@ -5,32 +5,33 @@ use viptv_engine::{
     profile::Scope,
 };
 mod catalog;
+mod controls;
 pub(crate) mod live;
 pub(crate) mod source_integrations;
-mod controls;
 pub(crate) use controls::get as discovery_controls;
 pub(crate) mod configuration;
+pub(crate) mod continuation;
 pub(crate) mod history;
 mod home;
 pub(crate) mod library;
 pub(crate) mod library_stats;
 #[cfg(test)]
 mod library_tests;
-mod projection;
-pub(crate) mod profiles;
 pub(crate) mod preferences;
-pub(crate) mod source_ranking;
 #[cfg(test)]
 mod profile_tests;
+pub(crate) mod profiles;
+mod projection;
 mod simkl_catalog;
+pub(crate) mod source_ranking;
 pub(crate) mod subtitles;
 pub(crate) use catalog::{detail, discover};
 #[cfg(test)]
 mod history_tests;
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod source_integration_tests;
+#[cfg(test)]
+mod tests;
 
 pub(crate) async fn bootstrap(
     State(app): State<App>,
@@ -53,9 +54,49 @@ pub(crate) async fn bootstrap(
     } else {
         None
     };
-    let bootstrap_library=if let Some(profile)=profile_id{Some(library::list(State(app.clone()),Extension(lease.clone()),Path(profile),axum::extract::Query(library::Page{offset:0,limit:100,..Default::default()})).await?.0)}else{None};
-    let membership=profile_id.map(|profile|library::membership::snapshot(&app.clone().with_lease(lease.clone()),&lease,profile)).transpose()?;
-    let bootstrap_preferences=if let Some(profile)=profile_id{Some(preferences::get(State(app.clone()),Extension(lease.clone()),Path(profile)).await?.0)}else{None};
+    let bootstrap_library = if let Some(profile) = profile_id {
+        Some(
+            library::list(
+                State(app.clone()),
+                Extension(lease.clone()),
+                Path(profile),
+                axum::extract::Query(library::Page {
+                    offset: 0,
+                    limit: 100,
+                    ..Default::default()
+                }),
+            )
+            .await?
+            .0,
+        )
+    } else {
+        None
+    };
+    let membership = profile_id
+        .map(|profile| {
+            library::membership::snapshot(&app.clone().with_lease(lease.clone()), &lease, profile)
+        })
+        .transpose()?;
+    let continuation = profile_id
+        .map(|profile| {
+            continuation::snapshot(
+                &app.clone().with_lease(lease.clone()),
+                &lease,
+                profile,
+                0,
+                12,
+            )
+        })
+        .transpose()?;
+    let bootstrap_preferences = if let Some(profile) = profile_id {
+        Some(
+            preferences::get(State(app.clone()), Extension(lease.clone()), Path(profile))
+                .await?
+                .0,
+        )
+    } else {
+        None
+    };
     lease.validate(
         &*app
             .db
@@ -76,10 +117,20 @@ pub(crate) async fn bootstrap(
             integrations.push(simkl);
         }
     }
-    if cfg!(feature="vsources-runtime") && app.secret_vault.is_some(){if let Some(plugin)=builtins().into_iter().find(|p|p.id=="vsources"){integrations.push(plugin);}}
-    let import=profile_id.and_then(|profile|crate::simkl::imports::schedule(&app.clone().with_lease(lease.clone()),&lease,profile)).map(|s|s.json());
-    let axum::Json(management)=profiles::list(State(app),Extension(lease)).await?;
-    Ok(axum::Json(json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership})))
+    if cfg!(feature = "vsources-runtime") && app.secret_vault.is_some() {
+        if let Some(plugin) = builtins().into_iter().find(|p| p.id == "vsources") {
+            integrations.push(plugin);
+        }
+    }
+    let import = profile_id
+        .and_then(|profile| {
+            crate::simkl::imports::schedule(&app.clone().with_lease(lease.clone()), &lease, profile)
+        })
+        .map(|s| s.json());
+    let axum::Json(management) = profiles::list(State(app), Extension(lease)).await?;
+    Ok(axum::Json(
+        json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation}),
+    ))
 }
 
 pub(crate) async fn home(

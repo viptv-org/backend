@@ -50,6 +50,8 @@ pub enum RowState {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct HomeRow {
+    #[serde(default)]
+    pub browse: Option<crate::home_browse::HomeBrowseAction>,
     pub id: String,
     pub title: String,
     pub provider_id: String,

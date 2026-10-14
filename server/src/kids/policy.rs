@@ -109,16 +109,36 @@ fn decide_request(
         app.request_lease().validate(&db)?;
         let p = app.identity();
         match parts.as_slice() {
-            ["parent", ..] | ["v3","parent",..] => return Ok(PolicyDecision::Pass),
-            ["v3","bootstrap"] if method==axum::http::Method::GET => return Ok(PolicyDecision::Pass),
-            ["v3","profiles"] | ["v3","profiles",_] | ["v3","profiles",_,"pin"] => return Ok(PolicyDecision::Pass),
-            ["v3", "calendar" | "discovery-controls"] if method == axum::http::Method::GET => return Ok(PolicyDecision::Pass),
+            ["parent", ..] | ["v3", "parent", ..] => return Ok(PolicyDecision::Pass),
+            ["v3", "bootstrap"] if method == axum::http::Method::GET => {
+                return Ok(PolicyDecision::Pass)
+            }
+            ["v3", "profiles"] | ["v3", "profiles", _] | ["v3", "profiles", _, "pin"] => {
+                return Ok(PolicyDecision::Pass)
+            }
+            ["v3", "calendar" | "discovery-controls"] if method == axum::http::Method::GET => {
+                return Ok(PolicyDecision::Pass)
+            }
             ["v3", "profiles", _, "library"]
                 if method == axum::http::Method::GET || method == axum::http::Method::PUT =>
             {
                 return Ok(PolicyDecision::Pass)
             }
             ["v3", "profiles", _, "library", _, _] if method == axum::http::Method::DELETE => {
+                return Ok(PolicyDecision::Pass)
+            }
+            ["v3", "profiles", _, "continue"] if method == axum::http::Method::GET => {
+                return Ok(PolicyDecision::Pass)
+            }
+            ["v3", "profiles", _, "continue", "next"] if method == axum::http::Method::POST => {
+                return Ok(PolicyDecision::Pass)
+            }
+            ["v3", "profiles", _, "continue", "visibility"]
+                if method == axum::http::Method::PUT =>
+            {
+                return Ok(PolicyDecision::Pass)
+            }
+            ["v3", "profiles", _, "library", "membership"] if method == axum::http::Method::GET => {
                 return Ok(PolicyDecision::Pass)
             }
             ["v3", "profiles", _, "history"]

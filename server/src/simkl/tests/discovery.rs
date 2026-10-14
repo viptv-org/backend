@@ -46,6 +46,21 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
         1,
         "one public document shared by three Home rows"
     );
+    for (provider_kind, query_kind) in [("movie", "movie"), ("tv", "series"), ("anime", "anime")] {
+        let row = rows
+            .iter()
+            .find(|r| r["id"] == format!("simkl:{provider_kind}:trending"))
+            .unwrap();
+        assert_eq!(row["browse"]["target"], "Discover");
+        let query = row["browse"]["query"].as_array().unwrap();
+        assert!(query
+            .iter()
+            .any(|v| v["id"] == "type" && v["values"][0] == query_kind));
+        assert!(query
+            .iter()
+            .any(|v| v["id"] == "catalog" && v["values"][0] == "simkl-trending"));
+    }
+
     for (path, title) in [
         ("/api/v3/discover?type=movie", "Trending Movie"),
         ("/api/v3/discover?type=movie&search=Movie", "Search Movie"),

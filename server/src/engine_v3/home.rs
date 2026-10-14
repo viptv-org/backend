@@ -1,6 +1,6 @@
 use super::*;
 use viptv_engine::{
-    home::{RowRequest, assemble},
+    home::{assemble, RowRequest},
     presentation::HomeSnapshot,
 };
 
@@ -16,14 +16,14 @@ pub(super) async fn load(
         profile,
         viptv_engine::capabilities::Capability::Discovery,
     )?;
-    crate::simkl::imports::schedule(&app,&lease,profile);
+    crate::simkl::imports::schedule(&app, &lease, profile);
     let (queue, favorites, revision) = {
         let db = app
             .db
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?;
         app.require_profile(&db, profile)?;
-        let mut queue = continuation::queue(&db, profile, 0, 12)?;
+        let mut queue = crate::continuation::queue(&db, profile, 0, 12)?;
         queue["items"] = json!(kids::filter_items(
             &db,
             &app.identity(),
@@ -50,17 +50,33 @@ pub(super) async fn load(
         .into_iter()
         .flatten()
         .filter_map(|item| {
-            let record=super::history::record(item)?;
-            let mut card=record.card();
-            if item["queue_status"]=="next" {
-                if let Ok(verified)=serde_json::from_value::<viptv_engine::presentation::Card>(item["engine_presentation"].clone()) {
-                    if verified.identity==card.identity {card=viptv_engine::presentation::enrich_card(&card,&verified);card.metadata=verified.metadata;card.subtitle=verified.subtitle;}
+            let record = super::history::record(item)?;
+            let mut card = record.card();
+            if item["queue_status"] == "next" {
+                if let Ok(verified) = serde_json::from_value::<viptv_engine::presentation::Card>(
+                    item["engine_presentation"].clone(),
+                ) {
+                    if verified.identity == card.identity {
+                        card = viptv_engine::presentation::enrich_card(&card, &verified);
+                        card.metadata = verified.metadata;
+                        card.subtitle = verified.subtitle;
+                    }
                 }
-                card.progress=None;
+                card.progress = None;
             }
             Some(card)
         })
         .collect();
+    let mut browse_actions = HashMap::from([
+        (
+            "continue".to_owned(),
+            viptv_engine::home_browse::HomeBrowseAction::continuation(),
+        ),
+        (
+            "favorites".to_owned(),
+            viptv_engine::home_browse::HomeBrowseAction::library(),
+        ),
+    ]);
     let mut requests = vec![
         RowRequest {
             id: "continue".into(),
@@ -82,8 +98,17 @@ pub(super) async fn load(
             ("anime", "Simkl Trending Anime"),
         ] {
             let task_app = app.clone();
+            let row_id = format!("simkl:{category}:trending");
+            browse_actions.insert(
+                row_id.clone(),
+                viptv_engine::home_browse::HomeBrowseAction::discover(
+                    if category == "tv" { "series" } else { category },
+                    "simkl-trending",
+                    None,
+                ),
+            );
             requests.push(RowRequest {
-                id: format!("simkl:{category}:trending"),
+                id: row_id,
                 title: title.into(),
                 provider_id: "simkl".into(),
                 load: Box::pin(crate::simkl::home_cards(task_app, profile, category)),
@@ -102,8 +127,17 @@ pub(super) async fn load(
         };
         let provider = format!("addon:{addon}");
         let task_app = app.clone();
+        let row_id = format!("{provider}:{kind}:{catalog}");
+        browse_actions.insert(
+            row_id.clone(),
+            viptv_engine::home_browse::HomeBrowseAction::discover(
+                &kind,
+                &catalog,
+                Some(("addon_id", addon.to_string())),
+            ),
+        );
         requests.push(RowRequest {
-            id: format!("{provider}:{kind}:{catalog}"),
+            id: row_id,
             title: c["name"].as_str().unwrap_or(&catalog).to_owned(),
             provider_id: provider.clone(),
             load: Box::pin(async move {
@@ -139,6 +173,7 @@ pub(super) async fn load(
         enrich(&metadata_app, profile, &mut snapshot).await;
     }
     for row in &mut snapshot.rows {
+        row.browse = browse_actions.remove(&row.id);
         super::source_integrations::merge_cached(
             &app,
             &lease,
@@ -201,7 +236,16 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
                 .as_ref()
                 .unwrap_or(&card.identity)
                 .id
-                .starts_with("simkl:") || crate::simkl::imports::remote_identity(&app,profile,&card.parent_identity.as_ref().unwrap_or(&card.identity).kind,&card.parent_identity.as_ref().unwrap_or(&card.identity).id).ok().flatten().is_some()
+                .starts_with("simkl:")
+                || crate::simkl::imports::remote_identity(
+                    &app,
+                    profile,
+                    &card.parent_identity.as_ref().unwrap_or(&card.identity).kind,
+                    &card.parent_identity.as_ref().unwrap_or(&card.identity).id,
+                )
+                .ok()
+                .flatten()
+                .is_some()
             {
                 crate::simkl::home_metadata(&app, profile, card.clone())
                     .await
