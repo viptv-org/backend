@@ -32,16 +32,30 @@ pub fn detail_page(
     } else {
         &root
     };
+    if meta
+        .get("type")
+        .is_some_and(|value| !value.is_null() && value.as_str() != Some(kind))
+    {
+        return Err(Error::Unresolved);
+    }
     if meta["id"].as_str() != Some(id) {
         return Err(Error::Unresolved);
     }
     let mut parent = meta.clone();
     parent["id"] = Value::String(id.into());
     parent["type"] = Value::String(kind.into());
-    let item = cards(&serde_json::json!({"metas":[parent]}).to_string(), provider)?
+    let mut item = cards(&serde_json::json!({"metas":[parent]}).to_string(), provider)?
         .into_iter()
         .next()
         .ok_or(Error::Unresolved)?;
+    // Only the complete host-fetched metadata document can add alternate IDs.
+    // Preview/catalog hints remain outside this proof path; video fields cannot
+    // override the parent identity used for episode matching.
+    for external in authoritative_external_ids(meta) {
+        if !item.identity.ids.contains(&external) {
+            item.identity.ids.push(external);
+        }
+    }
     let all = episode_cards(meta, provider, &item)?;
     let seasons = crate::presentation::episode_seasons(&all);
     let next_cursor = (all.len() > offset + limit).then(|| (offset + limit).to_string());
@@ -134,6 +148,7 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                 })
                 .unwrap_or_default();
             Some(Card {
+                metadata_origin: None,
                 identity: MediaIdentity {
                     id,
                     kind: kind.clone(),
@@ -179,6 +194,7 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                         .as_f64()
                         .or_else(|| v["imdbRating"].as_str().and_then(|s| s.parse().ok()))
                         .filter(|n| n.is_finite() && (0.0..=10.0).contains(n)),
+                    certification: field(v, "contentRating", 128),
                     ..Default::default()
                 }),
             })
@@ -202,4 +218,143 @@ pub fn recommendations(meta: &Value, provider: &str, original: &str) -> Result<V
             })
             .collect(),
     )
+}
+
+/// Recognize bounded, explicit provider assertions, preserving disagreements so
+/// resolvers can reject them instead of selecting an arbitrary first mapping.
+fn authoritative_external_ids(meta: &Value) -> Vec<ExternalId> {
+    let fields: [(&str, &[&str]); 6] = [
+        ("imdb", &["imdb_id", "imdbId", "imdbID"]),
+        ("tmdb", &["tmdb_id", "tmdbId", "moviedb_id"]),
+        ("tvdb", &["tvdb_id", "tvdbId"]),
+        ("mal", &["mal_id", "malId"]),
+        ("anilist", &["anilist_id", "anilistId"]),
+        ("kitsu", &["kitsu_id", "kitsuId"]),
+    ];
+    let mut result = Vec::new();
+    for (namespace, aliases) in fields {
+        let values = aliases.iter().map(|field| &meta[*field]).chain(
+            ["ids", "external_ids"].into_iter().flat_map(|container| {
+                std::iter::once(&meta[container][namespace])
+                    .chain(aliases.iter().map(move |field| &meta[container][*field]))
+            }),
+        );
+        for value in values {
+            let text = value
+                .as_str()
+                .filter(|value| value.len() <= 32)
+                .map(str::to_owned)
+                .or_else(|| value.as_u64().map(|value| value.to_string()));
+            let Some(value) = text else {
+                continue;
+            };
+            let valid = if namespace == "imdb" {
+                value.strip_prefix("tt").is_some_and(|digits| {
+                    !digits.is_empty()
+                        && digits.len() <= 16
+                        && digits.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            } else {
+                value
+                    .parse::<u64>()
+                    .is_ok_and(|number| number > 0 && number.to_string() == value)
+            };
+            if valid {
+                let id = ExternalId {
+                    namespace: namespace.into(),
+                    value,
+                };
+                if !result.contains(&id) {
+                    result.push(id);
+                }
+                if result.len() == 32 {
+                    return result;
+                }
+            }
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod identity_proof_tests {
+    use super::*;
+    #[test]
+    fn full_metadata_preserves_explicit_ids_without_promoting_catalog_hints_or_video_overrides() {
+        let meta = serde_json::json!({"id":"opaque-parent","type":"series","name":"Series","imdb_id":"tt1111111","tmdb_id":123,"ids":{"tvdb":"456"},"videos":[{"id":"opaque-child","name":"Episode","season":2,"episode":3,"imdb_id":"tt9999999","tmdb_id":999}]});
+        let preview = cards(
+            &serde_json::json!({"metas":[meta.clone()]}).to_string(),
+            "addon:one",
+        )
+        .unwrap()
+        .remove(0);
+        assert!(preview.identity.ids.is_empty());
+        let detail = detail_page(
+            &serde_json::json!({"meta":meta}).to_string(),
+            "addon:one",
+            "series",
+            "opaque-parent",
+            0,
+            24,
+        )
+        .unwrap();
+        assert!(detail.item.identity.ids.contains(&ExternalId {
+            namespace: "imdb".into(),
+            value: "tt1111111".into()
+        }));
+        assert!(detail.item.identity.ids.contains(&ExternalId {
+            namespace: "tmdb".into(),
+            value: "123".into()
+        }));
+        assert!(detail.item.identity.ids.contains(&ExternalId {
+            namespace: "tvdb".into(),
+            value: "456".into()
+        }));
+        assert_eq!(
+            detail.episodes[0].parent_identity.as_ref().unwrap().ids,
+            detail.item.identity.ids
+        );
+        assert!(detail.episodes[0].identity.ids.is_empty());
+    }
+    #[test]
+    fn present_conflicting_metadata_kind_is_not_rewritten_into_authority() {
+        assert!(matches!(
+            detail_page(
+                r#"{"meta":{"id":"opaque","type":"movie","name":"Wrong kind","imdb_id":"tt1111111"}}"#,
+                "addon:one",
+                "series",
+                "opaque",
+                0,
+                24
+            ),
+            Err(Error::Unresolved)
+        ));
+        assert!(
+            detail_page(
+                r#"{"meta":{"id":"opaque","name":"Missing kind"}}"#,
+                "addon:one",
+                "series",
+                "opaque",
+                0,
+                24
+            )
+            .is_ok()
+        );
+    }
+    #[test]
+    fn conflicts_remain_visible_and_invalid_nested_fractional_or_noncanonical_ids_are_ignored() {
+        let detail=detail_page(r#"{"meta":{"id":"tt1111111","name":"Movie","imdb_id":"tt2222222","ids":{"imdb":"tt3333333","tmdb":"00123"},"tmdb_id":1.25,"tvdb_id":{"id":123},"mal_id":true,"anilist_id":0,"kitsu_id":"12x"}}"#,"addon:one","movie","tt1111111",0,24).unwrap();
+        assert_eq!(
+            detail
+                .item
+                .identity
+                .ids
+                .iter()
+                .filter(|id| id.namespace == "imdb")
+                .count(),
+            3
+        );
+        assert_eq!(detail.item.identity.ids.len(), 3);
+        assert!(crate::identity::resolve(&detail.item.identity, "imdb", &[]).is_err());
+    }
 }

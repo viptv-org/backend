@@ -79,7 +79,7 @@ async fn start(app: &App) -> String {
         app,
         "member-token-1",
         "POST",
-        "/api/v3/profiles/1/simkl/authorize",
+        "/api/profiles/1/simkl/authorize",
         json!({}),
     )
     .await;
@@ -105,7 +105,7 @@ async fn link(app: &App) -> String {
         .oneshot(
             axum::http::Request::builder()
                 .uri(format!(
-                    "/api/v3/simkl/callback?state={state}&code=fixture-code&iss=https%3A%2F%2Fsimkl.com"
+                    "/api/simkl/callback?state={state}&code=fixture-code&iss=https%3A%2F%2Fsimkl.com"
                 ))
                 .header(header::HOST, "tv.example")
                 .body(axum::body::Body::empty())
@@ -126,6 +126,7 @@ mod revocation;
 
 mod calendar_browse;
 mod discovery;
+mod unified_search;
 
 mod mapping;
 
@@ -151,6 +152,6 @@ mod continuation_v3;
 
 mod paused_import_identity;
 
-mod paused_title_scope;
-mod anime_tracking_identity;
 mod anime_next_identity;
+mod anime_tracking_identity;
+mod paused_title_scope;

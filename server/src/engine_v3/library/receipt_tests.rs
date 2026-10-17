@@ -10,7 +10,7 @@ async fn mutation_membership_is_complete_profile_owned_and_kids_filtered() {
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/library",
+            "/api/profiles/1/library",
             input(id),
         )
         .await;
@@ -37,12 +37,12 @@ async fn mutation_membership_is_complete_profile_owned_and_kids_filtered() {
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/library",
+        "/api/profiles/1/library",
         input("approved"),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{saved}");
-    let ids = saved["library_membership"]["identities"]
+    let ids = saved["library_membership"]["legacy_identities"]
         .as_array()
         .unwrap();
     assert_eq!(ids.len(), 1);
@@ -50,9 +50,9 @@ async fn mutation_membership_is_complete_profile_owned_and_kids_filtered() {
     assert_eq!(saved["library_membership"]["complete"], true);
     for method in ["PUT", "DELETE"] {
         let path = if method == "PUT" {
-            "/api/v3/profiles/1/library"
+            "/api/profiles/1/library"
         } else {
-            "/api/v3/profiles/1/library/movie/approved"
+            "/api/profiles/1/library/movie/approved"
         };
         let (status, denied) =
             request(&app, "member-token-2", method, path, input("approved")).await;
@@ -63,15 +63,17 @@ async fn mutation_membership_is_complete_profile_owned_and_kids_filtered() {
         &app,
         "member-token-1",
         "DELETE",
-        "/api/v3/profiles/1/library/movie/approved",
+        "/api/profiles/1/library/movie/approved",
         Value::Null,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(removed["library_membership"]["identities"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        removed["library_membership"]["identities"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(removed["library_membership"]["complete"], true);
     assert_eq!(
         app.db
@@ -94,7 +96,7 @@ async fn membership_bound_failure_rolls_back_the_mutation_instead_of_acknowledgi
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/library",
+        "/api/profiles/1/library",
         input("overflow"),
     )
     .await;

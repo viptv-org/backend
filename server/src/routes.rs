@@ -1,12 +1,13 @@
 use super::*;
 
-/// Backward-compatible application router with the optional account dashboard at `/`.
+/// Backward-compatible application router with the account dashboard mounted at
+/// `/device` (the KMP viewing app owns `/` when supplied).
 pub fn router(app: App, dashboard: Option<std::path::PathBuf>) -> Router {
     router_with_tv(app, dashboard, None)
 }
 
-/// Mount the account dashboard at `/` and the TV React bundle at `/tv` without
-/// changing API/media origins or enabling cross-origin credentials.
+/// Mount the account dashboard at `/device` and the KMP viewing app at `/`
+/// without changing API/media origins or enabling cross-origin credentials.
 pub fn router_with_tv(
     app: App,
     dashboard: Option<std::path::PathBuf>,
@@ -14,124 +15,137 @@ pub fn router_with_tv(
 ) -> Router {
     let api = Router::new()
         .route(
-            "/v3/profiles/:id/source-integrations",
+            "/profiles/:id/source-integrations",
             get(engine_v3::source_integrations::schemas)
                 .put(engine_v3::source_integrations::configure),
         )
         .route(
-            "/v3/profiles/:id/source-integrations/:connection",
+            "/profiles/:id/source-integrations/:connection",
             delete(engine_v3::source_integrations::remove),
         )
         .route(
-            "/v3/profiles/:id/library/membership",
+            "/profiles/:id/library/membership",
             get(engine_v3::library::membership::get),
         )
         .route(
-            "/v3/profiles/:id/imports/simkl",
+            "/profiles/:id/imports/simkl",
             get(simkl::imports::read).post(simkl::imports::read),
         )
         .route(
-            "/v3/profiles/:id/preferences",
+            "/profiles/:id/preferences",
             get(engine_v3::preferences::get).put(engine_v3::preferences::update),
         )
         .route(
-            "/v3/profiles/:id/source-ranking",
+            "/profiles/:id/source-ranking",
             post(engine_v3::source_ranking::rank),
         )
         .route(
-            "/v3/profiles/:id/live/channels",
+            "/profiles/:id/live/channels",
             get(engine_v3::live::channels),
         )
         .route(
-            "/v3/profiles/:id/live/:channel/guide",
+            "/profiles/:id/live/favorites",
+            get(engine_v3::live::favorites::get),
+        )
+        .route(
+            "/profiles/:id/live/:channel/favorite",
+            axum::routing::put(engine_v3::live::favorites::add)
+                .delete(engine_v3::live::favorites::remove),
+        )
+        .route(
+            "/profiles/:id/live/:channel/guide",
             get(engine_v3::live::guide),
         )
         .route(
-            "/v3/profiles/:id/live/:channel/sources",
+            "/profiles/:id/live/:channel/sources",
             post(engine_v3::live::sources),
         )
-        .route("/v3/bootstrap", get(engine_v3::bootstrap))
+        .route("/bootstrap", get(engine_v3::bootstrap))
         .route(
-            "/v3/profiles",
+            "/profiles",
             get(engine_v3::profiles::list).post(engine_v3::profiles::create),
         )
         .route(
-            "/v3/profiles/:id",
+            "/profiles/:id",
             axum::routing::patch(engine_v3::profiles::update).delete(delete_profile_authenticated),
         )
         .route(
-            "/v3/profiles/:id/pin",
+            "/profiles/:id/pin",
             get(engine_v3::profiles::pin_status).put(engine_v3::profiles::unsupported_pin),
         )
-        .route("/v3/parent/status", get(kids::status))
-        .route("/v3/parent/unlock", post(kids::unlock))
-        .route("/v3/parent/pin", axum::routing::put(kids::set_pin))
+        .route("/parent/search", get(engine_v3::search::parent))
         .route(
-            "/v3/profiles/:id/integrations",
+            "/profiles/:id/approvals",
+            get(kids::titles::list).post(kids::titles::approve),
+        )
+        .route("/parent/status", get(kids::status))
+        .route("/parent/unlock", post(kids::unlock))
+        .route("/parent/pin", axum::routing::put(kids::set_pin))
+        .route(
+            "/profiles/:id/integrations",
             get(engine_v3::configuration::get).put(engine_v3::configuration::update),
         )
         .route(
-            "/v3/profiles/:id/continue",
+            "/profiles/:id/continue",
             get(engine_v3::continuation::get),
         )
         .route(
-            "/v3/profiles/:id/continue/next",
+            "/profiles/:id/continue/next",
             post(engine_v3::continuation::resolve),
         )
         .route(
-            "/v3/profiles/:id/continue/visibility",
+            "/profiles/:id/continue/visibility",
             axum::routing::put(engine_v3::continuation::update),
         )
-        .route("/v3/profiles/:id/home", get(engine_v3::home))
+        .route("/profiles/:id/home", get(engine_v3::home))
         .route(
-            "/v3/profiles/:id/history",
+            "/profiles/:id/history",
             get(engine_v3::history::list).delete(engine_v3::history::clear),
         )
         .route(
-            "/v3/profiles/:id/library",
+            "/profiles/:id/library",
             get(engine_v3::library::list).put(engine_v3::library::save),
         )
         .route(
-            "/v3/profiles/:id/library/:kind/:item",
+            "/profiles/:id/library/:kind/:item",
             delete(engine_v3::library::remove),
         )
-        .route("/v3/account/devices", get(engine_v3::account_devices::get).delete(engine_v3::account_devices::remove_all))
-        .route("/v3/account/devices/:id", delete(engine_v3::account_devices::remove))
-        .route("/v3/discover", get(engine_v3::discover))
-        .route("/v3/calendar", get(simkl::calendar::get))
-        .route("/v3/discovery-controls", get(engine_v3::discovery_controls))
-        .route("/v3/meta/:kind/:id", get(engine_v3::detail))
         .route(
-            "/v3/subtitles/:kind/:id",
+            "/account/devices",
+            get(engine_v3::account_devices::get).delete(engine_v3::account_devices::remove_all),
+        )
+        .route(
+            "/account/devices/:id",
+            delete(engine_v3::account_devices::remove),
+        )
+        .route("/discover", get(engine_v3::discover))
+        .route("/search", get(engine_v3::search::get))
+        .route("/calendar", get(simkl::calendar::get))
+        .route("/discovery-controls", get(engine_v3::discovery_controls))
+        .route("/meta/:kind/:id", get(engine_v3::detail))
+        .route(
+            "/subtitles/:kind/:id",
             get(engine_v3::subtitles::discover),
         )
         .route(
-            "/v3/subtitle-content/:id",
+            "/subtitle-content/:id",
             get(engine_v3::subtitles::content),
         )
         .route(
-            "/v3/profiles/:id/simkl",
+            "/profiles/:id/simkl",
             get(simkl::status).delete(simkl::disconnect),
         )
-        .route("/v3/profiles/:id/simkl/authorize", post(simkl::authorize))
-        .route("/v3/profiles/:id/simkl/search", get(simkl::search))
+        .route("/profiles/:id/simkl/authorize", post(simkl::authorize))
+        .route("/profiles/:id/simkl/search", get(simkl::search))
         .route(
-            "/v3/profiles/:id/simkl/meta/:category/:title",
+            "/profiles/:id/simkl/meta/:category/:title",
             get(simkl::detail),
         )
-        .route("/v3/profiles/:id/simkl/watched", post(simkl::watched))
-        .route("/v3/profiles/:id/playback-events", post(simkl::playback))
+        .route("/profiles/:id/simkl/watched", post(simkl::watched))
+        .route("/profiles/:id/playback-events", post(simkl::playback))
         .route(
-            "/v3/profiles/:id/progress",
+            "/profiles/:id/progress",
             axum::routing::put(simkl::progress),
-        )
-        .route(
-            "/profiles",
-            get(profiles_authenticated).post(create_profile_authenticated),
-        )
-        .route(
-            "/profiles/:id",
-            axum::routing::patch(update_profile_authenticated).delete(delete_profile_authenticated),
         )
         .route(
             "/profiles/:id/imports/stremio/preview",
@@ -151,43 +165,41 @@ pub fn router_with_tv(
         )
         .route("/catalogs", get(catalogs))
         .route("/catalogs/revision", get(catalogs_revision))
-        .route("/discover", get(discover))
-        .route("/meta/:kind/:id", get(meta))
-        .route("/v2/streams", post(provider::discovery_v2::start))
+        .route("/streams", post(provider::discovery_v2::start))
         .route(
-            "/v2/addons",
+            "/addons",
             get(addon::http_v2::list).post(addon::http_v2::create),
         )
         .route(
-            "/v2/addons/:id",
+            "/addons/:id",
             axum::routing::patch(addon::http_v2::update).delete(addon::http_v2::delete),
         )
         .route(
-            "/v2/iptv/connections",
+            "/iptv/connections",
             get(provider::connections_v2::list).post(provider::connections_v2::create),
         )
         .route(
-            "/v2/iptv/connections/:id",
+            "/iptv/connections/:id",
             axum::routing::patch(provider::connections_v2::update)
                 .delete(provider::connections_v2::delete),
         )
         .route(
-            "/v2/iptv/connections/:id/credentials",
+            "/iptv/connections/:id/credentials",
             axum::routing::put(provider::connections_v2::renew),
         )
         .route(
-            "/v2/iptv/connections/:id/refresh",
+            "/iptv/connections/:id/refresh",
             get(provider::refresh_v2::get)
                 .post(provider::refresh_v2::request)
                 .delete(provider::refresh_v2::cancel),
         )
         .route(
-            "/v2/streams/:id",
+            "/streams/:id",
             get(provider::discovery_v2::poll).delete(provider::discovery_v2::cancel),
         )
-        .route("/v2/iptv/guide/:id", get(provider::discovery_v2::guide))
+        .route("/iptv/guide/:id", get(provider::discovery_v2::guide))
         .route(
-            "/v2/iptv/live/:id/source",
+            "/iptv/live/:id/source",
             post(provider::discovery_v2::live_source),
         )
         .route(
@@ -201,22 +213,6 @@ pub fn router_with_tv(
             delete(delete_favorite_authenticated),
         )
         .route(
-            "/profiles/:id/progress",
-            get(progress_authenticated).put(save_progress_authenticated),
-        )
-        .route(
-            "/profiles/:id/preferences",
-            get(preferences::get).put(preferences::put),
-        )
-        .route(
-            "/profiles/:id/approvals",
-            get(kids::approvals).post(kids::approve),
-        )
-        .route("/parent/search", get(kids::search))
-        .route("/parent/status", get(kids::status))
-        .route("/parent/pin", axum::routing::put(kids::set_pin))
-        .route("/parent/unlock", post(kids::unlock))
-        .route(
             "/profiles/:id/kids",
             get(kids::get_policy).put(kids::set_policy),
         )
@@ -229,80 +225,69 @@ pub fn router_with_tv(
             "/profiles/:id/progress/correct",
             axum::routing::put(library::correct),
         )
-        .route("/profiles/:id/continue/page", get(continuation::page))
-        .route("/profiles/:id/continue/next", post(continuation::next))
-        .route(
-            "/profiles/:id/continue/visibility",
-            axum::routing::put(continuation::visibility),
-        )
-        .route(
-            "/profiles/:id/continue/settings",
-            get(continuation::settings).put(continuation::save_settings),
-        )
-        .route(
-            "/profiles/:id/continue",
-            get(continue_watching_authenticated),
-        )
         .merge(
             Router::new()
-                .route("/v2/playback-protocol", get(gateway::playback::support))
+                .route("/playback-protocol", get(gateway::playback::support))
                 .route(
-                    "/v2/torrent-runtime-protocol",
+                    "/torrent-runtime-protocol",
                     get(gateway::playback::runtime_support),
                 )
-                .route("/v2/playback", post(gateway::playback::start))
+                .route("/playback", post(gateway::playback::start))
                 .route(
-                    "/v2/playback-decoder-start",
+                    "/playback-decoder-start",
                     post(gateway::playback::decoder_start),
                 )
-                .route("/v2/playback/:id/subtitles", post(gateway::playback::attach_subtitle))
                 .route(
-                    "/v2/playback/:id/first-frame",
+                    "/playback/:id/subtitles",
+                    post(gateway::playback::attach_subtitle),
+                )
+                .route(
+                    "/playback/:id/first-frame",
                     post(gateway::playback::first_frame),
                 )
                 .route(
-                    "/v2/playback/:id",
+                    "/playback/:id",
                     get(gateway::playback::get).delete(gateway::playback::stop),
                 )
-                .route("/v2/playback/:id/heartbeat", post(gateway::playback::renew))
+                .route("/playback/:id/heartbeat", post(gateway::playback::renew))
                 .route(
-                    "/v2/playback/:id/progress",
+                    "/playback/:id/progress",
                     get(gateway::playback::progress),
                 )
                 .route(
-                    "/v2/playback-requests/:request_id",
+                    "/playback-requests/:request_id",
                     axum::routing::delete(gateway::playback::cancel_request),
                 ),
         )
         .route(
-            "/v2/gateways",
+            "/gateways",
             get(gateway::http::list).post(gateway::http::register),
         )
         .route(
-            "/v2/gateways/:id",
+            "/gateways/:id",
             axum::routing::patch(gateway::http::update)
                 .put(gateway::http::replace)
                 .delete(gateway::http::delete),
         )
-        .route("/v2/gateways/:id/check", post(gateway::http::check))
+        .route("/gateways/:id/check", post(gateway::http::check))
         .route(
-            "/v2/gateways/:id/grants",
+            "/gateways/:id/grants",
             get(gateway::http::grants).put(gateway::http::grant),
         )
         .route(
-            "/v2/iptv/matches",
+            "/iptv/matches",
             get(provider::v2_http::matches).put(provider::v2_http::override_match),
         )
         .route(
-            "/v2/iptv/live-default",
+            "/iptv/live-default",
             get(provider::v2_http::live_default).put(provider::v2_http::set_live_default),
         )
         .route(
-            "/v2/iptv/live/channels",
+            "/iptv/live/channels",
             get(provider::v2_http::live_channels),
         )
         .route(
-            "/v2/iptv/live/categories",
+            "/iptv/live/categories",
             get(provider::v2_http::live_categories),
         )
         .fallback(|| async { ApiError(StatusCode::NOT_FOUND, "API route not found".into()) })
@@ -322,12 +307,12 @@ pub fn router_with_tv(
         .layer(middleware::from_fn(images::negotiate));
     let mut r = Router::new()
         .route(
-            "/api/v3/images/simkl/:folder/*asset",
+            "/api/images/simkl/:folder/*asset",
             get(images::get).options(images::options),
         )
         .nest("/api", api)
         .route(
-            "/api/v3/simkl/callback",
+            "/api/simkl/callback",
             get(simkl::callback).layer(middleware::map_response(private_api_response)),
         )
         .route(
@@ -342,19 +327,13 @@ pub fn router_with_tv(
         .route("/privacy", get(privacy_page))
         .route("/terms", get(terms_page));
     if let Some(path) = dashboard {
-        let root_index = path.join("index.html");
-        let device_index = root_index.clone();
-        r = r
-            .route("/", get(move || dashboard_entry(root_index.clone())))
-            .route(
-                "/device",
-                get(move || dashboard_entry(device_index.clone())),
-            )
-            .fallback_service(
-                tower_http::services::ServeDir::new(&path).not_found_service(
-                    tower_http::services::ServeFile::new(path.join("index.html")),
-                ),
-            );
+        let device_index = path.join("index.html");
+        // The account-management dashboard is management-only: it is mounted
+        // under /device exclusively. The viewing app owns the root.
+        r = r.route(
+            "/device",
+            get(move || dashboard_entry(device_index.clone())),
+        );
     } else {
         // A server-only image still answers / with its identity so health
         // checks pass without a mounted dashboard.
@@ -370,11 +349,13 @@ pub fn router_with_tv(
         );
     }
     if let Some(path) = tv_dashboard {
-        let tv_entry = path.join("index.html");
+        // The KMP viewing app is the site root; /tv is gone (legacy route
+        // removed). Unknown paths fall back to the app so client-side
+        // deep links resolve to the app shell.
+        let root_index = path.join("index.html");
         r = r
-            .route("/tv", get(move || dashboard_entry(tv_entry.clone())))
-            .nest_service(
-                "/tv/",
+            .route("/", get(move || dashboard_entry(root_index.clone())))
+            .fallback_service(
                 tower_http::services::ServeDir::new(&path).fallback(
                     tower_http::services::ServeFile::new(path.join("index.html")),
                 ),

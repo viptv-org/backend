@@ -7,6 +7,9 @@ pub struct Store {
 mod catalog;
 mod connections;
 mod library;
+mod metadata_origins;
+mod scoped_library;
+mod live_favorites;
 mod library_stats;
 mod playback;
 mod profiles;
@@ -22,16 +25,20 @@ impl Store {
     fn from_connection(db: Connection) -> Result<Self, Error> {
         db.execute_batch("PRAGMA foreign_keys=ON;
           CREATE TABLE IF NOT EXISTS engine_profiles(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, revision INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile));
+          CREATE TABLE IF NOT EXISTS engine_deleted_profile_revisions(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(connection,account,profile));
           CREATE TABLE IF NOT EXISTS engine_observations(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, event TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,event));
           CREATE TABLE IF NOT EXISTS engine_connections(id TEXT PRIMARY KEY, account TEXT NOT NULL, value TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS engine_catalog_cache(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, revision INTEGER NOT NULL, row_id TEXT NOT NULL, expires_at INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,row_id));
           CREATE TABLE IF NOT EXISTS engine_playback(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, updated_at_millis INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,kind,id));
           CREATE TABLE IF NOT EXISTS engine_favorites(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection,account,profile,kind,id), FOREIGN KEY(connection,account,profile) REFERENCES engine_profiles(connection,account,profile) ON DELETE CASCADE);
+          CREATE TABLE IF NOT EXISTS engine_live_favorites(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, channel_id TEXT NOT NULL, source_id TEXT NOT NULL REFERENCES engine_connections(id) ON DELETE CASCADE, source_revision INTEGER NOT NULL, PRIMARY KEY(connection,account,profile,channel_id), FOREIGN KEY(connection,account,profile) REFERENCES engine_profiles(connection,account,profile) ON DELETE CASCADE);
           CREATE TABLE IF NOT EXISTS engine_library_revisions(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, revision INTEGER NOT NULL, PRIMARY KEY(connection,account,profile), FOREIGN KEY(connection,account,profile) REFERENCES engine_profiles(connection,account,profile) ON DELETE CASCADE);
           CREATE TABLE IF NOT EXISTS engine_profile_locks(connection TEXT NOT NULL, account TEXT NOT NULL, profile TEXT NOT NULL, pin_hash TEXT NOT NULL, failures INTEGER NOT NULL DEFAULT 0, blocked_until INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(connection,account,profile));
           CREATE INDEX IF NOT EXISTS engine_playback_recent ON engine_playback(connection,account,profile,updated_at_millis DESC);").map_err(|_| Error::Storage)?;
         let has_added:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('engine_favorites') WHERE name='added_at_millis')",[],|r|r.get(0)).map_err(|_|Error::Storage)?;
         if !has_added{db.execute_batch("ALTER TABLE engine_favorites ADD COLUMN added_at_millis INTEGER").map_err(|_|Error::Storage)?;}
+        metadata_origins::init(&db)?;
+        scoped_library::init(&db)?;
         Ok(Self { db })
     }
     pub fn profile(&self, scope: &Scope) -> Result<Option<ProfileConfiguration>, Error> {
@@ -55,6 +62,14 @@ impl Store {
         })
         .collect()
     }
+    /// Reusing an ID must not reuse the authority of its deleted incarnation.
+    pub fn new_profile_revision(&self, scope: &Scope) -> Result<u64, Error> {
+        Self::initial_profile_revision(&self.db, scope)
+    }
+    fn initial_profile_revision(db: &Connection, scope: &Scope) -> Result<u64, Error> {
+        let deleted: Option<u64> = db.query_row("SELECT revision FROM engine_deleted_profile_revisions WHERE connection=?1 AND account=?2 AND profile=?3", params![scope.connection_id,scope.account_id,scope.profile_id],|row|row.get(0)).optional().map_err(|_|Error::Storage)?;
+        deleted.map_or(Ok(0), |revision|revision.checked_add(1).filter(|revision| *revision <= i64::MAX as u64).ok_or(Error::Storage))
+    }
     /// Compare-and-swap prevents a late settings request overwriting newer choices.
     pub fn save_profile(
         &mut self,
@@ -66,7 +81,7 @@ impl Store {
         let current: Option<u64> = tx.query_row("SELECT revision FROM engine_profiles WHERE connection=?1 AND account=?2 AND profile=?3", params![s.connection_id,s.account_id,s.profile_id], |r| r.get(0)).optional().map_err(|_| Error::Storage)?;
         if current != expected_revision
             || current.is_some_and(|r| s.revision != r + 1)
-            || (current.is_none() && s.revision != 0)
+            || (current.is_none() && s.revision != Self::initial_profile_revision(&tx, s)?)
         {
             return Err(Error::Conflict);
         }

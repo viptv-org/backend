@@ -20,6 +20,8 @@ pub struct PlaybackRecord {
     pub completed_at_millis: Option<u64>,
     #[serde(default)]
     pub parent_identity: Option<MediaIdentity>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub metadata_origin:Option<crate::origin::MetadataOrigin>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
@@ -52,6 +54,7 @@ impl PlaybackRecord {
             None
         };
         let mut card = self.presentation.clone().unwrap_or_else(|| Card {
+            metadata_origin:self.metadata_origin.clone(),
             identity: self.identity.clone(),
             provider_id: self.provider_id.clone(),
             title: self.title.clone(),
@@ -67,6 +70,7 @@ impl PlaybackRecord {
             category: None,
             metadata: None,
         });
+        card.metadata_origin=self.metadata_origin.clone();
         card.identity = self.identity.clone();
         card.parent_identity = self.parent_identity.clone();
         card.progress = self.progress();

@@ -37,6 +37,8 @@ pub struct Card {
     pub parent_identity: Option<MediaIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub added_at_millis: Option<u64>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub metadata_origin:Option<crate::origin::MetadataOrigin>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Facet)]

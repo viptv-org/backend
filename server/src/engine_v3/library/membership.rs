@@ -39,8 +39,38 @@ pub(super) fn snapshot_db(
             edition: None,
         })
         .collect::<Vec<_>>();
-    let mut aliases=db.prepare(&format!("SELECT i.statistics FROM simkl_import_entries i JOIN favorites f ON f.profile_id=i.profile_id AND f.type=i.local_kind AND f.id=i.local_id WHERE f.profile_id=?1 AND {allowed} ORDER BY i.remote_kind,i.remote_id LIMIT 10001")).map_err(db_error)?;
-    let mut seen = keys.into_iter().collect::<std::collections::HashSet<_>>();
+    let mut legacy_identities = Vec::new();
+    identities.retain(|id| {
+        if viptv_engine::origin::shared_identity(id) && !id.id.starts_with("simkl:") {
+            true
+        } else {
+            legacy_identities.push(id.clone());
+            false
+        }
+    });
+    let canonical = identities
+        .iter()
+        .map(|id| (id.id.clone(), id.kind.clone()))
+        .collect::<std::collections::HashSet<_>>();
+    let logical_keys = keys
+        .iter()
+        .map(|(id, kind)| {
+            super::super::scoped_library::Key(
+                if canonical.contains(&(id.clone(), kind.clone())) {
+                    "shared".into()
+                } else {
+                    "legacy".into()
+                },
+                kind.clone(),
+                id.clone(),
+            )
+        })
+        .collect();
+    let mut aliases=db.prepare(&format!("SELECT i.statistics FROM simkl_import_entries i WHERE i.profile_id=?1 AND NOT EXISTS(SELECT 1 FROM library_removals removed WHERE removed.profile_id=i.profile_id AND removed.type=i.local_kind AND removed.id=i.local_id) AND (EXISTS(SELECT 1 FROM favorites f WHERE f.profile_id=i.profile_id AND f.type=i.local_kind AND f.id=i.local_id AND {allowed}) OR EXISTS(SELECT 1 FROM engine_scoped_records s WHERE s.profile_id=i.profile_id AND s.record_kind='favorite' AND s.identity_scope='shared' AND s.kind=i.local_kind AND s.identity_id=i.local_id)) ORDER BY i.remote_kind,i.remote_id LIMIT 10001")).map_err(db_error)?;
+    let mut seen = identities
+        .iter()
+        .map(|id| (id.id.clone(), id.kind.clone()))
+        .collect::<std::collections::HashSet<_>>();
     let values = aliases
         .query_map([profile], |r| r.get::<_, String>(0))
         .map_err(db_error)?
@@ -55,7 +85,9 @@ pub(super) fn snapshot_db(
         {
             for provenance in statistics.provenance {
                 let id = provenance.external_identity;
-                if kids::require_item(db, &lease.principal, &id.kind, &id.id).is_ok()
+                if provenance.provider_id == "simkl"
+                    && viptv_engine::origin::shared_identity(&id)
+                    && kids::require_item(db, &lease.principal, &id.kind, &id.id).is_ok()
                     && seen.insert((id.id.clone(), id.kind.clone()))
                 {
                     identities.push(id);
@@ -73,12 +105,15 @@ pub(super) fn snapshot_db(
         .optional()
         .map_err(db_error)?
         .unwrap_or(0);
-    serde_json::to_value(viptv_engine::library::LibraryMembershipSnapshot {
+    let mut snapshot = viptv_engine::library::LibraryMembershipSnapshot {
         identities,
         revision: revision.saturating_add(configuration),
         complete: true,
-    })
-    .map_err(|_| ApiError::from("Membership unavailable"))
+        scoped_identities: vec![],
+        legacy_identities,
+    };
+    scoped_library::membership_db(db, app, profile, &mut snapshot, logical_keys)?;
+    serde_json::to_value(snapshot).map_err(|_| ApiError::from("Membership unavailable"))
 }
 pub(crate) async fn get(
     State(app): State<App>,

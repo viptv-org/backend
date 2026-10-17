@@ -63,6 +63,7 @@ pub(super) fn save_token(
 }
 
 pub(super) struct Credential {
+    pub parent_scope: Option<crate::kids::parent_scope::ParentScope>,
     pub revision: Option<u64>,
     pub capability: Capability,
     pub configuration_revision: u64,
@@ -74,11 +75,48 @@ pub(super) fn credential(
     profile: i64,
     capability: Capability,
 ) -> Result<Credential, ApiError> {
+    credential_access(app, profile, capability, None)
+}
+pub(super) fn credential_parent(
+    app: &App,
+    parent: &crate::kids::parent_scope::ParentScope,
+    capability: Capability,
+) -> Result<Credential, ApiError> {
+    if !matches!(capability, Capability::Search | Capability::Metadata) {
+        return Err(auth::forbidden());
+    }
+    credential_access(app, parent.profile(), capability, Some(parent))
+}
+pub(super) fn reload_credential(
+    app: &App,
+    profile: i64,
+    credential: &Credential,
+) -> Result<Credential, ApiError> {
+    credential_access(
+        app,
+        profile,
+        credential.capability,
+        credential.parent_scope.as_ref(),
+    )
+}
+pub(super) fn credential_access(
+    app: &App,
+    profile: i64,
+    capability: Capability,
+    parent: Option<&crate::kids::parent_scope::ParentScope>,
+) -> Result<Credential, ApiError> {
     let db = app
         .db
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
-    app.require_profile(&db, profile)?;
+    if let Some(parent) = parent {
+        if parent.profile() != profile {
+            return Err(auth::forbidden());
+        }
+        parent.validate(&db)?;
+    } else {
+        app.require_profile(&db, profile)?;
+    }
     assigned(&db, profile, capability)?;
     let account = app.identity().account_id().ok_or_else(auth::forbidden)?;
     if !app.simkl.configured() || app.secret_vault.is_none() {
@@ -104,6 +142,7 @@ pub(super) fn credential(
         })
         .transpose()?;
     Ok(Credential {
+        parent_scope: parent.cloned(),
         revision,
         configuration_revision: configuration_revision(&db, profile)?,
         capability,
@@ -116,7 +155,7 @@ pub(super) fn validate(app: &App, profile: i64, credential: &Credential) -> Resu
         .db
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
-    app.require_profile(&db, profile)?;
+    require_scope(&db, app, profile, credential)?;
     assigned(&db, profile, credential.capability)?;
     if configuration_revision(&db, profile)? != credential.configuration_revision {
         return Err(ApiError(
@@ -129,6 +168,22 @@ pub(super) fn validate(app: &App, profile: i64, credential: &Credential) -> Resu
         return Err(ApiError(StatusCode::CONFLICT, "Simkl link changed".into()));
     }
     Ok(())
+}
+
+pub(super) fn require_scope(
+    db: &Connection,
+    app: &App,
+    profile: i64,
+    credential: &Credential,
+) -> Result<(), ApiError> {
+    if let Some(parent) = &credential.parent_scope {
+        if parent.profile() != profile {
+            return Err(auth::forbidden());
+        }
+        parent.validate(db)
+    } else {
+        app.require_profile(db, profile)
+    }
 }
 
 pub(super) async fn request(
@@ -201,13 +256,44 @@ fn configuration_revision(db: &Connection, profile: i64) -> Result<u64, ApiError
     .map(|value| value.unwrap_or(0))
 }
 
-pub(super) async fn private_read(app:&App,profile:i64,credential:&Credential,path:&str)->Result<Value,ApiError>{
-    let raw=credential.token.as_ref().ok_or_else(||ApiError(StatusCode::UNAUTHORIZED,"Link Simkl for this profile".into()))?;
-    if let Ok(document)=serde_json::from_slice::<Value>(raw.expose()){
-        if !document["scope"].as_str().is_some_and(|scope|scope.split_whitespace().any(|s|s=="media:read")){return Err(ApiError(StatusCode::FORBIDDEN,"Simkl read authorization is unavailable".into()));}
+pub(super) async fn private_read(
+    app: &App,
+    profile: i64,
+    credential: &Credential,
+    path: &str,
+) -> Result<Value, ApiError> {
+    let raw = credential.token.as_ref().ok_or_else(|| {
+        ApiError(
+            StatusCode::UNAUTHORIZED,
+            "Link Simkl for this profile".into(),
+        )
+    })?;
+    if let Ok(document) = serde_json::from_slice::<Value>(raw.expose()) {
+        if !document["scope"]
+            .as_str()
+            .is_some_and(|scope| scope.split_whitespace().any(|s| s == "media:read"))
+        {
+            return Err(ApiError(
+                StatusCode::FORBIDDEN,
+                "Simkl read authorization is unavailable".into(),
+            ));
+        }
     }
-    let token=tokens::access(app,profile,credential).await?.ok_or_else(||ApiError(StatusCode::UNAUTHORIZED,"Link Simkl for this profile".into()))?;
-    validate(app,profile,credential)?;
-    let value=app.simkl.request_checked(path,Some(&token),None,||validate(app,profile,credential)).await?;
-    validate(app,profile,credential)?;Ok(value)
+    let token = tokens::access(app, profile, credential)
+        .await?
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::UNAUTHORIZED,
+                "Link Simkl for this profile".into(),
+            )
+        })?;
+    validate(app, profile, credential)?;
+    let value = app
+        .simkl
+        .request_checked(path, Some(&token), None, || {
+            validate(app, profile, credential)
+        })
+        .await?;
+    validate(app, profile, credential)?;
+    Ok(value)
 }

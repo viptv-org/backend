@@ -156,6 +156,7 @@ fn details(code: &str) -> (StatusCode, &'static str) {
         "discovery_capacity" => (StatusCode::TOO_MANY_REQUESTS,"Too many source searches are active. Wait briefly before trying again."),
         "discovery_not_found" => (StatusCode::NOT_FOUND,"This source search expired or is unavailable in this session. Search for sources again."),
         "provider_discovery_failed" => (StatusCode::BAD_GATEWAY,"This IPTV provider could not return sources. Try again or choose another provider."),
+        "restricted_metadata_unsupported" => (StatusCode::UNPROCESSABLE_ENTITY,crate::kids::consumers::UNSUPPORTED),
         "source_format_unsupported" => (StatusCode::NOT_ACCEPTABLE,"This source format is not supported. Choose another source."),
         "source_headers_unsupported" => (StatusCode::NOT_ACCEPTABLE,"This source requires unsupported or invalid request headers. Choose another source."),
         "addon_timeout" => (StatusCode::GATEWAY_TIMEOUT,"The addon took too long to respond. Try again or choose another addon."),

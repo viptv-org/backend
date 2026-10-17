@@ -17,7 +17,7 @@ async fn canonical_resume_is_opt_in_explicit_position_wins_and_retries_keep_admi
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         resume.clone(),
     )
     .await;
@@ -34,7 +34,7 @@ async fn canonical_resume_is_opt_in_explicit_position_wins_and_retries_keep_admi
         )
         .unwrap();
     let (status, repeated) =
-        request(&app, "member-token-1", "POST", "/api/v2/playback", resume).await;
+        request(&app, "member-token-1", "POST", "/api/playback", resume).await;
     assert_eq!(status, StatusCode::OK, "{repeated}");
     assert_eq!(repeated["id"], id);
     assert_eq!(repeated["delivery"]["position"], 12.5);
@@ -47,7 +47,7 @@ async fn canonical_resume_is_opt_in_explicit_position_wins_and_retries_keep_admi
         body["resume"] = json!(resume);
         body["position"] = json!(position);
         let (status, started) =
-            request(&app, "member-token-1", "POST", "/api/v2/playback", body).await;
+            request(&app, "member-token-1", "POST", "/api/playback", body).await;
         assert_eq!(status, StatusCode::ACCEPTED, "{started}");
         assert_eq!(
             settled(&app, started["id"].as_str().unwrap()).await["delivery"]["position"],
@@ -58,7 +58,7 @@ async fn canonical_resume_is_opt_in_explicit_position_wins_and_retries_keep_admi
     forged["resume"] = json!(true);
     forged["media_id"] = json!("mapped-imdb-episode");
     assert_eq!(
-        request(&app, "member-token-1", "POST", "/api/v2/playback", forged)
+        request(&app, "member-token-1", "POST", "/api/playback", forged)
             .await
             .0,
         StatusCode::BAD_REQUEST
@@ -74,7 +74,7 @@ async fn unsafe_direct_probe_falls_back_to_registered_gateway_or_fails_without_r
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "unsafe_without_gateway", "android"),
     )
     .await;
@@ -88,7 +88,7 @@ async fn unsafe_direct_probe_falls_back_to_registered_gateway_or_fails_without_r
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "unsafe_with_gateway", "android"),
     )
     .await;
@@ -105,7 +105,7 @@ async fn gateway_resume_reports_applied_source_clock_and_renew_retains_delivery(
     let mut body = body(&source, "gateway_source_clock", "android");
     body["position"] = json!(48.6);
     body["force_gateway"] = json!(true);
-    let (status, created) = request(&app, "member-token-1", "POST", "/api/v2/playback", body).await;
+    let (status, created) = request(&app, "member-token-1", "POST", "/api/playback", body).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{created}");
     let id = created["id"].as_str().unwrap();
     let ready = settled(&app, id).await;
@@ -118,7 +118,7 @@ async fn gateway_resume_reports_applied_source_clock_and_renew_retains_delivery(
         &app,
         "member-token-1",
         "POST",
-        &format!("/api/v2/playback/{id}/heartbeat"),
+        &format!("/api/playback/{id}/heartbeat"),
         json!({}),
     )
     .await;
@@ -131,7 +131,7 @@ async fn native_mp4_is_capability_negotiated_and_preserves_one_native_seek() {
     let source=source(&app);
     for (index,platform,expected) in [(0,"android","mp4"),(1,"android_tv","mp4"),(2,"desktop","mp4"),(3,"web","hls"),(4,"roku","hls")] {
         let mut input=body(&source,&format!("native_mp4_{index}"),platform);input["force_gateway"]=json!(true);input["position"]=json!(48.6);
-        let (_,created)=request(&app,"member-token-1","POST","/api/v2/playback",input).await;
+        let (_,created)=request(&app,"member-token-1","POST","/api/playback",input).await;
         let ready=settled(&app,created["id"].as_str().unwrap()).await;
         assert_eq!(ready["delivery"]["format"],expected,"{ready}");
         assert_eq!(ready["delivery"]["position"],if expected=="mp4"{48.6}else{0.0});

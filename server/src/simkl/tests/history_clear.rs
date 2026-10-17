@@ -17,7 +17,7 @@ async fn clear_history_is_selected_profile_local_only_and_invalidates_continue_w
                 &app,
                 token,
                 "DELETE",
-                &format!("/api/v3/profiles/{profile}/history"),
+                &format!("/api/profiles/{profile}/history"),
                 json!({})
             )
             .await
@@ -29,7 +29,7 @@ async fn clear_history_is_selected_profile_local_only_and_invalidates_continue_w
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/bootstrap",
+        "/api/bootstrap",
         json!({}),
     )
     .await;
@@ -42,7 +42,7 @@ async fn clear_history_is_selected_profile_local_only_and_invalidates_continue_w
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1/history",
+            "/api/profiles/1/history",
             json!({})
         )
         .await
@@ -53,7 +53,7 @@ async fn clear_history_is_selected_profile_local_only_and_invalidates_continue_w
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/history",
+        "/api/profiles/1/history",
         json!({}),
     )
     .await;
@@ -62,7 +62,7 @@ async fn clear_history_is_selected_profile_local_only_and_invalidates_continue_w
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/bootstrap",
+        "/api/bootstrap",
         json!({}),
     )
     .await;
@@ -118,7 +118,7 @@ async fn clear_history_is_selected_profile_local_only_and_invalidates_continue_w
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1/history",
+            "/api/profiles/1/history",
             json!({})
         )
         .await
@@ -139,7 +139,7 @@ async fn clear_history_is_selected_profile_local_only_and_invalidates_continue_w
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1/history",
+            "/api/profiles/1/history",
             json!({})
         )
         .await

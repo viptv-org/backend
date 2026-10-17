@@ -34,7 +34,7 @@ async fn default_native_admission_supports_phone_and_tv_with_two_grants_per_sess
                     &app,
                     "member-token-1",
                     "POST",
-                    "/api/v2/playback",
+                    "/api/playback",
                     input("third_default")
                 )
                 .await
@@ -45,7 +45,7 @@ async fn default_native_admission_supports_phone_and_tv_with_two_grants_per_sess
                 &app,
                 "member-token-1",
                 "DELETE",
-                &format!("/api/v2/playback/{}", first["id"].as_str().unwrap()),
+                &format!("/api/playback/{}", first["id"].as_str().unwrap()),
                 Value::Null,
             )
             .await;
@@ -95,7 +95,7 @@ async fn default_native_admission_is_independent_for_other_accounts_and_sessions
             &app,
             "member-token-2",
             "GET",
-            "/api/v2/playback-protocol",
+            "/api/playback-protocol",
             Value::Null
         )
         .await
@@ -119,7 +119,7 @@ async fn default_native_admission_is_independent_for_other_accounts_and_sessions
             &app,
             "member-token-2",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(second_source, "account_two_third")
         )
         .await
@@ -171,7 +171,7 @@ async fn setup() -> App {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/playback-protocol",
+        "/api/playback-protocol",
         Value::Null,
     )
     .await;
@@ -196,7 +196,7 @@ async fn runtime_grants_support_local_platforms_automatic_selection_and_tracker_
             &app,
             "member-token-1",
             "GET",
-            "/api/v2/torrent-runtime-protocol",
+            "/api/torrent-runtime-protocol",
             Value::Null,
         )
         .await;
@@ -223,7 +223,7 @@ async fn runtime_grants_support_local_platforms_automatic_selection_and_tracker_
             &app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/playback/{id}/heartbeat"),
+            &format!("/api/playback/{id}/heartbeat"),
             Value::Null,
         )
         .await;
@@ -234,7 +234,7 @@ async fn runtime_grants_support_local_platforms_automatic_selection_and_tracker_
             &app,
             "member-token-1",
             "DELETE",
-            &format!("/api/v2/playback/{id}"),
+            &format!("/api/playback/{id}"),
             Value::Null,
         )
         .await;
@@ -243,7 +243,7 @@ async fn runtime_grants_support_local_platforms_automatic_selection_and_tracker_
             &app,
             "member-token-1",
             "GET",
-            &format!("/api/v2/playback/{id}"),
+            &format!("/api/playback/{id}"),
             Value::Null,
         )
         .await;
@@ -259,7 +259,7 @@ async fn runtime_request_never_substitutes_gateway_delivery() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         runtime_body(&source, "runtime_unnegotiated", "desktop"),
     )
     .await;
@@ -269,19 +269,19 @@ async fn runtime_request_never_substitutes_gateway_delivery() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/torrent-runtime-protocol",
+        "/api/torrent-runtime-protocol",
         Value::Null,
     )
     .await;
     let mut forced = runtime_body(&source, "runtime_forced", "android");
     forced["force_gateway"] = json!(true);
-    let (_, value) = request(&app, "member-token-1", "POST", "/api/v2/playback", forced).await;
+    let (_, value) = request(&app, "member-token-1", "POST", "/api/playback", forced).await;
     assert_eq!(value["error_code"], "source_format_unsupported");
     let (status, _) = request(
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         runtime_body(&source, "runtime_web", "web"),
     )
     .await;
@@ -291,7 +291,7 @@ async fn ready(app: &App, input: Value) -> Value {
     ready_as(app, "member-token-1", input).await
 }
 async fn ready_as(app: &App, token: &str, input: Value) -> Value {
-    let (status, value) = request(app, token, "POST", "/api/v2/playback", input).await;
+    let (status, value) = request(app, token, "POST", "/api/playback", input).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{value}");
     let id = value["id"].as_str().unwrap();
     for _ in 0..100 {
@@ -299,7 +299,7 @@ async fn ready_as(app: &App, token: &str, input: Value) -> Value {
             app,
             token,
             "GET",
-            &format!("/api/v2/playback/{id}"),
+            &format!("/api/playback/{id}"),
             Value::Null,
         )
         .await;
@@ -329,7 +329,7 @@ async fn native_grants_are_exact_independent_transient_and_poll_never_renews() {
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -338,7 +338,7 @@ async fn native_grants_are_exact_independent_transient_and_poll_never_renews() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "first"),
     )
     .await;
@@ -351,7 +351,7 @@ async fn native_grants_are_exact_independent_transient_and_poll_never_renews() {
         &app,
         "member-token-1",
         "DELETE",
-        "/api/v2/playback-requests/first",
+        "/api/playback-requests/first",
         Value::Null,
     )
     .await;
@@ -360,7 +360,7 @@ async fn native_grants_are_exact_independent_transient_and_poll_never_renews() {
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -372,7 +372,7 @@ async fn native_grants_are_exact_independent_transient_and_poll_never_renews() {
             &app,
             "member-token-1",
             "GET",
-            &format!("/api/v2/playback/{}", second["id"].as_str().unwrap()),
+            &format!("/api/playback/{}", second["id"].as_str().unwrap()),
             Value::Null
         )
         .await
@@ -384,7 +384,7 @@ async fn native_grants_are_exact_independent_transient_and_poll_never_renews() {
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(&source, "first")
         )
         .await
@@ -407,7 +407,7 @@ async fn native_negotiation_exact_selection_and_server_owned_controls_gate_admis
         let mut input = body(&source, field);
         input[field] = value;
         assert_eq!(
-            request(&app, "member-token-1", "POST", "/api/v2/playback", input)
+            request(&app, "member-token-1", "POST", "/api/playback", input)
                 .await
                 .1["error_code"],
             "gateway_required"
@@ -419,7 +419,7 @@ async fn native_negotiation_exact_selection_and_server_owned_controls_gate_admis
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(&missing, "missing")
         )
         .await
@@ -438,7 +438,7 @@ async fn native_negotiation_exact_selection_and_server_owned_controls_gate_admis
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(&source, "unnegotiated")
         )
         .await
@@ -458,7 +458,7 @@ async fn conflicting_retries_and_other_scopes_cannot_change_source_file_or_trans
         input
     }] {
         let (status, value) =
-            request(&app, "member-token-1", "POST", "/api/v2/playback", input).await;
+            request(&app, "member-token-1", "POST", "/api/playback", input).await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(value["error_code"], "playback_conflict");
     }
@@ -467,7 +467,7 @@ async fn conflicting_retries_and_other_scopes_cannot_change_source_file_or_trans
             &app,
             "member-token-2",
             "DELETE",
-            "/api/v2/playback-requests/bound",
+            "/api/playback-requests/bound",
             Value::Null
         )
         .await
@@ -479,7 +479,7 @@ async fn conflicting_retries_and_other_scopes_cannot_change_source_file_or_trans
             &app,
             "member-token-1",
             "GET",
-            &format!("/api/v2/playback/{}", first["id"].as_str().unwrap()),
+            &format!("/api/playback/{}", first["id"].as_str().unwrap()),
             Value::Null
         )
         .await
@@ -510,7 +510,7 @@ async fn same_session_different_profile_cancellation_does_not_mutate_existing_au
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v2/playback-requests/profile-bound",
+            "/api/playback-requests/profile-bound",
             Value::Null
         )
         .await
@@ -526,13 +526,13 @@ async fn cancellation_races_admission_and_survives_entry_retirement_and_registry
     let source = torrent(&app, Some(0));
     for index in 0..20 {
         let id = format!("race{index}");
-        let cancellation_path = format!("/api/v2/playback-requests/{id}");
+        let cancellation_path = format!("/api/playback-requests/{id}");
         let (_, cancelled) = tokio::join!(
             request(
                 &app,
                 "member-token-1",
                 "POST",
-                "/api/v2/playback",
+                "/api/playback",
                 body(&source, &id)
             ),
             request(
@@ -549,7 +549,7 @@ async fn cancellation_races_admission_and_survives_entry_retirement_and_registry
                 &app,
                 "member-token-1",
                 "POST",
-                "/api/v2/playback",
+                "/api/playback",
                 body(&source, &id)
             )
             .await
@@ -563,7 +563,7 @@ async fn cancellation_races_admission_and_survives_entry_retirement_and_registry
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(&source, "race0")
         )
         .await
@@ -575,7 +575,7 @@ async fn cancellation_races_admission_and_survives_entry_retirement_and_registry
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v2/playback-requests/race0",
+            "/api/playback-requests/race0",
             Value::Null
         )
         .await
@@ -600,7 +600,7 @@ async fn quota_exhaustion_keeps_tombstones_and_refuses_admission() {
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(&source, "capacity")
         )
         .await
@@ -612,7 +612,7 @@ async fn quota_exhaustion_keeps_tombstones_and_refuses_admission() {
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v2/playback-requests/cancelled0",
+            "/api/playback-requests/cancelled0",
             Value::Null
         )
         .await
@@ -646,7 +646,7 @@ async fn native_poll_and_heartbeat_revalidate_producer_and_terminal_responses_ha
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/playback/{}", first["id"].as_str().unwrap()),
+        &format!("/api/playback/{}", first["id"].as_str().unwrap()),
         Value::Null,
     )
     .await;
@@ -670,7 +670,7 @@ async fn extension_rejects_null_duplicates_wrong_platform_and_oversized_or_encod
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/v2/playback")
+                    .uri("/api/playback")
                     .header("authorization", "Bearer member-token-1")
                     .header("content-type", "application/json")
                     .body(Body::from(input))
@@ -683,7 +683,7 @@ async fn extension_rejects_null_duplicates_wrong_platform_and_oversized_or_encod
     let mut null = body(&source, "null");
     null["client"]["native_torrent"] = Value::Null;
     assert_eq!(
-        request(&app, "member-token-1", "POST", "/api/v2/playback", null)
+        request(&app, "member-token-1", "POST", "/api/playback", null)
             .await
             .0,
         StatusCode::BAD_REQUEST
@@ -693,7 +693,7 @@ async fn extension_rejects_null_duplicates_wrong_platform_and_oversized_or_encod
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/v2/playback")
+                    .uri("/api/playback")
                     .header("authorization", "Bearer member-token-1")
                     .header("content-type", "application/json")
                     .header("content-encoding", encoding)
@@ -716,7 +716,7 @@ async fn native_renewal_is_immutable_and_expired_authority_cannot_be_revived() {
         &app,
         "member-token-1",
         "POST",
-        &format!("/api/v2/playback/{id}/heartbeat"),
+        &format!("/api/playback/{id}/heartbeat"),
         json!({}),
     )
     .await;
@@ -726,7 +726,7 @@ async fn native_renewal_is_immutable_and_expired_authority_cannot_be_revived() {
         &app,
         "member-token-1",
         "POST",
-        &format!("/api/v2/playback/{id}/heartbeat"),
+        &format!("/api/playback/{id}/heartbeat"),
         Value::Null,
     )
     .await;
@@ -749,7 +749,7 @@ async fn native_renewal_is_immutable_and_expired_authority_cannot_be_revived() {
             &app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/playback/{id}/heartbeat"),
+            &format!("/api/playback/{id}/heartbeat"),
             Value::Null
         )
         .await
@@ -760,7 +760,7 @@ async fn native_renewal_is_immutable_and_expired_authority_cannot_be_revived() {
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -772,7 +772,7 @@ async fn native_renewal_is_immutable_and_expired_authority_cannot_be_revived() {
                 &app,
                 "member-token-1",
                 "DELETE",
-                &format!("/api/v2/playback/{id}"),
+                &format!("/api/playback/{id}"),
                 Value::Null
             )
             .await
@@ -797,7 +797,7 @@ async fn exact_episode_proof_requires_explicit_context_and_survives_discovery_wi
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(&source, "inexact")
         )
         .await
@@ -844,7 +844,7 @@ async fn children_negotiate_cancel_and_keep_duplicate_validation_while_title_pol
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/playback-protocol",
+        "/api/playback-protocol",
         Value::Null,
     )
     .await;
@@ -858,7 +858,7 @@ async fn children_negotiate_cancel_and_keep_duplicate_validation_while_title_pol
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v2/playback")
+                .uri("/api/playback")
                 .header("authorization", "Bearer member-token-1")
                 .header("content-type", "application/json")
                 .body(Body::from(duplicated))
@@ -873,7 +873,7 @@ async fn children_negotiate_cancel_and_keep_duplicate_validation_while_title_pol
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v2/playback-requests/absent_child",
+            "/api/playback-requests/absent_child",
             Value::Null
         )
         .await
@@ -893,7 +893,7 @@ async fn children_negotiate_cancel_and_keep_duplicate_validation_while_title_pol
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/playback/{}", first["id"].as_str().unwrap()),
+        &format!("/api/playback/{}", first["id"].as_str().unwrap()),
         Value::Null,
     )
     .await;
@@ -921,7 +921,7 @@ async fn starting_heartbeat_renews_authority_without_exposing_private_input() {
         &app,
         "member-token-1",
         "POST",
-        &format!("/api/v2/playback/{id}/heartbeat"),
+        &format!("/api/playback/{id}/heartbeat"),
         Value::Null,
     )
     .await;
@@ -941,7 +941,7 @@ async fn failed_private_metainfo_preparation_settles_without_input_or_gateway_fa
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "bad-metainfo"),
     )
     .await;
@@ -952,7 +952,7 @@ async fn failed_private_metainfo_preparation_settles_without_input_or_gateway_fa
             &app,
             "member-token-1",
             "GET",
-            &format!("/api/v2/playback/{id}"),
+            &format!("/api/playback/{id}"),
             Value::Null,
         )
         .await;

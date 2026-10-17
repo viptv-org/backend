@@ -25,7 +25,7 @@ async fn typed_next_uses_selected_simkl_metadata_and_honest_airing_without_histo
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/continue/next",
+            "/api/profiles/1/continue/next",
             next_body(),
         )
         .await;
@@ -83,7 +83,7 @@ async fn profile_switch_during_next_metadata_read_never_publishes_a_transition()
             &pending,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/continue/next",
+            "/api/profiles/1/continue/next",
             next_body(),
         )
         .await

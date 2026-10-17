@@ -8,7 +8,7 @@ fn event(sequence: u64, action: &str, position: u64) -> Value {
 #[tokio::test]
 async fn history_first_deduplicates_lifecycle_completion_without_a_second_mutation() {
     let (app, task, writes) = tracking_server().await;
-    let events = "/api/v3/profiles/1/playback-events";
+    let events = "/api/profiles/1/playback-events";
     assert_eq!(
         request(&app, "member-token-1", "POST", events, event(1, "start", 0))
             .await
@@ -20,7 +20,7 @@ async fn history_first_deduplicates_lifecycle_completion_without_a_second_mutati
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             history_body("simkl:movie:10", 95_000, 100_000)
         )
         .await
@@ -56,7 +56,7 @@ async fn history_first_deduplicates_lifecycle_completion_without_a_second_mutati
 #[tokio::test]
 async fn stop_first_confirms_the_shared_receipt_and_suppresses_history_upload() {
     let (app, task, writes) = tracking_server().await;
-    let events = "/api/v3/profiles/1/playback-events";
+    let events = "/api/profiles/1/playback-events";
     assert_eq!(
         request(&app, "member-token-1", "POST", events, event(1, "start", 0))
             .await
@@ -81,7 +81,7 @@ async fn stop_first_confirms_the_shared_receipt_and_suppresses_history_upload() 
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             history_body("simkl:movie:10", 95_000, 100_000)
         )
         .await
@@ -104,7 +104,7 @@ async fn stop_first_confirms_the_shared_receipt_and_suppresses_history_upload() 
 #[tokio::test]
 async fn failed_stop_keeps_history_fallback_available() {
     let (app, task, writes) = tracking_server_with_failed_stop(true).await;
-    let events = "/api/v3/profiles/1/playback-events";
+    let events = "/api/profiles/1/playback-events";
     assert_eq!(
         request(&app, "member-token-1", "POST", events, event(1, "start", 0))
             .await
@@ -128,7 +128,7 @@ async fn failed_stop_keeps_history_fallback_available() {
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             history_body("simkl:movie:10", 95_000, 100_000)
         )
         .await
@@ -156,7 +156,7 @@ async fn explicit_watched_correction_is_its_own_user_action_after_automatic_comp
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             history_body("simkl:movie:10", 95_000, 100_000)
         )
         .await

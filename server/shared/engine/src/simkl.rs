@@ -86,6 +86,7 @@ pub fn card(value: &Value, category: &str) -> Result<Card, Error> {
         });
     }
     Ok(Card {
+        metadata_origin:None,
         identity: MediaIdentity {
             id: format!("simkl:{category}:{id}"),
             kind: if movie { "movie" } else { "series" }.into(),

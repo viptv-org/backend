@@ -64,6 +64,41 @@ pub(crate) async fn progress(
         value["engine_parent_identity"] = json!(card.parent_identity);
         value["engine_provider_id"] = json!(card.provider_id);
     }
+    if q.record.metadata_origin.is_none()
+        && q.record
+            .presentation
+            .as_ref()
+            .is_some_and(|card| card.metadata_origin.is_some())
+    {
+        return Err("Conflicting playback metadata origin".into());
+    }
+    if q.record.metadata_origin.is_some() {
+        {
+            let db = app
+                .db
+                .lock()
+                .map_err(|_| ApiError::from("Database unavailable"))?;
+            app.require_profile(&db, profile)?;
+        }
+        let expected = q.record.card();
+        let evidence = crate::engine_v3::origins::persistence_card(&app, &expected).await?;
+        let tracking = matches!(&evidence,crate::engine_v3::origins::MetadataEvidence::Verified(card,_) if card.metadata_origin.as_ref().is_some_and(|origin|origin.provider_id=="simkl"));
+        {
+            let mut db = app
+                .db
+                .lock()
+                .map_err(|_| ApiError::from("Database unavailable"))?;
+            let tx = db.transaction().map_err(db_error)?;
+            crate::engine_v3::scoped_library::record_db(
+                &tx, &app, profile, &q.record, &evidence, q.ended,
+            )?;
+            tx.commit().map_err(db_error)?;
+        }
+        if tracking {
+            schedule_progress(app.clone(), profile, value, false);
+        }
+        return Ok(axum::Json(json!({"ok":true})));
+    }
     // Legacy persistence preserves existing lists, completion policy and history corrections.
     crate::handlers_profiles::save_progress(State(app), Path(profile), axum::Json(value)).await
 }

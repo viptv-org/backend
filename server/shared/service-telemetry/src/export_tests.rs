@@ -107,7 +107,7 @@ async fn actual_otlp_exports_failed_requests_and_metrics_without_sensitive_field
     let telemetry = telemetry(endpoint, dir.path().join("quota"), 0.0, 1024 * 1024).await;
     let app = Router::new()
         .route(
-            "/api/v2/playback/:id/heartbeat",
+            "/api/playback/:id/heartbeat",
             post(|| async { StatusCode::BAD_GATEWAY }),
         )
         .layer(axum_middleware::from_fn_with_state(
@@ -119,7 +119,7 @@ async fn actual_otlp_exports_failed_requests_and_metrics_without_sensitive_field
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v2/playback/private-capability/heartbeat?token=private-password")
+                .uri("/api/playback/private-capability/heartbeat?token=private-password")
                 .header("authorization", "Bearer private-user-key")
                 .header("cookie", "private-session-cookie")
                 .header("traceparent", parent)

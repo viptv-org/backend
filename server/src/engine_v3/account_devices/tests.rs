@@ -15,7 +15,7 @@ async fn account_devices_include_both_kinds_and_preserve_family_scope() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/account/devices",
+        "/api/account/devices",
         Value::Null,
     )
     .await;
@@ -39,7 +39,7 @@ async fn account_devices_include_both_kinds_and_preserve_family_scope() {
             &app,
             "own-tv",
             "GET",
-            "/api/v3/account/devices",
+            "/api/account/devices",
             Value::Null
         )
         .await
@@ -51,7 +51,7 @@ async fn account_devices_include_both_kinds_and_preserve_family_scope() {
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/account/devices/s2",
+            "/api/account/devices/s2",
             Value::Null
         )
         .await
@@ -63,7 +63,7 @@ async fn account_devices_include_both_kinds_and_preserve_family_scope() {
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/account/devices/s1",
+            "/api/account/devices/s1",
             Value::Null
         )
         .await
@@ -75,7 +75,7 @@ async fn account_devices_include_both_kinds_and_preserve_family_scope() {
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/account/devices/other-browser",
+            "/api/account/devices/other-browser",
             Value::Null
         )
         .await
@@ -93,7 +93,7 @@ async fn account_devices_include_both_kinds_and_preserve_family_scope() {
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/account/devices/own-tv",
+            "/api/account/devices/own-tv",
             Value::Null
         )
         .await
@@ -134,7 +134,7 @@ async fn account_devices_sign_out_all_is_atomic_and_keeps_account_content() {
         &app,
         "member-token-1",
         "DELETE",
-        "/api/v3/account/devices",
+        "/api/account/devices",
         Value::Null,
     )
     .await;
@@ -214,7 +214,7 @@ async fn account_devices_cookie_mutations_require_csrf_and_clear_cookies() {
     for csrf in [None, Some("fixture-csrf")] {
         let mut builder = Request::builder()
             .method("DELETE")
-            .uri("/api/v3/account/devices")
+            .uri("/api/account/devices")
             .header("cookie", "viptv_session=member-token-1")
             .header("host", "fixture.invalid")
             .header("origin", "https://fixture.invalid");
@@ -264,9 +264,9 @@ async fn account_devices_parent_policy_blocks_reads_and_revocation() {
         )
         .unwrap();
     for (method, path) in [
-        ("GET", "/api/v3/account/devices"),
-        ("DELETE", "/api/v3/account/devices/own-tv"),
-        ("DELETE", "/api/v3/account/devices"),
+        ("GET", "/api/account/devices"),
+        ("DELETE", "/api/account/devices/own-tv"),
+        ("DELETE", "/api/account/devices"),
     ] {
         assert_eq!(
             request(&app, "member-token-1", method, path, Value::Null)

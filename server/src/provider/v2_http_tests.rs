@@ -32,7 +32,7 @@ async fn oversized_catalog_cursors_fail_safely_without_changing_raw_identifiers(
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/live/categories?limit=1",
+        "/api/iptv/live/categories?limit=1",
         Value::Null,
     )
     .await;
@@ -53,7 +53,7 @@ async fn oversized_catalog_cursors_fail_safely_without_changing_raw_identifiers(
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/live/categories?limit=1",
+        "/api/iptv/live/categories?limit=1",
         Value::Null,
     )
     .await;
@@ -64,7 +64,7 @@ async fn oversized_catalog_cursors_fail_safely_without_changing_raw_identifiers(
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/iptv/live/categories?limit=1&cursor={cursor}"),
+        &format!("/api/iptv/live/categories?limit=1&cursor={cursor}"),
         Value::Null,
     )
     .await;
@@ -107,7 +107,7 @@ async fn oversized_match_cursor_fails_before_emitting_an_unusable_token() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/matches?limit=1",
+        "/api/iptv/matches?limit=1",
         Value::Null,
     )
     .await;
@@ -128,7 +128,7 @@ async fn oversized_match_cursor_fails_before_emitting_an_unusable_token() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/matches?limit=1",
+        "/api/iptv/matches?limit=1",
         Value::Null,
     )
     .await;
@@ -138,7 +138,7 @@ async fn oversized_match_cursor_fails_before_emitting_an_unusable_token() {
         "member-token-1",
         "GET",
         &format!(
-            "/api/v2/iptv/matches?limit=1&cursor={}",
+            "/api/iptv/matches?limit=1&cursor={}",
             first["next_cursor"].as_str().unwrap()
         ),
         Value::Null,
@@ -174,14 +174,14 @@ async fn account_matches_are_paged_and_cursors_cannot_cross_accounts() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/matches",
+        "/api/iptv/matches",
         Value::Null,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(first["items"].as_array().unwrap().len(), 50);
     let cursor = first["next_cursor"].as_str().unwrap();
-    let path = format!("/api/v2/iptv/matches?cursor={cursor}");
+    let path = format!("/api/iptv/matches?cursor={cursor}");
     let (status, second) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert_ne!(first["items"][0]["vod_id"], second["items"][0]["vod_id"]);
@@ -195,7 +195,7 @@ async fn account_matches_are_paged_and_cursors_cannot_cross_accounts() {
         &app,
         "member-token-2",
         "GET",
-        "/api/v2/iptv/matches",
+        "/api/iptv/matches",
         Value::Null,
     )
     .await;
@@ -205,7 +205,7 @@ async fn account_matches_are_paged_and_cursors_cannot_cross_accounts() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/matches?search=Private",
+        "/api/iptv/matches?search=Private",
         Value::Null,
     )
     .await;
@@ -223,7 +223,7 @@ async fn account_matches_are_paged_and_cursors_cannot_cross_accounts() {
                 &app,
                 "member-token-1",
                 "GET",
-                &format!("/api/v2/iptv/matches?{query}"),
+                &format!("/api/iptv/matches?{query}"),
                 Value::Null
             )
             .await
@@ -247,7 +247,7 @@ async fn matches_traverse_both_directions_across_owned_providers_and_filters() {
         "&kind=movie",
         "&provider_id=2&kind=series&search=Fixture",
     ] {
-        let base = format!("/api/v2/iptv/matches?limit=17{filter}");
+        let base = format!("/api/iptv/matches?limit=17{filter}");
         let mut page = request(&app, "member-token-1", "GET", &base, Value::Null)
             .await
             .1;
@@ -332,17 +332,17 @@ async fn match_cursors_reject_stale_owned_catalogs_but_ignore_foreign_mutations(
             &app,
             "member-token-1",
             "GET",
-            "/api/v2/iptv/matches?limit=17",
+            "/api/iptv/matches?limit=17",
             Value::Null,
         )
         .await;
         let next = first["next_cursor"].as_str().unwrap();
-        let next_path = format!("/api/v2/iptv/matches?limit=17&cursor={next}");
+        let next_path = format!("/api/iptv/matches?limit=17&cursor={next}");
         let (status, second) =
             request(&app, "member-token-1", "GET", &next_path, Value::Null).await;
         assert_eq!(status, StatusCode::OK, "{second}");
         let reverse_path = format!(
-            "/api/v2/iptv/matches?limit=17&cursor={}",
+            "/api/iptv/matches?limit=17&cursor={}",
             second["previous_cursor"].as_str().unwrap()
         );
         {
@@ -389,13 +389,13 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/matches",
+        "/api/iptv/matches",
         Value::Null,
     )
     .await;
     let body = json!({"vod_id":"vod:1:0000","metadata_id":"tt1234567","type":"movie"});
     assert_eq!(
-        request(&app, "member-token-1", "PUT", "/api/v2/iptv/matches", body)
+        request(&app, "member-token-1", "PUT", "/api/iptv/matches", body)
             .await
             .0,
         StatusCode::OK
@@ -405,7 +405,7 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
         "member-token-1",
         "GET",
         &format!(
-            "/api/v2/iptv/matches?cursor={}",
+            "/api/iptv/matches?cursor={}",
             before["next_cursor"].as_str().unwrap()
         ),
         Value::Null,
@@ -417,7 +417,7 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/matches?limit=1",
+        "/api/iptv/matches?limit=1",
         Value::Null,
     )
     .await;
@@ -429,7 +429,7 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
                 &app,
                 "member-token-1",
                 "PUT",
-                "/api/v2/iptv/matches",
+                "/api/iptv/matches",
                 json!({"vod_id":id,"metadata_id":"tt9999999","type":"movie"}),
             )
             .await,
@@ -441,7 +441,7 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/live-default",
+        "/api/iptv/live-default",
         Value::Null,
     )
     .await;
@@ -451,7 +451,7 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
             &app,
             "member-token-1",
             "PUT",
-            "/api/v2/iptv/live-default",
+            "/api/iptv/live-default",
             json!({"catalog_id":3})
         )
         .await
@@ -463,7 +463,7 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
             &app,
             "member-token-1",
             "PUT",
-            "/api/v2/iptv/live-default",
+            "/api/iptv/live-default",
             json!({"catalog_id":2})
         )
         .await
@@ -474,7 +474,7 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/live-default",
+        "/api/iptv/live-default",
         Value::Null,
     )
     .await;
@@ -488,7 +488,7 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/live-default",
+        "/api/iptv/live-default",
         Value::Null,
     )
     .await;
@@ -503,7 +503,7 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/matches?provider_id=3",
+        "/api/iptv/matches?provider_id=3",
         Value::Null,
     )
     .await;
@@ -525,7 +525,7 @@ async fn locked_kids_and_paired_devices_cannot_manage_account_sources() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/matches",
+        "/api/iptv/matches",
         Value::Null,
     )
     .await;
@@ -548,7 +548,7 @@ async fn locked_kids_and_paired_devices_cannot_manage_account_sources() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/matches",
+        "/api/iptv/matches",
         Value::Null,
     )
     .await;
@@ -573,7 +573,7 @@ async fn raw_live_pages_preserve_order_logos_and_account_default() {
             db.execute("INSERT INTO provider_live_categories_v2 VALUES(?1,'sports','Sports',0),(?1,'news','News',1)", [provider]).unwrap();
         }
     }
-    let root = "/api/v2/iptv/live/channels";
+    let root = "/api/iptv/live/channels";
     let (status, first) = request(&app, "member-token-1", "GET", root, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{first}");
     assert_eq!(first["catalog_id"], 1);
@@ -761,7 +761,7 @@ async fn raw_live_pages_preserve_order_logos_and_account_default() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/live/categories?limit=1",
+        "/api/iptv/live/categories?limit=1",
         Value::Null,
     )
     .await;
@@ -783,7 +783,7 @@ async fn raw_live_pages_preserve_order_logos_and_account_default() {
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/iptv/live/categories?cursor={cat_cursor}"),
+        &format!("/api/iptv/live/categories?cursor={cat_cursor}"),
         Value::Null,
     )
     .await;
@@ -825,7 +825,7 @@ async fn raw_live_browsing_allows_paired_devices_but_not_locked_kids() {
             [],
         )
         .unwrap();
-    let path = "/api/v2/iptv/live/channels";
+    let path = "/api/iptv/live/channels";
     // Account two has no selected profile: catalog access cannot bypass that.
     assert_eq!(
         request(&app, "member-token-2", "GET", path, Value::Null)
@@ -888,7 +888,7 @@ async fn live_personal_subsets_bind_selected_profile_and_default_catalog_without
         .unwrap();
         db.execute("INSERT INTO favorites(profile_id,id,type,name) VALUES(20,'iptv:1:0','live','Other profile')",[]).unwrap();
     }
-    let root = "/api/v2/iptv/live/channels?collection=favorites&limit=1";
+    let root = "/api/iptv/live/channels?collection=favorites&limit=1";
     let (status, first) = request(&app, "member-token-1", "GET", root, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{first}");
     assert_eq!(first["items"][0]["id"], "iptv:1:1");
@@ -902,7 +902,7 @@ async fn live_personal_subsets_bind_selected_profile_and_default_catalog_without
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/live/channels?collection=recent",
+        "/api/iptv/live/channels?collection=recent",
         Value::Null,
     )
     .await;
@@ -911,7 +911,7 @@ async fn live_personal_subsets_bind_selected_profile_and_default_catalog_without
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/live/channels?collection=favorites&catalog_id=2",
+        "/api/iptv/live/channels?collection=favorites&catalog_id=2",
         Value::Null,
     )
     .await;
@@ -939,7 +939,7 @@ async fn live_personal_subsets_bind_selected_profile_and_default_catalog_without
                 &app,
                 "member-token-1",
                 "GET",
-                &format!("/api/v2/iptv/live/channels?{suffix}"),
+                &format!("/api/iptv/live/channels?{suffix}"),
                 Value::Null
             )
             .await
@@ -957,7 +957,7 @@ async fn empty_account_live_catalog_has_no_implicit_global_fallback() {
         .unwrap()
         .execute("DELETE FROM provider_ownership WHERE account_id=1", [])
         .unwrap();
-    for path in ["/api/v2/iptv/live/channels", "/api/v2/iptv/live/categories"] {
+    for path in ["/api/iptv/live/channels", "/api/iptv/live/categories"] {
         let (status, page) = request(&app, "member-token-1", "GET", path, Value::Null).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
@@ -1001,9 +1001,9 @@ async fn v2_discovery_uses_three_owned_providers_not_live_default_or_foreign_sou
     async fn finish(app: &App, value: Value) -> (String, Value) {
         crate::test_support::encrypt_fixture_sources(app);
         let (status, start) =
-            request(app, "member-token-1", "POST", "/api/v2/streams", value).await;
+            request(app, "member-token-1", "POST", "/api/streams", value).await;
         assert_eq!(status, StatusCode::OK, "{start}");
-        let path = format!("/api/v2/streams/{}", start["id"].as_str().unwrap());
+        let path = format!("/api/streams/{}", start["id"].as_str().unwrap());
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 let (status, result) =
@@ -1125,7 +1125,7 @@ async fn v2_discovery_revocation_during_series_fetch_does_not_publish_or_cache()
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/streams",
+        "/api/streams",
         json!({"type":"series","id":"tt1234567:1:2","only_provider_id":1}),
     )
     .await;
@@ -1142,7 +1142,7 @@ async fn v2_discovery_revocation_during_series_fetch_does_not_publish_or_cache()
         )
         .unwrap();
     release.notify_one();
-    let path = format!("/api/v2/streams/{}", start["id"].as_str().unwrap());
+    let path = format!("/api/streams/{}", start["id"].as_str().unwrap());
     let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             let (status, value) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
@@ -1189,7 +1189,7 @@ async fn v2_guide_uses_owned_raw_channel_and_hides_foreign_or_missing_ids() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/guide/iptv:1:1",
+        "/api/iptv/guide/iptv:1:1",
         Value::Null,
     )
     .await;
@@ -1199,12 +1199,12 @@ async fn v2_guide_uses_owned_raw_channel_and_hides_foreign_or_missing_ids() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/streams",
+        "/api/streams",
         json!({"type":"live","id":"iptv:1:1"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{start}");
-    let path = format!("/api/v2/streams/{}", start["id"].as_str().unwrap());
+    let path = format!("/api/streams/{}", start["id"].as_str().unwrap());
     let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             let (_, result) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
@@ -1239,7 +1239,7 @@ async fn v2_guide_uses_owned_raw_channel_and_hides_foreign_or_missing_ids() {
                 &app,
                 "member-token-1",
                 "GET",
-                &format!("/api/v2/iptv/guide/{id}"),
+                &format!("/api/iptv/guide/{id}"),
                 Value::Null,
             )
             .await,
@@ -1269,7 +1269,7 @@ async fn exact_live_source_is_owned_private_and_independent_of_addon_discovery()
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/iptv/live/iptv:1:7/source",
+        "/api/iptv/live/iptv:1:7/source",
         Value::Null,
     )
     .await;
@@ -1294,7 +1294,7 @@ async fn exact_live_source_is_owned_private_and_independent_of_addon_discovery()
     }
     let playback = json!({"request_id":"exact_live","stream_id":id,"client":{"platform":"android","can_play_direct":true,"max_width":3840,"max_height":2160,"video_codecs":["h264"],"audio_codecs":["aac"]}});
     let (status, started) =
-        request(&app, "member-token-1", "POST", "/api/v2/playback", playback).await;
+        request(&app, "member-token-1", "POST", "/api/playback", playback).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{started}");
     let playback_id = started["id"].as_str().unwrap();
     let (status, ready) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
@@ -1303,7 +1303,7 @@ async fn exact_live_source_is_owned_private_and_independent_of_addon_discovery()
                 &app,
                 "member-token-1",
                 "GET",
-                &format!("/api/v2/playback/{playback_id}"),
+                &format!("/api/playback/{playback_id}"),
                 Value::Null,
             )
             .await;
@@ -1326,7 +1326,7 @@ async fn exact_live_source_is_owned_private_and_independent_of_addon_discovery()
         &app,
         "member-token-1",
         "DELETE",
-        &format!("/api/v2/playback/{playback_id}"),
+        &format!("/api/playback/{playback_id}"),
         Value::Null,
     )
     .await;
@@ -1338,7 +1338,7 @@ async fn exact_live_source_is_owned_private_and_independent_of_addon_discovery()
                 &app,
                 "member-token-1",
                 "POST",
-                &format!("/api/v2/iptv/live/{channel}/source"),
+                &format!("/api/iptv/live/{channel}/source"),
                 Value::Null,
             )
             .await,
@@ -1357,7 +1357,7 @@ async fn exact_live_source_is_owned_private_and_independent_of_addon_discovery()
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/iptv/live/iptv:1:7/source",
+            "/api/iptv/live/iptv:1:7/source",
             Value::Null
         )
         .await,
@@ -1375,7 +1375,7 @@ async fn exact_live_source_is_owned_private_and_independent_of_addon_discovery()
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/iptv/live/iptv:2:7/source",
+        "/api/iptv/live/iptv:2:7/source",
         Value::Null,
     )
     .await;
@@ -1422,9 +1422,9 @@ async fn approved_kids_vod_uses_v2_without_unlock_and_cannot_smuggle_other_title
         db.execute("INSERT INTO kids_media(account_id,kind,id,parent_id,metadata,age,updated_at) VALUES(1,'movie','tt1234567','tt1234567',?1,5,?2)",params![json!({"id":"tt1234567","type":"movie","name":"Approved","year":2020,"imdb_id":"tt1234567","tmdb_id":"123"}).to_string(),util::now()]).unwrap();
         db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,imdb_id,extension) VALUES('approved',1,'9','movie','Approved','approved',2020,'tt1234567','mp4'),('adult',1,'10','movie','Adult','adult',2020,'tt9999999','mp4')",[]).unwrap();
     }
-    let (status,started)=request(&app,"member-token-1","POST","/api/v2/streams",json!({"type":"movie","id":"tt1234567","name":"Adult","imdb_id":"tt9999999","only_provider_id":3})).await;
+    let (status,started)=request(&app,"member-token-1","POST","/api/streams",json!({"type":"movie","id":"tt1234567","name":"Adult","imdb_id":"tt9999999","only_provider_id":3})).await;
     assert_eq!(status, StatusCode::OK, "{started}");
-    let path = format!("/api/v2/streams/{}", started["id"].as_str().unwrap());
+    let path = format!("/api/streams/{}", started["id"].as_str().unwrap());
     let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             let (status, value) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
@@ -1457,7 +1457,7 @@ async fn approved_kids_vod_uses_v2_without_unlock_and_cannot_smuggle_other_title
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/streams",
+            "/api/streams",
             json!({"type":"movie","id":"tt9999999"})
         )
         .await

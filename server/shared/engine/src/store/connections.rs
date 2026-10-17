@@ -18,6 +18,9 @@ impl Store {
             profile_id: profile_id.into(),
             revision: 0,
         };
+        if connection.account_id != scope.account_id || connection.private_profile_id.as_ref().is_some_and(|owner|owner!=profile_id) {
+            return Err(Error::Forbidden);
+        }
         let mut profile = self.profile(&scope)?.ok_or(Error::Forbidden)?;
         let before = profile.scope.revision;
         let assignment = profile

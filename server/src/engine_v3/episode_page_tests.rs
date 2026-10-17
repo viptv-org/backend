@@ -13,7 +13,7 @@ async fn stremio_detail_limits_reuse_metadata_and_preserve_defaults_and_terminal
     app.addons.allow_test_loopback = true;
     app.db.lock().unwrap().execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES('Metadata',?1,?2,1)",params![format!("http://{address}/manifest.json"),json!({"id":"fixture","name":"Metadata","version":"1","resources":["meta"],"types":["series"]}).to_string()]).unwrap();
     crate::test_support::encrypt_fixture_sources(&app);
-    let base = "/api/v3/meta/series/large-parent";
+    let base = "/api/meta/series/large-parent";
     let (status, first) = request(&app, "member-token-1", "GET", base, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{first}");
     assert_eq!(first["episodes"].as_array().unwrap().len(), 24);

@@ -68,7 +68,7 @@ async fn live_source_fixture(app: &App) -> String {
         app,
         "member-token-1",
         "POST",
-        "/api/v2/iptv/live/iptv:1:7/source",
+        "/api/iptv/live/iptv:1:7/source",
         Value::Null,
     )
     .await;
@@ -87,7 +87,7 @@ async fn ready_live_admission_records_exact_profile_history_once_for_both_delive
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             input.clone(),
         )
         .await;
@@ -127,12 +127,12 @@ async fn ready_live_admission_records_exact_profile_history_once_for_both_delive
             (1, "iptv:1:7", "Selected channel", 0.0, 0.0)
         );
         assert!(first.3.ends_with("/7.png"));
-        request(&app, "member-token-1", "POST", "/api/v2/playback", input).await;
+        request(&app, "member-token-1", "POST", "/api/playback", input).await;
         request(
             &app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/playback/{id}/heartbeat"),
+            &format!("/api/playback/{id}/heartbeat"),
             Value::Null,
         )
         .await;
@@ -141,7 +141,7 @@ async fn ready_live_admission_records_exact_profile_history_once_for_both_delive
             &app,
             "member-token-1",
             "GET",
-            "/api/v2/iptv/live/channels?collection=recent",
+            "/api/iptv/live/channels?collection=recent",
             Value::Null,
         )
         .await;
@@ -151,7 +151,7 @@ async fn ready_live_admission_records_exact_profile_history_once_for_both_delive
             &app,
             "member-token-1",
             "DELETE",
-            &format!("/api/v2/playback/{id}"),
+            &format!("/api/playback/{id}"),
             Value::Null,
         )
         .await;
@@ -167,7 +167,7 @@ async fn ready_live_admission_records_exact_profile_history_once_for_both_delive
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(&source, "second-live", platform),
         )
         .await;
@@ -203,7 +203,7 @@ async fn cancelled_or_removed_live_admission_does_not_record_history() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "cancel-live", "roku"),
     )
     .await;
@@ -219,7 +219,7 @@ async fn cancelled_or_removed_live_admission_does_not_record_history() {
         &app,
         "member-token-1",
         "DELETE",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -248,7 +248,7 @@ async fn cancelled_or_removed_live_admission_does_not_record_history() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "removed-live", "android"),
     )
     .await;
@@ -274,7 +274,7 @@ async fn source_revoked_during_live_gateway_start_never_records_recent() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "revoke-live", "roku"),
     )
     .await;
@@ -346,7 +346,9 @@ async fn setup() -> (App, Peer) {
     let received_captions = captions.clone();
     let frames = Arc::new(Mutex::new(Vec::new()));
     let received_frames = frames.clone();
+    let received_frames_v2 = frames.clone();
     let protocol_mode = mode.clone();
+    let protocol = axum::routing::get(move || { let mode=protocol_mode.clone(); async move { Json(if mode.load(Ordering::SeqCst)==8 { json!({"version":2,"first_frame_ack":false}) } else { json!({"version":2,"first_frame_ack":true}) }) } });
     let create = axum::routing::post(move |Json(value): Json<Value>| {
         let created = created.clone();
         let state = state.clone();
@@ -400,9 +402,12 @@ async fn setup() -> (App, Peer) {
     }}))
         .route("/v1/preparations/:id",axum::routing::get(||async{Json(json!({"stage":"fetching_metadata","private_extra":"never-forward"}))}))
         .route("/v1/sessions", create.clone())
+        .route("/torrent-sessions", create.clone())
         .route("/v2/torrent-sessions", create)
-        .route("/v2/torrent-runtime-protocol", axum::routing::get(move || { let mode=protocol_mode.clone(); async move { Json(if mode.load(Ordering::SeqCst)==8 { json!({"version":2,"first_frame_ack":false}) } else { json!({"version":2,"first_frame_ack":true}) }) }}))
-        .route("/v2/torrent-sessions/:id/first-frame", axum::routing::post(move |Path(id):Path<String>, Json(body):Json<Value>| { let frames=received_frames.clone(); async move { assert_eq!(body,json!({}));frames.lock().unwrap().push(id);StatusCode::NO_CONTENT }}))
+        .route("/torrent-runtime-protocol", protocol.clone())
+        .route("/v2/torrent-runtime-protocol", protocol)
+        .route("/torrent-sessions/:id/first-frame", axum::routing::post(move |Path(id):Path<String>, Json(body):Json<Value>| { let frames=received_frames; async move { assert_eq!(body,json!({}));frames.lock().unwrap().push(id);StatusCode::NO_CONTENT }}))
+        .route("/v2/torrent-sessions/:id/first-frame", axum::routing::post(move |Path(id):Path<String>, Json(body):Json<Value>| { let frames=received_frames_v2; async move { assert_eq!(body,json!({}));frames.lock().unwrap().push(id);StatusCode::NO_CONTENT }}))
         .route("/v1/sessions/:id",axum::routing::get(|Path(id):Path<String>|async move{Json(remote(&id))}).delete(move||{let deleted=deleted.clone();async move{deleted.fetch_add(1,Ordering::SeqCst);StatusCode::NO_CONTENT}}))
         .route("/v1/sessions/:id/captions",axum::routing::post(move |Path(id):Path<String>,headers:axum::http::HeaderMap,Json(body):Json<Value>|{let received=received_captions.clone();async move {
             assert!(headers["authorization"].to_str().unwrap().starts_with("Bearer pgk_"));
@@ -462,7 +467,7 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/streams",
+        "/api/streams",
         json!({"type":"movie","id":"fixture","only_addons":true}),
     )
     .await;
@@ -472,7 +477,7 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
                 &app,
                 "member-token-1",
                 "GET",
-                &format!("/api/v2/streams/{}", start["id"].as_str().unwrap()),
+                &format!("/api/streams/{}", start["id"].as_str().unwrap()),
                 Value::Null,
             )
             .await;
@@ -495,7 +500,7 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(first, &format!("torrent-{platform}"), platform),
         )
         .await;
@@ -517,7 +522,7 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(first, &format!("torrent-refused-{mode}"), "android"),
         )
         .await;
@@ -532,7 +537,7 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(second, "torrent-other-file", "android"),
     )
     .await;
@@ -547,7 +552,7 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(first, "torrent-cache-full", "android"),
     )
     .await;
@@ -563,7 +568,7 @@ async fn settled_for(app: &App, token: &str, id: &str) -> Value {
                 app,
                 token,
                 "GET",
-                &format!("/api/v2/playback/{id}"),
+                &format!("/api/playback/{id}"),
                 Value::Null,
             )
             .await;
@@ -604,7 +609,7 @@ async fn reflected_private_source_headers_are_hidden_in_cards_and_preserved_for_
             &app,
             "member-token-2",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(id, "foreign", platform),
         )
         .await;
@@ -615,7 +620,7 @@ async fn reflected_private_source_headers_are_hidden_in_cards_and_preserved_for_
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(id, "private-headers", platform),
         )
         .await;
@@ -640,7 +645,7 @@ async fn reflected_private_source_headers_are_hidden_in_cards_and_preserved_for_
             &app,
             "member-token-1",
             "DELETE",
-            &format!("/api/v2/playback/{playback}"),
+            &format!("/api/playback/{playback}"),
             Value::Null,
         )
         .await;
@@ -673,7 +678,7 @@ async fn playback_never_falls_back_to_another_accounts_gateway_without_a_grant()
         &app,
         "member-token-2",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(source, "private", "roku"),
     )
     .await;
@@ -685,7 +690,7 @@ async fn playback_never_falls_back_to_another_accounts_gateway_without_a_grant()
         &app,
         "member-token-2",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(source, "granted", "roku"),
     )
     .await;
@@ -699,7 +704,7 @@ async fn playback_never_falls_back_to_another_accounts_gateway_without_a_grant()
         &app,
         "member-token-2",
         "POST",
-        &format!("/api/v2/playback/{id}/heartbeat"),
+        &format!("/api/playback/{id}/heartbeat"),
         Value::Null,
     )
     .await
@@ -722,7 +727,7 @@ async fn native_direct_and_mandatory_gateway_policy_do_not_invoke_embedded_playb
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(&source, platform, platform),
         )
         .await;
@@ -734,7 +739,7 @@ async fn native_direct_and_mandatory_gateway_policy_do_not_invoke_embedded_playb
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         input.clone(),
     )
     .await;
@@ -746,14 +751,14 @@ async fn native_direct_and_mandatory_gateway_policy_do_not_invoke_embedded_playb
         .as_str()
         .unwrap()
         .starts_with("http://"));
-    let (_, retry) = request(&app, "member-token-1", "POST", "/api/v2/playback", input).await;
+    let (_, retry) = request(&app, "member-token-1", "POST", "/api/playback", input).await;
     assert_eq!(retry["id"], id);
     assert_eq!(
         request(
             &app,
             "member-token-2",
             "GET",
-            &format!("/api/v2/playback/{id}"),
+            &format!("/api/playback/{id}"),
             Value::Null
         )
         .await
@@ -765,7 +770,7 @@ async fn native_direct_and_mandatory_gateway_policy_do_not_invoke_embedded_playb
         &app,
         "member-token-1",
         "DELETE",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -774,7 +779,7 @@ async fn native_direct_and_mandatory_gateway_policy_do_not_invoke_embedded_playb
             &app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/playback/{id}/heartbeat"),
+            &format!("/api/playback/{id}/heartbeat"),
             Value::Null
         )
         .await
@@ -793,7 +798,7 @@ async fn ordinary_direct_and_gateway_heartbeat_preserve_empty_json_compatibility
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(&source, "heartbeat_compat", platform),
         )
         .await;
@@ -808,7 +813,7 @@ async fn ordinary_direct_and_gateway_heartbeat_preserve_empty_json_compatibility
                 "gateway"
             }
         );
-        let path = format!("/api/v2/playback/{id}/heartbeat");
+        let path = format!("/api/playback/{id}/heartbeat");
         for body in [json!([]), json!({"extra":true}), json!(0)] {
             let (status, response) = request(&app, "member-token-1", "POST", &path, body).await;
             assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -837,7 +842,7 @@ async fn conversion_and_track_choices_require_and_reach_the_authorized_gateway()
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         input.clone(),
     )
     .await;
@@ -848,7 +853,7 @@ async fn conversion_and_track_choices_require_and_reach_the_authorized_gateway()
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         input.clone(),
     )
     .await;
@@ -865,7 +870,7 @@ async fn conversion_and_track_choices_require_and_reach_the_authorized_gateway()
     assert_eq!(peer.outputs.lock().unwrap()[0]["max_height"], 2160);
     input["conversion"] = json!("video");
     assert_eq!(
-        request(&app, "member-token-1", "POST", "/api/v2/playback", input)
+        request(&app, "member-token-1", "POST", "/api/playback", input)
             .await
             .0,
         StatusCode::CONFLICT
@@ -874,7 +879,7 @@ async fn conversion_and_track_choices_require_and_reach_the_authorized_gateway()
     bad["subtitles_off"] = json!(true);
     bad["subtitle_track"] = json!(3);
     assert_eq!(
-        request(&app, "member-token-1", "POST", "/api/v2/playback", bad)
+        request(&app, "member-token-1", "POST", "/api/playback", bad)
             .await
             .0,
         StatusCode::BAD_REQUEST
@@ -894,7 +899,7 @@ async fn v2_profile_preferences_are_scoped_snapshots_without_quality_clamping() 
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         direct.clone(),
     )
     .await;
@@ -907,14 +912,14 @@ async fn v2_profile_preferences_are_scoped_snapshots_without_quality_clamping() 
     assert!(ready["delivery"]["preferences"].get("quality").is_none());
     save("de", "es");
     let (status, repeated) =
-        request(&app, "member-token-1", "POST", "/api/v2/playback", direct).await;
+        request(&app, "member-token-1", "POST", "/api/playback", direct).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(repeated["id"], id);
     assert_eq!(repeated["delivery"]["preferences"]["audio_language"], "ja");
     gateway(&app, "first", 0);
     let managed = body(&source, "profile_new", "roku");
     let (status, admission) =
-        request(&app, "member-token-1", "POST", "/api/v2/playback", managed).await;
+        request(&app, "member-token-1", "POST", "/api/playback", managed).await;
     assert_eq!(status, StatusCode::ACCEPTED);
     assert_eq!(
         settled(&app, admission["id"].as_str().unwrap()).await["status"],
@@ -927,7 +932,7 @@ async fn v2_profile_preferences_are_scoped_snapshots_without_quality_clamping() 
     let mut off = body(&source, "profile_off", "roku");
     off["subtitles_off"] = json!(true);
     off["preferred_audio_language"] = json!("it");
-    let (_, admission) = request(&app, "member-token-1", "POST", "/api/v2/playback", off).await;
+    let (_, admission) = request(&app, "member-token-1", "POST", "/api/playback", off).await;
     assert_eq!(
         settled(&app, admission["id"].as_str().unwrap()).await["status"],
         "ready"
@@ -945,7 +950,7 @@ async fn gateway_selection_affinity_renewal_and_grant_revocation_are_scoped() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "one", "roku"),
     )
     .await;
@@ -962,7 +967,7 @@ async fn gateway_selection_affinity_renewal_and_grant_revocation_are_scoped() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "two", "vizio"),
     )
     .await;
@@ -978,7 +983,7 @@ async fn gateway_selection_affinity_renewal_and_grant_revocation_are_scoped() {
             &app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/playback/{id}/heartbeat"),
+            &format!("/api/playback/{id}/heartbeat"),
             Value::Null
         )
         .await
@@ -989,7 +994,7 @@ async fn gateway_selection_affinity_renewal_and_grant_revocation_are_scoped() {
         &app,
         "member-token-1",
         "DELETE",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -1006,7 +1011,7 @@ async fn gateway_selection_affinity_renewal_and_grant_revocation_are_scoped() {
             &app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/playback/{id2}/heartbeat"),
+            &format!("/api/playback/{id2}/heartbeat"),
             Value::Null
         )
         .await
@@ -1031,7 +1036,7 @@ async fn source_mutation_and_remote_failures_are_closed_and_actionable() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source_id, "bad-url", "roku"),
     )
     .await;
@@ -1045,7 +1050,7 @@ async fn source_mutation_and_remote_failures_are_closed_and_actionable() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source_id, "limit", "roku"),
     )
     .await;
@@ -1068,7 +1073,7 @@ async fn source_mutation_and_remote_failures_are_closed_and_actionable() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source_id, "changed", "android"),
     )
     .await;
@@ -1085,7 +1090,7 @@ async fn stopping_during_gateway_start_releases_the_late_viewer() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "cancel", "roku"),
     )
     .await;
@@ -1101,7 +1106,7 @@ async fn stopping_during_gateway_start_releases_the_late_viewer() {
         &app,
         "member-token-1",
         "DELETE",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -1127,7 +1132,7 @@ async fn fresh_playback_skips_full_gateways_and_unassigned_provider_sources_fail
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&id, "capacity", "roku"),
     )
     .await;
@@ -1160,7 +1165,7 @@ async fn fresh_playback_skips_full_gateways_and_unassigned_provider_sources_fail
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(items[0]["id"].as_str().unwrap(), "unassigned", "android"),
     )
     .await;
@@ -1336,7 +1341,7 @@ async fn isolated_backend_gateway_real_media_lifecycle() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(items[0]["id"].as_str().unwrap(), "real-media", "roku"),
     )
     .await;
@@ -1348,7 +1353,7 @@ async fn isolated_backend_gateway_real_media_lifecycle() {
                 &app,
                 "member-token-1",
                 "GET",
-                &format!("/api/v2/playback/{id}"),
+                &format!("/api/playback/{id}"),
                 Value::Null,
             )
             .await;
@@ -1400,7 +1405,7 @@ async fn isolated_backend_gateway_real_media_lifecycle() {
             &app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/playback/{id}/heartbeat"),
+            &format!("/api/playback/{id}/heartbeat"),
             Value::Null
         )
         .await
@@ -1411,7 +1416,7 @@ async fn isolated_backend_gateway_real_media_lifecycle() {
         &app,
         "member-token-1",
         "DELETE",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -1453,7 +1458,7 @@ async fn torrent_progress_is_measured_scoped_and_separate_from_authority() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(cards[0]["id"].as_str().unwrap(), "progress-owner", "web"),
     )
     .await;
@@ -1466,7 +1471,7 @@ async fn torrent_progress_is_measured_scoped_and_separate_from_authority() {
     .await
     .unwrap();
     let expiry = start["expires_at"].clone();
-    let path = format!("/api/v2/playback/{id}/progress");
+    let path = format!("/api/playback/{id}/progress");
     let (status, stage) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stage, json!({"stage":"fetching_metadata"}));
@@ -1480,7 +1485,7 @@ async fn torrent_progress_is_measured_scoped_and_separate_from_authority() {
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -1497,7 +1502,7 @@ async fn torrent_progress_is_measured_scoped_and_separate_from_authority() {
         &app,
         "member-token-1",
         "DELETE",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -1525,7 +1530,7 @@ async fn decoder_start_brokers_frames_without_renewing_or_bypassing_source_autho
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback-decoder-start",
+        "/api/playback-decoder-start",
         input.clone(),
     )
     .await;
@@ -1535,7 +1540,7 @@ async fn decoder_start_brokers_frames_without_renewing_or_bypassing_source_autho
     assert_eq!(ready["status"], "ready", "{ready}");
     let authority = app.gateway_playbacks.frame_authority_facts(id);
     assert!(authority.2);
-    let path = format!("/api/v2/playback/{id}/first-frame");
+    let path = format!("/api/playback/{id}/first-frame");
     for _ in 0..2 {
         assert_eq!(
             request(&app, "member-token-1", "POST", &path, json!({}))
@@ -1547,7 +1552,7 @@ async fn decoder_start_brokers_frames_without_renewing_or_bypassing_source_autho
     assert_eq!(peer.frames.lock().unwrap().len(), 2);
     assert_eq!(app.gateway_playbacks.frame_authority_facts(id), authority);
     assert_eq!(
-        request(&app, "member-token-1", "POST", "/api/v2/playback", input)
+        request(&app, "member-token-1", "POST", "/api/playback", input)
             .await
             .0,
         StatusCode::CONFLICT
@@ -1588,7 +1593,7 @@ async fn decoder_start_refuses_gateway_without_frame_protocol_before_source_crea
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback-decoder-start",
+        "/api/playback-decoder-start",
         body(
             sources[0]["id"].as_str().unwrap(),
             "unsupported-ack",

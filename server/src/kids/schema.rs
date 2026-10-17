@@ -1,6 +1,7 @@
 use super::*;
 
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
+    super::scoped::init(db)?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS kids_profiles(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,max_age INTEGER NOT NULL DEFAULT 12,revision INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS parent_controls(account_id INTEGER PRIMARY KEY REFERENCES auth_accounts(id) ON DELETE CASCADE,pin_hash TEXT NOT NULL,failures INTEGER NOT NULL DEFAULT 0,blocked_until INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS parent_grants(session_id TEXT PRIMARY KEY REFERENCES auth_sessions(id) ON DELETE CASCADE,expires INTEGER NOT NULL);
@@ -204,13 +205,62 @@ pub(crate) async fn approve(
     } else {
         None
     };
-    blocking(move||{let mut db=app.db.lock().unwrap();let tx=db.transaction().map_err(db_error)?;app.request_lease().validate(&tx)?;let account=manager(&tx,&app.identity(),Some(profile))?;
-        if let Some(meta)=meta {observe(&tx,account,&kind,&meta,true)?;let (_,_,age,_)=media(&tx,&app.identity(),&kind,&id)?.ok_or("Metadata unavailable")?;if age.is_some_and(|age|age>=18){return Err("Adult titles cannot be approved for kids profiles".into());}
-            let count:i64=tx.query_row("SELECT count(*) FROM kids_approvals WHERE profile_id=?1",[profile],|r|r.get(0)).map_err(db_error)?;let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM kids_approvals WHERE profile_id=?1 AND kind=?2 AND id=?3)",params![profile,kind,id],|r|r.get(0)).map_err(db_error)?;if count>=500 && !exists{return Err("Up to 500 approved titles are supported. Revoke a title before adding another".into());}
-            tx.execute("INSERT OR IGNORE INTO kids_approvals(profile_id,kind,id) VALUES(?1,?2,?3)",params![profile,kind,id]).map_err(db_error)?;
-        }else{tx.execute("DELETE FROM kids_approvals WHERE profile_id=?1 AND kind=?2 AND id=?3",params![profile,kind,id]).map_err(db_error)?;}
-        tx.execute("INSERT INTO kids_profiles(profile_id,revision) VALUES(?1,1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",[profile]).map_err(db_error)?;
-        prune_observations(&tx,account)?;
-        tx.commit().map_err(db_error)?;Ok(axum::Json(json!({"approved":approved})))
-    }).await
+    blocking(move || {
+        let mut db = app.db.lock().unwrap();
+        let tx = db.transaction().map_err(db_error)?;
+        let value = apply_approval(&tx, &app, profile, &kind, &id, approved, meta.as_ref())?;
+        tx.commit().map_err(db_error)?;
+        Ok(axum::Json(value))
+    })
+    .await
+}
+
+// Shared by legacy and typed entry points: keep the original policy and write semantics.
+pub(super) fn apply_approval(
+    tx: &Connection,
+    app: &App,
+    profile: i64,
+    kind: &str,
+    id: &str,
+    approved: bool,
+    meta: Option<&Value>,
+) -> Result<Value, ApiError> {
+    app.request_lease().validate(tx)?;
+    let account = manager(tx, &app.identity(), Some(profile))?;
+    if let Some(meta) = meta {
+        observe(&tx, account, &kind, &meta, true)?;
+        let (_, _, age, _) =
+            media(&tx, &app.identity(), &kind, &id)?.ok_or("Metadata unavailable")?;
+        if age.is_some_and(|age| age >= 18) {
+            return Err("Adult titles cannot be approved for kids profiles".into());
+        }
+        let count: i64 = tx
+            .query_row(
+                "SELECT(SELECT count(*)FROM kids_approvals WHERE profile_id=?1)+(SELECT count(*)FROM kids_origin_approvals WHERE profile_id=?1)",
+                [profile],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM kids_approvals WHERE profile_id=?1 AND kind=?2 AND id=?3)",params![profile,kind,id],|r|r.get(0)).map_err(db_error)?;
+        if count >= 500 && !exists {
+            return Err(
+                "Up to 500 approved titles are supported. Revoke a title before adding another"
+                    .into(),
+            );
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO kids_approvals(profile_id,kind,id) VALUES(?1,?2,?3)",
+            params![profile, kind, id],
+        )
+        .map_err(db_error)?;
+    } else {
+        tx.execute(
+            "DELETE FROM kids_approvals WHERE profile_id=?1 AND kind=?2 AND id=?3",
+            params![profile, kind, id],
+        )
+        .map_err(db_error)?;
+    }
+    tx.execute("INSERT INTO kids_profiles(profile_id,revision) VALUES(?1,1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",[profile]).map_err(db_error)?;
+    prune_observations(&tx, account)?;
+    Ok(json!({"approved":approved}))
 }

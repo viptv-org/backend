@@ -22,9 +22,9 @@ async fn stale_approval_cannot_recreate_a_family(revoke: Option<bool>) {
     };
     if let Some(all) = revoke {
         let path = if all {
-            "/api/v3/account/devices"
+            "/api/account/devices"
         } else {
-            "/api/v3/account/devices/queued-browser"
+            "/api/account/devices/queued-browser"
         };
         assert_eq!(
             request(&app, "member-token-1", "DELETE", path, Value::Null)

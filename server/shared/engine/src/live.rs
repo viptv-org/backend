@@ -148,6 +148,7 @@ pub fn channel_id(connection: &str, identity: &str) -> String {
 }
 pub fn live_card(id: String, name: String, logo: Option<String>, provider_id: String) -> Card {
     Card {
+        metadata_origin:None,
         identity: crate::identity::MediaIdentity {
             id,
             kind: "live".into(),

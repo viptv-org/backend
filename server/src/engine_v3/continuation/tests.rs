@@ -4,14 +4,14 @@ fn identity(id: &str, episode: bool) -> Value {
     json!({"id":id,"kind":"series","ids":[],"episode":if episode{json!({"order":"aired","season":1,"episode":1238})}else{Value::Null},"edition":null})
 }
 async fn progress(app: &App) {
-    let(status,value)=request(app,"member-token-1","PUT","/api/v3/profiles/1/progress",json!({"record":{"identity":identity("opaque-child-1238",true),"parent_identity":identity("opaque-parent",false),"provider_id":"stremio","title":"Owned series","poster":null,"landscape":null,"position_millis":30000,"duration_millis":100000,"updated_at_millis":1,"completed_at_millis":null}})).await;
+    let(status,value)=request(app,"member-token-1","PUT","/api/profiles/1/progress",json!({"record":{"identity":identity("opaque-child-1238",true),"parent_identity":identity("opaque-parent",false),"provider_id":"stremio","title":"Owned series","poster":null,"landscape":null,"position_millis":30000,"duration_millis":100000,"updated_at_millis":1,"completed_at_millis":null}})).await;
     assert_eq!(status, StatusCode::OK, "{value}");
 }
 #[tokio::test]
 async fn typed_queue_and_bootstrap_retain_exact_resume_clock_and_visibility_is_title_scoped() {
     let app = fixture();
     progress(&app).await;
-    let path = "/api/v3/profiles/1/continue";
+    let path = "/api/profiles/1/continue";
     let (status, page) = request(&app, "member-token-1", "GET", path, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     let entry = &page["entries"][0];
@@ -24,7 +24,7 @@ async fn typed_queue_and_bootstrap_retain_exact_resume_clock_and_visibility_is_t
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/bootstrap",
+        "/api/bootstrap",
         Value::Null,
     )
     .await;
@@ -38,7 +38,7 @@ async fn typed_queue_and_bootstrap_retain_exact_resume_clock_and_visibility_is_t
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/continue/visibility",
+        "/api/profiles/1/continue/visibility",
         body.clone(),
     )
     .await;
@@ -54,7 +54,7 @@ async fn typed_queue_and_bootstrap_retain_exact_resume_clock_and_visibility_is_t
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/continue/visibility",
+        "/api/profiles/1/continue/visibility",
         json!({"identity":receipt["identity"],"hidden":false}),
     )
     .await;
@@ -75,7 +75,7 @@ async fn typed_queue_and_bootstrap_retain_exact_resume_clock_and_visibility_is_t
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/continue/visibility",
+            "/api/profiles/1/continue/visibility",
             forged
         )
         .await
@@ -93,7 +93,7 @@ async fn typed_queue_and_bootstrap_retain_exact_resume_clock_and_visibility_is_t
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/profiles/1/continue?limit=101",
+            "/api/profiles/1/continue?limit=101",
             Value::Null
         )
         .await
@@ -105,7 +105,7 @@ async fn typed_queue_and_bootstrap_retain_exact_resume_clock_and_visibility_is_t
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/profiles/1/history",
+            "/api/profiles/1/history",
             Value::Null
         )
         .await
@@ -134,7 +134,7 @@ async fn generic_next_uses_one_large_provider_document_opaque_ids_and_never_adds
         &app,
         "member-token-1",
         "POST",
-        "/api/v3/profiles/1/continue/next",
+        "/api/profiles/1/continue/next",
         body.clone(),
     )
     .await;
@@ -162,19 +162,19 @@ async fn generic_next_uses_one_large_provider_document_opaque_ids_and_never_adds
         &app,
         "member-token-1",
         "POST",
-        "/api/v3/profiles/1/continue/next",
+        "/api/profiles/1/continue/next",
         wrong,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["status"], "Unavailable");
-    let(status,_)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/progress",json!({"ended":true,"record":{"identity":identity("opaque-child-1238",true),"parent_identity":identity("opaque-parent",false),"provider_id":"stremio","title":"Actual series","poster":null,"landscape":null,"position_millis":100000,"duration_millis":100000,"updated_at_millis":1,"completed_at_millis":null}})).await;
+    let(status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/progress",json!({"ended":true,"record":{"identity":identity("opaque-child-1238",true),"parent_identity":identity("opaque-parent",false),"provider_id":"stremio","title":"Actual series","poster":null,"landscape":null,"position_millis":100000,"duration_millis":100000,"updated_at_millis":1,"completed_at_millis":null}})).await;
     assert_eq!(status, StatusCode::OK);
     let (status, page) = request(
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/continue",
+        "/api/profiles/1/continue",
         Value::Null,
     )
     .await;
@@ -210,7 +210,7 @@ async fn queue_visibility_rejects_unknown_and_restricted_identities_without_writ
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/continue/visibility",
+            "/api/profiles/1/continue/visibility",
             body.clone()
         )
         .await
@@ -230,7 +230,7 @@ async fn queue_visibility_rejects_unknown_and_restricted_identities_without_writ
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/continue",
+        "/api/profiles/1/continue",
         Value::Null,
     )
     .await;
@@ -241,7 +241,7 @@ async fn queue_visibility_rejects_unknown_and_restricted_identities_without_writ
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/continue/visibility",
+            "/api/profiles/1/continue/visibility",
             body
         )
         .await

@@ -13,7 +13,7 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/live/channels",
+        "/api/profiles/1/live/channels",
         Value::Null,
     )
     .await;
@@ -25,7 +25,7 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/live/opaque-live/guide",
+        "/api/profiles/1/live/opaque-live/guide",
         Value::Null,
     )
     .await;
@@ -40,7 +40,7 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
         &app,
         "member-token-1",
         "POST",
-        "/api/v3/profiles/1/live/opaque-live/sources",
+        "/api/profiles/1/live/opaque-live/sources",
         Value::Null,
     )
     .await;
@@ -51,7 +51,7 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/source-ranking",
+            "/api/profiles/1/source-ranking",
             json!({"ids":[sources["streams"][0]["id"]]})
         )
         .await
@@ -65,7 +65,7 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
             &app,
             "member-token-2",
             "GET",
-            "/api/v3/profiles/1/live/channels",
+            "/api/profiles/1/live/channels",
             Value::Null
         )
         .await
@@ -76,7 +76,7 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         json!({"revision":0,"browsing_plugin":"stremio","assignments":[]}),
     )
     .await;
@@ -85,7 +85,7 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/live/channels",
+        "/api/profiles/1/live/channels",
         Value::Null,
     )
     .await;
@@ -95,7 +95,7 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/live/opaque-live/sources",
+            "/api/profiles/1/live/opaque-live/sources",
             Value::Null
         )
         .await
@@ -107,13 +107,13 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
 #[tokio::test]
 async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_guide_honest() {
     let app = fixture();
-    let(status,_)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"m3u","configuration":{"playlist_url":"https://provider.example/list.m3u?token=private"}})).await;
+    let(status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"m3u","configuration":{"playlist_url":"https://provider.example/list.m3u?token=private"}})).await;
     assert_eq!(status, StatusCode::OK);
     let (_, schemas) = request(
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/source-integrations",
+        "/api/profiles/1/source-integrations",
         Value::Null,
     )
     .await;
@@ -142,7 +142,7 @@ async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/live/channels",
+        "/api/profiles/1/live/channels",
         Value::Null,
     )
     .await;
@@ -152,7 +152,7 @@ async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v3/profiles/1/live/{id}/guide"),
+        &format!("/api/profiles/1/live/{id}/guide"),
         Value::Null,
     )
     .await;
@@ -163,7 +163,7 @@ async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_
         &app,
         "member-token-1",
         "POST",
-        &format!("/api/v3/profiles/1/live/{id}/sources"),
+        &format!("/api/profiles/1/live/{id}/sources"),
         Value::Null,
     )
     .await;
@@ -174,7 +174,7 @@ async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/source-ranking",
+            "/api/profiles/1/source-ranking",
             json!({"ids":[source["streams"][0]["id"]]})
         )
         .await
@@ -191,14 +191,14 @@ async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_
 #[ignore = "reads the real published public playlist using an isolated owned API fixture"]
 async fn real_public_m3u_api_directory_guide_status_and_source_grants() {
     let app = fixture();
-    let(status,_)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"m3u","configuration":{"playlist_url":"https://iptv-org.github.io/iptv/countries/us.m3u"}})).await;
+    let(status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"m3u","configuration":{"playlist_url":"https://iptv-org.github.io/iptv/countries/us.m3u"}})).await;
     assert_eq!(status, StatusCode::OK);
     let start = Instant::now();
     let (status, page) = request(
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/live/channels?limit=20",
+        "/api/profiles/1/live/channels?limit=20",
         Value::Null,
     )
     .await;
@@ -209,7 +209,7 @@ async fn real_public_m3u_api_directory_guide_status_and_source_grants() {
         &app,
         "member-token-1",
         "POST",
-        &format!("/api/v3/profiles/1/live/{channel}/sources"),
+        &format!("/api/profiles/1/live/{channel}/sources"),
         Value::Null,
     )
     .await;
@@ -220,7 +220,7 @@ async fn real_public_m3u_api_directory_guide_status_and_source_grants() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v3/profiles/1/source-ranking",
+        "/api/profiles/1/source-ranking",
         json!({"ids":[source["streams"][0]["id"]]}),
     )
     .await;
@@ -230,7 +230,7 @@ async fn real_public_m3u_api_directory_guide_status_and_source_grants() {
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v3/profiles/1/live/{channel}/guide"),
+        &format!("/api/profiles/1/live/{channel}/guide"),
         Value::Null,
     )
     .await;

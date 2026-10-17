@@ -165,12 +165,12 @@ async fn grant_recipient_pages_require_operator_and_own_registration() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/gateways",
+        "/api/gateways",
         registration(),
     )
     .await;
     let id = added["id"].as_str().unwrap();
-    let root = format!("/api/v2/gateways/{id}/grants");
+    let root = format!("/api/gateways/{id}/grants");
     assert_eq!(
         request(&app, "member-token-1", "GET", &root, Value::Null)
             .await
@@ -249,7 +249,7 @@ async fn grant_recipient_pages_require_operator_and_own_registration() {
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/gateways/{}/grants?cursor={cursor}", other.id),
+        &format!("/api/gateways/{}/grants?cursor={cursor}", other.id),
         Value::Null,
     )
     .await;
@@ -321,12 +321,12 @@ async fn saved_gateway_checks_expose_scoped_capacity_and_revalidate_revoked_gran
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/gateways",
+        "/api/gateways",
         registration(),
     )
     .await;
     let id = added["id"].as_str().unwrap();
-    let path = format!("/api/v2/gateways/{id}/check");
+    let path = format!("/api/gateways/{id}/check");
     let (status, absent) = request(&app, "member-token-1", "POST", &path, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(absent, json!({"ready":true,"version":1,"available":null}));
@@ -346,7 +346,7 @@ async fn saved_gateway_checks_expose_scoped_capacity_and_revalidate_revoked_gran
         &app,
         "member-token-1",
         "PUT",
-        &format!("/api/v2/gateways/{id}/grants"),
+        &format!("/api/gateways/{id}/grants"),
         json!({"account_id":2,"enabled":true}),
     )
     .await;
@@ -374,7 +374,7 @@ async fn saved_gateway_checks_expose_scoped_capacity_and_revalidate_revoked_gran
         &app,
         "member-token-1",
         "PUT",
-        &format!("/api/v2/gateways/{id}/grants"),
+        &format!("/api/gateways/{id}/grants"),
         json!({"account_id":2,"enabled":false}),
     )
     .await;
@@ -387,7 +387,7 @@ async fn saved_gateway_checks_expose_scoped_capacity_and_revalidate_revoked_gran
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/gateways/{id}/grants"),
+        &format!("/api/gateways/{id}/grants"),
         Value::Null,
     )
     .await;
@@ -412,7 +412,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/gateways",
+        "/api/gateways",
         registration(),
     )
     .await;
@@ -440,7 +440,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         &app,
         "member-token-2",
         "GET",
-        "/api/v2/gateways",
+        "/api/gateways",
         Value::Null,
     )
     .await;
@@ -450,7 +450,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
             &app,
             "member-token-2",
             "POST",
-            &format!("/api/v2/gateways/{id}/check"),
+            &format!("/api/gateways/{id}/check"),
             Value::Null
         )
         .await
@@ -463,7 +463,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
             &app,
             "member-token-1",
             "PUT",
-            &format!("/api/v2/gateways/{id}/grants"),
+            &format!("/api/gateways/{id}/grants"),
             json!({"account_id":2,"enabled":true})
         )
         .await
@@ -480,7 +480,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
             &app,
             "member-token-1",
             "PUT",
-            &format!("/api/v2/gateways/{id}/grants"),
+            &format!("/api/gateways/{id}/grants"),
             json!({"account_id":2,"enabled":true})
         )
         .await
@@ -491,7 +491,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         &app,
         "member-token-2",
         "GET",
-        "/api/v2/gateways",
+        "/api/gateways",
         Value::Null,
     )
     .await;
@@ -502,7 +502,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
             &app,
             "member-token-2",
             "POST",
-            &format!("/api/v2/gateways/{id}/check"),
+            &format!("/api/gateways/{id}/check"),
             Value::Null
         )
         .await
@@ -514,7 +514,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
             &app,
             "member-token-2",
             "PATCH",
-            &format!("/api/v2/gateways/{id}"),
+            &format!("/api/gateways/{id}"),
             json!({"enabled":false})
         )
         .await
@@ -531,7 +531,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
             &app,
             "member-token-2",
             "PUT",
-            &format!("/api/v2/gateways/{id}"),
+            &format!("/api/gateways/{id}"),
             registration()
         )
         .await
@@ -544,7 +544,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
             &app,
             "member-token-1",
             "PATCH",
-            &format!("/api/v2/gateways/{id}"),
+            &format!("/api/gateways/{id}"),
             json!({"name":"Label change","priority":20})
         )
         .await
@@ -555,7 +555,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/gateways",
+        "/api/gateways",
         Value::Null,
     )
     .await;
@@ -569,7 +569,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         &app,
         "member-token-1",
         "PUT",
-        &format!("/api/v2/gateways/{id}"),
+        &format!("/api/gateways/{id}"),
         replacement,
     )
     .await;
@@ -580,7 +580,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
             &app,
             "member-token-1",
             "PUT",
-            &format!("/api/v2/gateways/{id}/grants"),
+            &format!("/api/gateways/{id}/grants"),
             json!({"account_id":2,"enabled":false})
         )
         .await
@@ -592,7 +592,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
             &app,
             "member-token-2",
             "POST",
-            &format!("/api/v2/gateways/{id}/check"),
+            &format!("/api/gateways/{id}/check"),
             Value::Null
         )
         .await
@@ -615,7 +615,7 @@ async fn invalid_endpoints_credentials_and_keyring_fail_closed_without_persisten
         let mut body = registration();
         body["endpoint"] = json!(endpoint);
         assert_eq!(
-            request(&app, "member-token-1", "POST", "/api/v2/gateways", body)
+            request(&app, "member-token-1", "POST", "/api/gateways", body)
                 .await
                 .0,
             StatusCode::BAD_REQUEST
@@ -628,7 +628,7 @@ async fn invalid_endpoints_credentials_and_keyring_fail_closed_without_persisten
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/gateways",
+            "/api/gateways",
             bootstrap
         )
         .await
@@ -656,7 +656,7 @@ async fn invalid_endpoints_credentials_and_keyring_fail_closed_without_persisten
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/gateways",
+            "/api/gateways",
             registration(),
         )
         .await;
@@ -678,7 +678,7 @@ async fn invalid_endpoints_credentials_and_keyring_fail_closed_without_persisten
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/gateways",
+        "/api/gateways",
         registration(),
     )
     .await;
@@ -687,7 +687,7 @@ async fn invalid_endpoints_credentials_and_keyring_fail_closed_without_persisten
         &app,
         "member-token-1",
         "POST",
-        &format!("/api/v2/gateways/{}/check", added["id"].as_str().unwrap()),
+        &format!("/api/gateways/{}/check", added["id"].as_str().unwrap()),
         Value::Null,
     )
     .await;
@@ -699,7 +699,7 @@ async fn invalid_endpoints_credentials_and_keyring_fail_closed_without_persisten
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/gateways",
+            "/api/gateways",
             registration()
         )
         .await
@@ -791,7 +791,7 @@ async fn registration_interoperates_with_the_independent_gateway_service() {
     let mut body = registration();
     body["integration_key"] = issued["secret"].clone();
     let (status, registered) =
-        request(&app, "member-token-1", "POST", "/api/v2/gateways", body).await;
+        request(&app, "member-token-1", "POST", "/api/gateways", body).await;
     assert_eq!(status, StatusCode::OK, "{registered}");
     assert!(!registered
         .to_string()
@@ -802,7 +802,7 @@ async fn registration_interoperates_with_the_independent_gateway_service() {
             "member-token-1",
             "POST",
             &format!(
-                "/api/v2/gateways/{}/check",
+                "/api/gateways/{}/check",
                 registered["id"].as_str().unwrap()
             ),
             Value::Null

@@ -2,13 +2,13 @@ use crate::{auth_integration_tests::fixture, test_support::request, *};
 #[tokio::test]
 async fn cached_m3u_multi_membership_and_xmltv_are_projected_without_new_egress() {
     let app = fixture();
-    let(status,_)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"m3u","configuration":{"playlist_url":"https://fixture.example/list.m3u","epg_url":"https://fixture.example/guide.xml.gz"}})).await;
+    let(status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"m3u","configuration":{"playlist_url":"https://fixture.example/list.m3u","epg_url":"https://fixture.example/guide.xml.gz"}})).await;
     assert_eq!(status, StatusCode::OK);
     let (_, snapshot) = request(
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/source-integrations",
+        "/api/profiles/1/source-integrations",
         Value::Null,
     )
     .await;
@@ -55,7 +55,7 @@ async fn cached_m3u_multi_membership_and_xmltv_are_projected_without_new_egress(
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v3/profiles/1/live/channels?group_id={kids}"),
+        &format!("/api/profiles/1/live/channels?group_id={kids}"),
         Value::Null,
     )
     .await;
@@ -71,7 +71,7 @@ async fn cached_m3u_multi_membership_and_xmltv_are_projected_without_new_egress(
             &app,
             "member-token-1",
             "GET",
-            &format!("/api/v3/profiles/1/live/{id}/guide"),
+            &format!("/api/profiles/1/live/{id}/guide"),
             Value::Null,
         )
         .await;

@@ -1,7 +1,7 @@
 use crate::{auth_integration_tests::fixture, test_support::request, *};
 use axum::{response::IntoResponse, routing::get, Router};
 use base64::Engine;
-const ROOT: &str = "/api/v2/addons";
+const ROOT: &str = "/api/addons";
 fn app() -> App {
     let mut app = fixture();
     let vault=Arc::new(secret_store::Vault::from_json(&json!({"active":"fixture","keys":{"fixture":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string()).unwrap());

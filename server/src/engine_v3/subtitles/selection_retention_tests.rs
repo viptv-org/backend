@@ -13,6 +13,7 @@ fn lease(profile: i64, session: &str) -> ResourceLease {
 }
 fn selection(owner: &ResourceLease, now: Instant) -> Selection {
     Selection {
+        metadata_proof:None,
         scope: viptv_engine::profile::Scope {
             connection_id: "server".into(),
             account_id: "1".into(),

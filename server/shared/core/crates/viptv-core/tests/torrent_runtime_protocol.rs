@@ -30,7 +30,7 @@ fn runtime_protocol_request_is_bodyless_and_rejects_extra_fields() {
         serde_json::from_str(&request(r#"{"operation":"torrentRuntimeProtocol"}"#).unwrap())
             .unwrap();
     assert_eq!(parsed["method"], "GET");
-    assert_eq!(parsed["path"], "/api/v2/torrent-runtime-protocol");
+    assert_eq!(parsed["path"], "/api/torrent-runtime-protocol");
     assert!(parsed["body"].is_null());
     assert!(request(r#"{"operation":"torrentRuntimeProtocol","body":{}}"#).is_err());
     assert!(

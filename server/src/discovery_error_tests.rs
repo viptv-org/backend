@@ -22,7 +22,7 @@ async fn plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_sib
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/iptv/live/iptv:2:7/source",
+            "/api/iptv/live/iptv:2:7/source",
             Value::Null
         )
         .await
@@ -36,7 +36,7 @@ async fn plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_sib
     assert_eq!(errors, vec![(1, code.to_owned())]);
     assert_eq!(addons.catalogs().unwrap()[0]["addon_id"], 2);
     let (status, metadata) =
-        request(&app, "member-token-1", "GET", "/api/v2/addons", Value::Null).await;
+        request(&app, "member-token-1", "GET", "/api/addons", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(metadata["items"][0]["configuration_error_code"], code);
     assert!(!metadata.to_string().contains("private-addon"));
@@ -44,7 +44,7 @@ async fn plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_sib
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/iptv/live/iptv:1:7/source",
+        "/api/iptv/live/iptv:1:7/source",
         Value::Null,
     )
     .await;
@@ -55,7 +55,7 @@ async fn plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_sib
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/iptv/live/channels?catalog_id=1",
+        "/api/iptv/live/channels?catalog_id=1",
         Value::Null,
     )
     .await;
@@ -72,7 +72,7 @@ async fn plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_sib
             &app,
             "member-token-1",
             "GET",
-            "/api/profiles/1/continue/page",
+            "/api/profiles/1/continue",
             Value::Null
         )
         .await
@@ -83,7 +83,7 @@ async fn plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_sib
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/streams",
+        "/api/streams",
         json!({"type":"movie","id":"tt1234567","only_addons":true}),
     )
     .await;
@@ -92,7 +92,7 @@ async fn plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_sib
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v2/streams/{}", start["id"].as_str().unwrap()),
+        &format!("/api/streams/{}", start["id"].as_str().unwrap()),
         Value::Null,
     )
     .await;
@@ -205,7 +205,7 @@ async fn addon_torrent_discovery_retains_an_opaque_source_and_requires_gateway_o
     );
     assert!(rows[0].get("url").is_none());
     assert!(rows[0].get("infoHash").is_none());
-    let (status, refused) = request(&app,"member-token-1","POST","/api/v2/playback",json!({"request_id":"torrent-fixture","stream_id":id,"client":{"platform":"android","can_play_direct":true,"max_width":1920,"max_height":1080,"video_codecs":["h264"],"audio_codecs":["aac"]}})).await;
+    let (status, refused) = request(&app,"member-token-1","POST","/api/playback",json!({"request_id":"torrent-fixture","stream_id":id,"client":{"platform":"android","can_play_direct":true,"max_width":1920,"max_height":1080,"video_codecs":["h264"],"audio_codecs":["aac"]}})).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(refused["error_code"], "gateway_required");
     task.abort();
@@ -267,10 +267,10 @@ async fn mixed_addon_torrent_sources_validate_private_input_without_losing_http_
             "private source context must stay off discovery wire"
         );
     }
-    let (status, cross_account) = request(&app,"member-token-2","POST","/api/v2/playback",json!({"request_id":"private-torrent","stream_id":rows[1]["id"],"client":{"platform":"android","can_play_direct":true,"max_width":1920,"max_height":1080,"video_codecs":["h264"],"audio_codecs":["aac"]}})).await;
+    let (status, cross_account) = request(&app,"member-token-2","POST","/api/playback",json!({"request_id":"private-torrent","stream_id":rows[1]["id"],"client":{"platform":"android","can_play_direct":true,"max_width":1920,"max_height":1080,"video_codecs":["h264"],"audio_codecs":["aac"]}})).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(cross_account.get("delivery").is_none());
-    let (_, ordinary) = request(&app,"member-token-1","POST","/api/v2/playback",json!({"request_id":"ordinary-http","stream_id":rows[0]["id"],"client":{"platform":"android","can_play_direct":true,"max_width":1920,"max_height":1080,"video_codecs":["h264"],"audio_codecs":["aac"]}})).await;
+    let (_, ordinary) = request(&app,"member-token-1","POST","/api/playback",json!({"request_id":"ordinary-http","stream_id":rows[0]["id"],"client":{"platform":"android","can_play_direct":true,"max_width":1920,"max_height":1080,"video_codecs":["h264"],"audio_codecs":["aac"]}})).await;
     let playback_id = ordinary["id"].as_str().unwrap();
     let ready = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -278,7 +278,7 @@ async fn mixed_addon_torrent_sources_validate_private_input_without_losing_http_
                 &app,
                 "member-token-1",
                 "GET",
-                &format!("/api/v2/playback/{playback_id}"),
+                &format!("/api/playback/{playback_id}"),
                 Value::Null,
             )
             .await;
@@ -310,7 +310,7 @@ async fn unsupported_required_header_events_are_safe_and_keep_healthy_siblings()
         session_id: Some("s1".into()),
     });
     owned.providers = owned.providers.for_account(1);
-    let job = Job {
+    let job = Job {metadata_proof:None,
         source_slots:std::sync::atomic::AtomicUsize::new(0),
         cancelled: std::sync::atomic::AtomicBool::new(false),
         configuration_revision: None,
@@ -399,9 +399,9 @@ async fn upstream() -> Upstream {
     Upstream { url, mode, task }
 }
 async fn discover(app: &App, value: Value) -> Value {
-    let (status, started) = request(app, "member-token-1", "POST", "/api/v2/streams", value).await;
+    let (status, started) = request(app, "member-token-1", "POST", "/api/streams", value).await;
     assert_eq!(status, StatusCode::OK, "{started}");
-    let path = format!("/api/v2/streams/{}", started["id"].as_str().unwrap());
+    let path = format!("/api/streams/{}", started["id"].as_str().unwrap());
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let (status, result) = request(app, "member-token-1", "GET", &path, Value::Null).await;
@@ -468,7 +468,7 @@ async fn iptv_discovery_and_guide_explain_failures_without_losing_healthy_source
             &app,
             "member-token-1",
             "GET",
-            "/api/v2/iptv/guide/iptv:1:1",
+            "/api/iptv/guide/iptv:1:1",
             Value::Null,
         )
         .await;
@@ -518,7 +518,7 @@ async fn discovery_rejections_are_structured_and_do_not_echo_request_details() {
         json!({"type":"series","id":"private-token","only_provider_id":"private-password"}),
     ] {
         let (status, error) =
-            request(&app, "member-token-1", "POST", "/api/v2/streams", body).await;
+            request(&app, "member-token-1", "POST", "/api/streams", body).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(error["error_code"], "invalid_discovery_request");
         no_diagnostics(&error, "fixture.invalid");
@@ -527,7 +527,7 @@ async fn discovery_rejections_are_structured_and_do_not_echo_request_details() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v2/streams")
+                .uri("/api/streams")
                 .header("authorization", "Bearer member-token-1")
                 .header("content-type", "application/json")
                 .body(Body::from("{private-password"))
@@ -545,7 +545,7 @@ async fn discovery_rejections_are_structured_and_do_not_echo_request_details() {
             &app,
             "member-token-1",
             "GET",
-            &format!("/api/v2/streams/missing?{query}"),
+            &format!("/api/streams/missing?{query}"),
             Value::Null,
         )
         .await;
@@ -556,7 +556,7 @@ async fn discovery_rejections_are_structured_and_do_not_echo_request_details() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/streams/missing",
+        "/api/streams/missing",
         Value::Null,
     )
     .await;
@@ -569,7 +569,7 @@ async fn set_addon_enabled(app: &crate::App, id: i64, enabled: bool) {
         app,
         "member-token-1",
         "PATCH",
-        &format!("/api/v2/addons/{id}"),
+        &format!("/api/addons/{id}"),
         json!({ "enabled": enabled }),
     )
     .await;
@@ -601,7 +601,7 @@ async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/addons",
+        "/api/addons",
         json!({"manifest_url":url}),
     )
     .await;
@@ -610,11 +610,11 @@ async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/streams",
+        "/api/streams",
         json!({"type":"movie","id":"tt1234567","only_addons":true}),
     )
     .await;
-    let path = format!("/api/v2/streams/{}", started["id"].as_str().unwrap());
+    let path = format!("/api/streams/{}", started["id"].as_str().unwrap());
     tokio::time::timeout(Duration::from_secs(3), entered.notified())
         .await
         .unwrap();
@@ -643,11 +643,11 @@ async fn encrypted_addon_disable_blocks_late_and_cached_source_publication() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/streams",
+        "/api/streams",
         json!({"type":"movie","id":"tt1234567","only_addons":true}),
     )
     .await;
-    let path = format!("/api/v2/streams/{}", started["id"].as_str().unwrap());
+    let path = format!("/api/streams/{}", started["id"].as_str().unwrap());
     let before = poll(&app, &path).await;
     assert_eq!(before["events"][0]["streams"].as_array().unwrap().len(), 1);
     set_addon_enabled(&app, addon, false).await;

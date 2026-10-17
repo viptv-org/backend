@@ -41,7 +41,7 @@ async fn oauth_is_single_use_encrypted_and_isolated() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/simkl",
+        "/api/profiles/1/simkl",
         json!({}),
     )
     .await;
@@ -53,7 +53,7 @@ async fn oauth_is_single_use_encrypted_and_isolated() {
             &app,
             "member-token-2",
             "GET",
-            "/api/v3/profiles/1/simkl",
+            "/api/profiles/1/simkl",
             json!({})
         )
         .await
@@ -65,7 +65,7 @@ async fn oauth_is_single_use_encrypted_and_isolated() {
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/profiles/2/simkl",
+            "/api/profiles/2/simkl",
             json!({})
         )
         .await
@@ -133,7 +133,7 @@ async fn unconfigured_service_advertises_no_simkl_and_cannot_authorize() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/simkl",
+        "/api/profiles/1/simkl",
         json!({}),
     )
     .await;
@@ -143,7 +143,7 @@ async fn unconfigured_service_advertises_no_simkl_and_cannot_authorize() {
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/simkl/authorize",
+            "/api/profiles/1/simkl/authorize",
             json!({})
         )
         .await
@@ -154,7 +154,7 @@ async fn unconfigured_service_advertises_no_simkl_and_cannot_authorize() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/bootstrap",
+        "/api/bootstrap",
         json!({}),
     )
     .await;
@@ -178,7 +178,7 @@ async fn paired_device_cannot_initiate_simkl_oauth() {
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/simkl/authorize",
+            "/api/profiles/1/simkl/authorize",
             json!({})
         )
         .await

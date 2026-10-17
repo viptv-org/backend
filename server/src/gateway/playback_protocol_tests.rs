@@ -11,7 +11,7 @@ async fn protocol_request(
     token: &str,
     body: Body,
 ) -> (StatusCode, Value, String) {
-    protocol_route_request(app, token, body, "/api/v2/playback-protocol").await
+    protocol_route_request(app, token, body, "/api/playback-protocol").await
 }
 
 async fn protocol_route_request(
@@ -46,7 +46,7 @@ async fn protocol_route_request(
 #[tokio::test]
 async fn shared_runtime_protocol_is_separate_scoped_and_bodyless() {
     let app = fixture();
-    let route = "/api/v2/torrent-runtime-protocol";
+    let route = "/api/torrent-runtime-protocol";
     let (status, value, cache) =
         protocol_route_request(&app, "member-token-1", Body::empty(), route).await;
     assert_eq!(status, StatusCode::OK, "{value}");

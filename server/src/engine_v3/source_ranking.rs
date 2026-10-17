@@ -11,7 +11,9 @@ pub(crate) async fn rank(
     Path(profile): Path<i64>,
     axum::Json(input): axum::Json<Rank>,
 ) -> ApiResult {
-    if input.ids.len() > crate::app_state::MAX_SOURCES_PER_JOB || input.ids.iter().any(|id| id.is_empty() || id.len() > 128) {
+    if input.ids.len() > crate::app_state::MAX_SOURCES_PER_JOB
+        || input.ids.iter().any(|id| id.is_empty() || id.len() > 128)
+    {
         return Err("Invalid source selection".into());
     }
     let app = app.with_lease(lease.clone());
@@ -68,7 +70,10 @@ pub(crate) async fn rank(
         {
             return Err(auth::forbidden());
         }
-        if grant.producer.starts_with("addon:") || grant.producer.starts_with("vsources:") || grant.producer.starts_with("m3u:") {
+        if grant.producer.starts_with("addon:")
+            || grant.producer.starts_with("vsources:")
+            || grant.producer.starts_with("m3u:")
+        {
             if !allowed.contains(grant.producer.as_str()) {
                 return Err(auth::forbidden());
             }
@@ -82,14 +87,12 @@ pub(crate) async fn rank(
         }
         let card = cards.get(&id).ok_or_else(auth::forbidden)?;
         candidates.push(SourceCandidate {
-            presentation: viptv_engine::stremio::SourcePresentation::read(&card["presentation"]),
+            presentation: viptv_engine::stremio::SourcePresentation::from_stream(card),
             id,
             provider_id: grant.producer.clone(),
             label: card["name"].as_str().unwrap_or("Stream").into(),
-            detail: card["description"].as_str().map(str::to_string),
-            quality_height: card["quality_height"]
-                .as_u64()
-                .and_then(|h| u32::try_from(h).ok()),
+            detail: viptv_engine::stremio::source_detail(card),
+            quality_height: viptv_engine::stremio::source_quality_height(card),
             audio_languages: card["audio_languages"]
                 .as_array()
                 .map(|languages| {

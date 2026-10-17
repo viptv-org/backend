@@ -522,7 +522,7 @@ mod tests {
             &app,
             "member-token-1",
             "DELETE",
-            &format!("/api/v2/addons/{id}"),
+            &format!("/api/addons/{id}"),
             Value::Null,
         )
         .await;

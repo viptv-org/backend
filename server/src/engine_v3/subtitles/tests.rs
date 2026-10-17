@@ -49,7 +49,7 @@ async fn subtitle_discovery_hides_urls_content_is_session_scoped_and_configurati
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/subtitles/movie/tt1",
+        "/api/subtitles/movie/tt1",
         json!({}),
     )
     .await;
@@ -59,7 +59,7 @@ async fn subtitle_discovery_hides_urls_content_is_session_scoped_and_configurati
     assert_eq!(found["providers"][1]["state"], "Failed");
     assert!(!found.to_string().contains("private-subtitle-secret"));
     let content = format!(
-        "/api/v3/subtitle-content/{}",
+        "/api/subtitle-content/{}",
         found["candidates"][0]["id"].as_str().unwrap()
     );
     let (status, _) = request(&app, "member-token-2", "GET", &content, json!({})).await;
@@ -88,7 +88,7 @@ async fn subtitle_discovery_hides_urls_content_is_session_scoped_and_configurati
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         json!({"revision":0,"browsing_plugin":"stremio","assignments":[]}),
     )
     .await;
@@ -99,7 +99,7 @@ async fn subtitle_discovery_hides_urls_content_is_session_scoped_and_configurati
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/subtitles/movie/tt1",
+        "/api/subtitles/movie/tt1",
         json!({}),
     )
     .await;

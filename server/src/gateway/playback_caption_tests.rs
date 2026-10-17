@@ -4,7 +4,7 @@ async fn subtitles(app: &App, media: &str) -> String {
         app,
         "member-token-1",
         "GET",
-        &format!("/api/v3/subtitles/movie/{media}"),
+        &format!("/api/subtitles/movie/{media}"),
         Value::Null,
     )
     .await;
@@ -40,7 +40,7 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "caption-owned", "roku"),
     )
     .await;
@@ -48,7 +48,7 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
     let ready = settled(&app, id).await;
     assert_eq!(ready["delivery"]["external_subtitles_supported"], true);
     assert_eq!(ready["delivery"]["subtitles_supported"], false);
-    let endpoint = format!("/api/v2/playback/{id}/subtitles");
+    let endpoint = format!("/api/playback/{id}/subtitles");
     let wrong = subtitles(&app, "tt2").await;
     assert_eq!(
         request(
@@ -119,7 +119,7 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "caption-replacement", "roku"),
     )
     .await;
@@ -133,7 +133,7 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
             &app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/playback/{replacement}/subtitles"),
+            &format!("/api/playback/{replacement}/subtitles"),
             json!({"subtitle_id":selected})
         )
         .await
@@ -162,7 +162,7 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         body(&source, "caption-old-gateway", "roku"),
     )
     .await;
@@ -176,7 +176,7 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
             &app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/playback/{old}/subtitles"),
+            &format!("/api/playback/{old}/subtitles"),
             json!({"subtitle_id":selected})
         )
         .await
@@ -187,7 +187,7 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
         &app,
         "member-token-1",
         "DELETE",
-        &format!("/api/v2/playback/{id}"),
+        &format!("/api/playback/{id}"),
         Value::Null,
     )
     .await;
@@ -218,7 +218,7 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
             &app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/playback/{replacement}/subtitles"),
+            &format!("/api/playback/{replacement}/subtitles"),
             json!({"subtitle_id":selected})
         )
         .await

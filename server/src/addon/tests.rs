@@ -138,7 +138,7 @@ fn test_addons() -> Addons {
     remove(&addons, 1);
     addons
 }
-/// Install a manifest URL the way `/api/v2/addons` does and return its id.
+/// Install a manifest URL the way `/api/addons` does and return its id.
 pub(super) async fn install(addons: &Addons, url: &str) -> Result<i64, String> {
     let vault = addons.vault.clone().ok_or("secret_store_not_configured")?;
     let (url, manifest) = addons.prepare_manifest(url).await?;

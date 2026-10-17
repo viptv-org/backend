@@ -4,7 +4,7 @@ use super::*;
 #[tokio::test]
 async fn typed_progress_uses_server_clock_95_percent_and_coalesces_completion() {
     let (app, task, writes) = tracking_server().await;
-    let endpoint = "/api/v3/profiles/1/progress";
+    let endpoint = "/api/profiles/1/progress";
     assert_eq!(
         request(
             &app,
@@ -79,7 +79,7 @@ async fn queued_completion_is_revoked_before_any_history_egress() {
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             history_body("simkl:movie:10", 95_000, 100_000)
         )
         .await
@@ -91,7 +91,7 @@ async fn queued_completion_is_revoked_before_any_history_egress() {
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1/simkl",
+            "/api/profiles/1/simkl",
             json!({})
         )
         .await
@@ -120,7 +120,7 @@ async fn opaque_stremio_history_and_unlinked_lifecycle_remain_usable() {
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             body.clone()
         )
         .await
@@ -143,7 +143,7 @@ async fn opaque_stremio_history_and_unlinked_lifecycle_remain_usable() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v3/profiles/1/playback-events",
+        "/api/profiles/1/playback-events",
         event,
     )
     .await;
@@ -169,7 +169,7 @@ async fn typed_simkl_episode_parent_coordinates_are_authoritative_before_history
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             body.clone()
         )
         .await
@@ -183,7 +183,7 @@ async fn typed_simkl_episode_parent_coordinates_are_authoritative_before_history
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             body.clone()
         )
         .await
@@ -196,7 +196,7 @@ async fn typed_simkl_episode_parent_coordinates_are_authoritative_before_history
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             body
         )
         .await
@@ -221,7 +221,7 @@ async fn ended_unknown_runtime_retains_observed_position_without_completion_or_t
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             body
         )
         .await
@@ -256,7 +256,7 @@ async fn anime_progress_preserves_tvdb_identity_and_history_uses_verified_native
         Some(json!({"order":"aired","season":2,"episode":1})),
     );
     body["parent_identity"] = media_identity("simkl:anime:40", "series", None);
-    let endpoint = "/api/v3/profiles/1/progress";
+    let endpoint = "/api/profiles/1/progress";
     let (status, result) = request(&app, "member-token-1", "PUT", endpoint, body.clone()).await;
     assert_eq!(status, StatusCode::OK, "{result}");
     assert!(writes.lock().unwrap().is_empty());
@@ -303,7 +303,7 @@ async fn verified_anime_film_progress_uses_anime_title_without_episode() {
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/progress",
+        "/api/profiles/1/progress",
         body,
     )
     .await;

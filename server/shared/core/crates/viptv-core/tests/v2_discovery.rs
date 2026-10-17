@@ -70,7 +70,7 @@ fn exact_source_identity_is_deduplicated_without_collapsing_providers_or_unknown
 fn v2_discovery_requests_are_explicit_and_keep_episode_identity() {
     let item = json!({"id":"tt1234567:1:2","type":"series","seriesId":"tt1234567","season":1,"episode":2,"name":"Episode"});
     let request = run("request", json!({"operation":"sourcesV2","item":item}));
-    assert_eq!(request["path"], "/api/v2/streams");
+    assert_eq!(request["path"], "/api/streams");
     assert_eq!(request["body"]["id"], "tt1234567:1:2");
     assert_eq!(request["body"]["episode"], 2);
     assert!(request["body"].get("profile_id").is_none());
@@ -79,7 +79,7 @@ fn v2_discovery_requests_are_explicit_and_keep_episode_identity() {
             "request",
             json!({"operation":"sourcesPollV2","id":"job/one","after":3})
         )["path"],
-        "/api/v2/streams/job%2Fone?after=3"
+        "/api/streams/job%2Fone?after=3"
     );
     assert_eq!(
         run(

@@ -283,6 +283,7 @@ pub enum PlaybackPlatform {
     Android,
     AndroidTv,
     Desktop,
+    Ios,
     Web,
     Tizen,
     Webos,

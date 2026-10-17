@@ -28,7 +28,7 @@ async fn actual_backend_torrent_browser_server() {
             [],
         )
         .unwrap();
-    let (status,_)=crate::test_support::request(&app,"member-token-1","POST","/api/v2/gateways",json!({
+    let (status,_)=crate::test_support::request(&app,"member-token-1","POST","/api/gateways",json!({
         "name":"Generated torrent gateway","endpoint":config["gateway_endpoint"],"namespace":"fixture","priority":10,"integration_key":config["gateway_key"]
     })).await;
     assert_eq!(
@@ -40,7 +40,7 @@ async fn actual_backend_torrent_browser_server() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/addons",
+        "/api/addons",
         json!({"manifest_url":config["addon_manifest"]}),
     )
     .await;

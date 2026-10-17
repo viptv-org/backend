@@ -34,6 +34,8 @@ pub struct LibraryStatistics {
     pub status: Option<String>,
     pub next_episode: Option<EpisodeCoordinates>,
     pub next_air_millis: Option<u64>,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub metadata_origin: Option<crate::origin::MetadataOrigin>,
 }
 impl LibraryStatistics {
     pub fn empty(identity: MediaIdentity) -> Self {
@@ -51,6 +53,7 @@ impl LibraryStatistics {
             status: None,
             next_episode: None,
             next_air_millis: None,
+            metadata_origin: None,
         }
     }
 }
@@ -111,4 +114,8 @@ pub struct LibraryMembershipSnapshot {
     pub identities: Vec<MediaIdentity>,
     pub revision: u64,
     pub complete: bool,
+    #[serde(default,skip_serializing_if="Vec::is_empty")]
+    pub scoped_identities:Vec<crate::origin::ScopedMediaIdentity>,
+    #[serde(default,skip_serializing_if="Vec::is_empty")]
+    pub legacy_identities:Vec<MediaIdentity>,
 }

@@ -11,7 +11,7 @@ async fn cancelled_discovery_preserves_stremio_and_sdk_grants_through_playback_a
         let addon_grant = source(&app);
         let owned = app.clone().with_lease(lease());
         let (grant, source, revision) = if producer == "vsources" {
-            let(status,configured)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"vsources","configuration":{"tmdb_api_key":"isolated-fixture-key"}})).await;
+            let(status,configured)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"vsources","configuration":{"tmdb_api_key":"isolated-fixture-key"}})).await;
             assert_eq!(status, StatusCode::OK, "{configured}");
             let source = configured["configuration"]["assignments"]
                 .as_array()
@@ -40,7 +40,7 @@ async fn cancelled_discovery_preserves_stremio_and_sdk_grants_through_playback_a
         };
         let job_id = format!("cancel-{producer}");
         owned.own_resource("job", &job_id);
-        let job = Arc::new(crate::app_state::Job {
+        let job = Arc::new(crate::app_state::Job {metadata_proof:None,
             source_slots: std::sync::atomic::AtomicUsize::new(1),
             cancelled: std::sync::atomic::AtomicBool::new(false),
             configuration_revision: revision,
@@ -60,7 +60,7 @@ async fn cancelled_discovery_preserves_stremio_and_sdk_grants_through_playback_a
                 &app,
                 "member-token-2",
                 "DELETE",
-                &format!("/api/v2/streams/{job_id}"),
+                &format!("/api/streams/{job_id}"),
                 Value::Null
             )
             .await
@@ -73,7 +73,7 @@ async fn cancelled_discovery_preserves_stremio_and_sdk_grants_through_playback_a
                     &app,
                     "member-token-1",
                     "DELETE",
-                    &format!("/api/v2/streams/{job_id}"),
+                    &format!("/api/streams/{job_id}"),
                     Value::Null
                 )
                 .await
@@ -85,7 +85,7 @@ async fn cancelled_discovery_preserves_stremio_and_sdk_grants_through_playback_a
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             body(&grant, &format!("admit-{producer}"), "roku"),
         )
         .await;
@@ -100,7 +100,7 @@ async fn cancelled_discovery_preserves_stremio_and_sdk_grants_through_playback_a
                 &app,
                 "member-token-1",
                 "DELETE",
-                &format!("/api/v2/streams/{job_id}"),
+                &format!("/api/streams/{job_id}"),
                 Value::Null
             )
             .await
@@ -112,7 +112,7 @@ async fn cancelled_discovery_preserves_stremio_and_sdk_grants_through_playback_a
                 &app,
                 "member-token-1",
                 "GET",
-                &format!("/api/v2/playback/{playback}"),
+                &format!("/api/playback/{playback}"),
                 Value::Null
             )
             .await
@@ -124,7 +124,7 @@ async fn cancelled_discovery_preserves_stremio_and_sdk_grants_through_playback_a
                 &app,
                 "member-token-1",
                 "DELETE",
-                &format!("/api/v2/playback/{playback}"),
+                &format!("/api/playback/{playback}"),
                 Value::Null
             )
             .await

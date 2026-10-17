@@ -45,7 +45,7 @@ async fn sources_and_subtitles_use_cached_authoritative_ids_and_preserve_canonic
                 &app,
                 "member-token-1",
                 "GET",
-                &format!("/api/v3/meta/{kind}/{title_id}"),
+                &format!("/api/meta/{kind}/{title_id}"),
                 json!({})
             )
             .await
@@ -56,7 +56,7 @@ async fn sources_and_subtitles_use_cached_authoritative_ids_and_preserve_canonic
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/streams",
+            "/api/streams",
             json!({"type":kind,"id":id,"only_addons":true,"imdb_id":"tt9999999","tmdb_id":"999"}),
         )
         .await;
@@ -68,7 +68,7 @@ async fn sources_and_subtitles_use_cached_authoritative_ids_and_preserve_canonic
                     &app,
                     "member-token-1",
                     "GET",
-                    &format!("/api/v2/streams/{job_id}"),
+                    &format!("/api/streams/{job_id}"),
                     json!({}),
                 )
                 .await;
@@ -101,7 +101,7 @@ async fn sources_and_subtitles_use_cached_authoritative_ids_and_preserve_canonic
             &app,
             "member-token-1",
             "GET",
-            &format!("/api/v3/subtitles/{kind}/{id}"),
+            &format!("/api/subtitles/{kind}/{id}"),
             json!({}),
         )
         .await;
@@ -134,7 +134,7 @@ async fn unresolved_or_mismatched_episode_mapping_returns_explicit_unavailable_w
         json!({"type":"series","id":"simkl:tv:20:2:4","season":1,"episode":4}),
     ] {
         let (status, body) =
-            request(&app, "member-token-1", "POST", "/api/v2/streams", input).await;
+            request(&app, "member-token-1", "POST", "/api/streams", input).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
         assert_eq!(body["error_code"], "metadata_mapping_unavailable");
     }
@@ -142,7 +142,7 @@ async fn unresolved_or_mismatched_episode_mapping_returns_explicit_unavailable_w
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/subtitles/movie/simkl:movie:11",
+        "/api/subtitles/movie/simkl:movie:11",
         json!({}),
     )
     .await;

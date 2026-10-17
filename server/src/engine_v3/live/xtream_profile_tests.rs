@@ -8,7 +8,7 @@ async fn paired_profile_can_save_private_xtream_without_creating_account_shared_
         .unwrap()
         .execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
         .unwrap();
-    let(status,body)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/source-integrations",json!({
+    let(status,body)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({
         "revision":0,"plugin_id":"xtream","configuration":{"server_url":"https://provider.example","username":"fixture-user","password":"fixture-password"}
     })).await;
     assert_eq!(
@@ -34,13 +34,13 @@ pub(super) async fn setup() -> (App, String) {
         .unwrap()
         .execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
         .unwrap();
-    let(status,_)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":"https://provider.example","username":"fixture-user","password":"fixture-password"}})).await;
+    let(status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":"https://provider.example","username":"fixture-user","password":"fixture-password"}})).await;
     assert_eq!(status, StatusCode::OK);
     let (status, snapshot) = request(
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/source-integrations",
+        "/api/profiles/1/source-integrations",
         Value::Null,
     )
     .await;
@@ -75,7 +75,7 @@ async fn private_xtream_updates_one_encrypted_connection_and_preserves_metadata_
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/source-integrations",
+        "/api/profiles/1/source-integrations",
         update(1, "replacement-secret"),
     )
     .await;
@@ -97,7 +97,7 @@ async fn private_xtream_updates_one_encrypted_connection_and_preserves_metadata_
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/source-integrations",
+            "/api/profiles/1/source-integrations",
             update(1, "stale-secret")
         )
         .await
@@ -109,7 +109,7 @@ async fn private_xtream_updates_one_encrypted_connection_and_preserves_metadata_
             &app,
             "member-token-2",
             "GET",
-            "/api/v3/profiles/1/source-integrations",
+            "/api/profiles/1/source-integrations",
             Value::Null
         )
         .await
@@ -146,7 +146,7 @@ async fn paired_profile_removal_cannot_delete_a_legacy_account_shared_provider()
         &app,
         "member-token-1",
         "DELETE",
-        "/api/v3/profiles/1/source-integrations/iptv:10?revision=1",
+        "/api/profiles/1/source-integrations/iptv:10?revision=1",
         Value::Null,
     )
     .await;

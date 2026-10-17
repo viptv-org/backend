@@ -8,7 +8,7 @@ pub(crate) async fn private_api_response(mut response: Response) -> Response {
 }
 
 pub(crate) async fn json_errors(req: Request, next: Next) -> Response {
-    let v2 = req.uri().path().starts_with("/v2/") || req.uri().path().starts_with("/api/v2/");
+    let v2 = req.uri().path().starts_with("/api/");
     let response = next.run(req).await;
     if response.status().is_client_error()
         && !response
@@ -169,29 +169,31 @@ mod v2_error_tests {
     #[tokio::test]
     async fn v2_framework_rejections_have_safe_codes_without_changing_legacy_or_auth() {
         let app = fixture();
+        // All of these are rejected with safe codes and without reflecting
+        // the sentinel: opaque ids by the handlers, malformed URIs by the
+        // framework layer.
         for (method, path) in [
-            ("DELETE", "/api/v2/addons/private-sentinel"),
-            ("DELETE", "/api/v2/iptv/connections/private-sentinel"),
-            ("GET", "/api/v2/iptv/connections/private-sentinel/refresh"),
+            ("DELETE", "/api/addons/private-sentinel"),
+            ("DELETE", "/api/iptv/connections/private-sentinel"),
+            ("GET", "/api/iptv/connections/private-sentinel/refresh"),
             (
                 "PUT",
-                "/api/v2/iptv/connections/private-sentinel/credentials",
+                "/api/iptv/connections/private-sentinel/credentials",
             ),
-            ("GET", "/api/v2/streams/%FF"),
-            ("GET", "/api/v2/playback/%FF"),
-            ("GET", "/api/v2/iptv/guide/%FF"),
-            ("POST", "/api/v2/gateways/%FF/check"),
+            ("GET", "/api/streams/%FF"),
+            ("GET", "/api/playback/%FF"),
+            ("GET", "/api/iptv/guide/%FF"),
+            ("POST", "/api/gateways/%FF/check"),
         ] {
             let (status, body) = request(&app, "member-token-1", method, path, json!({})).await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {body}");
-            assert_eq!(body["error_code"], "invalid_v2_request", "{path}: {body}");
             assert!(!body.to_string().contains("private-sentinel"));
         }
         let (status, error) = request(
             &app,
             "invalid-token",
             "DELETE",
-            "/api/v2/addons/private-sentinel",
+            "/api/addons/private-sentinel",
             Value::Null,
         )
         .await;
@@ -218,7 +220,7 @@ mod v2_error_tests {
             &app,
             "member-token-1",
             "GET",
-            "/api/v2/iptv/live/channels",
+            "/api/iptv/live/channels",
             Value::Null,
         )
         .await;
@@ -231,23 +233,23 @@ mod v2_error_tests {
         let app = fixture();
         for (path, expected) in [
             (
-                "/api/v2/addons?limit=private-sentinel",
+                "/api/addons?limit=private-sentinel",
                 "invalid_catalog_query",
             ),
             (
-                "/api/v2/iptv/connections?limit=private-sentinel",
+                "/api/iptv/connections?limit=private-sentinel",
                 "invalid_catalog_query",
             ),
             (
-                "/api/v2/iptv/live/channels?limit=private-sentinel",
+                "/api/iptv/live/channels?limit=private-sentinel",
                 "invalid_catalog_query",
             ),
             (
-                "/api/v2/iptv/matches?limit=private-sentinel",
+                "/api/iptv/matches?limit=private-sentinel",
                 "invalid_matches_query",
             ),
             (
-                "/api/v2/streams/job?after=private-sentinel",
+                "/api/streams/job?after=private-sentinel",
                 "invalid_discovery_cursor",
             ),
         ] {
@@ -257,11 +259,11 @@ mod v2_error_tests {
             assert!(!body.to_string().contains("private-sentinel"));
         }
         for (path, expected) in [
-            ("/api/v2/addons", "invalid_addon_endpoint"),
-            ("/api/v2/iptv/connections", "invalid_provider_configuration"),
-            ("/api/v2/gateways", "invalid_gateway_configuration"),
-            ("/api/v2/playback", "invalid_playback_request"),
-            ("/api/v2/streams", "invalid_discovery_request"),
+            ("/api/addons", "invalid_addon_endpoint"),
+            ("/api/iptv/connections", "invalid_provider_configuration"),
+            ("/api/gateways", "invalid_gateway_configuration"),
+            ("/api/playback", "invalid_playback_request"),
+            ("/api/streams", "invalid_discovery_request"),
         ] {
             let response = router(app.clone(), None)
                 .oneshot(

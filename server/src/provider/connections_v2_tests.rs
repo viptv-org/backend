@@ -49,7 +49,7 @@ async fn upstream() -> (String, tokio::task::JoinHandle<()>) {
 fn input(base: &str, user: &str, password: &str) -> Value {
     json!({"name":"Fixture account","url":base,"username":user,"password":password})
 }
-const ROOT: &str = "/api/v2/iptv/connections";
+const ROOT: &str = "/api/iptv/connections";
 
 #[tokio::test]
 async fn connection_crud_encrypts_immediately_and_preserves_account_defaults() {

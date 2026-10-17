@@ -22,7 +22,7 @@ async fn imported_anime_next_rejects_aired_mapping_shared_by_different_absolute_
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/profiles/1/library",
+            "/api/profiles/1/library",
             Value::Null
         )
         .await
@@ -35,7 +35,7 @@ async fn imported_anime_next_rejects_aired_mapping_shared_by_different_absolute_
                 &app,
                 "member-token-1",
                 "GET",
-                "/api/v3/profiles/1/imports/simkl",
+                "/api/profiles/1/imports/simkl",
                 Value::Null,
             )
             .await;

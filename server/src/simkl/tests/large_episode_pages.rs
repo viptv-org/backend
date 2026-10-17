@@ -29,7 +29,7 @@ async fn simkl_detail_limits_keep_one_episode_read_and_exact_large_title_cursors
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let mut app = fixture();
     app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
-    let base = "/api/v3/meta/series/simkl:anime:42";
+    let base = "/api/meta/series/simkl:anime:42";
     let (status, first) = request(&app, "member-token-1", "GET", base, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{first}");
     assert_eq!(first["episodes"].as_array().unwrap().len(), 24);
@@ -58,7 +58,7 @@ async fn simkl_detail_limits_keep_one_episode_read_and_exact_large_title_cursors
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/simkl/meta/anime/42?offset=600&limit=1",
+        "/api/profiles/1/simkl/meta/anime/42?offset=600&limit=1",
         Value::Null,
     )
     .await;
@@ -83,7 +83,7 @@ async fn simkl_detail_limits_keep_one_episode_read_and_exact_large_title_cursors
             &app,
             "member-token-2",
             "GET",
-            "/api/v3/profiles/1/simkl/meta/anime/42?limit=128",
+            "/api/profiles/1/simkl/meta/anime/42?limit=128",
             Value::Null
         )
         .await

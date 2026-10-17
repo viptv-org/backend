@@ -1,0 +1,48 @@
+warning: unused variable: `config`
+  --> src/engine_v3/live.rs:68:10
+   |
+68 |     let (config, connections) = scope(&app, &lease, profile)?;
+   |          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `expires`, `groups`, `guides`, and `xmltv` are never read
+  --> src/engine_v3/live.rs:25:9
+   |
+23 | pub(crate) struct Cache {
+   |                   ----- fields in this struct
+24 |     pub revision: i64,
+25 |     pub expires: Instant,
+   |         ^^^^^^^
+26 |     pub channels: Vec<PrivateChannel>,
+27 |     pub groups: Vec<LiveGroup>,
+   |         ^^^^^^
+28 |     pub guides: HashMap<String, (Instant, LiveGuide)>,
+   |         ^^^^^^
+29 |     pub xmltv: Option<(Instant, Arc<str>)>,
+   |         ^^^^^
+   |
+   = note: `Cache` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `live_fetch_gates` is never read
+   --> src/app_state.rs:127:16
+    |
+114 | pub struct App {
+    |            --- field in this struct
+...
+127 |     pub(crate) live_fetch_gates: Arc<engine_v3::live::FetchGates>,
+    |                ^^^^^^^^^^^^^^^^
+    |
+    = note: `App` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+
+running 487 tests
+....................................................................................... 87/487
+....................................................................................... 174/487
+.....................................i......................i.ii....................... 261/487
+................................................ii.....i............................... 348/487
+....................................................................................... 435/487
+..................i.................................
+test result: ok. 479 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 20.17s
+

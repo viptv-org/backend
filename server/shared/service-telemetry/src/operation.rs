@@ -36,13 +36,13 @@ impl Operation {
     }
     pub fn route(path: &str) -> Self {
         let path = path.strip_prefix("/api").unwrap_or(path);
-        if path == "/v2/playback" {
+        if path == "/playback" {
             Self::PlaybackStart
-        } else if path.starts_with("/v2/playback/") && path.ends_with("/heartbeat") {
+        } else if path.starts_with("/playback/") && path.ends_with("/heartbeat") {
             Self::PlaybackHeartbeat
-        } else if path.starts_with("/v2/playback/") {
+        } else if path.starts_with("/playback/") {
             Self::PlaybackSession
-        } else if path.starts_with("/v2/streams") {
+        } else if path.starts_with("/streams") {
             Self::Discovery
         } else if path == "/v1/sessions" {
             Self::GatewayPrepare

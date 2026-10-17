@@ -32,7 +32,7 @@ async fn profile_switch_while_metadata_is_queued_prevents_upstream_request() {
             &request_app,
             "member-token-1",
             "GET",
-            "/api/v3/profiles/1/simkl/meta/movie/10",
+            "/api/profiles/1/simkl/meta/movie/10",
             json!({}),
         )
         .await
@@ -100,7 +100,7 @@ async fn profile_switch_during_metadata_prevents_watched_write() {
             &request_app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/simkl/watched",
+            "/api/profiles/1/simkl/watched",
             json!({"category":"movie","id":10}),
         )
         .await
@@ -136,7 +136,7 @@ async fn another_profile_of_same_account_does_not_inherit_link() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/3/simkl",
+        "/api/profiles/3/simkl",
         json!({}),
     )
     .await;
@@ -147,7 +147,7 @@ async fn another_profile_of_same_account_does_not_inherit_link() {
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/3/simkl/watched",
+            "/api/profiles/3/simkl/watched",
             json!({"category":"movie","id":10})
         )
         .await

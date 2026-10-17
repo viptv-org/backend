@@ -17,6 +17,8 @@ pub(super) fn card(item: &Value) -> Option<Card> {
             c.identity.id == projected.identity.id && c.identity.kind == projected.identity.kind
         })
         .unwrap_or(projected);
+    // A historical context cannot confer the current connector incarnation.
+    saved.metadata_origin = None;
     // Legacy updates to these shared columns remain visible in typed reads.
     saved.title = item["name"].as_str().unwrap_or(&saved.title).to_owned();
     saved.poster = item["poster"].as_str().map(str::to_owned);
@@ -52,8 +54,22 @@ pub(crate) async fn save(
     axum::Json(input): axum::Json<Save>,
 ) -> ApiResult {
     let app = app.with_lease(lease);
+    validate(&input.card)?;
+    let evidence = if input.card.metadata_origin.is_some() {
+        Some(origins::persistence_card(&app, &input.card).await?)
+    } else {
+        None
+    };
     blocking(move || {
-        validate(&input.card)?;
+        if let Some(evidence) = evidence {
+            let mut db=app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;
+            app.require_profile(&db, profile)?;
+            let tx=db.transaction().map_err(db_error)?;
+            scoped_library::save_db(&tx,&app,profile,&evidence)?;
+            let membership=membership::snapshot_db(&app,&app.request_lease(),profile,&tx)?;
+            tx.commit().map_err(db_error)?;
+            return Ok(axum::Json(json!({"ok":true,"saved":true,"library_membership":membership})));
+        }
         let mut db = app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;
         app.require_profile(&db, profile)?;
         kids::require_item(&db, &app.identity(), &input.card.identity.kind, &input.card.identity.id)?;
@@ -74,10 +90,17 @@ pub(crate) async fn save(
         Ok(axum::Json(json!({"ok":true,"saved":true,"library_membership":membership})))
     }).await
 }
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Removal {
+    metadata_origin: Option<String>,
+    card: Option<String>,
+}
 pub(crate) async fn remove(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path((profile, kind, id)): Path<(i64, String, String)>,
+    Query(selector): Query<Removal>,
 ) -> ApiResult {
     let app = app.with_lease(lease);
     blocking(move || {
@@ -93,6 +116,36 @@ pub(crate) async fn remove(
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?;
         app.require_profile(&db, profile)?;
+        if selector.metadata_origin.is_some() || selector.card.is_some() {
+            let origin: viptv_engine::origin::MetadataOrigin = serde_json::from_str(
+                selector
+                    .metadata_origin
+                    .as_deref()
+                    .ok_or("Metadata origin is required")?,
+            )
+            .map_err(|_| ApiError::from("Invalid metadata origin"))?;
+            let card: Card = serde_json::from_str(
+                selector
+                    .card
+                    .as_deref()
+                    .filter(|s| s.len() <= 65536)
+                    .ok_or("Stored card is required")?,
+            )
+            .map_err(|_| ApiError::from("Invalid stored card"))?;
+            if card.identity.kind != kind
+                || card.identity.id != id
+                || card.metadata_origin.as_ref() != Some(&origin)
+            {
+                return Err("Stored selector does not match the requested title".into());
+            }
+            let tx = db.transaction().map_err(db_error)?;
+            scoped_library::remove_db(&tx, &app, profile, &card)?;
+            let membership = membership::snapshot_db(&app, &app.request_lease(), profile, &tx)?;
+            tx.commit().map_err(db_error)?;
+            return Ok(axum::Json(
+                json!({"ok":true,"saved":false,"library_membership":membership}),
+            ));
+        }
         kids::require_item(&db, &app.identity(), &kind, &id)?;
         let id = membership::resolve(&db, profile, &kind, &id)?;
         let tx = db.transaction().map_err(db_error)?;

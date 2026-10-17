@@ -5,20 +5,35 @@ pub(super) async fn document(
     profile: i64,
     request: &NextEpisodeRequest,
     simkl: bool,
+    explicit: Option<&(String, Option<i64>, String)>,
+    metadata_origin: Option<&viptv_engine::origin::MetadataOrigin>,
 ) -> Result<(Card, Vec<EpisodeAvailability>), ApiError> {
     let parent = request
         .parent_identity
         .as_ref()
         .ok_or_else(|| ApiError::from("An explicit parent identity is required"))?;
     if simkl {
-        return crate::simkl::continuation_document(app, profile, &parent.kind, &parent.id).await;
+        let (mut parent, mut entries) =
+            crate::simkl::continuation_document(app, profile, &parent.kind, &parent.id).await?;
+        if let Some(origin) = metadata_origin {
+            parent.metadata_origin = Some(origin.clone());
+            for entry in &mut entries {
+                entry.card.metadata_origin = Some(origin.clone());
+            }
+        }
+        return Ok((parent, entries));
     }
-    let (host, revision) = configuration::apply(
-        app.clone(),
-        lease,
-        profile,
-        viptv_engine::capabilities::Capability::Metadata,
-    )?;
+    let (host, origin, revision) = if let Some((provider, addon, _)) = explicit {
+        super::super::search::metadata_scope(app.clone(), lease, profile, provider, *addon)?
+    } else {
+        let (host, revision) = configuration::apply(
+            app.clone(),
+            lease,
+            profile,
+            viptv_engine::capabilities::Capability::Metadata,
+        )?;
+        (host, "stremio".to_owned(), revision)
+    };
     let raw = host.addons.meta("series", &parent.id).await?;
     configuration::validate_revision(app, profile, revision)?;
     let meta = if raw["meta"].is_object() {
@@ -29,11 +44,32 @@ pub(super) async fn document(
     if meta["id"].as_str() != Some(&parent.id) {
         return Err("Metadata returned a different parent".into());
     }
-    let detail =
-        viptv_engine::stremio::detail_page(&raw.to_string(), "stremio", "series", &parent.id, 0, 1)
+    let mut detail =
+        viptv_engine::stremio::detail_page(&raw.to_string(), &origin, "series", &parent.id, 0, 1)
             .map_err(|_| ApiError::from("Parent metadata unavailable"))?;
-    let cards = viptv_engine::stremio::episode_cards(meta, "stremio", &detail.item)
+    let mut cards = viptv_engine::stremio::episode_cards(meta, &origin, &detail.item)
         .map_err(|_| ApiError::from("Episode metadata unavailable"))?;
+    if let Some(origin) = metadata_origin {
+        detail.item.metadata_origin = Some(origin.clone());
+        for card in &mut cards {
+            card.metadata_origin = Some(origin.clone());
+        }
+        let mut db = app
+            .db
+            .lock()
+            .map_err(|_| ApiError::from("Database unavailable"))?;
+        let tx = db.transaction().map_err(db_error)?;
+        lease.validate(&tx)?;
+        kids::scoped::observe_document(
+            &tx,
+            lease.principal.account_id().ok_or_else(auth::forbidden)?,
+            &detail.item,
+            &cards,
+            meta,
+        )?;
+        kids::scoped::require_card_db(&tx, &lease.principal, &detail.item)?;
+        tx.commit().map_err(db_error)?;
+    }
     let rows = meta["videos"]
         .as_array()
         .ok_or_else(|| ApiError::from("Episode document unavailable"))?;

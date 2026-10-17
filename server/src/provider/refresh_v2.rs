@@ -303,7 +303,7 @@ mod tests {
         }
     }
     async fn create(f: &Fixture) -> i64 {
-        let (status,value)=http(&f.app,"member-token-1","POST","/api/v2/iptv/connections",json!({"name":"Background fixture","url":f.base,"username":"private-user","password":"private-password"})).await;
+        let (status,value)=http(&f.app,"member-token-1","POST","/api/iptv/connections",json!({"name":"Background fixture","url":f.base,"username":"private-user","password":"private-password"})).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{value}");
         value["id"].as_i64().unwrap()
     }
@@ -314,7 +314,7 @@ mod tests {
                     &f.app,
                     "member-token-1",
                     "GET",
-                    &format!("/api/v2/iptv/connections/{id}/refresh"),
+                    &format!("/api/iptv/connections/{id}/refresh"),
                     Value::Null,
                 )
                 .await;
@@ -338,7 +338,7 @@ mod tests {
         assert_eq!(success["counts"]["vod"], 1);
         assert_eq!(success["counts"]["series"], 1);
         assert!(success["next_at"].as_i64().unwrap() > crate::util::now() + 21000);
-        let path = format!("/api/v2/iptv/connections/{id}/refresh");
+        let path = format!("/api/iptv/connections/{id}/refresh");
         for method in ["GET", "POST", "DELETE"] {
             assert_eq!(
                 http(&f.app, "member-token-2", method, &path, Value::Null)
@@ -351,7 +351,7 @@ mod tests {
             &f.app,
             "member-token-1",
             "GET",
-            "/api/v2/iptv/live/channels",
+            "/api/iptv/live/channels",
             Value::Null,
         )
         .await;
@@ -380,7 +380,7 @@ mod tests {
             &f.app,
             "member-token-1",
             "GET",
-            "/api/v2/iptv/live/channels",
+            "/api/iptv/live/channels",
             Value::Null,
         )
         .await;
@@ -392,7 +392,7 @@ mod tests {
             &f.app,
             "member-token-1",
             "GET",
-            "/api/v2/iptv/live/channels",
+            "/api/iptv/live/channels",
             Value::Null,
         )
         .await;
@@ -423,7 +423,7 @@ mod tests {
             &f.app,
             "member-token-1",
             "DELETE",
-            &format!("/api/v2/iptv/connections/{id}/refresh"),
+            &format!("/api/iptv/connections/{id}/refresh"),
             Value::Null,
         )
         .await;
@@ -475,12 +475,12 @@ mod tests {
             &f.app,
             "member-token-1",
             "POST",
-            "/api/v2/iptv/connections",
+            "/api/iptv/connections",
             json!({"name":"Second","url":f.base,"username":"second","password":"password"}),
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::OK);
-        let (status,other)=http(&f.app,"member-token-2","POST","/api/v2/iptv/connections",json!({"name":"Other account","url":f.base,"username":"private-user","password":"private-password"})).await;
+        let (status,other)=http(&f.app,"member-token-2","POST","/api/iptv/connections",json!({"name":"Other account","url":f.base,"username":"private-user","password":"private-password"})).await;
         assert_eq!(status, axum::http::StatusCode::OK);
         let db = f.app.db.lock().unwrap();
         assert_eq!(claim(&db).unwrap().unwrap().provider, first);
@@ -505,7 +505,7 @@ mod tests {
             &f.app,
             "member-token-1",
             "POST",
-            &format!("/api/v2/iptv/connections/{id}/refresh"),
+            &format!("/api/iptv/connections/{id}/refresh"),
             Value::Null,
         )
         .await;

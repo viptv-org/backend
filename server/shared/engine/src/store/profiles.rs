@@ -127,9 +127,17 @@ impl Store {
     }
 
     pub fn delete_profile(&mut self, scope: &Scope, pin: &str) -> Result<(), Error> {
-        if self.profile(scope)?.is_none() {
-            return Err(Error::Forbidden);
-        }
+        self.delete_profile_with_private_connections(scope, pin)
+            .map(|_| ())
+    }
+    /// Return only the private connection records removed by this transaction so
+    /// the native host can prune their separate vault entries after commit.
+    pub fn delete_profile_with_private_connections(
+        &mut self,
+        scope: &Scope,
+        pin: &str,
+    ) -> Result<Vec<IntegrationConnection>, Error> {
+        let current = self.profile(scope)?.ok_or(Error::Forbidden)?;
         if self
             .profiles(&scope.connection_id, &scope.account_id)?
             .len()
@@ -141,6 +149,34 @@ impl Store {
             return Err(Error::Forbidden);
         }
         let tx = self.db.transaction().map_err(|_| Error::Storage)?;
+        tx.execute("INSERT INTO engine_deleted_profile_revisions(connection,account,profile,revision) VALUES(?1,?2,?3,?4) ON CONFLICT(connection,account,profile) DO UPDATE SET revision=MAX(revision,excluded.revision)",params![scope.connection_id,scope.account_id,scope.profile_id,current.scope.revision]).map_err(|_|Error::Storage)?;
+        let private = {
+            let mut query = tx
+                .prepare("SELECT value FROM engine_connections WHERE account=?1")
+                .map_err(|_| Error::Storage)?;
+            let rows = query
+                .query_map([&scope.account_id], |row| row.get::<_, String>(0))
+                .map_err(|_| Error::Storage)?;
+            let mut private = Vec::new();
+            for row in rows {
+                let connection: IntegrationConnection =
+                    serde_json::from_str(&row.map_err(|_| Error::Storage)?)
+                        .map_err(|_| Error::Storage)?;
+                if connection.account_id == scope.account_id
+                    && connection.private_profile_id.as_deref() == Some(&scope.profile_id)
+                {
+                    private.push(connection);
+                }
+            }
+            private
+        };
+        for connection in &private {
+            tx.execute(
+                "DELETE FROM engine_connections WHERE account=?1 AND id=?2",
+                params![scope.account_id, connection.id],
+            )
+            .map_err(|_| Error::Storage)?;
+        }
         for table in [
             "engine_profiles",
             "engine_observations",
@@ -154,6 +190,52 @@ impl Store {
             )
             .map_err(|_| Error::Storage)?;
         }
-        tx.commit().map_err(|_| Error::Storage)
+        tx.commit().map_err(|_| Error::Storage)?;
+        Ok(private)
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    #[test]
+    fn recreated_ids_keep_monotonic_authority_and_overflow_is_rejected() {
+        let mut store = Store::memory().unwrap();
+        for id in ["first", "other"] {
+            store
+                .save_profile(
+                    &ProfileConfiguration::local("local".into(), id.into(), id.into()),
+                    None,
+                )
+                .unwrap();
+        }
+        let scope =
+            ProfileConfiguration::local("local".into(), "first".into(), "First".into()).scope;
+        store.delete_profile(&scope, "").unwrap();
+        assert_eq!(store.new_profile_revision(&scope).unwrap(), 1);
+        let mut recreated =
+            ProfileConfiguration::local("local".into(), "first".into(), "Fresh".into());
+        assert_eq!(store.save_profile(&recreated, None), Err(Error::Conflict));
+        recreated.scope.revision = 1;
+        store.save_profile(&recreated, None).unwrap();
+        store.delete_profile(&recreated.scope, "").unwrap();
+        assert_eq!(store.new_profile_revision(&scope).unwrap(), 2);
+        assert_eq!(
+            store
+                .new_profile_revision(
+                    &ProfileConfiguration::local("local".into(), "new".into(), "New".into()).scope
+                )
+                .unwrap(),
+            0
+        );
+        store
+            .db
+            .execute(
+                "UPDATE engine_deleted_profile_revisions SET revision=?1 WHERE profile='first'",
+                [i64::MAX],
+            )
+            .unwrap();
+        assert_eq!(store.new_profile_revision(&scope), Err(Error::Storage));
+        assert!(store.profile(&scope).unwrap().is_none());
     }
 }

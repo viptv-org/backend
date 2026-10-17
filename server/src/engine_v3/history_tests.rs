@@ -16,20 +16,20 @@ async fn get(app: &App, path: &str) -> Value {
 #[tokio::test]
 async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
     let app = fixture();
-    let before = get(&app, "/api/v3/bootstrap").await;
+    let before = get(&app, "/api/bootstrap").await;
     assert_eq!(
         request(
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             body(30_000)
         )
         .await
         .0,
         StatusCode::OK
     );
-    let history = get(&app, "/api/v3/profiles/1/history").await;
+    let history = get(&app, "/api/profiles/1/history").await;
     let entry = &history[0];
     assert_eq!(entry["card"]["identity"], identity("opaque-episode", true));
     assert_eq!(
@@ -44,7 +44,7 @@ async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
     assert_eq!(entry["card"]["progress"], 0.3);
     assert!(entry["completed_at_millis"].is_null());
     assert!(entry["updated_at_millis"].as_u64().unwrap() > 1000);
-    let home = get(&app, "/api/v3/bootstrap").await;
+    let home = get(&app, "/api/bootstrap").await;
     assert_eq!(home["home"]["rows"][0]["cards"][0], entry["card"]);
     assert!(
         home["home"]["revision"].as_u64().unwrap() > before["home"]["revision"].as_u64().unwrap()
@@ -54,14 +54,14 @@ async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             body(95_000)
         )
         .await
         .0,
         StatusCode::OK
     );
-    let completed = get(&app, "/api/v3/profiles/1/history").await;
+    let completed = get(&app, "/api/profiles/1/history").await;
     assert!(completed[0]["completed_at_millis"].as_u64().is_some());
     assert_eq!(completed[0]["card"]["progress"], 0.95);
     assert_eq!(
@@ -69,7 +69,7 @@ async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
             &app,
             "member-token-2",
             "GET",
-            "/api/v3/profiles/1/history",
+            "/api/profiles/1/history",
             json!({})
         )
         .await
@@ -88,20 +88,21 @@ async fn conflicting_parent_is_rejected_and_legacy_context_is_projected_without_
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             input
         )
         .await
         .0,
         StatusCode::BAD_REQUEST
     );
-    assert!(get(&app, "/api/v3/profiles/1/history")
+    assert!(get(&app, "/api/profiles/1/history")
         .await
         .as_array()
         .unwrap()
         .is_empty());
-    assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/progress",json!({"id":"legacy-opaque","type":"series","name":"Legacy episode","series_id":"legacy-parent","season":1,"episode":3,"position":20,"duration":100})).await.0,StatusCode::OK);
-    let history = get(&app, "/api/v3/profiles/1/history?limit=1").await;
+    // Legacy rows (written by imports) project into typed history cards.
+    app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at,context,title_id) VALUES(1,'legacy-opaque','series','Legacy episode',20,100,0,'{\"series_id\":\"legacy-parent\",\"season\":1,\"episode\":3}','legacy-parent')",[]).unwrap();
+    let history = get(&app, "/api/profiles/1/history?limit=1").await;
     assert_eq!(history[0]["card"]["identity"]["id"], "legacy-opaque");
     assert_eq!(history[0]["card"]["parent_identity"]["id"], "legacy-parent");
     assert_eq!(history[0]["card"]["identity"]["episode"]["episode"], 3);
@@ -113,7 +114,7 @@ async fn conflicting_parent_is_rejected_and_legacy_context_is_projected_without_
             [],
         )
         .unwrap();
-    assert!(get(&app, "/api/v3/profiles/1/history")
+    assert!(get(&app, "/api/profiles/1/history")
         .await
         .as_array()
         .unwrap()
@@ -123,7 +124,7 @@ async fn conflicting_parent_is_rejected_and_legacy_context_is_projected_without_
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/progress",
+            "/api/profiles/1/progress",
             body(30_000)
         )
         .await

@@ -29,6 +29,7 @@ impl Store {
                 params![scope.connection_id, scope.account_id, scope.profile_id],
             )
             .map_err(|_| Error::Storage)?;
+        self.db.execute("DELETE FROM engine_scoped_records WHERE connection=?1 AND account=?2 AND profile=?3 AND record_kind='playback'",params![scope.connection_id,scope.account_id,scope.profile_id]).map_err(|_|Error::Storage)?;
         Ok(())
     }
     pub fn record_playback(
@@ -39,6 +40,16 @@ impl Store {
         duration_millis: u64,
         now_millis: u64,
     ) -> Result<(), Error> {
+        if card.metadata_origin.is_some() {
+            return self.record_scoped_playback(
+                scope,
+                card,
+                position_millis,
+                duration_millis,
+                now_millis,
+                false,
+            );
+        }
         let profile = self.profile(scope)?.ok_or(Error::Forbidden)?;
         if profile.scope.revision != scope.revision {
             return Err(Error::Conflict);
@@ -67,8 +78,22 @@ impl Store {
         presentation.logo = public_art(card.logo.as_deref());
         presentation.progress = None;
         presentation.added_at_millis = None;
-        let times_watched=match &old{None=>Some(u64::from(completed)),Some(old)=>old.times_watched.map(|count|if completed && !(old.duration_millis>0&&old.position_millis.saturating_mul(100)>=old.duration_millis.saturating_mul(95)){count.saturating_add(1)}else{count})};
+        let times_watched = match &old {
+            None => Some(u64::from(completed)),
+            Some(old) => old.times_watched.map(|count| {
+                if completed
+                    && !(old.duration_millis > 0
+                        && old.position_millis.saturating_mul(100)
+                            >= old.duration_millis.saturating_mul(95))
+                {
+                    count.saturating_add(1)
+                } else {
+                    count
+                }
+            }),
+        };
         let record = PlaybackRecord {
+            metadata_origin: None,
             times_watched,
             presentation: Some(presentation),
             identity: card.identity.clone(),
@@ -95,13 +120,33 @@ impl Store {
         kind: &str,
         id: &str,
     ) -> Result<Option<PlaybackRecord>, Error> {
-        let raw:Option<String>=self.db.query_row("SELECT value FROM engine_playback WHERE connection=?1 AND account=?2 AND profile=?3 AND kind=?4 AND id=?5",params![scope.connection_id,scope.account_id,scope.profile_id,kind,id],|r|r.get(0)).optional().map_err(|_|Error::Storage)?;
-        raw.map(|value| serde_json::from_str(&value).map_err(|_| Error::Storage))
-            .transpose()
+        self.library_scope(scope, false)?;
+        let shared = self.playback_key(
+            scope,
+            &super::scoped_library::Key("shared".into(), kind.into(), id.into()),
+        )?;
+        let legacy = self.playback_key(
+            scope,
+            &super::scoped_library::Key("legacy".into(), kind.into(), id.into()),
+        )?;
+        Ok(match (shared, legacy) {
+            (Some(a), Some(b)) => Some(if a.updated_at_millis >= b.updated_at_millis {
+                a
+            } else {
+                b
+            }),
+            (a, b) => a.or(b),
+        })
     }
     pub fn history(&self, scope: &Scope, limit: u32) -> Result<Vec<PlaybackRecord>, Error> {
-        let mut q=self.db.prepare("SELECT value FROM engine_playback WHERE connection=?1 AND account=?2 AND profile=?3 ORDER BY updated_at_millis DESC LIMIT ?4").map_err(|_|Error::Storage)?;
-        let rows = q
+        self.library_scope(scope, false)?;
+        let sql = format!(
+            "SELECT value,legacy FROM (SELECT p.value,p.updated_at_millis,p.kind,p.id AS identity_id,'legacy' AS identity_scope,1 AS legacy FROM engine_playback p WHERE p.connection=?1 AND p.account=?2 AND p.profile=?3 AND NOT EXISTS(SELECT 1 FROM engine_scoped_records s WHERE s.connection=p.connection AND s.account=p.account AND s.profile=p.profile AND s.record_kind='playback' AND s.identity_scope='shared' AND s.kind=p.kind AND s.identity_id=p.id AND s.updated_at_millis>=p.updated_at_millis AND {}) UNION ALL SELECT s.value,s.updated_at_millis,s.kind,s.identity_id,s.identity_scope,0 AS legacy FROM engine_scoped_records s WHERE s.connection=?1 AND s.account=?2 AND s.profile=?3 AND s.record_kind='playback' AND NOT(s.identity_scope='shared' AND EXISTS(SELECT 1 FROM engine_playback p WHERE p.connection=s.connection AND p.account=s.account AND p.profile=s.profile AND p.kind=s.kind AND p.id=s.identity_id AND p.updated_at_millis>s.updated_at_millis AND {})))ORDER BY updated_at_millis DESC,kind,identity_id,identity_scope LIMIT ?4",
+            super::scoped_library::legacy_shared_sql("p"),
+            super::scoped_library::legacy_shared_sql("p")
+        );
+        let mut query = self.db.prepare(&sql).map_err(|_| Error::Storage)?;
+        let rows = query
             .query_map(
                 params![
                     scope.connection_id,
@@ -109,12 +154,20 @@ impl Store {
                     scope.profile_id,
                     limit.clamp(1, 100)
                 ],
-                |r| r.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
             )
             .map_err(|_| Error::Storage)?;
         rows.map(|row| {
-            row.map_err(|_| Error::Storage)
-                .and_then(|raw| serde_json::from_str(&raw).map_err(|_| Error::Storage))
+            let (value, legacy) = row.map_err(|_| Error::Storage)?;
+            let mut record: PlaybackRecord =
+                serde_json::from_str(&value).map_err(|_| Error::Storage)?;
+            if legacy {
+                record.metadata_origin = None;
+                if let Some(card) = &mut record.presentation {
+                    card.metadata_origin = None;
+                }
+            }
+            Ok(record)
         })
         .collect()
     }

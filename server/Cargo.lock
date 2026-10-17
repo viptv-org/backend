@@ -3036,6 +3036,7 @@ dependencies = [
  "flate2",
  "futures",
  "quick-xml",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",

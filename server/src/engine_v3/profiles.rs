@@ -39,7 +39,7 @@ fn project(db: &Connection, value: &Value) -> Result<Value, ApiError> {
         .and_then(|id| id.parse::<i64>().ok())
         .ok_or("Invalid profile identity")?;
     Ok(
-        json!({"id":value["id"],"name":value["name"],"avatar_id":avatar(db,id)?,"locked":false,"selection_requires_parent":false,"lock_kind":null,"is_primary":value["is_primary"],"can_delete":value["is_primary"]!=true,"kids":value["kids"],"setup_complete":value["setup_complete"]}),
+        json!({"id":value["id"],"name":value["name"],"avatar_id":avatar(db,id)?,"locked":false,"selection_requires_parent":false,"lock_kind":null,"is_primary":value["is_primary"],"can_delete":value["is_primary"]!=true,"kids":value["kids"],"max_age":value["max_age"],"setup_complete":value["setup_complete"]}),
     )
 }
 fn payload(value: &Value, create: bool) -> Result<Option<Option<String>>, ApiError> {

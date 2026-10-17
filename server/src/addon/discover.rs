@@ -40,8 +40,29 @@ impl Addons {
         .await
     }
     pub async fn discover_with_options(&self, request: DiscoverOptions) -> Result<Value, String> {
+        self.discover_with_origin(request)
+            .await
+            .map(|(value, _)| value)
+    }
+    pub(crate) async fn discover_with_origin(
+        &self,
+        request: DiscoverOptions,
+    ) -> Result<(Value, Option<i64>), String> {
         let entries = self.async_entries().await?;
         let plan = viptv_provider::discover::plan_discovery(&entries, &request)?;
+        let owners = entries
+            .iter()
+            .filter_map(|entry| {
+                let own =
+                    viptv_provider::discover::plan_discovery(std::slice::from_ref(entry), &request)
+                        .ok()?;
+                own.endpoints
+                    .iter()
+                    .any(|endpoint| plan.endpoints.contains(endpoint))
+                    .then_some(entry.0)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let owner = (owners.len() == 1).then(|| *owners.first().expect("one issuer"));
         let results: Vec<Value> = stream::iter(plan.endpoints.iter().cloned().map(|u| {
             let s = self.clone();
             async move { s.fetch(&u, 300).await }
@@ -53,22 +74,127 @@ impl Addons {
         .flatten()
         .collect();
         viptv_provider::discover::aggregate_discovery(&results, &plan, request.skip)
+            .map(|value| (value, owner))
     }
+    /// Grouped search retains successes and failures by endpoint until one
+    /// absolute deadline. Unlike legacy aggregation, a slow sibling catalog
+    /// cannot erase cards that already arrived from this add-on. `catalog`
+    /// restricts the search to a single catalog so each searchable catalog of
+    /// the add-on becomes its own result row.
+    pub(crate) async fn search_results(
+        &self,
+        addon: i64,
+        kinds: Vec<String>,
+        catalog: Option<String>,
+        query: String,
+        budget: Duration,
+    ) -> Result<(Vec<Value>, bool), String> {
+        let entries = self.async_entries().await?;
+        let mut endpoints = Vec::new();
+        for kind in kinds {
+            let plan = viptv_provider::discover::plan_discovery(
+                &entries,
+                &DiscoverOptions {
+                    kind: kind.clone(),
+                    catalog: catalog.clone(),
+                    addon: Some(addon),
+                    skip: 0,
+                    search: Some(query.clone()),
+                    genre: None,
+                    extras: HashMap::new(),
+                    values: vec![],
+                },
+            )?;
+            endpoints.extend(plan.endpoints.into_iter().map(|url| (kind.clone(), url)));
+        }
+        endpoints.truncate(32);
+        if endpoints.is_empty() {
+            return Ok((vec![], true));
+        }
+        let mut requests = stream::iter(endpoints.into_iter().enumerate().map(
+            |(index, (kind, url))| {
+                let this = self.clone();
+                async move { (index, kind, this.fetch(&url, 300).await) }
+            },
+        ))
+        .buffer_unordered(8);
+        let deadline = tokio::time::Instant::now() + budget;
+        let mut batches = Vec::new();
+        let mut failed = false;
+        loop {
+            match tokio::time::timeout_at(deadline, requests.next()).await {
+                Ok(Some((index, kind, Ok(value)))) => {
+                    if let Some(metas) = value["metas"].as_array() {
+                        let metas = metas
+                            .iter()
+                            .take(200)
+                            .cloned()
+                            .filter_map(|mut meta| {
+                                if !meta.is_object() {
+                                    failed = true;
+                                    return None;
+                                }
+                                if meta["type"].is_null() {
+                                    meta["type"] = json!(kind);
+                                }
+                                Some(meta)
+                            })
+                            .collect::<Vec<_>>();
+                        batches.push((index, metas));
+                    } else {
+                        failed = true;
+                    }
+                }
+                Ok(Some((_, _, Err(_)))) => failed = true,
+                Ok(None) => break,
+                Err(_) => {
+                    failed = true;
+                    break;
+                }
+            }
+        }
+        batches.sort_by_key(|(index, _)| *index);
+        let mut seen = std::collections::HashSet::new();
+        let items = batches
+            .into_iter()
+            .flat_map(|(_, metas)| metas)
+            .filter(|meta| {
+                seen.insert((
+                    meta["type"].as_str().unwrap_or("").to_owned(),
+                    meta["id"].as_str().unwrap_or("").to_owned(),
+                ))
+            })
+            .take(200)
+            .collect();
+        Ok((items, failed))
+    }
+
     pub async fn meta(&self, kind: &str, id: &str) -> Result<Value, String> {
+        self.meta_with_origin(kind, id)
+            .await
+            .map(|(value, _)| value)
+    }
+    pub(crate) async fn meta_with_origin(
+        &self,
+        kind: &str,
+        id: &str,
+    ) -> Result<(Value, i64), String> {
         let endpoints = self
             .async_entries()
             .await?
             .into_iter()
             .filter(|(_, _, m)| supports(m, "meta", kind, id))
             .take(32)
-            .map(|(_, u, _)| Self::endpoint(&u, &["meta", kind, &format!("{id}.json")]))
+            .map(|(addon, u, _)| {
+                Self::endpoint(&u, &["meta", kind, &format!("{id}.json")]).map(|url| (addon, url))
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut results = stream::iter(endpoints.into_iter().map(|u| {
+        let mut results = stream::iter(endpoints.into_iter().map(|(addon, u)| {
             let this = self.clone();
-            async move { this.fetch(&u, 3600).await }
+            async move { (addon, this.fetch(&u, 3600).await) }
         }))
         .buffered(8);
-        while let Some(result) = results.next().await {
+        while let Some((issuer, result)) = results.next().await {
             if let Ok(v) = result {
                 if v["meta"].is_object() {
                     let mut primary = v;
@@ -77,7 +203,7 @@ impl Addons {
                         // metadata uses broken generated URLs. Keep playback identities.
                         let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
                         while needs_episode_art(&primary["meta"]) {
-                            let Ok(Some(next)) =
+                            let Ok(Some((_, next))) =
                                 tokio::time::timeout_at(deadline, results.next()).await
                             else {
                                 break;
@@ -94,7 +220,7 @@ impl Addons {
                             }
                         }
                     }
-                    return Ok(primary);
+                    return Ok((primary, issuer));
                 }
             }
         }

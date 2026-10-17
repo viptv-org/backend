@@ -28,7 +28,7 @@ async fn unlink_while_refresh_waits_for_owner_prevents_dispatch() {
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1/simkl",
+            "/api/profiles/1/simkl",
             json!({})
         )
         .await
@@ -78,7 +78,7 @@ async fn unlink_during_refresh_does_not_restore_sealed_credentials() {
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1/simkl",
+            "/api/profiles/1/simkl",
             json!({})
         )
         .await

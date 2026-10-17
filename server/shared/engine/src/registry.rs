@@ -82,7 +82,7 @@ impl Registry {
                         .any(|a| a.connection_id == c.id && a.enabled.contains(&capability))
                     && (!matches!(
                         capability,
-                        Capability::Discovery | Capability::Search | Capability::Metadata
+                        Capability::Discovery | Capability::Metadata
                     ) || c.plugin_id == profile.browsing_plugin)
             })
             .collect())

@@ -15,7 +15,7 @@ async fn linked_library_uses_one_private_read_real_user_stats_and_never_writes_w
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/library?source=simkl&rated=rated_8_plus",
+        "/api/profiles/1/library?source=simkl&rated=rated_8_plus",
         json!({}),
     )
     .await;
@@ -28,7 +28,7 @@ async fn linked_library_uses_one_private_read_real_user_stats_and_never_writes_w
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/library?source=simkl&show=has_new_episode&episodes_left_max=9",
+        "/api/profiles/1/library?source=simkl&show=has_new_episode&episodes_left_max=9",
         json!({}),
     )
     .await;
@@ -42,7 +42,7 @@ async fn linked_library_uses_one_private_read_real_user_stats_and_never_writes_w
             &app,
             "member-token-2",
             "GET",
-            "/api/v3/profiles/1/library?source=simkl",
+            "/api/profiles/1/library?source=simkl",
             json!({})
         )
         .await
@@ -55,7 +55,7 @@ async fn linked_library_uses_one_private_read_real_user_stats_and_never_writes_w
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1/simkl",
+            "/api/profiles/1/simkl",
             json!({})
         )
         .await
@@ -66,7 +66,7 @@ async fn linked_library_uses_one_private_read_real_user_stats_and_never_writes_w
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/library?source=simkl",
+        "/api/profiles/1/library?source=simkl",
         json!({}),
     )
     .await;
@@ -103,7 +103,7 @@ async fn expired_private_snapshot_checks_activities_merges_deltas_ratings_and_re
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
     app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
-    let path = "/api/v3/profiles/1/library?source=simkl";
+    let path = "/api/profiles/1/library?source=simkl";
     assert_eq!(
         request(&app, "member-token-1", "GET", path, json!({}))
             .await
@@ -151,7 +151,7 @@ async fn profile_switch_during_private_read_discards_the_entire_response() {
             &cloned,
             "member-token-1",
             "GET",
-            "/api/v3/profiles/1/library?source=simkl",
+            "/api/profiles/1/library?source=simkl",
             json!({}),
         )
         .await
@@ -174,7 +174,7 @@ async fn profile_switch_during_private_read_discards_the_entire_response() {
 async fn genre_enrichment_runs_in_background_and_reports_partial_matches_until_verified(){
  let (mut app,initial,_)=server().await;link(&app).await;initial.abort();let gate=Arc::new(tokio::sync::Semaphore::new(0));let reads=Arc::new(AtomicUsize::new(0));let g=gate.clone();let r=reads.clone();
  let routes=Router::new().route("/sync/activities",get(||async{axum::Json(json!({"all":null}))})).route("/sync/all-items",get(||async{axum::Json(json!({"shows":null,"anime":null,"movies":[{"status":"completed","movie":{"title":"Movie","ids":{"simkl":10}}}]}))})).route("/movies/10",get(move |headers:axum::http::HeaderMap|{let g=g.clone();let r=r.clone();async move{assert!(!headers.contains_key(header::AUTHORIZATION));r.fetch_add(1,Ordering::SeqCst);let _permit=g.acquire().await.unwrap();axum::Json(json!({"title":"Movie","ids":{"simkl":10},"genres":["Drama"]}))}}));
- let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();let task=tokio::spawn(async move{axum::serve(listener,routes).await.unwrap()});app.simkl=Arc::new(Service::fixture(&format!("http://{address}")));let path="/api/v3/profiles/1/library?source=simkl";
+ let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();let task=tokio::spawn(async move{axum::serve(listener,routes).await.unwrap()});app.simkl=Arc::new(Service::fixture(&format!("http://{address}")));let path="/api/profiles/1/library?source=simkl";
  let (status,page)=request(&app,"member-token-1","GET",path,json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(page["cards"].as_array().unwrap().len(),1);assert!(page["reason"].as_str().unwrap().contains("0 of 1"));assert_eq!(page["refresh_after_millis"],4000);
  let (status,partial)=request(&app,"member-token-1","GET",&format!("{path}&genre=Drama"),json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(partial["availability"],"TemporarilyUnavailable");assert!(partial["cards"].as_array().unwrap().is_empty());gate.add_permits(1);
  tokio::time::timeout(Duration::from_secs(3),async{loop{let (_,page)=request(&app,"member-token-1","GET",&format!("{path}&genre=Drama"),json!({})).await;if page["availability"]=="Available"&&page["cards"].as_array().is_some_and(|cards|cards.len()==1){assert!(page["reason"].is_null());break;}tokio::time::sleep(Duration::from_millis(10)).await;}}).await.unwrap();assert_eq!(reads.load(Ordering::SeqCst),1);
@@ -184,7 +184,7 @@ async fn genre_enrichment_runs_in_background_and_reports_partial_matches_until_v
 async fn unavailable_metadata_stops_aggregate_refresh_when_the_worker_finishes(){
  let (mut app,initial,_)=server().await;link(&app).await;initial.abort();
  let routes=Router::new().route("/sync/activities",get(||async{axum::Json(json!({"all":null}))})).route("/sync/all-items",get(||async{axum::Json(json!({"movies":[{"status":"completed","movie":{"title":"Movie","ids":{"simkl":10}}}]}))})).route("/movies/10",get(||async{StatusCode::BAD_GATEWAY}));
- let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();let task=tokio::spawn(async move{axum::serve(listener,routes).await.unwrap()});app.simkl=Arc::new(Service::fixture(&format!("http://{address}")));let path="/api/v3/profiles/1/library?source=simkl&genre=Drama";
+ let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();let task=tokio::spawn(async move{axum::serve(listener,routes).await.unwrap()});app.simkl=Arc::new(Service::fixture(&format!("http://{address}")));let path="/api/profiles/1/library?source=simkl&genre=Drama";
  let(status,page)=request(&app,"member-token-1","GET",path,json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(page["refresh_after_millis"],4000);
  tokio::time::timeout(Duration::from_secs(3),async{loop{let(status,page)=request(&app,"member-token-1","GET",path,json!({})).await;assert_eq!(status,StatusCode::OK);if page["refresh_after_millis"].is_null(){assert_eq!(page["availability"],"TemporarilyUnavailable");assert!(page["reason"].as_str().unwrap().contains("incomplete"));break;}tokio::time::sleep(Duration::from_millis(10)).await;}}).await.unwrap();task.abort();
 }
@@ -200,10 +200,10 @@ async fn unified_library_imports_membership_original_history_and_verified_pauses
       .route("/tv/20",get(||async{axum::Json(json!({"title":"Show","runtime":24,"ids":{"simkl":20,"imdb":"tt7654321"}}))}))
       .route("/tv/episodes/20",get(||async{axum::Json(json!([{"title":"Second","season":1,"episode":2,"ids":{"simkl":201}}]))}));
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();let task=tokio::spawn(async move{axum::serve(listener,routes).await.unwrap()});app.simkl=Arc::new(Service::fixture(&format!("http://{address}")));
-    let (status,initial)=request(&app,"member-token-1","GET","/api/v3/profiles/1/library",json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(initial["refresh_after_millis"],4000);
+    let (status,initial)=request(&app,"member-token-1","GET","/api/profiles/1/library",json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(initial["refresh_after_millis"],4000);
     let mut terminal=Value::Null;
-    for _ in 0..100 {let (status,state)=request(&app,"member-token-1","GET","/api/v3/profiles/1/imports/simkl",json!({})).await;assert_eq!(status,StatusCode::OK);if state["running"]==false{terminal=state;break;}tokio::time::sleep(Duration::from_millis(20)).await;}
+    for _ in 0..100 {let (status,state)=request(&app,"member-token-1","GET","/api/profiles/1/imports/simkl",json!({})).await;assert_eq!(status,StatusCode::OK);if state["running"]==false{terminal=state;break;}tokio::time::sleep(Duration::from_millis(20)).await;}
     assert_eq!(terminal["availability"],"Available","{terminal}");assert_eq!(terminal["added_titles"],2);assert_eq!(terminal["imported_history"],3);assert!(terminal["library_revision"].as_u64().unwrap()>0);
-    let (status,library)=request(&app,"member-token-1","GET","/api/v3/profiles/1/library",json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(library["cards"].as_array().unwrap().len(),2);assert_eq!(library["sources"].as_array().unwrap().len(),1);assert_eq!(library["query"]["source"],"favorites");assert!(library["controls"].as_array().unwrap().iter().all(|c|c["id"]!="source"));assert_eq!(library["statistics"][0]["provenance"][0]["provider_id"],"simkl");
+    let (status,library)=request(&app,"member-token-1","GET","/api/profiles/1/library",json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(library["cards"].as_array().unwrap().len(),2);assert_eq!(library["sources"].as_array().unwrap().len(),1);assert_eq!(library["query"]["source"],"favorites");assert!(library["controls"].as_array().unwrap().iter().all(|c|c["id"]!="source"));assert_eq!(library["statistics"][0]["provenance"][0]["provider_id"],"simkl");
     let db=app.db.lock().unwrap();let row:(f64,f64)=db.query_row("SELECT position,duration FROM progress WHERE profile_id=1 AND id='simkl:tv:20:1:2'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();assert_eq!(row,(720.0,1440.0));assert_eq!(db.query_row("SELECT COUNT(*) FROM simkl_tracking_receipts",[],|r|r.get::<_,u64>(0)).unwrap(),0);assert_eq!(reads.load(Ordering::SeqCst),1);drop(db);task.abort();
 }

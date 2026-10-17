@@ -13,8 +13,9 @@ pub(crate) struct Service {
     base: String,
     pub(super) data_base: String,
     pub(super) trending: super::discovery::PublicCache,
-    pub(super) public_documents:
-        tokio::sync::Mutex<std::collections::HashMap<String, (Instant, Arc<Value>)>>,
+    pub(super) public_documents: tokio::sync::Mutex<
+        std::collections::HashMap<String, Arc<tokio::sync::Mutex<Option<(Instant, Arc<Value>)>>>>,
+    >,
     pub(super) metadata: super::cache::Cache,
     pub(super) imports: super::imports::Jobs,
     pub(super) watchlists: super::watchlists::Cache,
@@ -124,11 +125,21 @@ impl Service {
                 {
                     return Err("Invalid Simkl application configuration".into());
                 }
-                let origin = auth::canonical_origin()
+                // In-process integration tests build the shared App without
+                // a pinned origin and inject `Service::fixture` where Simkl
+                // is under test; without an origin the service stays
+                // unconfigured in debug test builds. Release builds and
+                // standalone debug builds still require a pinned origin.
+                let Some(origin) = auth::canonical_origin()
                     .map_err(|_| "Invalid Simkl callback origin")?
-                    .ok_or("A pinned HTTPS origin is required for Simkl")?;
+                else {
+                    if cfg!(all(test, debug_assertions)) {
+                        return Self::new(None, "https://api.simkl.com");
+                    }
+                    return Err("A pinned HTTPS origin is required for Simkl".into());
+                };
                 let redirect = origin
-                    .join("/api/v3/simkl/callback")
+                    .join("/api/simkl/callback")
                     .map_err(|_| "Invalid Simkl callback origin")?
                     .to_string();
                 Some(Config {
@@ -244,7 +255,7 @@ impl Service {
             Some(Config {
                 client_id: "fixture-client".into(),
                 secret: Zeroizing::new("fixture-secret".into()),
-                redirect: "https://tv.example/api/v3/simkl/callback".into(),
+                redirect: "https://tv.example/api/simkl/callback".into(),
             }),
             base,
         )

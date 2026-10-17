@@ -9,27 +9,58 @@ async fn public_calendar_genres_and_scoped_controls_use_v2_data_without_user_tok
         calls.fetch_add(1,Ordering::SeqCst);
         axum::Json(json!({"calendar":[{"simkl_id":20,"date":"2026-10-13T04:00:00Z","episode":{"season":2,"episode":3,"title":"Actual episode"}},{"simkl_id":20,"date":"2026-10-13T04:00:00Z","episode":{"season":2,"episode":4,"title":"Another episode"}},{"simkl_id":20,"date":"2026-10-21T04:00:00Z","episode":{"season":2,"episode":5}}],"metadata":{"20":{"title":"Actual series","ids":{"simkl_id":20,"imdb":"tt1234567"}}}}))
     }}))
-    .route("/discover/trending/movies/genre/index.json",get(||async{axum::Json(json!([{"name":"Science fiction","slug":"science-fiction","count":2}]))}))
+    .route("/discover/trending/movies/genre/index.json",get(||async{axum::Json(json!([{"name":"All Genre","slug":"all","count":500},{"name":"Science fiction","slug":"science-fiction","count":2},{"name":"Duplicate science fiction","slug":"science-fiction","count":2}]))}))
     .route("/discover/trending/movies/genre/science-fiction_month_500.json",get(|headers:axum::http::HeaderMap|async move{assert!(!headers.contains_key(header::AUTHORIZATION));axum::Json(json!([{"title":"Filtered movie","ids":{"simkl_id":10}}]))}));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let mut app = fixture();
     app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
-    let path = "/api/v3/calendar?type=series&start=2026-10-12&end=2026-10-18";
+    let path = "/api/calendar?type=series&start=2026-10-12&end=2026-10-18";
     let (status, page) = request(&app, "member-token-1", "GET", path, json!({})).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     let entries = page["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 2);
     assert_ne!(entries[0]["id"], entries[1]["id"]);
     for entry in entries {
+        assert_eq!(entry["card"]["metadata_origin"]["provider_id"],"simkl");
         assert_eq!(entry["card"]["identity"]["id"], "simkl:tv:20");
         assert!(entry["card"]["identity"]["episode"].is_null());
         assert_eq!(entry["date"], "2026-10-13T04:00:00Z");
     }
-    let (status,limited)=request(&app,"member-token-1","GET",&format!("{path}&limit=1"),json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(limited["entries"].as_array().unwrap().len(),1);assert_eq!(limited["next_cursor"],"1");
-    let (status,larger)=request(&app,"member-token-1","GET",&format!("{path}&limit=500"),json!({})).await;assert_eq!(status,StatusCode::OK);assert_eq!(larger,page);
-    assert_eq!(request(&app,"member-token-1","GET",&format!("{path}&limit=501"),json!({})).await.0,StatusCode::BAD_REQUEST);
+    let (status, limited) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("{path}&limit=1"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(limited["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(limited["next_cursor"], "1");
+    let (status, larger) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("{path}&limit=500"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(larger, page);
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "GET",
+            &format!("{path}&limit=501"),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
     let (_, again) = request(&app, "member-token-1", "GET", path, json!({})).await;
     assert_eq!(again, page);
     assert_eq!(count.load(Ordering::SeqCst), 1);
@@ -37,25 +68,37 @@ async fn public_calendar_genres_and_scoped_controls_use_v2_data_without_user_tok
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/discovery-controls?type=movie",
+        "/api/discovery-controls?type=movie",
         json!({}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{controls}");
     assert_eq!(controls["provider_id"], "simkl");
-    assert_eq!(controls["calendar"]["availability"], "Available");
-    assert!(
-        controls["controls"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|c| c["id"] == "genre" && c["choices"][1]["value"] == "science-fiction")
+    let genre_choices = controls["controls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "genre")
+        .unwrap()["choices"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(genre_choices.len(), 2);
+    assert_eq!(
+        genre_choices.iter().filter(|c| c["value"] == "all").count(),
+        1
     );
+    assert_eq!(controls["calendar"]["availability"], "Available");
+    assert!(controls["controls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["id"] == "genre" && c["choices"][1]["value"] == "science-fiction"));
     let (status, page) = request(
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/discover?type=movie&genre=science-fiction",
+        "/api/discover?type=movie&genre=science-fiction",
         json!({}),
     )
     .await;
@@ -65,7 +108,7 @@ async fn public_calendar_genres_and_scoped_controls_use_v2_data_without_user_tok
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/discovery-controls?type=movie&genre=science-fiction",
+        "/api/discovery-controls?type=movie&genre=science-fiction",
         json!({}),
     )
     .await;
@@ -83,14 +126,14 @@ async fn public_calendar_genres_and_scoped_controls_use_v2_data_without_user_tok
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/discover?type=movie&genre=unadvertised",
+            "/api/discover?type=movie&genre=unadvertised",
             json!({})
         )
         .await
         .0,
         StatusCode::BAD_REQUEST
     );
-    assert_eq!(request(&app,"member-token-1","GET","/api/v3/discover?type=movie&genre=science-fiction&extras=%7B%22timeframe%22%3A%22week%22%7D",json!({})).await.0,StatusCode::BAD_REQUEST);
+    assert_eq!(request(&app,"member-token-1","GET","/api/discover?type=movie&genre=science-fiction&extras=%7B%22timeframe%22%3A%22week%22%7D",json!({})).await.0,StatusCode::BAD_REQUEST);
     app.db
         .lock()
         .unwrap()
@@ -106,13 +149,13 @@ async fn public_calendar_genres_and_scoped_controls_use_v2_data_without_user_tok
 #[tokio::test]
 async fn calendar_configuration_date_window_and_session_revocation_are_not_empty_success() {
     let app = fixture();
-    let (status, _) = request(&app, "member-token-1", "GET", "/api/v3/calendar", json!({})).await;
+    let (status, _) = request(&app, "member-token-1", "GET", "/api/calendar", json!({})).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     let (_, controls) = request(
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/discovery-controls",
+        "/api/discovery-controls",
         json!({}),
     )
     .await;
@@ -125,7 +168,7 @@ async fn calendar_configuration_date_window_and_session_revocation_are_not_empty
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/calendar?start=2026-02-30",
+            "/api/calendar?start=2026-02-30",
             json!({})
         )
         .await
@@ -137,7 +180,7 @@ async fn calendar_configuration_date_window_and_session_revocation_are_not_empty
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/calendar?start=2026-01-01&end=2026-12-31",
+            "/api/calendar?start=2026-01-01&end=2026-12-31",
             json!({})
         )
         .await
@@ -145,7 +188,7 @@ async fn calendar_configuration_date_window_and_session_revocation_are_not_empty
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        request(&app, "wrong-token", "GET", "/api/v3/calendar", json!({}))
+        request(&app, "wrong-token", "GET", "/api/calendar", json!({}))
             .await
             .0,
         StatusCode::UNAUTHORIZED
@@ -169,7 +212,7 @@ async fn all_types_search_aggregates_only_selected_metadata_provider_and_rejects
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/discover?type=all&search=Actual",
+        "/api/discover?type=all&search=Actual",
         json!({}),
     )
     .await;
@@ -186,7 +229,7 @@ async fn all_types_search_aggregates_only_selected_metadata_provider_and_rejects
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/discover?type=all&search=Actual&skip=24",
+            "/api/discover?type=all&search=Actual&skip=24",
             json!({})
         )
         .await
@@ -198,7 +241,7 @@ async fn all_types_search_aggregates_only_selected_metadata_provider_and_rejects
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/discover?type=all",
+            "/api/discover?type=all",
             json!({})
         )
         .await
@@ -210,5 +253,77 @@ async fn all_types_search_aggregates_only_selected_metadata_provider_and_rejects
         3,
         "invalid broad requests must not dispatch provider calls"
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_cold_calendar_does_not_block_genres_and_identical_fetches_coalesce() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let routes = Router::new()
+        .route(
+            "/calendar/v2/tv.json",
+            get({
+                let started = started.clone();
+                let release = release.clone();
+                let reads = reads.clone();
+                move || {
+                    let started = started.clone();
+                    let release = release.clone();
+                    let reads = reads.clone();
+                    async move {
+                        reads.fetch_add(1, Ordering::SeqCst);
+                        started.notify_one();
+                        let _permit = release.acquire().await.unwrap();
+                        axum::Json(json!({"calendar":[],"metadata":{}}))
+                    }
+                }
+            }),
+        )
+        .route(
+            "/discover/trending/movies/genre/index.json",
+            get(|| async { axum::Json(json!([{"name":"Drama","slug":"drama"}])) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    let service = Arc::new(Service::fixture(&format!("http://{address}")));
+    let first = tokio::spawn({
+        let service = service.clone();
+        async move {
+            service
+                .public_document("/calendar/v2/tv.json", Duration::from_secs(60), || Ok(()))
+                .await
+                .unwrap()
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(2), started.notified())
+        .await
+        .unwrap();
+    let second = tokio::spawn({
+        let service = service.clone();
+        async move {
+            service
+                .public_document("/calendar/v2/tv.json", Duration::from_secs(60), || Ok(()))
+                .await
+                .unwrap()
+        }
+    });
+    let genres = tokio::time::timeout(
+        Duration::from_secs(2),
+        service.public_document(
+            "/discover/trending/movies/genre/index.json",
+            Duration::from_secs(60),
+            || Ok(()),
+        ),
+    )
+    .await
+    .expect("An unrelated document must not wait for the calendar")
+    .unwrap();
+    assert_eq!(genres[0]["slug"], "drama");
+    release.add_permits(1);
+    assert_eq!(first.await.unwrap(), second.await.unwrap());
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
     task.abort();
 }

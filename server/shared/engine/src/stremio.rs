@@ -4,6 +4,8 @@ mod browse;
 pub use browse::{ExtraValues, CatalogQuery,catalog_controls,discovery_urls,catalog_page,catalog_pageable,discovery_plan};
 mod media;
 mod streams;
+mod source_metadata;
+pub use source_metadata::{source_audio_languages, source_detail, source_quality_height};
 mod subtitle_text;
 mod subtitle_encoding;
 mod subtitles;

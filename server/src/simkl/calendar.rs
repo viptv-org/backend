@@ -13,7 +13,7 @@ pub(crate) struct CalendarQuery {
     end: Option<String>,
     #[serde(default)]
     skip: usize,
-    limit:Option<usize>,
+    limit: Option<usize>,
 }
 fn default_kind() -> String {
     "series".into()
@@ -70,8 +70,10 @@ pub(crate) async fn get(
     if end < start || (end - start).num_days() > 33 || q.skip > 10_000 {
         return Err("Invalid calendar window".into());
     }
-    let limit=q.limit.unwrap_or(100);
-    if !(1..=500).contains(&limit){return Err("Invalid calendar page size".into());}
+    let limit = q.limit.unwrap_or(100);
+    if !(1..=500).contains(&limit) {
+        return Err("Invalid calendar page size".into());
+    }
     let access = store::credential(&app, profile, Capability::Discovery)?;
     let doc = app
         .simkl
@@ -92,6 +94,7 @@ pub(crate) async fn get(
         .ok_or("Simkl calendar was invalid")?;
     let mut entries = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut permitted = std::collections::HashMap::new();
     for event in events {
         let Some(id) = event["simkl_id"].as_u64().filter(|id| *id > 0) else {
             continue;
@@ -112,10 +115,23 @@ pub(crate) async fn get(
         if viptv_engine::simkl::id(value) != Some(id) {
             return Err("Simkl calendar identity mismatch".into());
         }
-        let Ok(card) = viptv_engine::simkl::card(value, category) else {
+        let Ok(mut card) = viptv_engine::simkl::card(value, category) else {
             continue;
         };
-        if metadata::allowed(&app, vec![card.clone()])?.is_empty() {
+        card.metadata_origin = Some(viptv_engine::origin::MetadataOrigin {
+            provider_id: "simkl".into(),
+            connection_id: None,
+            incarnation: None,
+        });
+        let allowed = match permitted.get(&id) {
+            Some(allowed) => *allowed,
+            None => {
+                let allowed = !metadata::allowed(&app, vec![card.clone()])?.is_empty();
+                permitted.insert(id, allowed);
+                allowed
+            }
+        };
+        if !allowed {
             continue;
         }
         let season = event["episode"]["season"]

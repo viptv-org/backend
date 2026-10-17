@@ -44,15 +44,108 @@ pub(super) fn cards(app: &App, items: Vec<Value>, provider: &str) -> Result<Vec<
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
     app.require_media(&db)?;
-    let safe = kids::filter_items(&db, &app.identity(), items)?;
-    Ok(safe
-        .iter()
-        .take(24)
-        .filter_map(|v| card(v, provider))
-        .collect())
+    let origin = super::origins::for_provider_db(
+        &db,
+        app.identity().account_id().ok_or_else(auth::forbidden)?,
+        provider,
+    )?;
+    let restricted = kids::restricted(&db, &app.identity())?;
+    let mut cards = Vec::new();
+    for item in items.iter().take(24) {
+        let Some(mut projected) = card(item, provider) else {
+            continue;
+        };
+        projected.metadata_origin = origin.clone();
+        if restricted {
+            if projected.identity.id.starts_with("simkl:")
+                && (provider == "stremio" || provider.starts_with("addon:"))
+            {
+                continue;
+            }
+            if let Some(origin) = &origin {
+                if let Ok(stored) = kids::scoped::lookup_db(
+                    &db,
+                    &app.identity(),
+                    origin,
+                    &projected.identity.kind,
+                    &projected.identity.id,
+                    Some(&projected),
+                ) {
+                    cards.push(stored);
+                    continue;
+                }
+            }
+            if origin.as_ref().is_some_and(|origin| {
+                !kids::titles::canonical(
+                    &origin.provider_id,
+                    &projected.identity.kind,
+                    &projected.identity.id,
+                )
+            }) {
+                continue;
+            }
+            if kids::require_item(
+                &db,
+                &app.identity(),
+                &projected.identity.kind,
+                &projected.identity.id,
+            )
+            .is_err()
+            {
+                continue;
+            }
+            let safe = kids::filter_items(&db, &app.identity(), vec![item.clone()])?;
+            let Some(mut projected) = safe.first().and_then(|item| card(item, provider)) else {
+                continue;
+            };
+            projected.metadata_origin = origin.clone();
+            cards.push(projected);
+        } else {
+            cards.push(projected);
+        }
+    }
+    Ok(cards)
 }
 
-pub(super) fn allowed_cards(app:&App,cards:Vec<Card>)->Result<Vec<Card>,ApiError>{
-    let db=app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;app.require_media(&db)?;
-    Ok(cards.into_iter().filter(|card|kids::require_item(&db,&app.identity(),&card.identity.kind,&card.identity.id).is_ok()).collect())
+pub(super) fn allowed_cards(app: &App, cards: Vec<Card>) -> Result<Vec<Card>, ApiError> {
+    let db = app
+        .db
+        .lock()
+        .map_err(|_| ApiError::from("Database unavailable"))?;
+    app.require_media(&db)?;
+    let restricted = kids::restricted(&db, &app.identity())?;
+    let mut safe = Vec::new();
+    for card in cards {
+        if !restricted {
+            safe.push(card);
+            continue;
+        }
+        if card.identity.id.starts_with("simkl:")
+            && (card.provider_id == "stremio" || card.provider_id.starts_with("addon:"))
+        {
+            continue;
+        }
+        if let Some(origin) = &card.metadata_origin {
+            if let Ok(stored) = kids::scoped::lookup_db(
+                &db,
+                &app.identity(),
+                origin,
+                &card.identity.kind,
+                &card.identity.id,
+                Some(&card),
+            ) {
+                safe.push(stored);
+                continue;
+            }
+            if !kids::titles::canonical(&origin.provider_id, &card.identity.kind, &card.identity.id)
+            {
+                continue;
+            }
+        }
+        if kids::require_item(&db, &app.identity(), &card.identity.kind, &card.identity.id).is_ok()
+        {
+            safe.push(card);
+        }
+    }
+    Ok(safe)
 }

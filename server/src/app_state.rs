@@ -24,7 +24,9 @@ impl ApiError {
     /// Stable recovery reasons shared by all platform clients.
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
-            "Verified source mapping is unavailable for this title or episode" => Some("metadata_mapping_unavailable"),
+            "Verified source mapping is unavailable for this title or episode" => {
+                Some("metadata_mapping_unavailable")
+            }
             "client_update_required" => Some("client_update_required"),
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),
@@ -122,9 +124,16 @@ pub struct App {
     pub(crate) images: Arc<images::Service>,
     pub(crate) stremio_import: Arc<stremio_import::Service>,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
-    pub(crate) live_fetch_gates:Arc<engine_v3::live::FetchGates>,
-    pub(crate) live_cache: Arc<tokio::sync::Mutex<HashMap<String,engine_v3::live::Cache>>>,
-    pub(crate) verified_cards: Arc<Mutex<HashMap<(String,u64,String,String),viptv_engine::presentation::Card>>>,
+    pub(crate) live_fetch_gates: Arc<engine_v3::live::FetchGates>,
+    pub(crate) live_cache: Arc<tokio::sync::Mutex<HashMap<String, engine_v3::live::Cache>>>,
+    pub(crate) verified_cards: Arc<
+        Mutex<
+            HashMap<
+                (String, u64, String, String, String, String),
+                viptv_engine::presentation::Card,
+            >,
+        >,
+    >,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
     // Request-local identity travels with discovery producers; ownership is never upstream-authored.
     pub(crate) principal: Option<auth::Principal>,
@@ -218,11 +227,12 @@ pub(crate) struct ExactVod {
     pub(crate) season: Option<u32>,
     pub(crate) episode: Option<u32>,
 }
-pub(crate) const MAX_SOURCES_PER_JOB:usize=4096;
+pub(crate) const MAX_SOURCES_PER_JOB: usize = 4096;
 pub(crate) struct Job {
-    pub(crate) source_slots:std::sync::atomic::AtomicUsize,
+    pub(crate) metadata_proof: Option<engine_v3::origins::MetadataProof>,
+    pub(crate) source_slots: std::sync::atomic::AtomicUsize,
     pub(crate) cancelled: std::sync::atomic::AtomicBool,
-    pub(crate) configuration_revision: Option<(i64,u64)>,
+    pub(crate) configuration_revision: Option<(i64, u64)>,
     pub(crate) media_id: Option<String>,
     pub(crate) exact_vod: Option<ExactVod>,
     // Validated original API request kind, never an upstream stream field.
@@ -236,7 +246,8 @@ pub(crate) struct JobState {
     pub(crate) pending: usize,
 }
 pub(crate) struct StreamEntry {
-    pub(crate) profile_revision:Option<(i64,u64)>,
+    pub(crate) metadata_proof: Option<engine_v3::origins::MetadataProof>,
+    pub(crate) profile_revision: Option<(i64, u64)>,
     pub(crate) media_id: Option<String>,
     pub(crate) exact_vod: Option<ExactVod>,
     // Set only by exact, account-authorized raw live-channel resolution.
@@ -267,13 +278,18 @@ impl App {
         continuation::init(&db).map_err(|_| "Viewing queue migration failed")?;
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
-        engine_v3::source_integrations::init(&db).map_err(|_| "Source integration initialization failed")?;
+        engine_v3::source_integrations::init(&db)
+            .map_err(|_| "Source integration initialization failed")?;
         engine_v3::live::init(&db).map_err(|_| "Live connections initialization failed")?;
-        engine_v3::preferences::init(&db).map_err(|_| "Profile preferences initialization failed")?;
+        engine_v3::preferences::init(&db)
+            .map_err(|_| "Profile preferences initialization failed")?;
         engine_v3::profiles::init(&db).map_err(|_| "Profile presentation initialization failed")?;
-        engine_v3::configuration::init(&db).map_err(|_| "Engine configuration initialization failed")?;
+        engine_v3::configuration::init(&db)
+            .map_err(|_| "Engine configuration initialization failed")?;
         engine_v3::history::init(&db).map_err(|_| "Library revision initialization failed")?;
-        engine_v3::library_stats::init(&db).map_err(|_|"Library statistics schema initialization failed")?;
+        engine_v3::scoped_library::init(&db).map_err(|_| "Scoped library initialization failed")?;
+        engine_v3::library_stats::init(&db)
+            .map_err(|_| "Library statistics schema initialization failed")?;
         simkl::init(&db).map_err(|_| "Simkl schema initialization failed")?;
         let simkl = Arc::new(simkl::Service::from_env()?);
         simkl.warm_discovery();
@@ -301,12 +317,12 @@ impl App {
             gateway_playbacks,
             subtitle_selections: Default::default(),
             simkl,
-            images:Arc::new(images::Service::new()),
+            images: Arc::new(images::Service::new()),
             stremio_import,
             jobs: Default::default(),
             verified_cards: Default::default(),
             live_cache: Default::default(),
-            live_fetch_gates:Default::default(),
+            live_fetch_gates: Default::default(),
             streams: Default::default(),
             principal: None,
             resource_owners: Default::default(),
@@ -435,9 +451,20 @@ impl App {
 }
 
 impl Job {
- pub(crate) fn reserve_sources(&self,requested:usize)->usize{
-  use std::sync::atomic::Ordering;
-  let mut current=self.source_slots.load(Ordering::Relaxed);
-  loop{let reserve=requested.min(MAX_SOURCES_PER_JOB.saturating_sub(current));match self.source_slots.compare_exchange_weak(current,current+reserve,Ordering::AcqRel,Ordering::Relaxed){Ok(_)=>return reserve,Err(next)=>current=next}}
- }
+    pub(crate) fn reserve_sources(&self, requested: usize) -> usize {
+        use std::sync::atomic::Ordering;
+        let mut current = self.source_slots.load(Ordering::Relaxed);
+        loop {
+            let reserve = requested.min(MAX_SOURCES_PER_JOB.saturating_sub(current));
+            match self.source_slots.compare_exchange_weak(
+                current,
+                current + reserve,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return reserve,
+                Err(next) => current = next,
+            }
+        }
+    }
 }

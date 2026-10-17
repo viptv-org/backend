@@ -10,8 +10,16 @@ pub(crate) fn emit_batch(
     result: Result<Vec<Value>, String>,
     complete: bool,
 ) {
-    if j.cancelled.load(std::sync::atomic::Ordering::Acquire){return;}
-    if a.request_lease().validate(&a.db.lock().unwrap()).is_err() {
+    if j.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    if a.request_lease().validate(&a.db.lock().unwrap()).is_err()
+        || j.metadata_proof.as_ref().is_some_and(|proof| {
+            proof
+                .validate(&a.db.lock().unwrap(), &a.request_lease())
+                .is_err()
+        })
+    {
         let mut state = j.state.lock().unwrap();
         state.events.clear();
         state.pending = 0;
@@ -55,15 +63,28 @@ pub(crate) fn emit_batch(
             }
         }
     }
-    if let Some(id)=source.strip_prefix("vsources:").and_then(|id|id.parse::<i64>().ok()){if !crate::engine_v3::source_integrations::available(a,id){let mut state=j.state.lock().unwrap();state.pending=state.pending.saturating_sub(usize::from(complete));drop(state);j.notify.notify_waiters();return;}}
+    if let Some(id) = source
+        .strip_prefix("vsources:")
+        .and_then(|id| id.parse::<i64>().ok())
+    {
+        if !crate::engine_v3::source_integrations::available(a, id) {
+            let mut state = j.state.lock().unwrap();
+            state.pending = state.pending.saturating_sub(usize::from(complete));
+            drop(state);
+            j.notify.notify_waiters();
+            return;
+        }
+    }
     let (streams, error, registration_error) = match result {
         Ok(r) => {
-            let limit=j.reserve_sources(r.len().min(100));
+            let limit = j.reserve_sources(r.len().min(100));
             let (streams, error) = a.register(source, r.into_iter().take(limit).collect(), &j.kind);
             {
                 let mut entries = a.streams.lock().unwrap();
                 for source in &streams {
                     if let Some(entry) = source["id"].as_str().and_then(|id| entries.get_mut(id)) {
+                        entry.profile_revision = j.configuration_revision;
+                        entry.metadata_proof = j.metadata_proof.clone();
                         entry.exact_vod = j.exact_vod.clone();
                         entry.media_id = j.media_id.clone();
                     }
@@ -98,8 +119,20 @@ pub(crate) fn emit_batch(
 }
 pub(crate) fn job(a: &App, id: &str) -> Result<Arc<Job>, ApiError> {
     a.prune();
-    a.jobs.lock().unwrap().get(id).cloned().ok_or(ApiError(
+    let job = a.jobs.lock().unwrap().get(id).cloned().ok_or(ApiError(
         StatusCode::NOT_FOUND,
         "Discovery job expired or not found".into(),
-    ))
+    ))?;
+    if let Some((profile, revision)) = job.configuration_revision {
+        crate::engine_v3::configuration::validate_revision(a, profile, revision)?;
+    }
+    if let Some(proof) = &job.metadata_proof {
+        proof.validate(
+            &*a.db
+                .lock()
+                .map_err(|_| ApiError::from("Database unavailable"))?,
+            &a.request_lease(),
+        )?;
+    }
+    Ok(job)
 }

@@ -47,7 +47,7 @@ async fn detail_rejects_a_provider_response_for_a_different_title() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/meta/movie/tt123",
+        "/api/meta/movie/tt123",
         json!({}),
     )
     .await;
@@ -66,7 +66,7 @@ async fn bootstrap_has_prepared_home_without_per_card_requests() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/bootstrap",
+        "/api/bootstrap",
         json!({}),
     )
     .await;
@@ -84,7 +84,7 @@ async fn home_rejects_cross_profile_access() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/2/home",
+        "/api/profiles/2/home",
         json!({}),
     )
     .await;
@@ -98,7 +98,7 @@ async fn profile_configuration_is_scoped_and_rejects_stale_updates() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         json!({}),
     )
     .await;
@@ -108,7 +108,7 @@ async fn profile_configuration_is_scoped_and_rejects_stale_updates() {
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         update.clone(),
     )
     .await;
@@ -118,7 +118,7 @@ async fn profile_configuration_is_scoped_and_rejects_stale_updates() {
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         update,
     )
     .await;
@@ -127,7 +127,7 @@ async fn profile_configuration_is_scoped_and_rejects_stale_updates() {
         &app,
         "member-token-2",
         "GET",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         json!({}),
     )
     .await;
@@ -148,7 +148,7 @@ async fn paired_device_can_change_selected_profile_integrations_but_not_restrict
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         update.clone(),
     )
     .await;
@@ -159,7 +159,7 @@ async fn paired_device_can_change_selected_profile_integrations_but_not_restrict
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/2/integrations",
+            "/api/profiles/2/integrations",
             update.clone()
         )
         .await
@@ -179,7 +179,7 @@ async fn paired_device_can_change_selected_profile_integrations_but_not_restrict
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/integrations",
+            "/api/profiles/1/integrations",
             json!({"revision":1,"browsing_plugin":"stremio","assignments":[]})
         )
         .await
@@ -191,18 +191,86 @@ async fn paired_device_can_change_selected_profile_integrations_but_not_restrict
 #[tokio::test]
 async fn bootstrap_advertises_m3u_only_with_live_runtime_and_credential_vault() {
     use base64::Engine;
-    for vault_available in [false,true] {
-        let mut app=fixture();
-        app.secret_vault=if vault_available {Some(std::sync::Arc::new(crate::secret_store::Vault::from_json(
-            &json!({"active":"test","keys":{"test":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string()).unwrap()))}else{None};
-        let (status,body)=request(&app,"member-token-1","GET","/api/v3/bootstrap",Value::Null).await;
-        assert_eq!(status,StatusCode::OK,"{body}");
-        let descriptor=body["integrations"].as_array().unwrap().iter().find(|p|p["id"]=="m3u");
-        assert_eq!(descriptor.is_some(),vault_available && cfg!(feature="live-runtime"));
-        if let Some(descriptor)=descriptor {
-            assert_eq!(descriptor["capabilities"],json!(["LiveTv","Sources"]));
-            assert!(descriptor["locations"].as_array().unwrap().contains(&json!("Server")));
-            assert!(!descriptor["capabilities"].as_array().unwrap().contains(&json!("Metadata")));
+    for vault_available in [false, true] {
+        let mut app = fixture();
+        app.secret_vault = if vault_available {
+            Some(std::sync::Arc::new(crate::secret_store::Vault::from_json(
+            &json!({"active":"test","keys":{"test":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string()).unwrap()))
+        } else {
+            None
+        };
+        let (status, body) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/bootstrap",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let descriptor = body["integrations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "m3u");
+        assert_eq!(
+            descriptor.is_some(),
+            vault_available && cfg!(feature = "live-runtime")
+        );
+        if let Some(descriptor) = descriptor {
+            assert_eq!(descriptor["capabilities"], json!(["LiveTv", "Sources"]));
+            assert!(descriptor["locations"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Server")));
+            assert!(!descriptor["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("Metadata")));
         }
     }
+}
+
+#[tokio::test]
+async fn delayed_metadata_is_cached_under_its_original_addon_revision() {
+    let app = fixture();
+    let lease = ResourceLease {
+        policy_revision: 0,
+        principal: auth::Principal::Account {
+            account_id: 1,
+            profile_id: Some(1),
+            role: "member".into(),
+            session_id: Some("s1".into()),
+        },
+        session_id: Some("s1".into()),
+    };
+    let app = app.with_lease(lease.clone());
+    let original_revision = app.addons.revision().unwrap();
+    let card = super::projection::card(
+        &json!({"id":"opaque","type":"movie","name":"Fixture"}),
+        "stremio",
+    )
+    .unwrap();
+    let mut delayed = card.clone();
+    delayed.logo = Some("https://images.example/stale.png".into());
+    // Metadata began under the old credentials and returned after they changed.
+    app.db.lock().unwrap().execute("INSERT INTO addon_config_revisions(account_id,revision) VALUES(1,?1) ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision",["1".repeat(32)]).unwrap();
+    super::source_integrations::cache_card_at(&app, &lease, 0, &original_revision, delayed);
+    let mut cards = vec![card];
+    super::source_integrations::merge_cached(&app, &lease, 0, &mut cards);
+    assert!(cards[0].logo.is_none());
+    let mut current = cards[0].clone();
+    current.logo = Some("https://images.example/fresh.png".into());
+    super::source_integrations::cache_card_at(
+        &app,
+        &lease,
+        0,
+        &app.addons.revision().unwrap(),
+        current,
+    );
+    super::source_integrations::merge_cached(&app, &lease, 0, &mut cards);
+    assert_eq!(
+        cards[0].logo.as_deref(),
+        Some("https://images.example/fresh.png")
+    );
 }

@@ -1,0 +1,534 @@
+   Compiling viptv-engine v0.1.0 (/mnt/ALPH/code/viptv-org/.worktrees/kmp-v2/backend/server/shared/engine)
+   Compiling viptv-server v0.1.0 (/mnt/ALPH/code/viptv-org/.worktrees/kmp-v2/backend/server)
+warning: unused variable: `config`
+  --> src/engine_v3/live.rs:68:10
+   |
+68 |     let (config, connections) = scope(&app, &lease, profile)?;
+   |          ^^^^^^ help: if this is intentional, prefix it with an underscore: `_config`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `expires`, `groups`, `guides`, and `xmltv` are never read
+  --> src/engine_v3/live.rs:25:9
+   |
+23 | pub(crate) struct Cache {
+   |                   ----- fields in this struct
+24 |     pub revision: i64,
+25 |     pub expires: Instant,
+   |         ^^^^^^^
+26 |     pub channels: Vec<PrivateChannel>,
+27 |     pub groups: Vec<LiveGroup>,
+   |         ^^^^^^
+28 |     pub guides: HashMap<String, (Instant, LiveGuide)>,
+   |         ^^^^^^
+29 |     pub xmltv: Option<(Instant, Arc<str>)>,
+   |         ^^^^^
+   |
+   = note: `Cache` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `live_fetch_gates` is never read
+   --> src/app_state.rs:127:16
+    |
+114 | pub struct App {
+    |            --- field in this struct
+...
+127 |     pub(crate) live_fetch_gates: Arc<engine_v3::live::FetchGates>,
+    |                ^^^^^^^^^^^^^^^^
+    |
+    = note: `App` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: `viptv-server` (lib test) generated 3 warnings (run `cargo fix --lib -p viptv-server --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 08s
+     Running unittests src/lib.rs (target/debug/deps/viptv_server-c93e7184af6747ab)
+
+running 486 tests
+test addon::credentials_v2::tests::legacy_addon_reinstallation_does_not_bypass_backup_first_migration ... ok
+test addon::credentials_v2::tests::legacy_initialization_never_assigns_secrets_to_the_first_owner ... ok
+test addon::credentials_v2::tests::network_install_uses_encrypted_storage_and_reinstall_preserves_id ... ok
+test addon::credentials_v2::tests::encrypted_addons_are_redacted_bound_to_owner_and_never_downgrade ... ok
+test addon::http_v2_tests::account_management_is_encrypted_paged_redacted_and_preserves_identity ... ok
+test addon::http_v2_tests::deleting_an_addon_during_reinstall_cannot_resurrect_it ... ok
+test addon::http_v2_tests::manifest_download_rechecks_session_before_writing ... ok
+test addon::http_v2_tests::protected_cache_never_reuses_legacy_or_another_accounts_response ... ok
+test addon::http_v2_tests::protected_redirects_allow_public_chains_but_reject_private_targets_and_loops ... ok
+test addon::http_v2_tests::rejected_manifest_addresses_do_not_register_or_echo_tokens ... ok
+test addon::http_v2_tests::stalled_installs_do_not_take_viewing_request_slots ... ok
+test addon::http_v2_tests::save_without_keyring_refuses_before_download_or_write ... ok
+test addon::tests::account_revision_tracks_only_committed_addon_changes ... ok
+test addon::tests::catalog_cache_and_protocol_without_skip ... ok
+test addon::tests::catalogs_preserve_bounded_normalized_extra_capabilities ... ok
+test addon::tests::complete_episode_art_does_not_wait_for_slow_secondary_metadata ... ok
+test addon::tests::bounded_search_and_raw_count_before_truncation ... ok
+test addon::tests::custom_catalog_types_options_and_explicit_search_pages_work ... ok
+test addon::tests::endpoint_encodes_untrusted_ids ... ok
+test addon::tests::entries_follow_insert_order_and_skip_disabled_addons ... ok
+test addon::tests::episode_art_enrichment_preserves_identity_and_requires_matching_episode ... ok
+test addon::tests::genre_discover_requires_advertisement_validates_options_and_encodes_path ... ok
+test addon::tests::metadata_falls_back_in_priority_order ... ok
+test addon::tests::ordered_catalogs_raw_pagination_search_constraints_and_meta ... ok
+test addon::tests::respects_resource_prefixes ... ok
+test addon::tests::root_prefixes_and_search_extras ... ok
+test addon::tests::seed_migration_and_restarts_never_restore_deleted_addons ... ok
+test app_state::display_error_tests::capacity_errors_explain_recovery_without_conflating_rate_limits ... ok
+test auth::device_pairing::tests::decimal_codes_preserve_zeroes_and_reject_biased_random_tail ... ok
+test auth::tests::argon_admission_times_out_but_cheap_actions_bypass_the_queue ... ok
+test addon::tests::concurrent_fetches_share_upstream_and_recover_after_cancellation ... ok
+test auth::tests::attacker_keyed_limits_and_pairings_evict_without_fail_closed_capacity ... ok
+test auth::tests::configured_https_origin_is_pinned_without_forwarded_host_trust ... ok
+test auth::tests::bounded_limits_events_and_expiry ... ok
+test auth::tests::device_deny::deny_refuses_expired_and_unknown_codes ... ok
+test auth::tests::device_deny::deny_refuses_already_approved_pairings_from_foreign_accounts ... ok
+test auth::tests::device_deny::deny_removes_live_pending_codes_for_any_authenticated_user ... ok
+test auth::tests::device_grants_persist_while_access_tokens_expire_and_browser_logins_rotate ... ok
+test auth::tests::human_pairing_code_is_eight_decimal_digits_and_not_the_device_secret ... ok
+test auth::tests::http_middleware_rejects_unauthenticated_and_cookie_csrf ... ok
+test auth::tests::member_confirmation_binds_device_to_current_account_only ... ok
+test auth::tests::origins_cookie_flags_and_public_allowlist ... ok
+test auth::tests::owner_management_does_not_bypass_profile_grants ... ok
+test auth::tests::pairing_code_collisions_retry_without_replacing_existing_devices ... ok
+test auth::tests::offline_owner_bootstrap_is_single_use_and_claims_only_unowned_history ... ok
+test auth::tests::pairing_code_validation_preserves_leading_zeroes_and_legacy_codes ... ok
+test auth::tests::public_registration_is_zero_profile_and_argon2 ... ok
+test auth::tests::rate_limits_are_database_local_and_init_leaves_no_transaction ... ok
+test auth::tests::password_snapshot_revalidation_and_last_owner_protection ... ok
+test auth::tests::refresh_replay_revokes_only_its_family_and_devices_are_not_admins ... ok
+test auth::tests::refresh_tombstones_are_bounded_without_blocking_rotation ... ok
+test auth::tests::recovery_is_single_use_and_revokes_sessions ... ok
+test auth::tests::secrets_hashed_and_refresh_rotates ... ok
+test auth::tests::selected_avatar_is_exact_and_survives_name_edits ... ok
+test auth::tests::stale_authority::live_approval_still_mints_a_device_with_current_browser_authority ... ok
+test auth::tests::stale_authority::stale_approval_after_all_family_revocation_cannot_mint_a_new_device ... ok
+test auth::tests::stale_authority::stale_approval_after_browser_family_revocation_cannot_mint_a_new_device ... ok
+test auth::tests::session_eviction_bounds_members_and_preserves_owner_admission ... ok
+test auth::tests::strict_profile_payloads_require_explicit_imported_setup_completion ... ok
+test auth_integration_tests::account_media_requires_selected_profile_and_ignores_profile_header ... ok
+test auth_integration_tests::addons_are_account_shared_and_cross_account_mutations_are_isolated ... ok
+test auth_integration_tests::auth_routes_receive_authentication_but_status_is_public ... ok
+test auth::tests::tab_csrf_tokens_survive_refresh_and_revoke_with_family ... ok
+test auth_integration_tests::catalog_revision_is_private_profile_guarded_and_account_scoped ... ok
+test auth_integration_tests::device_profile_management_preserves_pairing_and_household_boundaries ... ok
+test auth_integration_tests::episode_history_is_scoped_to_the_open_series ... ok
+test auth_integration_tests::favorites_and_progress_require_the_exact_selected_profile ... ok
+test auth_integration_tests::home_favorites_page_does_not_let_live_channels_hide_saved_movies ... ok
+test auth_integration_tests::household_profile_deletion_protects_primary_and_revokes_selected_resources ... ok
+test auth_integration_tests::device_profile_mutations_require_live_parent_grant_and_lease ... ok
+test auth_integration_tests::kids_library_uses_trusted_ratings_approvals_and_exact_episode_membership ... ok
+test auth_integration_tests::kids_mixed_series_details_omit_every_episode_disallowed_by_sources ... ok
+test auth_integration_tests::kids_policy_changes_revoke_already_issued_resources ... ok
+test auth_integration_tests::kids_policy_requires_parent_pin_and_blocks_unknown_content_and_exit ... ok
+test auth_integration_tests::kids_large_series_preserves_parent_response_and_exact_bounded_episode_membership ... ok
+test auth_integration_tests::library_corrections_update_history_and_continue_without_losing_source ... ok
+test auth_integration_tests::library_pages_and_atomic_toggle_are_profile_scoped ... ok
+test auth_integration_tests::media_resource_lease_rechecks_grants_account_state_and_session_expiry ... ok
+test auth_integration_tests::manual_watched_does_not_invent_an_episode_duration ... ok
+test auth_integration_tests::members_cannot_administer_providers_addons_or_other_resources ... ok
+test auth_integration_tests::numeric_and_legacy_pairing_codes_support_qr_expiry_and_single_use ... ok
+test auth_integration_tests::owner_paired_device_has_no_administration_privileges ... ok
+test auth_integration_tests::parent_approval_cap_is_idempotent_and_legacy_overflow_remains_revocable ... ok
+test auth_integration_tests::numeric_pairing_lookup_guesses_are_rate_limited_per_account ... ok
+test auth_integration_tests::parent_title_search_uses_server_ids_and_requires_parent_authority ... ok
+test auth_integration_tests::playback_after_a_correction_becomes_the_current_episode_immediately ... ok
+test auth_integration_tests::playback_ownership_cleanup_preserves_live_and_concurrently_created_sessions ... ok
+test auth_integration_tests::playback_preferences_are_scoped_validated_and_share_autoplay_setting ... ok
+test auth_integration_tests::profile_lists_are_filtered_and_new_profiles_are_granted_atomically ... ok
+test auth_integration_tests::profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immediate ... ok
+test auth_integration_tests::public_pairing_qr_guesses_use_a_global_rate_limit ... ok
+test auth_integration_tests::same_account_and_profile_other_session_cannot_reuse_owned_resources ... ok
+test auth_integration_tests::stale_authenticated_profile_handlers_recheck_grants_before_db_access ... ok
+test contract_tests::continuation_discovery_scopes_skip_unrelated_producers ... ok
+test contract_tests::cookie_and_api_key_reflections_are_redacted_from_every_card_field ... ok
+test contract_tests::enriched_numeric_year_and_alternate_id_match_through_api ... ok
+test contract_tests::enrichment_repairs_blank_names_preserves_ids_and_prefers_valid_context ... ok
+test contract_tests::final_roku_wire_get_accepts_parent_512_and_emits_decimal_tmdb ... ok
+test contract_tests::history_never_groups_unrelated_opaque_addon_ids ... ok
+test contract_tests::invalid_optional_context_rejected_before_save_or_job ... ok
+test contract_tests::migration_and_old_client_are_idempotent ... ok
+test contract_tests::next_api_reads_metadata_envelope_then_discovers_actual_iptv_episode ... ok
+test contract_tests::next_episode_preserves_actual_identity_and_rejects_ambiguous_or_future_targets ... ok
+test contract_tests::next_queue_preserves_resume_only_in_final_seconds ... ok
+test contract_tests::opaque_episode_progress_roundtrip_rediscovers_without_metadata ... ok
+test contract_tests::ordinary_header_values_do_not_mutilate_language_or_display_metadata ... ok
+test contract_tests::pengu_fetch_context_retains_only_explicit_safe_headers_privately ... ok
+test contract_tests::registered_headers_and_display_fallback_are_bounded ... ok
+test contract_tests::release_family_and_iptv_identity_survive_episode_changes ... ok
+test contract_tests::retired_engine_messages_are_not_classified ... ok
+test contract_tests::roku_matching_context_wire_boundaries ... ok
+test auth_integration_tests::parent_pin_rotation_invalidates_grants_and_attempts_are_rate_limited ... ok
+test contract_tests::short_cookie_tokens_do_not_tear_language_or_client_identification_words ... ok
+test contract_tests::source_cards_preserve_bounded_reports_without_promoting_or_leaking_them ... ok
+test contract_tests::source_cookies_are_kept_for_playback_and_never_published_on_cards ... ok
+test contract_tests::source_filter_labels_use_configured_producer_not_upstream_name ... ok
+test contract_tests::source_resume_identity_survives_new_jobs_and_rotating_urls ... ok
+test contract_tests::unsupported_required_headers_fail_safely_without_discarding_healthy_sources ... ok
+test discovery_error_tests::addon_errors_and_invalid_success_bodies_are_not_silent_empty_results ... ok
+test contract_tests::viewing_queue_keeps_completed_series_hides_without_erasing_and_pages_titles ... ok
+test discovery_error_tests::addon_torrent_discovery_retains_an_opaque_source_and_requires_gateway_on_android ... ok
+test discovery_error_tests::discovery_rejections_are_structured_and_do_not_echo_request_details ... ok
+test discovery_error_tests::encrypted_addon_disable_blocks_late_and_cached_source_publication ... ok
+test discovery_error_tests::mixed_addon_torrent_sources_validate_private_input_without_losing_http_siblings ... ok
+test discovery_error_tests::plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_siblings ... ok
+test discovery_error_tests::iptv_discovery_and_guide_explain_failures_without_losing_healthy_sources ... ok
+test discovery_error_tests::unsupported_required_header_events_are_safe_and_keep_healthy_siblings ... ok
+test discovery_error_tests::torrent_source_fingerprints_match_private_payload_and_stay_stable_on_rediscovery ... ok
+test engine_v3::account_devices::tests::account_devices_cookie_mutations_require_csrf_and_clear_cookies ... ok
+test engine_v3::account_devices::tests::account_devices_parent_policy_blocks_reads_and_revocation ... ok
+test engine_v3::account_devices::tests::account_devices_include_both_kinds_and_preserve_family_scope ... ok
+test engine_v3::account_devices::tests::account_devices_sign_out_all_is_atomic_and_keeps_account_content ... ok
+test engine_v3::bootstrap_facts_tests::bootstrap_negotiates_required_audio_api_without_an_extra_request_or_selected_profile ... ok
+test engine_v3::bootstrap_facts_tests::subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs_no_provider_io ... ok
+test engine_v3::continuation::tests::queue_visibility_rejects_unknown_and_restricted_identities_without_writes ... ok
+test engine_v3::continuation::tests::generic_next_uses_one_large_provider_document_opaque_ids_and_never_adds_history ... ok
+test engine_v3::continuation::tests::typed_queue_and_bootstrap_retain_exact_resume_clock_and_visibility_is_title_scoped ... ok
+test engine_v3::discovery_choice_tests::simkl_never_silently_ignores_array_filters_or_malformed_values ... ok
+test engine_v3::discovery_choice_tests::discovery_multi_choices_preserve_controls_owner_and_validate_before_provider_io ... ok
+test engine_v3::history_tests::conflicting_parent_is_rejected_and_legacy_context_is_projected_without_id_guessing ... ok
+test engine_v3::history_tests::typed_history_and_home_round_trip_opaque_parent_and_real_progress ... ok
+test engine_v3::episode_page_tests::stremio_detail_limits_reuse_metadata_and_preserve_defaults_and_terminal_pages ... ok
+test engine_v3::library::receipt_tests::membership_bound_failure_rolls_back_the_mutation_instead_of_acknowledging_partial_state ... ok
+test engine_v3::library::receipt_tests::mutation_membership_is_complete_profile_owned_and_kids_filtered ... ok
+test engine_v3::library_tests::favorite_dates_preserve_first_add_and_do_not_invent_legacy_timestamps ... ok
+test engine_v3::library_tests::legacy_favorites_are_projected_without_guessing_and_restricted_changes_fail_closed ... ok
+test engine_v3::library_tests::library_and_home_reuse_exact_current_family_metadata_without_changing_personal_state ... ok
+test engine_v3::library_tests::real_completion_counts_remain_unknown_for_legacy_rows_and_increment_only_on_transitions ... ok
+test engine_v3::library_tests::typed_library_preserves_provider_identity_shared_rows_profile_fences_and_paging ... ok
+test engine_v3::live::favorites::tests::disabled_unassigned_or_removed_channels_are_hidden_but_saved_rows_can_be_removed ... ok
+test engine_v3::live::favorites::tests::favorites_cookie_mutations_require_csrf_and_restricted_profiles_require_parent ... ok
+test engine_v3::live::favorites::tests::live_favorites_are_idempotent_profile_owned_and_separate_from_vod_library ... ok
+test engine_v3::live::fetch_gates::tests::per_connection_coalescing_keeps_other_directories_independent ... ok
+test engine_v3::live::favorites::tests::favorites_are_bounded_without_deleting_existing_preferences ... ok
+test engine_v3::live_tests::live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sources_opaque ... ok
+test engine_v3::origin_tests::private_origin_stale_expected_alias_and_reinstalled_connector_are_rejected ... ok
+test engine_v3::origin_tests::reserved_namespace_and_posted_matching_hints_never_mint_scoped_authority ... ok
+test engine_v3::origin_tests::private_origin_approval_detail_next_caption_source_and_revocation_are_isolated ... ok
+test engine_v3::origins::tests::incarnation_survives_configuration_but_never_id_reuse ... ok
+test engine_v3::profile_tests::profile_management_exposes_scalar_kids_and_the_actual_age_ceiling ... ok
+test engine_v3::profile_tests::profile_preferences_are_private_independently_versioned_and_reject_stale_edits ... ok
+test engine_v3::profile_tests::typed_profile_crud_preserves_ownership_avatar_and_primary_protection ... ok
+test engine_v3::scoped_library::tests::intrinsic_canonical_raw_namespaces_do_not_promote_unverified_external_assertions ... ok
+test engine_v3::scoped_library::tests::legacy_canonical_and_verified_private_progress_share_one_continue_group ... ok
+test engine_v3::scoped_library::tests::legacy_shared_unknown_dates_and_counts_stay_unknown_on_new_origin_write ... ok
+test engine_v3::scoped_library::tests::losing_verified_alias_does_not_copy_shared_state_into_new_private_lookup ... ok
+test engine_v3::scoped_library::tests::malformed_or_origin_only_removal_never_falls_back_to_old_raw_id ... ok
+test engine_v3::scoped_library::tests::progress_timestamps_counts_and_profile_scope_are_server_owned ... ok
+test engine_v3::scoped_library::tests::proof_configuration_change_between_fetch_and_commit_cannot_authorize_alias ... ok
+test engine_v3::profile_tests::restricted_profile_management_uses_existing_account_parent_grant ... ok
+test engine_v3::scoped_library::tests::same_opaque_ids_are_separate_from_each_other_and_from_legacy_for_every_read ... ok
+test engine_v3::scoped_library::tests::scoped_queue_visibility_cannot_hide_colliding_legacy_or_other_addon ... ok
+test engine_v3::scoped_library::tests::stale_install_selector_cannot_delete_legacy_or_reinstalled_private_record ... ok
+test engine_v3::scoped_library::tests::unverified_catalog_assertions_remain_private_and_cannot_rewrite_old_constraints ... ok
+test engine_v3::source_integration_tests::sdk_configuration_is_profile_private_vault_backed_and_revision_fenced ... ok
+test engine_v3::scoped_library::tests::verified_aliases_coalesce_but_remapped_opaque_lookup_retains_both_bindings ... ok
+test engine_v3::subtitles::selections::tests::active_heartbeat_keeps_exact_id_and_cached_text_for_a_long_movie_then_expires ... ok
+test engine_v3::subtitles::selections::tests::cache_bounds_immutable_text_and_unbound_candidate_expiry_are_enforced ... ok
+test engine_v3::source_ranking_tests::ranking_preserves_private_grants_checks_owner_and_uses_structured_quality ... ok
+test engine_v3::subtitles::tests::subtitle_discovery_hides_urls_content_is_session_scoped_and_configuration_revokes_it ... ok
+test engine_v3::tests::bootstrap_has_prepared_home_without_per_card_requests ... ok
+test engine_v3::tests::bootstrap_advertises_m3u_only_with_live_runtime_and_credential_vault ... ok
+test engine_v3::tests::delayed_metadata_is_cached_under_its_original_addon_revision ... ok
+test engine_v3::tests::detail_rejects_a_provider_response_for_a_different_title ... ok
+test engine_v3::tests::home_rejects_cross_profile_access ... ok
+test engine_v3::tests::paired_device_can_change_selected_profile_integrations_but_not_restricted_or_other_profiles ... ok
+test engine_v3::tests::remote_projection_preserves_episode_identity_and_keeps_progress_in_library ... ok
+test gateway::client::dns_tests::fresh_private_dns_answer_rejects_and_invalidates_previous_public_pins ... ok
+test gateway::client::dns_tests::transient_dns_failure_keeps_validated_pins_without_extending_cache_age ... ok
+test gateway::diagnostics::tests::diagnostic_fields_do_not_include_paths_queries_or_credentials ... ok
+test gateway::diagnostics::tests::failed_heartbeat_emits_correlated_status_without_payload ... ok
+test gateway::direct_probe::tests::authority_revoked_while_waiting_for_probe_capacity_prevents_dns_or_media_dispatch ... ok
+test engine_v3::tests::profile_configuration_is_scoped_and_rejects_stale_updates ... ok
+test gateway::direct_probe::tests::missing_location_and_redirect_loops_select_gateway_instead_of_unchecked_direct ... ok
+test gateway::direct_probe::tests::revoked_authority_during_probe_never_returns_a_direct_destination ... ok
+test gateway::direct_probe::tests::secure_redirects_reject_downgrades_private_targets_and_control_values ... ok
+test gateway::direct_probe::tests::real_307_keeps_declared_headers_only_on_the_original_recipient ... ok
+test gateway::native_fetch::tests::cross_origin_metainfo_redirect_never_forwards_source_credentials ... ok
+test gateway::native_fetch::tests::identity_headers_body_redirects_and_credentials_are_bounded ... ok
+test gateway::playback::native_tests::cancellation_races_admission_and_survives_entry_retirement_and_registry_restart ... ok
+test gateway::playback::native_tests::children_negotiate_cancel_and_keep_duplicate_validation_while_title_policy_rechecks ... ok
+test gateway::playback::native_tests::conflicting_retries_and_other_scopes_cannot_change_source_file_or_transport ... ok
+test gateway::playback::native_tests::default_native_admission_is_independent_for_other_accounts_and_sessions ... ok
+test gateway::playback::native_tests::default_native_admission_supports_phone_and_tv_with_two_grants_per_session ... ok
+test gateway::playback::native_tests::exact_episode_proof_requires_explicit_context_and_survives_discovery_without_source_io ... ok
+test gateway::playback::native_tests::extension_rejects_null_duplicates_wrong_platform_and_oversized_or_encoded_bodies ... ok
+test gateway::playback::native_tests::failed_private_metainfo_preparation_settles_without_input_or_gateway_fallback ... ok
+test gateway::playback::native_tests::native_grants_are_exact_independent_transient_and_poll_never_renews ... ok
+test gateway::playback::native_tests::native_negotiation_exact_selection_and_server_owned_controls_gate_admission ... ok
+test gateway::playback::native_tests::native_poll_and_heartbeat_revalidate_producer_and_terminal_responses_have_no_input ... ok
+test gateway::playback::native_tests::native_renewal_is_immutable_and_expired_authority_cannot_be_revived ... ok
+test gateway::playback::native_tests::quota_exhaustion_keeps_tombstones_and_refuses_admission ... ok
+test gateway::playback::native_tests::runtime_grants_support_local_platforms_automatic_selection_and_tracker_hints ... ok
+test gateway::playback::native_tests::runtime_request_never_substitutes_gateway_delivery ... ok
+test gateway::playback::native_tests::same_session_different_profile_cancellation_does_not_mutate_existing_authority ... ok
+test gateway::playback::native_tests::starting_heartbeat_renews_authority_without_exposing_private_input ... ok
+test gateway::playback_protocol_tests::native_protocol_is_authenticated_bodyless_and_enabled_by_default ... ok
+test gateway::playback_protocol_tests::native_protocol_rejects_a_body_without_echoing_it ... ok
+test gateway::playback_protocol_tests::native_protocol_requires_an_admitted_profile_and_revalidates_resource_authority ... ok
+test gateway::playback_protocol_tests::shared_runtime_protocol_is_separate_scoped_and_bodyless ... ok
+test gateway::playback_tests::addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_affinity ... ok
+test gateway::playback_tests::cancelled_or_removed_live_admission_does_not_record_history ... ok
+test gateway::playback_tests::caption_tests::external_caption_attach_requires_exact_media_scope_and_an_advertised_gateway ... ok
+test gateway::playback_tests::conversion_and_track_choices_require_and_reach_the_authorized_gateway ... ok
+test gateway::playback_tests::decoder_start_brokers_frames_without_renewing_or_bypassing_source_authority ... ok
+test gateway::playback_tests::decoder_start_refuses_gateway_without_frame_protocol_before_source_create ... ok
+test gateway::playback_tests::discovery_cancel_tests::cancelled_discovery_preserves_stremio_and_sdk_grants_through_playback_admission ... ok
+test gateway::playback_tests::fresh_playback_skips_full_gateways_and_unassigned_provider_sources_fail_closed ... ok
+test gateway::playback_tests::gateway_selection_affinity_renewal_and_grant_revocation_are_scoped ... ok
+test gateway::playback_tests::isolated_backend_gateway_real_media_lifecycle ... ignored, run only in a disposable --network none container with CAP_NET_ADMIN and VIPTV_TEST_ISOLATED_NETWORK=container
+test gateway::playback_tests::native_direct_and_mandatory_gateway_policy_do_not_invoke_embedded_playback ... ok
+test gateway::playback_tests::ordinary_direct_and_gateway_heartbeat_preserve_empty_json_compatibility ... ok
+test gateway::playback_tests::playback_never_falls_back_to_another_accounts_gateway_without_a_grant ... ok
+test gateway::playback_tests::ready_live_admission_records_exact_profile_history_once_for_both_deliveries ... ok
+test gateway::playback_tests::reflected_private_source_headers_are_hidden_in_cards_and_preserved_for_both_lease_deliveries ... ok
+test gateway::playback_tests::required_audio_tests::required_source_audio_is_negotiated_for_direct_and_enforced_by_gateway ... ok
+test gateway::playback_tests::resume_tests::canonical_resume_is_opt_in_explicit_position_wins_and_retries_keep_admission_snapshot ... ok
+test gateway::playback_tests::resume_tests::gateway_resume_reports_applied_source_clock_and_renew_retains_delivery ... ok
+test gateway::playback_tests::resume_tests::native_mp4_is_capability_negotiated_and_preserves_one_native_seek ... ok
+test gateway::playback_tests::resume_tests::unsafe_direct_probe_falls_back_to_registered_gateway_or_fails_without_raw_delivery ... ok
+test gateway::playback_tests::source_mutation_and_remote_failures_are_closed_and_actionable ... ok
+test gateway::playback_tests::source_revoked_during_live_gateway_start_never_records_recent ... ok
+test gateway::playback_tests::stopping_during_gateway_start_releases_the_late_viewer ... ok
+test gateway::playback_tests::torrent_progress_is_measured_scoped_and_separate_from_authority ... ok
+test gateway::playback_tests::v2_profile_preferences_are_scoped_snapshots_without_quality_clamping ... ok
+test gateway::resume::tests::opaque_episode_resume_is_selected_profile_exact_id_and_server_completion_bound ... ok
+test gateway::tests::gateway_http_and_async_failures_share_only_allowlisted_classifications ... ok
+test gateway::tests::gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_grant ... ok
+test gateway::tests::gateway_network_policy_rejects_private_reserved_and_transition_addresses ... ok
+test gateway::tests::grant_recipient_pages_require_operator_and_own_registration ... ok
+test gateway::tests::ingress_text_error_is_transport_failure_not_invalid_gateway_protocol ... ok
+test gateway::tests::invalid_endpoints_credentials_and_keyring_fail_closed_without_persistence ... ok
+test gateway::tests::registration_interoperates_with_the_independent_gateway_service ... ignored, requires VIPTV_TEST_GATEWAY_BINARY and qualified real FFmpeg/ffprobe
+test gateway::tests::saved_gateway_checks_expose_scoped_capacity_and_revalidate_revoked_grants ... ok
+test gateway::torrent_browser_acceptance::actual_backend_torrent_browser_server ... ignored, requires an isolated real gateway, generated addon, trusted HTTPS ingress
+test gateway::torrent_native_acceptance::actual_backend_android_native_server ... ignored, requires private generated owned-media configuration and isolated Android fixture APK
+test http_middleware::v2_error_tests::v2_framework_rejections_have_safe_codes_without_changing_legacy_or_auth ... ok
+test http_middleware::v2_error_tests::v2_query_and_json_rejections_keep_route_specific_safe_codes ... ok
+test images::cache::tests::fetches_are_bounded_coalesced_cached_and_never_forward_inbound_credentials ... ok
+test gateway::native_fetch::tests::stalled_response_observes_one_ten_second_total_deadline ... ok
+test images::tests::descriptors_accept_only_public_provider_images_and_rewrite_asset_fields_only ... ok
+test images::tests::negotiation_preserves_legacy_and_changes_only_opt_in_json_assets ... ok
+test images::tests::public_image_preflight_requires_no_account_and_allows_public_image_headers ... ok
+test migration_v2::tests::addon_ownership_and_encryption_preserve_ids_and_require_explicit_mapping ... ok
+test migration_v2::tests::backup_export_and_assignment_preserve_identity_and_viewing_history ... ok
+test migration_v2::tests::committed_encryption_cleanup_failure_retries_without_losing_later_history ... ok
+test migration_v2::tests::duplicate_or_nonpositive_owner_ids_are_rejected ... ok
+test migration_v2::tests::encryption_is_backup_first_preserves_identity_and_compacts_old_plaintext ... ok
+test migration_v2::tests::encryption_rolls_back_every_provider_when_later_credentials_are_invalid ... ok
+test migration_v2::tests::invalid_owner_map_rolls_back_schema_and_keeps_private_artifacts ... ok
+test migration_v2::tests::retirement_tests::active_legacy_routing_refuses_retirement_and_preserves_route_and_all_source_rows ... ok
+test migration_v2::tests::retirement_tests::bad_keys_existing_artifacts_and_unreviewed_foreign_dependencies_roll_back_retirement ... ok
+test migration_v2::tests::retirement_tests::incoming_foreign_dependencies_refuse_cascade_null_empty_and_mixed_case_targets ... ok
+test migration_v2::tests::retirement_tests::missing_ownership_and_plaintext_are_refused_without_deleting_retired_configuration ... ok
+test migration_v2::tests::retirement_tests::normal_boot_never_recreates_retired_tables ... ok
+test migration_v2::tests::retirement_tests::retirement_is_export_first_and_keeps_accounts_profiles_history_catalogs_matches_and_secrets ... ok
+test images::cache::tests::queued_images_wait_for_a_slot_and_local_deadlines_never_poison_the_cache ... ok
+test preserved_data_tests::favorite_aliases_and_retired_composite_history_remain_exact_without_runtime_remapping ... ok
+test preserved_data_tests::historical_maximum_quality_is_archived_but_never_returned_or_updated_as_active_policy ... ok
+test provider::catalog_v2::tests::additive_schema_preserves_existing_rows_and_is_repeatable ... ok
+test provider::connections_v2_tests::connection_crud_encrypts_immediately_and_preserves_account_defaults ... ok
+test provider::connections_v2_tests::connection_validation_rechecks_revoked_account_before_persistence ... ok
+test preserved_data_tests::database_waiters_do_not_starve_runtime_after_engine_removal ... ok
+test provider::connections_v2_tests::public_http_is_supported_but_private_and_credential_bearing_endpoints_are_not ... ok
+test provider::connections_v2_tests::protected_detail_cache_is_encrypted_and_survives_offline_read ... ok
+test provider::credentials_v2::tests::encrypted_readers_preserve_http_identity_and_fail_closed ... ok
+test provider::connections_v2_tests::rejected_checks_never_store_credentials_or_echo_upstream_diagnostics ... ok
+test provider::discovery_v2::wait_tests::cancellation_is_owned_idempotent_and_preserves_published_events ... ok
+test provider::discovery_v2::wait_tests::concurrent_producers_share_one_whole_job_ranking_budget ... ok
+test provider::discovery_v2::wait_tests::long_poll_wakes_for_partial_results_then_returns_terminal_without_waiting ... ok
+test provider::refresh_v2::tests::cancelled_inflight_refresh_cannot_publish_late_catalog ... ok
+test provider::refresh_v2::tests::expired_claims_and_configuration_changes_invalidate_old_workers ... ok
+test provider::refresh_v2::tests::initial_background_refresh_is_atomic_and_failed_refresh_retains_snapshot ... ok
+test provider::refresh_v2::tests::missing_keyring_reports_failure_instead_of_queueing_forever ... ok
+test provider::discovery_v2::wait_tests::long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting ... ok
+test provider::tests::matching::credential_path_segments_are_encoded ... ok
+test provider::tests::matching::epg_decoding_and_timestamps_are_safe ... ok
+test provider::tests::matching::fallback_requires_both_title_and_year ... ok
+test provider::tests::matching::lazy_detail_validation_rejects_mismatches_and_preserves_known_evidence ... ok
+test provider::tests::matching::lazy_episode_selection_uses_numbers_not_array_position ... ok
+test provider::tests::matching::metadata_ids_take_priority_and_conflicts_do_not_title_match ... ok
+test provider::tests::matching::normalization_is_conservative_and_unicode_aware ... ok
+test provider::tests::matching::overrides_are_authoritative_and_type_checked ... ok
+test provider::tests::matching::series_episode_ids_support_namespaces_and_reject_conflicts ... ok
+test provider::refresh_v2::tests::queue_bounds_claims_and_gives_another_account_the_next_slot ... ok
+test provider::tests::matching::unspecified_episode_containers_use_transport_route_not_live_kind ... ok
+test provider::v2::tests::legacy_ownership_requires_complete_explicit_valid_map ... ok
+test provider::v2::tests::matches_are_bounded_filtered_and_cannot_cross_account_cursors ... ok
+test provider::v2::tests::page_cursor_encoder_accepts_exact_decoder_bounds_and_refuses_larger_tokens ... ok
+test provider::v2::tests::persistent_account_default_and_request_override_are_isolated ... ok
+test provider::v2_http_tests::account_matches_are_paged_and_cursors_cannot_cross_accounts ... ok
+test provider::v2_http_tests::approved_kids_vod_uses_v2_without_unlock_and_cannot_smuggle_other_titles ... ok
+test provider::v2_http_tests::empty_account_live_catalog_has_no_implicit_global_fallback ... ok
+test provider::v2_http_tests::exact_live_source_is_owned_private_and_independent_of_addon_discovery ... ok
+test provider::v2_http_tests::live_personal_subsets_bind_selected_profile_and_default_catalog_without_counts ... ok
+test provider::v2_http_tests::live_registration_does_not_stamp_old_urls_with_updated_credentials ... ok
+test provider::v2_http_tests::locked_kids_and_paired_devices_cannot_manage_account_sources ... ok
+test provider::v2_http_tests::match_cursors_reject_stale_owned_catalogs_but_ignore_foreign_mutations ... ok
+test provider::transport_v2::tests::request_and_body_deadlines_are_distinct_from_interrupted_bodies ... ok
+test provider::v2_http_tests::match_edits_and_defaults_are_account_owned_not_owner_role_global ... ok
+test provider::v2_http_tests::oversized_catalog_cursors_fail_safely_without_changing_raw_identifiers ... ok
+test provider::v2_http_tests::oversized_match_cursor_fails_before_emitting_an_unusable_token ... ok
+test provider::v2_http_tests::raw_live_browsing_allows_paired_devices_but_not_locked_kids ... ok
+test provider::v2_http_tests::matches_traverse_both_directions_across_owned_providers_and_filters ... ok
+test provider::v2_http_tests::v2_discovery_revocation_during_series_fetch_does_not_publish_or_cache ... ok
+test provider::v2_http_tests::raw_live_pages_preserve_order_logos_and_account_default ... ok
+test provider::v2_http_tests::v2_guide_uses_owned_raw_channel_and_hides_foreign_or_missing_ids ... ok
+test real_gateway_qa::real_provider_gateway_backend ... ignored, Own isolated QA database/keyring and real gateway are required
+test remote_qa_fixture::remote_addon_browser_fixture ... ignored, Starts a loopback QA server; run explicitly with --ignored --nocapture
+test provider::v2_http_tests::v2_discovery_uses_three_owned_providers_not_live_default_or_foreign_sources ... ok
+test secret_store::tests::ciphertext_is_randomized_authenticated_and_bound_to_account_purpose_record ... ok
+test secret_store::tests::keyring_rotation_reads_old_ciphertexts_without_plaintext_fallback ... ok
+test service_errors::tests::unknown_diagnostics_are_never_public_and_rate_limits_are_not_connection_limits ... ok
+test simkl::anime_episode::tests::absolute_and_aired_coordinates_are_independent_and_every_hint_must_agree ... ok
+test simkl::artwork::qualification::public_logo_asset_reader_returns_real_image_without_metadata_payload ... ignored, Owned public artwork egress qualification
+test simkl::artwork::tests::artwork_never_accepts_credentials_private_hosts_or_plain_http ... ok
+test simkl::imports::paused::identity::tests::conflicting_hints_never_depend_on_episode_order_and_single_verified_forms_still_work ... ok
+test secret_store::tests::addon_manifests_do_not_widen_gateway_or_provider_secret_limits ... ok
+test simkl::imports::tests::deleted_or_cleared_history_stays_removed_and_unchanged_imports_keep_revision_stable ... ok
+test simkl::imports::tests::import_never_overwrites_local_progress_or_exports_and_only_advances_unchanged_receipts ... ok
+test simkl::imports::tests::original_episode_import_does_not_invent_missing_watched_rows_dates_or_anime_seasons ... ok
+test simkl::imports::tests::cheap_membership_contains_verified_aliases_and_alias_removal_targets_one_saved_row ... ok
+test simkl::imports::tests::remote_membership_preserves_local_identity_added_date_and_removal ... ok
+test simkl::tests::anime_tracking_identity::anime_tracking_rejects_ambiguous_absolute_numbers_before_any_provider_write ... ok
+test simkl::tests::calendar_browse::a_cold_calendar_does_not_block_genres_and_identical_fetches_coalesce ... ok
+test simkl::tests::calendar_browse::all_types_search_aggregates_only_selected_metadata_provider_and_rejects_ambiguous_paging ... ok
+test simkl::tests::anime_next_identity::imported_anime_next_rejects_aired_mapping_shared_by_different_absolute_episodes ... ok
+test simkl::tests::calendar_browse::calendar_configuration_date_window_and_session_revocation_are_not_empty_success ... ok
+test simkl::tests::calendar_browse::public_calendar_genres_and_scoped_controls_use_v2_data_without_user_tokens ... ok
+test simkl::tests::continuation_v3::profile_switch_during_next_metadata_read_never_publishes_a_transition ... ok
+test simkl::tests::discovery::configured_default_routes_home_discovery_search_and_detail_without_user_token ... ok
+test simkl::tests::continuation_v3::typed_next_uses_selected_simkl_metadata_and_honest_airing_without_history_or_tracking ... ok
+test simkl::tests::episode_pages::generic_detail_indexes_all_verified_seasons_and_pages_exact_children_without_extra_provider_reads ... ok
+test simkl::tests::history_clear::clear_history_is_selected_profile_local_only_and_invalidates_continue_watching ... ok
+test simkl::tests::discovery::slow_simkl_home_returns_visible_failed_rows_within_assembly_budget ... ok
+test simkl::tests::import_continuation::imported_next_episode_uses_verified_provider_target_preserves_canonical_identity_and_never_writes_fake_progress ... ok
+test simkl::tests::large_episode_pages::simkl_detail_limits_keep_one_episode_read_and_exact_large_title_cursors ... ok
+test simkl::tests::mapping::sources_and_subtitles_use_cached_authoritative_ids_and_preserve_canonical_playback_identity ... ok
+test simkl::tests::mapping::unresolved_or_mismatched_episode_mapping_returns_explicit_unavailable_without_addon_request ... ok
+test simkl::tests::metadata::all_search_keeps_anime_subtype_and_ranks_naruto_above_unrelated_movie_ovas ... ok
+test simkl::tests::metadata::metadata_and_tracking_require_exact_identity_and_current_profile_link ... ok
+test simkl::tests::metadata::related_titles_and_full_metadata_arrive_in_one_selected_provider_detail_response ... ok
+test simkl::tests::metadata::unlink_invalidates_pending_oauth_and_disabled_assignment_blocks_tracking ... ok
+test simkl::tests::metadata::upstream_metadata_authorization_failure_does_not_expire_viptv_session ... ok
+test simkl::tests::oauth::oauth_is_single_use_encrypted_and_isolated ... ok
+test simkl::tests::oauth::paired_device_cannot_initiate_simkl_oauth ... ok
+test simkl::tests::oauth::revoked_and_expired_authorizations_cannot_link ... ok
+test simkl::tests::oauth::unconfigured_service_advertises_no_simkl_and_cannot_authorize ... ok
+test simkl::tests::metadata::oauth_required_metadata_uses_profile_link_without_populating_public_cache ... ok
+test simkl::tests::paused_import_identity::paused_episode_import_requires_episode_id_and_aired_mapping_to_agree ... ok
+test simkl::tests::revocation::another_profile_of_same_account_does_not_inherit_link ... ok
+test simkl::tests::revocation::profile_switch_during_metadata_prevents_watched_write ... ok
+test simkl::tests::revocation::profile_switch_while_metadata_is_queued_prevents_upstream_request ... ok
+test simkl::tests::token_revocation::insufficient_or_malformed_token_grants_are_never_saved ... ok
+test simkl::tests::token_revocation::unlink_during_refresh_does_not_restore_sealed_credentials ... ok
+test simkl::tests::token_revocation::unlink_while_refresh_waits_for_owner_prevents_dispatch ... ok
+test simkl::tests::tokens::cancelled_refresh_caller_still_seals_the_replacement_and_never_replays ... ok
+test simkl::tests::tokens::expired_profile_token_refresh_is_coalesced_sealed_and_preserves_link_revision ... ok
+test simkl::tests::paused_title_scope::paused_import_scopes_equal_numeric_ids_to_the_explicit_title_category ... ok
+test simkl::tests::tokens::wrong_oauth_issuer_does_not_consume_valid_state_or_exchange_code ... ok
+test simkl::tests::tracking_completion::explicit_watched_correction_is_its_own_user_action_after_automatic_completion ... ok
+test simkl::tests::tokens::parent_grant_expiry_during_one_use_refresh_seals_replacement_without_returning_content ... ok
+test simkl::tests::tracking_completion::history_first_deduplicates_lifecycle_completion_without_a_second_mutation ... ok
+test simkl::tests::tracking_completion::failed_stop_keeps_history_fallback_available ... ok
+test simkl::tests::tracking_completion::stop_first_confirms_the_shared_receipt_and_suppresses_history_upload ... ok
+test simkl::tests::tracking_history::ended_unknown_runtime_retains_observed_position_without_completion_or_tracking ... ok
+test simkl::tests::tracking_history::anime_progress_preserves_tvdb_identity_and_history_uses_verified_native_number ... ok
+test simkl::tests::tracking_history::opaque_stremio_history_and_unlinked_lifecycle_remain_usable ... ok
+test simkl::tests::tracking_history::queued_completion_is_revoked_before_any_history_egress ... ok
+test simkl::tests::tracking_history::typed_progress_uses_server_clock_95_percent_and_coalesces_completion ... ok
+test simkl::tests::tracking_history::verified_anime_film_progress_uses_anime_title_without_episode ... ok
+test simkl::tests::tracking_history::typed_simkl_episode_parent_coordinates_are_authoritative_before_history_write ... ok
+test simkl::tests::tracking_lifecycle::lifecycle_attempt_cannot_change_media_and_unmapped_provider_does_not_call_upstream ... ok
+test simkl::tests::tracking_lifecycle::lifecycle_busy_reservation_does_not_consume_an_unsubmitted_sequence ... ok
+test simkl::tests::tracking_lifecycle::anime_scrobble_uses_verified_sequential_mapping_and_rejects_missing_mapping ... ok
+test simkl::tests::tracking_lifecycle::provider_authorization_failure_is_not_a_viptv_session_expiry ... ok
+test simkl::tests::tracking_lifecycle::queued_lifecycle_configuration_revision_change_prevents_scrobble_egress ... ok
+test simkl::tests::tracking_lifecycle::lifecycle_stop_retains_95_percent_policy_and_rejects_replayed_attempts ... ok
+test simkl::tests::unified_search::empty_rows_are_distinct_from_failure_and_large_rows_keep_the_bounded_200_cards ... ok
+test simkl::tests::unified_search::explicit_metadata_origin_overrides_default_and_search_only_addons_delegate_safely ... ok
+test simkl::tests::unified_search::a_search_row_timeout_retains_completed_rows ... ok
+test simkl::tests::unified_search::grouped_search_keeps_three_simkl_rows_and_per_addon_identity_with_partial_failures ... ok
+test simkl::tests::unified_search::parent_target_requires_current_grant_and_discards_late_target_policy_changes ... ok
+test simkl::tests::unified_search::parent_target_search_and_approval_use_owned_target_without_switching_media_profile ... ok
+test simkl::tests::unified_search::fast_sibling_catalog_cards_survive_the_same_addon_timeout ... ok
+test simkl::tests::unified_search::restricted_canonical_episode_consumers_use_verified_policy_and_revoke_real_playback_and_subtitles ... ok
+test simkl::tests::unified_search::restricted_imdb_parent_and_exact_stremio_episode_work_with_a_different_browse_default ... ok
+test simkl::tests::unified_search::restricted_opaque_explicit_consumers_remain_unsupported_without_widening_legacy_approvals ... ok
+test simkl::tests::unified_search::profile_and_policy_changes_suppress_all_inflight_search_rows ... ok
+test simkl::tests::unified_search::subtitle_origin_keeps_stremio_opaque_simkl_prefix_ids_out_of_simkl_mapping ... ok
+test simkl::tests::unified_search::typed_next_preserves_explicit_origin_and_never_reuses_a_different_provider_queue_cache ... ok
+test simkl::tests::unified_search::typed_parent_approval_refuses_late_metadata_after_parent_authority_is_removed ... ok
+test simkl::tests::unified_search::restricted_search_and_discovery_project_only_approved_titles_and_hide_reserved_namespace_spoofs ... ok
+test simkl::tests::unified_search::typed_parent_approval_rejects_opaque_namespace_confusion_and_keeps_revoke_available ... ok
+test simkl::tests::unified_search::typed_parent_search_discards_inflight_previews_after_parent_grant_is_revoked ... ok
+test simkl::tests::unified_search::typed_parent_search_marks_scoped_private_ids_supported_and_adult_refetch_cannot_be_approved ... ok
+test simkl::tests::unified_search::typed_parent_search_and_approval_are_selected_profile_scoped_and_observe_real_simkl_episodes ... ok
+test simkl::tests::unified_search::typed_simkl_next_works_when_stremio_is_the_browse_default ... ok
+test simkl::tests::watchlists::genre_enrichment_runs_in_background_and_reports_partial_matches_until_verified ... ok
+test simkl::tests::watchlists::linked_library_uses_one_private_read_real_user_stats_and_never_writes_watchlist ... ok
+test simkl::tests::watchlists::profile_switch_during_private_read_discards_the_entire_response ... ok
+test simkl::tests::watchlists::expired_private_snapshot_checks_activities_merges_deltas_ratings_and_removals ... ok
+test simkl::tests::watchlists::unavailable_metadata_stops_aggregate_refresh_when_the_worker_finishes ... ok
+test source_http::tests::cross_origin_redirect_does_not_copy_query_credentials_or_cookies ... ok
+test source_http::tests::redirect_targets_reject_downgrades_private_addresses_and_userinfo ... ok
+test sources::input::tests::tracker_hints_are_preserved_without_entering_presentation_values ... ok
+test sources::metadata_tests::metadata_hints_are_parsed_after_private_reflections_are_redacted ... ok
+test sources::metadata_tests::sanitized_source_metadata_batch_matches_shared_parser ... ok
+test simkl::tests::watchlists::unified_library_imports_membership_original_history_and_verified_pauses_without_export ... ok
+test stremio_import::tests::addon_only_scope_requires_a_selected_import ... ok
+test stremio_import::tests::anchor_aligns_after_videos_were_added_before_it ... ok
+test stremio_import::addon_review::budget_tests::retained_metadata_has_an_aggregate_byte_bound ... ok
+test stremio_import::tests::authorization_unauthorized_foreign_replaced_device_restricted_and_parent ... ok
+test stremio_import::tests::anime_seasons_and_the_imdb_entry_merge_into_one_show ... ok
+test stremio_import::tests::bitfield_rejects_ambiguous_partial_and_out_of_range_metadata ... ok
+test stremio_import::tests::bits_after_a_stale_anchor_are_read ... ok
+test stremio_import::tests::cancelled_older_review_cannot_clear_newer_pending_generation ... ok
+test stremio_import::tests::completion_only_never_ranks_over_real_series_activity ... ok
+test stremio_import::tests::backup_and_transaction_failures_abort_every_write_and_receipt ... ok
+test stremio_import::tests::credentials_and_parser_errors_do_not_echo_secrets_and_failed_reservations_are_disposed ... ok
+test stremio_import::tests::episode_identity_survives_http_apply_and_movie_watched_keeps_known_local_runtime ... ok
+test stremio_import::tests::failed_changed_review_preserves_published_plan_and_version ... ok
+test stremio_import::tests::failed_review_can_retry_from_last_published_version ... ok
+test stremio_import::tests::fetch_concurrency_and_global_preview_capacity_are_bounded ... ok
+test stremio_import::tests::genuine_manual_watched_correction_is_preserved_even_with_import_owned_assertion ... ok
+test stremio_import::tests::imported_completion_is_replaced_by_newer_rewatch_resume_and_replay_is_idempotent ... ok
+test stremio_import::tests::imported_continuation_does_not_override_new_playback_or_manual_decisions ... ok
+test stremio_import::tests::imported_continuation_keeps_title_order_hiding_and_normal_next_cache ... ok
+test stremio_import::tests::imported_continuation_repairs_legacy_receipt_once_without_changing_playback ... ok
+test stremio_import::tests::imported_continuation_repair_requires_unchanged_receipt_owned_activity ... ok
+test stremio_import::tests::imported_continuation_repairs_old_resume_and_completion_in_one_pass ... ok
+test stremio_import::tests::imported_watched_resume_anchors_queue_on_last_verified_watched_episode ... ok
+test stremio_import::tests::imported_continuation_requires_watched_resume_and_selected_valid_target ... ok
+test stremio_import::tests::legacy_progress_get_exports_authoritative_completion_fields ... ok
+test stremio_import::tests::long_cinemeta_series_is_not_rejected_by_size ... ok
+test stremio_import::tests::mapper_cleared_removed_temp_unsupported_duplicates_and_options ... ok
+test stremio_import::tests::mapper_rejects_missing_future_invalid_dates_offsets_and_episode_ids ... ok
+test stremio_import::tests::mapper_seconds_rewatch_exact_episode_and_movie_completion ... ok
+test stremio_import::tests::merge_preserves_newer_equal_manual_source_context_and_queue_hiding ... ok
+test stremio_import::tests::kitsu_sequel_cour_remaps_to_verified_imdb_episodes ... ok
+test stremio_import::tests::metadata_matches_only_original_identity_and_exact_episode_without_guessing_dates ... ok
+test stremio_import::tests::movie_rewatch_without_usable_resume_retains_previous_completion ... ok
+test stremio_import::tests::named_review_exclusions_replay_and_scope ... ok
+test stremio_import::tests::network_reauthorization_rejects_profile_replacement_before_publishing_preview ... ok
+test stremio_import::tests::no_addon_imdb_bitfields_are_verified_beyond_first_sixteen_without_guessing_opaque ... ok
+test stremio_import::tests::old_receipt_repairs_completion_without_touching_active_resume_or_manual_correction ... ok
+test stremio_import::tests::preview_capacity_is_bounded_and_cancel_reclaims_slot ... ok
+test stremio_import::tests::preview_is_read_only_confirmation_backup_apply_replay_and_removed_favorite ... ok
+test stremio_import::tests::real_collection_shape_unsafe_and_duplicate_addons_remain_read_only ... ok
+test stremio_import::tests::real_file_wal_backup_uses_private_directory_and_contains_no_import_credentials_or_preview ... ok
+test stremio_import::tests::real_library_remap_preview ... ignored
+test stremio_import::tests::removing_metadata_addon_removes_only_its_rows_and_restores_same_handle ... ok
+test stremio_import::tests::repeated_review_keeps_handles_and_requires_current_apply_version ... ok
+test stremio_import::tests::resolved_removed_entry_without_history_is_not_flagged_unmatched ... ok
+test stremio_import::tests::selected_addon_applies_encrypted_only_after_confirmation_and_addon_only ... ok
+test stremio_import::tests::show_missing_from_cinemeta_verifies_against_simkl_episodes ... ok
+test stremio_import::tests::source_redirect_oversize_invalid_and_item_limits_fail_closed ... ok
+test stremio_import::tests::specials_may_skip_numbers ... ok
+test stremio_import::tests::stale_snapshot_cancel_expiry_and_session_binding ... ok
+test stremio_import::tests::undated_series_watch_flags_are_review_only ... ok
+test stremio_import::tests::untranslatable_anime_episode_is_reviewed_not_guessed ... ok
+test stremio_import::tests::upstream_401_is_422_not_viptv_session_expiry ... ok
+test stremio_import::tests::verified_current_completion_survives_unusable_resume_and_movie_missing_date ... ok
+test stremio_import::tests::verified_episode_bitfield_marks_only_verified_ids_without_date ... ok
+test util::tests::rejects_protocols_and_userinfo ... ok
+test stremio_import::tests::metadata_deadline_keeps_fast_verified_results_and_bounds_inflight ... ok
+
+test result: ok. 478 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 64.27s
+

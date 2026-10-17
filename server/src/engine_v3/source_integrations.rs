@@ -3,7 +3,7 @@ use super::*;
 use viptv_engine::{
     capabilities::Capability,
     profile::IntegrationConnection,
-    source_integration::{VsourcesConfiguration, vsources_schema},
+    source_integration::{vsources_schema, VsourcesConfiguration},
 };
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_source_integrations(id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,revision INTEGER NOT NULL,enabled INTEGER NOT NULL,secret TEXT NOT NULL,UNIQUE(account_id,profile_id));")
@@ -310,24 +310,49 @@ pub(crate) fn available_db(db: &Connection, lease: &ResourceLease, id: i64) -> b
     };
     cfg!(feature="vsources-runtime") && db.query_row("SELECT EXISTS(SELECT 1 FROM engine_source_integrations s JOIN engine_profile_configuration p ON p.profile_id=s.profile_id JOIN json_each(p.value,'$.assignments') a WHERE s.id=?1 AND s.account_id=?2 AND s.profile_id=?3 AND s.enabled=1 AND json_extract(a.value,'$.connection_id')=?4 AND EXISTS(SELECT 1 FROM json_each(a.value,'$.enabled') c WHERE c.value='Sources'))",params![id,lease.principal.account_id(),profile,format!("vsources:{id}")],|r|r.get::<_,bool>(0)).unwrap_or(false)
 }
+#[cfg(all(test, feature = "vsources-runtime"))]
+pub(crate) use runtime::canonical_card;
 #[cfg(feature = "vsources-runtime")]
 pub(crate) use runtime::spawn;
 
-pub(crate) fn cache_detail(app: &App, lease: &ResourceLease, revision: u64, value: &Value) {
+pub(crate) fn cache_detail(
+    app: &App,
+    lease: &ResourceLease,
+    revision: u64,
+    addon_revision: &str,
+    value: &Value,
+) {
     let Ok(detail) =
         serde_json::from_value::<viptv_engine::presentation::DetailSnapshot>(value.clone())
     else {
         return;
     };
     for card in std::iter::once(detail.item).chain(detail.episodes) {
-        cache_card(app, lease, revision, card);
+        cache_card_at(app, lease, revision, addon_revision, card);
     }
 }
 
+#[cfg(test)]
 pub(crate) fn cache_card(
     app: &App,
     lease: &ResourceLease,
     revision: u64,
+    card: viptv_engine::presentation::Card,
+) {
+    let Some(account) = lease.principal.account_id() else {
+        return;
+    };
+    let Ok(addon_revision) = app.addons.clone().for_account(account).revision() else {
+        return;
+    };
+    cache_card_at(app, lease, revision, &addon_revision, card);
+}
+
+pub(crate) fn cache_card_at(
+    app: &App,
+    lease: &ResourceLease,
+    revision: u64,
+    addon_revision: &str,
     card: viptv_engine::presentation::Card,
 ) {
     let Ok(mut cache) = app.verified_cards.lock() else {
@@ -340,8 +365,10 @@ pub(crate) fn cache_card(
         (
             lease.principal.key(),
             revision,
+            card.provider_id.clone(),
             card.identity.kind.clone(),
             card.identity.id.clone(),
+            addon_revision.to_owned(),
         ),
         card,
     );
@@ -353,6 +380,32 @@ pub(crate) fn merge_cached(
     revision: u64,
     cards: &mut [viptv_engine::presentation::Card],
 ) {
+    let Ok(addon_revision) = app.addons.revision() else {
+        return;
+    };
+    merge_cached_revision(app, lease, revision, addon_revision, cards);
+}
+
+pub(crate) fn merge_cached_with_db(
+    app: &App,
+    lease: &ResourceLease,
+    revision: u64,
+    db: &Connection,
+    cards: &mut [viptv_engine::presentation::Card],
+) {
+    let Ok(addon_revision) = app.addons.revision_db(db) else {
+        return;
+    };
+    merge_cached_revision(app, lease, revision, addon_revision, cards);
+}
+
+fn merge_cached_revision(
+    app: &App,
+    lease: &ResourceLease,
+    revision: u64,
+    addon_revision: String,
+    cards: &mut [viptv_engine::presentation::Card],
+) {
     let Ok(cache) = app.verified_cards.lock() else {
         return;
     };
@@ -361,8 +414,10 @@ pub(crate) fn merge_cached(
         if let Some(metadata) = cache.get(&(
             lease.principal.key(),
             revision,
+            card.provider_id.clone(),
             identity.kind.clone(),
             identity.id.clone(),
+            addon_revision.clone(),
         )) {
             *card = viptv_engine::presentation::enrich_card(card, metadata);
         }

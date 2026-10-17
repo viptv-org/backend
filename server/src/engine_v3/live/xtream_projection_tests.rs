@@ -45,7 +45,7 @@ async fn private_xtream_projects_cached_catalog_guide_and_revocable_opaque_live_
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/live/channels?group_id=news",
+        "/api/profiles/1/live/channels?group_id=news",
         Value::Null,
     )
     .await;
@@ -57,7 +57,7 @@ async fn private_xtream_projects_cached_catalog_guide_and_revocable_opaque_live_
         &app,
         "member-token-1",
         "GET",
-        &format!("/api/v3/profiles/1/live/{channel}/guide"),
+        &format!("/api/profiles/1/live/{channel}/guide"),
         Value::Null,
     )
     .await;
@@ -68,7 +68,7 @@ async fn private_xtream_projects_cached_catalog_guide_and_revocable_opaque_live_
         &app,
         "member-token-1",
         "POST",
-        &format!("/api/v3/profiles/1/live/{channel}/sources"),
+        &format!("/api/profiles/1/live/{channel}/sources"),
         Value::Null,
     )
     .await;
@@ -88,7 +88,7 @@ async fn private_xtream_projects_cached_catalog_guide_and_revocable_opaque_live_
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         play("before_remove"),
     )
     .await;
@@ -99,7 +99,7 @@ async fn private_xtream_projects_cached_catalog_guide_and_revocable_opaque_live_
             &app,
             "member-token-2",
             "POST",
-            &format!("/api/v3/profiles/1/live/{channel}/sources"),
+            &format!("/api/profiles/1/live/{channel}/sources"),
             Value::Null
         )
         .await
@@ -110,7 +110,7 @@ async fn private_xtream_projects_cached_catalog_guide_and_revocable_opaque_live_
         &app,
         "member-token-1",
         "DELETE",
-        &format!("/api/v3/profiles/1/source-integrations/{connection}?revision=1"),
+        &format!("/api/profiles/1/source-integrations/{connection}?revision=1"),
         Value::Null,
     )
     .await;
@@ -119,7 +119,7 @@ async fn private_xtream_projects_cached_catalog_guide_and_revocable_opaque_live_
         &app,
         "member-token-1",
         "POST",
-        "/api/v2/playback",
+        "/api/playback",
         play("after_remove"),
     )
     .await;

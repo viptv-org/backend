@@ -5,13 +5,18 @@ use viptv_engine::{
     profile::IntegrationConnection,
 };
 mod configuration;
-#[cfg(feature="live-runtime")]
-mod xtream_configuration;
-#[cfg(feature="live-runtime")]
-mod xtream;
+pub(crate) mod favorites;
 mod fetch_gates;
-pub(crate) use configuration::{available_m3u, configure, connections, init, remove};
+#[cfg(feature = "live-runtime")]
+mod xtream;
+#[cfg(feature = "live-runtime")]
+mod xtream_configuration;
+pub(crate) use configuration::{available_m3u, configure, connections, remove};
 pub(crate) use fetch_gates::FetchGates;
+pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
+    configuration::init(db)?;
+    favorites::init(db)
+}
 #[cfg(feature = "live-runtime")]
 mod native;
 #[derive(Clone)]
@@ -287,7 +292,7 @@ pub(super) fn remember_sources(
     connection: &str,
     cards: &[Value],
 ) {
-    let job = Arc::new(Job {
+    let job = Arc::new(Job {metadata_proof:None,
         source_slots: std::sync::atomic::AtomicUsize::new(cards.len()),
         cancelled: std::sync::atomic::AtomicBool::new(false),
         configuration_revision: Some((profile, revision)),
@@ -335,16 +340,19 @@ async fn bounded(future: impl std::future::Future<Output = ApiResult>) -> ApiRes
 mod xtream_profile_tests;
 
 pub(crate) fn available_xtream(db: &Connection, lease: &ResourceLease, id: i64) -> bool {
-    #[cfg(feature="live-runtime")]
-    return xtream_configuration::available(db,lease,id);
-    #[cfg(not(feature="live-runtime"))]
-    {let _=(db,lease,id);false}
+    #[cfg(feature = "live-runtime")]
+    return xtream_configuration::available(db, lease, id);
+    #[cfg(not(feature = "live-runtime"))]
+    {
+        let _ = (db, lease, id);
+        false
+    }
 }
 
-#[cfg(all(test,feature="live-runtime"))]
-#[path="live/xtream_projection_tests.rs"]
+#[cfg(all(test, feature = "live-runtime"))]
+#[path = "live/xtream_projection_tests.rs"]
 mod xtream_projection_tests;
 
-#[cfg(all(test,feature="live-runtime"))]
-#[path="live/xtream_authority_tests.rs"]
+#[cfg(all(test, feature = "live-runtime"))]
+#[path = "live/xtream_authority_tests.rs"]
 mod xtream_authority_tests;

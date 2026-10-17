@@ -45,8 +45,8 @@ impl Image {
         })
     }
     pub fn href(href: &str) -> Option<Self> {
-        let source = if href.starts_with("/api/v3/images/simkl/") {
-            href.strip_prefix("/api/v3/images/simkl/")?.to_owned()
+        let source = if href.starts_with("/api/images/simkl/") {
+            href.strip_prefix("/api/images/simkl/")?.to_owned()
         } else {
             let mut url = Url::parse(href).ok()?;
             if url.scheme() != "https"
@@ -67,7 +67,7 @@ impl Image {
                 && url.username().is_empty()
                 && url.password().is_none()
             {
-                if let Some(path) = url.path().strip_prefix("/api/v3/images/simkl/") {
+                if let Some(path) = url.path().strip_prefix("/api/images/simkl/") {
                     let (folder, asset) = path.split_once('/')?;
                     return Self::parts(folder, asset);
                 }
@@ -91,6 +91,6 @@ impl Image {
         format!("https://simkl.in/{}/{}", self.folder, self.asset)
     }
     pub fn proxy(&self) -> String {
-        format!("/api/v3/images/simkl/{}/{}", self.folder, self.asset)
+        format!("/api/images/simkl/{}/{}", self.folder, self.asset)
     }
 }

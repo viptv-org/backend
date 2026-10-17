@@ -5,6 +5,8 @@ use rusqlite::Connection;
 use viptv_server::App;
 
 fn initialize(db: Connection, _root: &std::path::Path) -> App {
+    // The release-shaped service pins an HTTPS callback origin for Simkl.
+    std::env::set_var("VIPTV_AUTH_ORIGIN", "https://tv.example");
     App::new(db, reqwest::Client::new()).unwrap()
 }
 

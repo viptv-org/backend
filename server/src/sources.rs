@@ -65,14 +65,22 @@ impl App {
             // Only the host SDK producer authors this requirement. An add-on
             // cannot use a display field to acquire a different playback policy.
             let required_audio_index = if source.starts_with("vsources:") {
-                match r.get("required_audio_index").filter(|value| !value.is_null()) {
+                match r
+                    .get("required_audio_index")
+                    .filter(|value| !value.is_null())
+                {
                     Some(value) => match value.as_u64().filter(|index| *index <= 65535) {
                         Some(index) => Some(index as u32),
-                        None => { unsupported += 1; continue; }
+                        None => {
+                            unsupported += 1;
+                            continue;
+                        }
                     },
                     None => None,
                 }
-            } else { None };
+            } else {
+                None
+            };
             let Some(input) = input::Input::parse(&r, source.starts_with("addon:"), kind == "live")
             else {
                 unsupported += 1;
@@ -157,7 +165,10 @@ impl App {
                     input.file_index
                 ]);
             }
-            if source.starts_with("addon:") || source.starts_with("iptv:") || source.starts_with("vsources:") {
+            if source.starts_with("addon:")
+                || source.starts_with("iptv:")
+                || source.starts_with("vsources:")
+            {
                 public["source_addon_id"] = json!(source);
             }
             if let Some(index) = required_audio_index {
@@ -174,11 +185,14 @@ impl App {
                 &headers,
                 &input.private_values
             ));
-            if source.starts_with("addon:") { public["presentation"]["provider_name"] = public["source_name"].clone(); }
+            if source.starts_with("addon:") {
+                public["presentation"]["provider_name"] = public["source_name"].clone();
+            }
             entries.insert(
                 id.clone(),
                 StreamEntry {
-                    profile_revision:None,
+                    metadata_proof:None,
+                    profile_revision: None,
                     media_id: None,
                     exact_vod: None,
                     live_channel_id: None,
@@ -250,7 +264,7 @@ pub(crate) fn source_configuration(
         "xtream"=>db.query_row("SELECT json_array(c.account_id,c.profile_id,c.revision,c.enabled,c.secret,p.revision,p.value) FROM engine_xtream_connections c LEFT JOIN engine_profile_configuration p ON p.profile_id=c.profile_id WHERE c.id=?1",[id],|r|r.get(0)).optional().map_err(db_error)?,
         "m3u"=>db.query_row("SELECT json_array(c.account_id,c.profile_id,c.revision,c.enabled,c.secret,p.revision,p.value) FROM engine_m3u_connections c LEFT JOIN engine_profile_configuration p ON p.profile_id=c.profile_id WHERE c.id=?1",[id],|r|r.get(0)).optional().map_err(db_error)?,
         "vsources"=>db.query_row("SELECT json_array(s.account_id,s.profile_id,s.revision,s.enabled,s.secret,p.revision,p.value) FROM engine_source_integrations s LEFT JOIN engine_profile_configuration p ON p.profile_id=s.profile_id WHERE s.id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
-        "addon"=>db.query_row("SELECT json_array(manifest_url,enabled,account_id,credentials_version,credentials_revision) FROM addons WHERE id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
+        "addon"=>db.query_row("SELECT json_array(a.manifest_url,a.enabled,a.account_id,a.credentials_version,a.credentials_revision,a.manifest,i.incarnation) FROM addons a JOIN engine_addon_incarnations i ON i.addon_id=a.id WHERE a.id=?1",[id],|row|row.get(0)).optional().map_err(db_error)?,
         _=>None,
     };
     Ok(value.map(|value| Sha256::digest(value.as_bytes()).into()))
@@ -365,23 +379,77 @@ fn source_card(
         .filter(|text| !text.is_empty())
         .unwrap_or(source);
     let mut card = json!({"id":id,"source":source,"name":clean(name,256),"title":clean(title,1024),"description":description,"audio_language_status":"unknown"});
-    if let Some(presentation) = viptv_engine::stremio::SourcePresentation::read(&raw["presentation"]) {
+    if let Some(presentation) =
+        viptv_engine::stremio::SourcePresentation::read(&raw["presentation"])
+    {
         let mut value = serde_json::to_value(presentation).unwrap_or(Value::Null);
         if let Some(fields) = value.as_object_mut() {
             for field in fields.values_mut() {
-                if let Some(text) = field.as_str() { *field = json!(clean(text, 128)); }
-                else if let Some(values) = field.as_array_mut() { for item in values { if let Some(text) = item.as_str() { *item = json!(clean(text, 64)); } } }
+                if let Some(text) = field.as_str() {
+                    *field = json!(clean(text, 128));
+                } else if let Some(values) = field.as_array_mut() {
+                    for item in values {
+                        if let Some(text) = item.as_str() {
+                            *item = json!(clean(text, 64));
+                        }
+                    }
+                }
             }
         }
         card["presentation"] = value;
     }
-    if let Some(height)=raw["quality_height"].as_u64().filter(|h|(144..=4320).contains(h)){card["quality_height"]=json!(height);}
-    let audio=raw["audio_languages"].as_array().map(|languages|languages.iter().take(16).filter_map(|v|v.as_str().filter(|tag|viptv_engine::preferences::language_tag(tag))).collect::<Vec<_>>()).unwrap_or_default();
-    if !audio.is_empty(){card["audio_languages"]=json!(audio);}
-    if let Some(filename) = raw
-        .pointer("/behaviorHints/filename")
-        .and_then(Value::as_str)
+    for key in ["quality", "codec"] {
+        if let Some(value) = raw[key].as_str() {
+            let value = clean(value, 128);
+            if !value.is_empty() {
+                card[key] = json!(value);
+            }
+        }
+    }
+    if let Some(height) = raw["quality_height"]
+        .as_u64()
+        .filter(|h| (144..=4320).contains(h))
     {
+        card["quality_height"] = json!(height);
+    }
+    let explicit_language_present = [
+        "audio_languages",
+        "reported_languages",
+        "language",
+        "languages",
+    ]
+    .iter()
+    .any(|key| match &raw[*key] {
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| value.as_str().is_some_and(|s| !s.trim().is_empty())),
+        _ => false,
+    });
+    let explicit_audio_present = raw["audio_languages"].as_array().is_some_and(|languages| {
+        languages
+            .iter()
+            .any(|v| v.as_str().is_some_and(|s| !s.trim().is_empty()))
+    });
+    let audio = raw["audio_languages"]
+        .as_array()
+        .map(|languages| {
+            languages
+                .iter()
+                .take(16)
+                .filter_map(Value::as_str)
+                .map(|tag| clean(tag, 32))
+                .filter(|tag| viptv_engine::preferences::language_tag(tag))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !audio.is_empty() {
+        card["audio_languages"] = json!(audio);
+    }
+    if let Some(filename) = raw.get("filename").and_then(Value::as_str).or_else(|| {
+        raw.pointer("/behaviorHints/filename")
+            .and_then(Value::as_str)
+    }) {
         if !filename.contains("://") && !filename.contains(url) {
             let filename = filename
                 .rsplit(['/', '\\'])
@@ -409,15 +477,19 @@ fn source_card(
         }
     }
     if let Some(size) = raw
-        .pointer("/behaviorHints/videoSize")
+        .get("size_bytes")
         .and_then(Value::as_u64)
+        .or_else(|| {
+            raw.pointer("/behaviorHints/videoSize")
+                .and_then(Value::as_u64)
+        })
         .filter(|n| *n > 0 && *n <= (1_u64 << 50))
     {
         card["size_bytes"] = json!(size);
         card["presentation"]["size_bytes"] = json!(size);
     }
     let mut languages = Vec::new();
-    for key in ["language", "languages"] {
+    for key in ["reported_languages", "language", "languages"] {
         let values: Vec<&Value> = match &raw[key] {
             Value::String(_) => vec![&raw[key]],
             Value::Array(values) => values.iter().take(16).collect(),
@@ -447,5 +519,112 @@ fn source_card(
         card["reported_languages"] = json!(languages);
         card["audio_language_status"] = json!("unverified");
     }
+    // Parse only the already redacted public fields. Hints are informational;
+    // opaque grants and private playback context remain host-authored above.
+    if let Some(presentation) = viptv_engine::stremio::SourcePresentation::from_stream(&card) {
+        card["presentation"] = json!(presentation);
+    }
+    if let Some(height) = viptv_engine::stremio::source_quality_height(&card) {
+        card["quality_height"] = json!(height);
+    }
+    let languages = if (explicit_audio_present && audio.is_empty())
+        || (explicit_language_present
+            && audio.is_empty()
+            && card["reported_languages"]
+                .as_array()
+                .is_none_or(Vec::is_empty))
+    {
+        Vec::new()
+    } else {
+        viptv_engine::stremio::source_audio_languages(&card)
+    };
+    card["audio_languages"] = json!(languages);
+    if !languages.is_empty() {
+        card["audio_language_status"] = json!("unverified");
+    }
+    if let Some(detail) = viptv_engine::stremio::source_detail(&card) {
+        card["detail"] = json!(detail);
+    }
     card
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    #[test]
+    fn sanitized_source_metadata_batch_matches_shared_parser() {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../shared/engine/source-metadata-vectors.json"
+        ))
+        .unwrap();
+        let captured: Value = serde_json::from_str(include_str!(
+            "../shared/engine/source-metadata-captured.json"
+        ))
+        .unwrap();
+        let started = Instant::now();
+        let cases: Vec<_> = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(captured["cases"].as_array().unwrap())
+            .collect();
+        for case in &cases {
+            let card = source_card(
+                &case["source"],
+                "addon:fixture",
+                "opaque-grant",
+                "https://media.example/opaque",
+                &HashMap::new(),
+                &[],
+            );
+            assert_eq!(card["id"], "opaque-grant");
+            assert!(card.get("url").is_none());
+            for (field, expected) in case["expected"].as_object().unwrap() {
+                let actual = match field.as_str() {
+                    "height" => &card["quality_height"],
+                    "languages" => {
+                        let value = &card["audio_languages"];
+                        if value.is_null() && expected == &json!([]) {
+                            continue;
+                        }
+                        value
+                    }
+                    // Backend detail includes a stable fallback when all upstream text is absent.
+                    "detail" => &card["detail"],
+                    _ => &card["presentation"][field],
+                };
+                assert_eq!(actual, expected, "{} field {field}", case["id"]);
+            }
+        }
+        eprintln!(
+            "SANITIZED_SOURCE_METADATA_BATCH cases={} elapsed_ms={}",
+            cases.len(),
+            started.elapsed().as_millis()
+        );
+        assert!(started.elapsed().as_secs() < 60);
+    }
+
+    #[test]
+    fn metadata_hints_are_parsed_after_private_reflections_are_redacted() {
+        let raw = json!({"name":"Provider", "title":"Secret4K HEVC https://private.example/2160p.AVC.mkv", "description":"AAC key-secret-ENG", "audio_languages":["key-secret-ENG"], "behaviorHints":{"filename":"Film.1080p.mkv"}});
+        let card = source_card(
+            &raw,
+            "addon:fixture",
+            "grant",
+            "https://media.example/opaque",
+            &HashMap::new(),
+            &["Secret4K".into(), "key-secret-ENG".into()],
+        );
+        assert_eq!(card["quality_height"], 1080);
+        assert_eq!(card["presentation"]["video_codec"], "HEVC");
+        assert_eq!(card["presentation"]["container"], "mkv");
+        assert_eq!(card["audio_languages"], json!([]));
+        let public = card.to_string();
+        assert!(
+            !public.contains("Secret4K")
+                && !public.contains("key-secret")
+                && !public.contains("private.example")
+        );
+    }
 }

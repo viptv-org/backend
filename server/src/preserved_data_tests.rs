@@ -81,7 +81,7 @@ async fn favorite_aliases_and_retired_composite_history_remain_exact_without_run
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/iptv/live/family%3Aold/source",
+            "/api/iptv/live/family%3Aold/source",
             json!({})
         )
         .await
@@ -113,16 +113,20 @@ async fn historical_maximum_quality_is_archived_but_never_returned_or_updated_as
     )
     .await;
     assert!(read.get("quality").is_none());
+    let mut preferences = read["preferences"].clone();
+    preferences["preferred_audio_language"] = json!("ja");
     let (status, saved) = request(
         &app,
         "member-token-1",
         "PUT",
         "/api/profiles/1/preferences",
-        json!({"audio_language":"ja"}),
+        json!({"revision":0,"preferences":preferences}),
     )
     .await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert!(saved.get("quality").is_none());
+    // The legacy row is preserved verbatim; the typed snapshot carries the
+    // active policy separately.
     let stored: String = app
         .db
         .lock()
@@ -135,17 +139,31 @@ async fn historical_maximum_quality_is_archived_but_never_returned_or_updated_as
         .unwrap();
     let stored: Value = serde_json::from_str(&stored).unwrap();
     assert_eq!(stored["quality"], "480p");
-    assert_eq!(stored["audio_language"], "ja");
+    assert_eq!(
+        app.db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT value FROM engine_profile_preferences WHERE profile_id=1",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap()
+            .contains("\"preferred_audio_language\":\"ja\""),
+        true
+    );
+    // A retired "quality" field is rejected outright by the typed contract
+    // instead of the legacy client-update handshake.
     assert_eq!(
         request(
             &app,
             "member-token-1",
             "PUT",
             "/api/profiles/1/preferences",
-            json!({"quality":"1080p"})
+            json!({"revision":1,"preferences":{"quality":"1080p"}})
         )
         .await
-        .1["error_code"],
-        "client_update_required"
+        .0,
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY
     );
 }

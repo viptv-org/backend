@@ -3,7 +3,7 @@ use crate::{auth_integration_tests::fixture, test_support::request, *};
 async fn typed_profile_crud_preserves_ownership_avatar_and_primary_protection() {
     let app = fixture();
     let (status, list) =
-        request(&app, "member-token-1", "GET", "/api/v3/profiles", json!({})).await;
+        request(&app, "member-token-1", "GET", "/api/profiles", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{list}");
     assert_eq!(
         list["capabilities"]["profile_pin"]["availability"],
@@ -14,7 +14,7 @@ async fn typed_profile_crud_preserves_ownership_avatar_and_primary_protection() 
         &app,
         "member-token-1",
         "POST",
-        "/api/v3/profiles",
+        "/api/profiles",
         json!({"name":"Typed profile","avatar_id":"zayne"}),
     )
     .await;
@@ -22,7 +22,7 @@ async fn typed_profile_crud_preserves_ownership_avatar_and_primary_protection() 
     let id = profile["id"].as_str().unwrap();
     assert_eq!(profile["avatar_id"], "zayne");
     assert_eq!(profile["can_delete"], true);
-    let path = format!("/api/v3/profiles/{id}");
+    let path = format!("/api/profiles/{id}");
     let (status, renamed) = request(
         &app,
         "member-token-1",
@@ -73,7 +73,7 @@ async fn typed_profile_crud_preserves_ownership_avatar_and_primary_protection() 
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1",
+            "/api/profiles/1",
             json!({})
         )
         .await
@@ -106,7 +106,7 @@ async fn restricted_profile_management_uses_existing_account_parent_grant() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v3/profiles",
+        "/api/profiles",
         json!({"name":"Other profile"}),
     )
     .await;
@@ -116,7 +116,7 @@ async fn restricted_profile_management_uses_existing_account_parent_grant() {
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/parent/pin",
+            "/api/parent/pin",
             json!({"pin":"2468"})
         )
         .await
@@ -132,7 +132,7 @@ async fn restricted_profile_management_uses_existing_account_parent_grant() {
         )
         .unwrap();
     let (status, list) =
-        request(&app, "member-token-1", "GET", "/api/v3/profiles", json!({})).await;
+        request(&app, "member-token-1", "GET", "/api/profiles", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{list}");
     assert_eq!(
         list["capabilities"]["create"]["availability"],
@@ -151,7 +151,7 @@ async fn restricted_profile_management_uses_existing_account_parent_grant() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/bootstrap",
+        "/api/bootstrap",
         json!({}),
     )
     .await;
@@ -162,7 +162,7 @@ async fn restricted_profile_management_uses_existing_account_parent_grant() {
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles",
+            "/api/profiles",
             json!({"name":"Blocked"})
         )
         .await
@@ -173,7 +173,7 @@ async fn restricted_profile_management_uses_existing_account_parent_grant() {
         &app,
         "member-token-1",
         "POST",
-        "/api/v3/parent/unlock",
+        "/api/parent/unlock",
         json!({"pin":"2468"}),
     )
     .await;
@@ -183,7 +183,7 @@ async fn restricted_profile_management_uses_existing_account_parent_grant() {
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles",
+            "/api/profiles",
             json!({"name":"Allowed","avatar_id":"initial-blue"})
         )
         .await
@@ -195,7 +195,7 @@ async fn restricted_profile_management_uses_existing_account_parent_grant() {
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles",
+            "/api/profiles",
             json!({"name":"Unknown avatar","avatar_id":"invalid"})
         )
         .await
@@ -204,7 +204,77 @@ async fn restricted_profile_management_uses_existing_account_parent_grant() {
     );
 }
 #[tokio::test]
-async fn profile_preferences_are_private_independently_versioned_and_reject_stale_edits(){
- let app=fixture();let(status,defaults)=request(&app,"member-token-1","GET","/api/v3/profiles/1/preferences",Value::Null).await;assert_eq!(status,StatusCode::OK);assert_eq!(defaults["revision"],0);let mut prefs=defaults["preferences"].clone();prefs["preferred_audio_language"]=json!("en-US");prefs["max_quality_height"]=json!(1080);
- let(status,saved)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/preferences",json!({"revision":0,"preferences":prefs})).await;assert_eq!(status,StatusCode::OK);assert_eq!(saved["revision"],1);assert_eq!(request(&app,"member-token-1","PUT","/api/v3/profiles/1/preferences",json!({"revision":0,"preferences":prefs})).await.0,StatusCode::CONFLICT);assert_eq!(request(&app,"member-token-2","GET","/api/v3/profiles/1/preferences",Value::Null).await.0,StatusCode::FORBIDDEN);
+async fn profile_preferences_are_private_independently_versioned_and_reject_stale_edits() {
+    let app = fixture();
+    let (status, defaults) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/preferences",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(defaults["revision"], 0);
+    let mut prefs = defaults["preferences"].clone();
+    prefs["preferred_audio_language"] = json!("en-US");
+    prefs["max_quality_height"] = json!(1080);
+    let (status, saved) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/preferences",
+        json!({"revision":0,"preferences":prefs}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["revision"], 1);
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "PUT",
+            "/api/profiles/1/preferences",
+            json!({"revision":0,"preferences":prefs})
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        request(
+            &app,
+            "member-token-2",
+            "GET",
+            "/api/profiles/1/preferences",
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn profile_management_exposes_scalar_kids_and_the_actual_age_ceiling() {
+    let app = fixture();
+    let (status, normal) =
+        request(&app, "member-token-1", "GET", "/api/profiles", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(normal["profiles"][0]["kids"], false);
+    assert_eq!(normal["profiles"][0]["max_age"], 12);
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO kids_profiles(profile_id,enabled,max_age,revision)VALUES(1,1,7,1)",
+            [],
+        )
+        .unwrap();
+    let (status, kids) =
+        request(&app, "member-token-1", "GET", "/api/profiles", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{kids}");
+    assert_eq!(kids["profiles"][0]["kids"], true);
+    assert_eq!(kids["profiles"][0]["max_age"], 7);
+    assert!(kids["profiles"][0]["kids"].is_boolean());
 }

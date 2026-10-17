@@ -9,7 +9,7 @@ pub(super) fn request(v: &Value) -> Result {
         let (method, path) = match op {
             "nextEpisode" => ("POST", format!("{base}/continue/next")),
             "sources" => ("POST", "/api/streams".into()),
-            "sourcesV2" => ("POST", "/api/v2/streams".into()),
+            "sourcesV2" => ("POST", "/api/streams".into()),
             "sourcesPoll" | "sourcesPollV2" => {
                 body = Value::Null;
                 let id = text(v, "id");
@@ -18,7 +18,7 @@ pub(super) fn request(v: &Value) -> Result {
                 }
                 let after = v["after"].as_u64().unwrap_or(0);
                 let prefix = if op == "sourcesPollV2" {
-                    "/api/v2/streams"
+                    "/api/streams"
                 } else {
                     "/api/streams"
                 };
@@ -35,9 +35,9 @@ pub(super) fn request(v: &Value) -> Result {
                     return Err(CoreError::InvalidInput);
                 }
                 if op == "liveSourceV2" {
-                    ("POST", format!("/api/v2/iptv/live/{}/source", enc(id)))
+                    ("POST", format!("/api/iptv/live/{}/source", enc(id)))
                 } else {
-                    ("GET", format!("/api/v2/iptv/guide/{}", enc(id)))
+                    ("GET", format!("/api/iptv/guide/{}", enc(id)))
                 }
             }
             "saveProgress" => {
@@ -62,11 +62,11 @@ pub(super) fn request(v: &Value) -> Result {
             }
             "playbackProtocolV2" => {
                 body = Value::Null;
-                ("GET", "/api/v2/playback-protocol".into())
+                ("GET", "/api/playback-protocol".into())
             }
             "torrentRuntimeProtocol" => {
                 body = Value::Null;
-                ("GET", "/api/v2/torrent-runtime-protocol".into())
+                ("GET", "/api/torrent-runtime-protocol".into())
             }
             "playbackV2CancelRequest" => {
                 let id = text(v, "requestId");
@@ -74,16 +74,16 @@ pub(super) fn request(v: &Value) -> Result {
                     return Err(CoreError::InvalidInput);
                 }
                 body = Value::Null;
-                ("DELETE", format!("/api/v2/playback-requests/{id}"))
+                ("DELETE", format!("/api/playback-requests/{id}"))
             }
             "playbackV2" | "playbackV2DecodedStart" => {
                 body = playback_v2_request(&v["playback"])?;
                 (
                     "POST",
                     if op == "playbackV2DecodedStart" {
-                        "/api/v2/playback-decoder-start".into()
+                        "/api/playback-decoder-start".into()
                     } else {
-                        "/api/v2/playback".into()
+                        "/api/playback".into()
                     },
                 )
             }
@@ -101,7 +101,7 @@ pub(super) fn request(v: &Value) -> Result {
                     return Err(CoreError::InvalidInput);
                 }
                 body = Value::Null;
-                let path = format!("/api/v2/playback/{}", enc(id));
+                let path = format!("/api/playback/{}", enc(id));
                 match op {
                     "playbackV2Heartbeat" => {
                         body = json!({});
@@ -208,7 +208,7 @@ fn live_catalog_request(v: &Value, categories: bool) -> std::result::Result<Stri
         query += &format!("&cursor={}", enc(cursor));
     }
     Ok(format!(
-        "/api/v2/iptv/live/{}?{query}",
+        "/api/iptv/live/{}?{query}",
         if categories { "categories" } else { "channels" }
     ))
 }

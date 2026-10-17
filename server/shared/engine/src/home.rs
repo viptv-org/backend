@@ -23,7 +23,7 @@ pub async fn assemble(scope: Scope, requests: Vec<RowRequest>, budget: Duration)
         complete: false,
     };
     let mut pending = FuturesUnordered::new();
-    for (index, request) in requests.into_iter().take(12).enumerate() {
+    for (index, request) in requests.into_iter().take(16).enumerate() {
         snapshot.rows.push(HomeRow {browse:None,
             id: request.id,
             title: request.title,

@@ -16,7 +16,7 @@ pub(crate) fn snapshot(
     app.require_profile(&db, profile)?;
     lease.validate(&db)?;
     let configuration_revision = configuration_revision(&db, profile)?;
-    let queue = crate::continuation::queue(&db, profile, offset, limit)?;
+    let queue = crate::continuation::queue(&db, profile, 0, 50000)?;
     let items = kids::filter_items(
         &db,
         &lease.principal,
@@ -56,10 +56,11 @@ pub(crate) fn snapshot(
             card.subtitle = None;
         }
         crate::simkl::imports::enrich(&db, profile, &mut card)?;
-        super::super::source_integrations::merge_cached(
+        super::super::source_integrations::merge_cached_with_db(
             app,
             lease,
             configuration_revision,
+            &db,
             std::slice::from_mut(&mut card),
         );
         let previous_identity = previous.map(|record| record.identity);
@@ -70,7 +71,34 @@ pub(crate) fn snapshot(
             previous_identity,
         });
     }
-    let next_cursor = queue["next_offset"].as_u64().map(|n| n.to_string());
+    if queue["next_offset"].is_number() {
+        return Err("History exceeds its bounded item limit".into());
+    }
+    for (key, entry) in super::super::scoped_library::continuation_db(&db, app, profile)? {
+        entries.retain(|old| {
+            let mut card = old.record.card();
+            if let Some(parent) = &old.record.parent_identity {
+                card.identity = parent.clone();
+                card.parent_identity = None;
+            }
+            super::super::scoped_library::raw_key(&card).is_ok_and(|old| old != key)
+        });
+        entries.push(entry);
+    }
+    entries.sort_by(|a, b| {
+        b.record
+            .updated_at_millis
+            .cmp(&a.record.updated_at_millis)
+            .then_with(|| a.card.identity.id.cmp(&b.card.identity.id))
+    });
+    let total = entries.len();
+    let next_cursor =
+        (offset as usize + (limit as usize) < total).then(|| (offset + limit).to_string());
+    let entries = entries
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect();
     let revision =
         configuration_revision.saturating_add(super::super::history::revision(&db, profile)?);
     Ok(ContinuationPage {

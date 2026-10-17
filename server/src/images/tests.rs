@@ -4,13 +4,13 @@ fn descriptors_accept_only_public_provider_images_and_rewrite_asset_fields_only(
     for href in [
         "https://simkl.in/episodes/12/abcdef_w.webp",
         "https://wsrv.nl/?url=https://simkl.in/episodes/12/abcdef_w.webp&q=90",
-        "/api/v3/images/simkl/episodes/12/abcdef_w.webp",
-        "https://native.example:18451/api/v3/images/simkl/episodes/12/abcdef_w.webp",
+        "/api/images/simkl/episodes/12/abcdef_w.webp",
+        "https://native.example:18451/api/images/simkl/episodes/12/abcdef_w.webp",
     ] {
         let image = descriptor::Image::href(href).unwrap();
         assert_eq!(
             image.proxy(),
-            "/api/v3/images/simkl/episodes/12/abcdef_w.webp"
+            "/api/images/simkl/episodes/12/abcdef_w.webp"
         );
     }
     for href in [
@@ -35,7 +35,7 @@ fn descriptors_accept_only_public_provider_images_and_rewrite_asset_fields_only(
     rewrite(&mut value, "proxy");
     assert_eq!(
         value["card"]["landscape"],
-        "/api/v3/images/simkl/episodes/12/abcdef_w.webp"
+        "/api/images/simkl/episodes/12/abcdef_w.webp"
     );
     assert_eq!(
         value["card"]["description"],
@@ -59,7 +59,7 @@ async fn negotiation_preserves_legacy_and_changes_only_opt_in_json_assets() {
     for (mode, prefix) in [
         (None, "https://wsrv.nl/"),
         (Some("direct"), "https://simkl.in/"),
-        (Some("proxy"), "/api/v3/images/simkl/"),
+        (Some("proxy"), "/api/images/simkl/"),
     ] {
         let mut request = axum::http::Request::builder().uri("/");
         if let Some(mode) = mode {
@@ -81,7 +81,7 @@ async fn negotiation_preserves_legacy_and_changes_only_opt_in_json_assets() {
     let response = crate::router(app, None)
         .oneshot(
             axum::http::Request::builder()
-                .uri("/api/v3/images/simkl/other/a_w.webp")
+                .uri("/api/images/simkl/other/a_w.webp")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -98,7 +98,7 @@ async fn public_image_preflight_requires_no_account_and_allows_public_image_head
         .oneshot(
             axum::http::Request::builder()
                 .method("OPTIONS")
-                .uri("/api/v3/images/simkl/episodes/12/abcdef_w.webp")
+                .uri("/api/images/simkl/episodes/12/abcdef_w.webp")
                 .header(header::ORIGIN, "https://public-view.example")
                 .header(
                     header::ACCESS_CONTROL_REQUEST_HEADERS,

@@ -312,9 +312,9 @@ async fn public_pairing_qr_guesses_use_a_global_rate_limit() {
 async fn profile_lists_are_filtered_and_new_profiles_are_granted_atomically() {
     let a = fixture();
     let (_, first) = request(&a, "member-token-1", "GET", "/api/profiles", Value::Null).await;
-    assert_eq!(first.as_array().unwrap().len(), 1);
+    assert_eq!(first["profiles"].as_array().unwrap().len(), 1);
     let (_, second) = request(&a, "member-token-2", "GET", "/api/profiles", Value::Null).await;
-    assert_eq!(second, json!([]));
+    assert_eq!(second["profiles"], json!([]));
     let (status, profile) = request(
         &a,
         "member-token-2",
@@ -329,7 +329,7 @@ async fn profile_lists_are_filtered_and_new_profiles_are_granted_atomically() {
         .or_else(|| profile["id"].as_str()?.parse().ok())
         .unwrap();
     let (_, second) = request(&a, "member-token-2", "GET", "/api/profiles", Value::Null).await;
-    assert_eq!(second, json!([profile]));
+    assert_eq!(second["profiles"], json!([profile]));
     a.db.lock()
         .unwrap()
         .execute(
@@ -338,7 +338,11 @@ async fn profile_lists_are_filtered_and_new_profiles_are_granted_atomically() {
         )
         .unwrap();
     for suffix in ["favorites", "progress"] {
-        let path = format!("/api/profiles/{id}/{suffix}");
+        let path = if suffix == "progress" {
+            format!("/api/profiles/{id}/progress/page")
+        } else {
+            format!("/api/profiles/{id}/{suffix}")
+        };
         assert_eq!(
             request(&a, "member-token-1", "GET", &path, Value::Null)
                 .await
@@ -372,7 +376,7 @@ async fn favorites_and_progress_require_the_exact_selected_profile() {
     let (status, profiles) =
         request(&a, "member-token-1", "GET", "/api/profiles", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(profiles.as_array().unwrap().len(), 2);
+    assert_eq!(profiles["profiles"].as_array().unwrap().len(), 2);
     assert_eq!(
         request(
             &a,
@@ -388,34 +392,58 @@ async fn favorites_and_progress_require_the_exact_selected_profile() {
 
     let favorite = json!({"id":"tt-favorite","type":"movie","name":"Favorite"});
     let progress = json!({
-        "id":"tt-progress",
-        "type":"movie",
-        "name":"Progress",
-        "position":12.0,
-        "duration":120.0
+        "record": {
+            "identity": {"id":"tt-progress","kind":"movie","ids":[],"episode":null,"edition":null},
+            "provider_id": "fixture",
+            "title": "Progress",
+            "poster": null,
+            "landscape": null,
+            "position_millis": 12_000,
+            "duration_millis": 120_000,
+            "updated_at_millis": 0,
+            "completed_at_millis": null
+        },
+        "ended": false
     });
-    for (suffix, body) in [("favorites", favorite), ("progress", progress)] {
-        let selected_path = format!("/api/profiles/1/{suffix}");
+    for (put_path, get_path, body, items_key) in [
+        (
+            "/api/profiles/1/favorites",
+            "/api/profiles/1/favorites",
+            favorite,
+            None,
+        ),
+        (
+            "/api/profiles/1/progress",
+            "/api/profiles/1/progress/page",
+            progress,
+            Some("items"),
+        ),
+    ] {
         assert_eq!(
-            request(&a, "member-token-1", "PUT", &selected_path, body.clone(),)
+            request(&a, "member-token-1", "PUT", put_path, body.clone(),)
                 .await
                 .0,
             StatusCode::OK
         );
         let (status, selected_items) =
-            request(&a, "member-token-1", "GET", &selected_path, Value::Null).await;
+            request(&a, "member-token-1", "GET", get_path, Value::Null).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(selected_items.as_array().unwrap().len(), 1);
+        let items = match items_key {
+            Some(key) => selected_items[key].as_array().unwrap().clone(),
+            None => selected_items.as_array().unwrap().clone(),
+        };
+        assert_eq!(items.len(), 1);
 
-        let other_owned_path = format!("/api/profiles/2/{suffix}");
+        let other_owned_put = put_path.replace("/profiles/1/", "/profiles/2/");
+        let other_owned_get = get_path.replace("/profiles/1/", "/profiles/2/");
         assert_eq!(
-            request(&a, "member-token-1", "GET", &other_owned_path, Value::Null,)
+            request(&a, "member-token-1", "GET", &other_owned_get, Value::Null,)
                 .await
                 .0,
             StatusCode::FORBIDDEN
         );
         assert_eq!(
-            request(&a, "member-token-1", "PUT", &other_owned_path, body,)
+            request(&a, "member-token-1", "PUT", &other_owned_put, body,)
                 .await
                 .0,
             StatusCode::FORBIDDEN
@@ -427,11 +455,11 @@ async fn favorites_and_progress_require_the_exact_selected_profile() {
             "member-token-1",
             "PUT",
             "/api/profiles/1/progress",
-            json!({"id":"tt-invalid","type":"movie","name":"Bad","position":-1.0,"duration":100.0})
+            json!({"record":{"identity":{"id":"tt-invalid","kind":"movie","ids":[],"episode":null,"edition":null},"provider_id":"fixture","title":"Bad","poster":null,"landscape":null,"position_millis":-1,"duration_millis":100_000,"updated_at_millis":0,"completed_at_millis":null},"ended":false})
         )
         .await
         .0,
-        StatusCode::BAD_REQUEST
+        StatusCode::UNPROCESSABLE_ENTITY
     );
 
     let db = a.db.lock().unwrap();
@@ -485,8 +513,8 @@ async fn members_cannot_administer_providers_addons_or_other_resources() {
     });
     owned.own_resource("job", "private-job");
     for path in [
-        "/api/v2/streams/private-job",
-        "/api/v2/streams/private-job/events",
+        "/api/streams/private-job",
+        "/api/streams/private-job/events",
     ] {
         assert_eq!(
             request(&a, "member-token-2", "GET", path, Value::Null)
@@ -536,7 +564,7 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
     );
     a.jobs.lock().unwrap().insert(
         "profile-job".into(),
-        Arc::new(Job {
+        Arc::new(Job {metadata_proof:None,
         source_slots:std::sync::atomic::AtomicUsize::new(0),
         cancelled: std::sync::atomic::AtomicBool::new(false),
         configuration_revision: None,
@@ -556,7 +584,7 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
             &a,
             "member-token-1",
             "GET",
-            "/api/v2/streams/profile-job",
+            "/api/streams/profile-job",
             Value::Null
         )
         .await
@@ -571,10 +599,10 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
         )
         .unwrap();
     for (method, path) in [
-        ("GET", "/api/v2/streams/profile-job"),
-        ("GET", "/api/v2/streams/profile-job/events"),
-        ("POST", "/api/v2/playback/profile-playback/heartbeat"),
-        ("DELETE", "/api/v2/playback/profile-playback"),
+        ("GET", "/api/streams/profile-job"),
+        ("GET", "/api/streams/profile-job/events"),
+        ("POST", "/api/playback/profile-playback/heartbeat"),
+        ("DELETE", "/api/playback/profile-playback"),
     ] {
         assert_eq!(
             request(&a, "member-token-1", method, path, Value::Null)
@@ -593,7 +621,7 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
             &a,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             json!({"request_id":"private-scope","stream_id":cards[0]["id"],"client":{"platform":"android","can_play_direct":true,"max_width":1280,"max_height":720,"video_codecs":["h264"],"audio_codecs":["aac"]}})
         )
         .await
@@ -615,7 +643,7 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
         )
         .unwrap();
     for path in [
-        "/api/v2/streams/profile-job",
+        "/api/streams/profile-job",
         "/api/profiles/1/favorites",
         "/api/profiles/1/progress",
     ] {
@@ -896,10 +924,10 @@ async fn same_account_and_profile_other_session_cannot_reuse_owned_resources() {
     owner.own_resource("job", "family-job");
     owner.own_resource("playback", "family-playback");
     for (method, path) in [
-        ("GET", "/api/v2/streams/family-job"),
-        ("GET", "/api/v2/streams/family-job/events"),
-        ("POST", "/api/v2/playback/family-playback/heartbeat"),
-        ("DELETE", "/api/v2/playback/family-playback"),
+        ("GET", "/api/streams/family-job"),
+        ("GET", "/api/streams/family-job/events"),
+        ("POST", "/api/playback/family-playback/heartbeat"),
+        ("DELETE", "/api/playback/family-playback"),
     ] {
         assert_eq!(
             request(&a, "other-session-token", method, path, Value::Null)
@@ -923,7 +951,7 @@ async fn same_account_and_profile_other_session_cannot_reuse_owned_resources() {
             &a,
             "other-session-token",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             json!({"request_id":"private-scope","stream_id":cards[0]["id"],"client":{"platform":"android","can_play_direct":true,"max_width":1280,"max_height":720,"video_codecs":["h264"],"audio_codecs":["aac"]}})
         )
         .await
@@ -945,8 +973,8 @@ async fn account_media_requires_selected_profile_and_ignores_profile_header() {
         ("GET", "/api/catalogs"),
         ("GET", "/api/discover"),
         ("GET", "/api/meta/movie/tt1"),
-        ("POST", "/api/v2/streams"),
-        ("GET", "/api/v2/streams/job"),
+        ("POST", "/api/streams"),
+        ("GET", "/api/streams/job"),
         ("GET", "/api/profiles/1/favorites"),
         ("PUT", "/api/profiles/1/progress"),
     ] {
@@ -1084,7 +1112,7 @@ async fn addons_are_account_shared_and_cross_account_mutations_are_isolated() {
             &a,
             &format!("member-token-{owner}"),
             "GET",
-            "/api/v2/addons",
+            "/api/addons",
             Value::Null,
         )
         .await;
@@ -1097,7 +1125,7 @@ async fn addons_are_account_shared_and_cross_account_mutations_are_isolated() {
         &a,
         "member-token-1",
         "PATCH",
-        "/api/v2/addons/2",
+        "/api/addons/2",
         json!({"enabled":false}),
     )
     .await;
@@ -1107,11 +1135,11 @@ async fn addons_are_account_shared_and_cross_account_mutations_are_isolated() {
         &a,
         "member-token-1",
         "DELETE",
-        "/api/v2/addons/2",
+        "/api/addons/2",
         Value::Null,
     )
     .await;
-    let (_, other) = request(&a, "member-token-2", "GET", "/api/v2/addons", Value::Null).await;
+    let (_, other) = request(&a, "member-token-2", "GET", "/api/addons", Value::Null).await;
     assert_eq!(other["items"][0]["enabled"], true);
     let (_, catalogs) = request(&a, "member-token-1", "GET", "/api/catalogs", Value::Null).await;
     assert_eq!(catalogs.as_array().unwrap().len(), 1);
@@ -1157,7 +1185,7 @@ async fn household_profile_deletion_protects_primary_and_revokes_selected_resour
             "member-token-1",
             "PUT",
             &format!("/api/profiles/{id}/progress"),
-            json!({"id":"movie","type":"movie","name":"Test","position":20,"duration":100})
+            json!({"record":{"identity":{"id":"movie","kind":"movie","ids":[],"episode":null,"edition":null},"provider_id":"fixture","title":"Test","poster":null,"landscape":null,"position_millis":20_000,"duration_millis":100_000,"updated_at_millis":0,"completed_at_millis":null}})
         )
         .await
         .0,
@@ -1212,7 +1240,7 @@ async fn household_profile_deletion_protects_primary_and_revokes_selected_resour
             &a,
             "member-token-1",
             "GET",
-            &format!("/api/profiles/{id}/progress"),
+            &format!("/api/profiles/{id}/progress/page"),
             Value::Null
         )
         .await
@@ -1223,8 +1251,8 @@ async fn household_profile_deletion_protects_primary_and_revokes_selected_resour
         .resource_lease("playback", "deleted-profile-media")
         .is_none());
     let (_, profiles) = request(&a, "member-token-1", "GET", "/api/profiles", Value::Null).await;
-    assert_eq!(profiles.as_array().unwrap().len(), 1);
-    assert_eq!(profiles[0]["is_primary"], true);
+    assert_eq!(profiles["profiles"].as_array().unwrap().len(), 1);
+    assert_eq!(profiles["profiles"][0]["is_primary"], true);
 }
 
 #[tokio::test]
@@ -1239,54 +1267,46 @@ async fn playback_preferences_are_scoped_validated_and_share_autoplay_setting() 
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(defaults["audio_language"], "en");
-    assert_eq!(defaults["autoplay"], true);
+    assert_eq!(defaults["preferences"]["subtitles_enabled"], true);
+    assert_eq!(defaults["preferences"]["source_selection"], "ask");
+    assert_eq!(defaults["revision"], 0);
     assert_eq!(
         request(
             &a,
             "member-token-2",
             "PUT",
             "/api/profiles/1/preferences",
-            json!({"autoplay":false})
+            json!({"revision":0,"preferences":defaults["preferences"]})
         )
         .await
         .0,
         StatusCode::FORBIDDEN
     );
-    let (status, saved) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"audio_language":"ja","subtitles_enabled":true,"subtitle_size":"large","quality":"720p","autoplay":false})).await;
+    let mut updated = defaults["preferences"].clone();
+    updated["preferred_audio_language"] = json!("ja");
+    updated["max_quality_height"] = json!(720);
+    updated["subtitle_font_scale"] = json!(1.25);
+    let (status, saved) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":0,"preferences":updated})).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(saved["audio_language"], "ja");
-    assert_eq!(saved["subtitle_language"], "en");
-    // An on/off client derives the mode; a sent mode decides subtitles_enabled.
-    assert_eq!(saved["subtitle_mode"], "always");
-    let (_, foreign) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"subtitle_mode":"foreign"})).await;
-    assert_eq!((foreign["subtitle_mode"].as_str(), foreign["subtitles_enabled"].as_bool()), (Some("foreign"), Some(true)));
-    let (_, still) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"subtitles_enabled":true})).await;
-    assert_eq!(still["subtitle_mode"], "foreign");
-    let (_, off) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"subtitles_enabled":false})).await;
-    assert_eq!(off["subtitle_mode"], "never");
-    assert_eq!(request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"subtitle_mode":"sometimes"})).await.0, StatusCode::BAD_REQUEST);
-    let (_, saved) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"subtitle_mode":"always"})).await;
-    let (_, autoplay) = request(
-        &a,
-        "member-token-1",
-        "GET",
-        "/api/profiles/1/continue/settings",
-        Value::Null,
-    )
-    .await;
-    assert_eq!(autoplay["autoplay"], false);
+    assert_eq!(saved["preferences"]["preferred_audio_language"], "ja");
+    assert_eq!(saved["preferences"]["max_quality_height"], 720);
+    assert_eq!(saved["revision"], 1);
+    // A stale revision is rejected with a conflict.
     assert_eq!(
-        request(
-            &a,
-            "member-token-1",
-            "PUT",
-            "/api/profiles/1/preferences",
-            json!({"quality":"potato"})
-        )
-        .await
-        .0,
+        request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":0,"preferences":updated})).await.0,
         StatusCode::CONFLICT
+    );
+    // Values that fail validation are rejected.
+    let mut invalid = updated.clone();
+    invalid["max_quality_height"] = json!(123);
+    assert_eq!(
+        request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":1,"preferences":invalid})).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    // Unknown fields are rejected.
+    assert_eq!(
+        request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":1,"preferences":{"subtitles_enabled":true,"source_selection":"ask","autoplay":false}})).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
     );
     assert_eq!(
         request(
@@ -1367,7 +1387,7 @@ async fn kids_policy_requires_parent_pin_and_blocks_unknown_content_and_exit() {
             &a,
             "member-token-1",
             "POST",
-            "/api/v2/streams",
+            "/api/streams",
             json!({"type":"movie","id":"adult","name":"Kids cartoon","contentRating":"G"})
         )
         .await
@@ -1499,7 +1519,7 @@ async fn library_pages_and_atomic_toggle_are_profile_scoped() {
 #[tokio::test]
 async fn library_corrections_update_history_and_continue_without_losing_source() {
     let a = fixture();
-    let episode = json!({"id":"opaque-episode","type":"series","name":"Series","series_id":"opaque-series","season":2,"episode":3,"position":35,"duration":100,"source_addon_id":"provider:1","source_fingerprint":"stable"});
+    let episode = json!({"record":{"identity":{"id":"opaque-episode","kind":"series","ids":[],"episode":{"order":"aired","season":2,"episode":3},"edition":null},"provider_id":"fixture","title":"Series","poster":null,"landscape":null,"position_millis":35_000,"duration_millis":100_000,"updated_at_millis":0,"completed_at_millis":null,"parent_identity":{"id":"opaque-series","kind":"series","ids":[],"episode":null,"edition":null}}});
     assert_eq!(
         request(
             &a,
@@ -1512,8 +1532,7 @@ async fn library_corrections_update_history_and_continue_without_losing_source()
         .0,
         StatusCode::OK
     );
-    let mut correction = episode.clone();
-    correction["action"] = json!("watched");
+    let mut correction = json!({"id":"opaque-episode","type":"series","name":"Series","series_id":"opaque-series","season":2,"episode":3,"duration":100,"source_addon_id":"provider:1","source_fingerprint":"stable","action":"watched"});
     assert_eq!(
         request(
             &a,
@@ -1554,12 +1573,12 @@ async fn library_corrections_update_history_and_continue_without_losing_source()
         &a,
         "member-token-1",
         "GET",
-        "/api/profiles/1/continue/page",
+        "/api/profiles/1/continue",
         Value::Null,
     )
     .await;
-    assert_eq!(queue["items"][0]["id"], "opaque-episode");
-    assert_eq!(queue["items"][0]["position"], 0.0);
+    assert_eq!(queue["entries"][0]["record"]["identity"]["id"], "opaque-episode");
+    assert_eq!(queue["entries"][0]["record"]["position_millis"], 0);
     correction["action"] = json!("position");
     correction["position"] = json!(24.0);
     assert_eq!(
@@ -1614,7 +1633,7 @@ async fn library_corrections_update_history_and_continue_without_losing_source()
 async fn episode_history_is_scoped_to_the_open_series() {
     let a = fixture();
     for (id, series) in [("a:1", "a"), ("b:1", "b")] {
-        assert_eq!(request(&a,"member-token-1","PUT","/api/profiles/1/progress",json!({"id":id,"type":"series","name":series,"series_id":series,"season":1,"episode":1,"position":20,"duration":20})).await.0,StatusCode::OK);
+        assert_eq!(request(&a,"member-token-1","PUT","/api/profiles/1/progress",json!({"record":{"identity":{"id":id,"kind":"series","ids":[],"episode":{"order":"aired","season":1,"episode":1},"edition":null},"provider_id":"fixture","title":series,"poster":null,"landscape":null,"position_millis":20_000,"duration_millis":20_000,"updated_at_millis":0,"completed_at_millis":null,"parent_identity":{"id":series,"kind":"series","ids":[],"episode":null,"edition":null}}})).await.0,StatusCode::OK);
     }
     let (status, items) = request(
         &a,
@@ -1659,12 +1678,12 @@ async fn manual_watched_does_not_invent_an_episode_duration() {
         &a,
         "member-token-1",
         "GET",
-        "/api/profiles/1/continue/page",
+        "/api/profiles/1/continue",
         Value::Null,
     )
     .await;
-    assert_eq!(queue["items"][0]["queue_status"], "pending");
-    assert_eq!(request(&a,"member-token-1","PUT","/api/profiles/1/progress",json!({"id":"unknown-duration","type":"series","name":"Show","series_id":"show","position":10,"duration":100})).await.0,StatusCode::OK);
+    assert_eq!(queue["entries"][0]["status"], "Pending");
+    assert_eq!(request(&a,"member-token-1","PUT","/api/profiles/1/progress",json!({"record":{"identity":{"id":"unknown-duration","kind":"series","ids":[],"episode":{"order":"aired","season":1,"episode":1},"edition":null},"provider_id":"fixture","title":"Show","poster":null,"landscape":null,"position_millis":10_000,"duration_millis":100_000,"updated_at_millis":0,"completed_at_millis":null,"parent_identity":{"id":"show","kind":"series","ids":[],"episode":null,"edition":null}}})).await.0,StatusCode::OK);
     let (_, history) = request(
         &a,
         "member-token-1",
@@ -1714,16 +1733,16 @@ async fn playback_after_a_correction_becomes_the_current_episode_immediately() {
     for _ in 0..3 {
         assert_eq!(request(&a,"member-token-1","PUT","/api/profiles/1/progress/correct",json!({"id":"ep1","type":"series","name":"Show","series_id":"show","season":1,"episode":1,"action":"watched"})).await.0,StatusCode::OK);
     }
-    assert_eq!(request(&a,"member-token-1","PUT","/api/profiles/1/progress",json!({"id":"ep2","type":"series","name":"Show","series_id":"show","season":1,"episode":2,"position":5,"duration":100})).await.0,StatusCode::OK);
+    assert_eq!(request(&a,"member-token-1","PUT","/api/profiles/1/progress",json!({"record":{"identity":{"id":"ep2","kind":"series","ids":[],"episode":{"order":"aired","season":1,"episode":2},"edition":null},"provider_id":"fixture","title":"Show","poster":null,"landscape":null,"position_millis":5_000,"duration_millis":100_000,"updated_at_millis":0,"completed_at_millis":null,"parent_identity":{"id":"show","kind":"series","ids":[],"episode":null,"edition":null}}})).await.0,StatusCode::OK);
     let (_, queue) = request(
         &a,
         "member-token-1",
         "GET",
-        "/api/profiles/1/continue/page",
+        "/api/profiles/1/continue",
         Value::Null,
     )
     .await;
-    assert_eq!(queue["items"][0]["id"], "ep2");
+    assert_eq!(queue["entries"][0]["record"]["identity"]["id"], "ep2");
 }
 
 async fn kids_metadata_fixture() -> (App, tokio::task::JoinHandle<()>) {
@@ -1748,7 +1767,7 @@ async fn kids_metadata_fixture() -> (App, tokio::task::JoinHandle<()>) {
             }
             if id == "large" {
                 meta["contentRating"] = json!("TV-Y");
-                meta["videos"] = json!((0..2000).map(|n|json!({"id":format!("large-{n}"),"season":1,"episode":n+1,"title":format!("Episode {n}"),"description":"x".repeat(1024)})).collect::<Vec<_>>());
+                meta["videos"] = json!((0..2000).map(|n|json!({"id":format!("large-{n}"),"season":1,"episode":n+1,"title":format!("Episode {n}"),"description":"x".repeat(512),"contentRating":"TV-Y"})).collect::<Vec<_>>());
             }
             if id == "safe" || id == "series" {
                 meta["contentRating"] = json!("TV-Y");
@@ -1767,11 +1786,21 @@ async fn kids_metadata_fixture() -> (App, tokio::task::JoinHandle<()>) {
             axum::Json(json!({"meta":meta}))
         }),
     );
-    let service = service.route("/catalog/:kind/:catalog/:extra", get(||async {axum::Json(json!({"metas":[{"id":"safe","type":"movie","name":"Trusted safe","contentRating":"TV-Y"},{"id":"unknown","type":"movie","name":"Unknown"},{"id":"adult","type":"movie","name":"Adult","contentRating":"TV-MA"}]}))}));
+    let metas = move |axum::extract::Path((kind, _)): axum::extract::Path<(String, String)>| {
+        let metas = if kind == "series" {
+            json!({"metas":[{"id":"safe","type":"series","name":"Trusted safe series","contentRating":"TV-Y"},{"id":"unknown","type":"series","name":"Unknown series"},{"id":"adult","type":"series","name":"Adult series","contentRating":"TV-MA"}]})
+        } else {
+            json!({"metas":[{"id":"safe","type":"movie","name":"Trusted safe","contentRating":"TV-Y"},{"id":"unknown","type":"movie","name":"Unknown"},{"id":"adult","type":"movie","name":"Adult","contentRating":"TV-MA"}]})
+        };
+        async move { axum::Json(metas) }
+    };
+    let service = service
+        .route("/catalog/:kind/:catalog/:extra", get(metas))
+        .route("/catalog/:kind/:catalog", get(metas));
     let task = tokio::spawn(async move { axum::serve(listener, service).await.unwrap() });
     {
         let db = a.db.lock().unwrap();
-        db.execute("INSERT INTO addons(account_id,name,manifest_url,manifest) VALUES(1,'Fixture',?1,?2)",params![format!("http://{address}/manifest.json"),json!({"id":"fixture","name":"Fixture","resources":["meta","catalog"],"types":["movie","series"],"catalogs":[{"id":"search","type":"movie","extra":[{"name":"search","isRequired":true}]}]}).to_string()]).unwrap();
+        db.execute("INSERT INTO addons(account_id,name,manifest_url,manifest) VALUES(1,'Fixture',?1,?2)",params![format!("http://{address}/manifest.json"),json!({"id":"fixture","name":"Fixture","resources":["meta","catalog"],"types":["movie","series"],"catalogs":[{"id":"top","type":"movie"},{"id":"top-series","type":"series"},{"id":"search","type":"movie","extra":[{"name":"search","isRequired":true}]}]}).to_string()]).unwrap();
         let hash = format!("{:x}", Sha256::digest(b"parent-token"));
         db.execute("INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,profile_id,kind,device_name,access_expires,refresh_expires,created_at) VALUES('parent',1,?1,'parent-refresh','unused',1,'browser','parent',?2,?2,0)",params![hash,util::now()+3600]).unwrap();
     }
@@ -1830,6 +1859,33 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
         json!({"profile_id":id}),
     )
     .await;
+    // The parent's own browsing seeds the trust store with the catalog items.
+    let (_, parent_discover) = request(
+        &a,
+        "parent-token",
+        "GET",
+        "/api/discover?type=movie",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(parent_discover["cards"].as_array().unwrap().len(), 3);
+    // Origin-scoped detail fetches seed the trust store for the child's
+    // restricted catalog lookups: each card carries the stamped origin and is
+    // replayed as the lookup expectation.
+    for card in parent_discover["cards"].as_array().unwrap() {
+        let id = card["identity"]["id"].as_str().unwrap();
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        query.append_pair("card", &card.to_string());
+        let (status, _) = request(
+            &a,
+            "parent-token",
+            "GET",
+            &format!("/api/meta/movie/{id}?{}", query.finish()),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
     for title in ["safe", "adult", "unknown"] {
         request(
             &a,
@@ -1861,11 +1917,11 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
     )
     .await;
     assert_eq!(
-        discover["metas"]
+        discover["cards"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|v| v["id"].as_str().unwrap())
+            .map(|v| v["identity"]["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
         vec!["safe"]
     );
@@ -1882,11 +1938,11 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
     assert!(favorites["next_offset"].is_null());
     for (path, body) in [
         (
-            "/api/v2/streams".to_string(),
+            "/api/streams".to_string(),
             json!({"id":"adult","type":"movie","name":"safe","contentRating":"TV-Y"}),
         ),
         (
-            "/api/v2/streams".to_string(),
+            "/api/streams".to_string(),
             json!({"id":"unknown-episode","type":"series","series_id":"series","season":1,"episode":1,"name":"safe"}),
         ),
         (
@@ -1917,7 +1973,7 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        request(&a, "member-token-1", "GET", "/api/v2/addons", Value::Null)
+        request(&a, "member-token-1", "GET", "/api/addons", Value::Null)
             .await
             .1["error_code"],
         "parent_required"
@@ -1938,32 +1994,43 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
         )
         .await
         .0,
-        StatusCode::BAD_REQUEST
+        StatusCode::UNPROCESSABLE_ENTITY
     );
+    let (_, unknown_card) = request(
+        &a,
+        "parent-token",
+        "GET",
+        "/api/meta/movie/unknown",
+        Value::Null,
+    )
+    .await;
     assert_eq!(
         request(
             &a,
             "parent-token",
             "POST",
             &format!("/api/profiles/{id}/approvals"),
-            json!({"id":"unknown","type":"movie","approved":true})
+            json!({"id":"unknown","type":"movie","approved":true,"card":unknown_card["item"]})
         )
         .await
         .0,
         StatusCode::OK
     );
-    assert_eq!(
-        request(
-            &a,
-            "member-token-1",
-            "GET",
-            "/api/meta/movie/unknown",
-            Value::Null
-        )
-        .await
-        .1["meta"]["name"],
-        "Trusted unknown"
+    let mut unknown_query = url::form_urlencoded::Serializer::new(String::new());
+    unknown_query.append_pair(
+        "metadata_origin",
+        &unknown_card["item"]["metadata_origin"].to_string(),
     );
+    unknown_query.append_pair("card", &unknown_card["item"].to_string());
+    let (_, member_unknown) = request(
+        &a,
+        "member-token-1",
+        "GET",
+        &format!("/api/meta/movie/unknown?{}", unknown_query.finish()),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(member_unknown["item"]["title"], "Trusted unknown");
     // A known episode's client-supplied parent/label is replaced, not trusted.
     assert_eq!(request(&a,"member-token-1","PUT",&format!("/api/profiles/{id}/progress/correct"),json!({"id":"episode-one","type":"series","series_id":"adultseries","name":"Adult spoof","action":"watched"})).await.0,StatusCode::OK);
     let (_, history) = request(
@@ -1975,13 +2042,21 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
     )
     .await;
     assert_eq!(history[0]["series_id"], "series");
+    let (_, series_card) = request(
+        &a,
+        "parent-token",
+        "GET",
+        "/api/meta/series/series",
+        Value::Null,
+    )
+    .await;
     assert_eq!(
         request(
             &a,
             "parent-token",
             "POST",
             &format!("/api/profiles/{id}/approvals"),
-            json!({"id":"series","type":"series","approved":true})
+            json!({"id":"series","type":"series","approved":true,"card":series_card["item"]})
         )
         .await
         .0,
@@ -1991,7 +2066,7 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
         &a,
         "member-token-1",
         "POST",
-        "/api/v2/streams",
+        "/api/streams",
         json!({"id":"episode-one","type":"series"}),
     )
     .await;
@@ -2015,7 +2090,7 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
             "member-token-1",
             "GET",
             &format!(
-                "/api/v2/streams/{}?after=0",
+                "/api/streams/{}?after=0",
                 old_job["id"].as_str().unwrap()
             ),
             Value::Null
@@ -2029,7 +2104,7 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
             &a,
             "member-token-1",
             "POST",
-            "/api/v2/streams",
+            "/api/streams",
             json!({"id":"episode-one","type":"series"})
         )
         .await
@@ -2183,7 +2258,7 @@ async fn kids_policy_changes_revoke_already_issued_resources() {
         &a,
         "member-token-1",
         "POST",
-        "/api/v2/streams",
+        "/api/streams",
         json!({"type":"movie","id":"safe"}),
     )
     .await;
@@ -2202,7 +2277,7 @@ async fn kids_policy_changes_revoke_already_issued_resources() {
             &a,
             "member-token-1",
             "GET",
-            &format!("/api/v2/streams/{job_id}?after=0"),
+            &format!("/api/streams/{job_id}?after=0"),
             Value::Null
         )
         .await
@@ -2224,14 +2299,28 @@ async fn kids_large_series_preserves_parent_response_and_exact_bounded_episode_m
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(original["meta"]["videos"].as_array().unwrap().len(), 2000);
+    // Detail episodes are served page-by-page; the full membership bound is
+    // enforced by the progress checks below.
+    assert_eq!(original["episodes"].as_array().unwrap().len(), 24);
     assert_eq!(
-        original["meta"]["videos"][1999]["description"]
+        original["episodes"][23]["description"]
             .as_str()
             .unwrap()
             .len(),
-        1024
+        512
     );
+    // Replay the parent's card so the scoped trust store observes the series.
+    let mut scoped_query = url::form_urlencoded::Serializer::new(String::new());
+    scoped_query.append_pair("card", &original["item"].to_string());
+    let (status, _) = request(
+        &a,
+        "parent-token",
+        "GET",
+        &format!("/api/meta/series/large?{}", scoped_query.finish()),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
     request(
         &a,
         "parent-token",
@@ -2269,6 +2358,33 @@ async fn kids_large_series_preserves_parent_response_and_exact_bounded_episode_m
         json!({"profile_id":id}),
     )
     .await;
+    // The parent's series browsing seeds the scoped trust store before
+    // restriction: each discovered card is replayed as a detail lookup.
+    let (status, parent_series) = request(
+        &a,
+        "parent-token",
+        "GET",
+        "/api/discover?type=series",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(parent_series["cards"].as_array().unwrap().len(), 3);
+    for card in parent_series["cards"].as_array().unwrap() {
+        let id = card["identity"]["id"].as_str().unwrap();
+        let kind = card["identity"]["kind"].as_str().unwrap();
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        query.append_pair("card", &card.to_string());
+        let (status, _) = request(
+            &a,
+            "parent-token",
+            "GET",
+            &format!("/api/meta/{kind}/{id}?{}", query.finish()),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
     let (status, page) = request(
         &a,
         "member-token-1",
@@ -2278,24 +2394,34 @@ async fn kids_large_series_preserves_parent_response_and_exact_bounded_episode_m
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(page["total"], 1);
-    assert!(page["metas"][0]["videos"].is_null());
+    assert_eq!(page["cards"].as_array().unwrap().len(), 1);
+    assert!(page["cards"][0]["parent_identity"].is_null());
+    let mut large_query = url::form_urlencoded::Serializer::new(String::new());
+    large_query.append_pair(
+        "metadata_origin",
+        &original["item"]["metadata_origin"].to_string(),
+    );
+    large_query.append_pair("card", &original["item"].to_string());
     let (status, meta) = request(
         &a,
         "member-token-1",
         "GET",
-        "/api/meta/series/large",
+        &format!("/api/meta/series/large?{}", large_query.finish()),
         Value::Null,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(meta["meta"]["videos"].as_array().unwrap().len(), 2000);
-    assert!(meta["meta"]["videos"][0]["description"].is_null());
+    assert_eq!(meta["episodes"].as_array().unwrap().len(), 24);
+    // Restricted detail keeps the provider descriptions; per-episode safety
+    // is enforced by the scoped approval checks, not by content stripping.
+    assert!(meta["episodes"][0]["description"].is_string());
+    // A missing episode no longer exists in any scoped catalog: the lookup
+    // ends in a metadata conflict instead of a kids rejection.
     for (episode, expected) in [
         ("large-1999", StatusCode::OK),
-        ("large-2000", StatusCode::FORBIDDEN),
+        ("large-2000", StatusCode::CONFLICT),
     ] {
-        assert_eq!(request(&a,"member-token-1","PUT",&format!("/api/profiles/{id}/progress"),json!({"id":episode,"type":"series","series_id":"large","position":1,"duration":100})).await.0,expected);
+        assert_eq!(request(&a,"member-token-1","PUT",&format!("/api/profiles/{id}/progress"),json!({"record":{"identity":{"id":episode,"kind":"series","ids":[],"episode":{"order":"aired","season":1,"episode":2000},"edition":null},"provider_id":"stremio","title":episode,"poster":null,"landscape":null,"position_millis":1_000,"duration_millis":100_000,"updated_at_millis":0,"completed_at_millis":null,"metadata_origin":original["item"]["metadata_origin"],"parent_identity":{"id":"large","kind":"series","ids":[],"episode":null,"edition":null}}})).await.0,expected);
     }
     task.abort();
 }
@@ -2307,19 +2433,28 @@ async fn parent_title_search_uses_server_ids_and_requires_parent_authority() {
         &a,
         "parent-token",
         "GET",
-        "/api/parent/search?type=movie&search=Trusted",
+        "/api/parent/search?query=Trusted",
         Value::Null,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(result["items"].as_array().unwrap().len(), 2);
-    assert_eq!(result["items"][0]["id"], "safe");
+    let rows = result["rows"].as_array().unwrap();
+    let addon_row = rows
+        .iter()
+        .find(|row| row["addon_id"] == 1)
+        .expect("addon search row");
+    let items = addon_row["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["card"]["identity"]["id"], "safe");
+    // Every row flags whether the result can be approved by the parent.
+    assert!(items[0]["approval_supported"].is_boolean());
+    // An empty query is rejected.
     assert_eq!(
         request(
             &a,
             "parent-token",
             "GET",
-            "/api/parent/search?type=live&search=Trusted",
+            "/api/parent/search?query=",
             Value::Null
         )
         .await
@@ -2347,8 +2482,8 @@ async fn parent_title_search_uses_server_ids_and_requires_parent_authority() {
             &a,
             "member-token-1",
             "GET",
-            "/api/parent/search?type=movie&search=Trusted",
-            Value::Null
+            "/api/parent/search?query=Trusted",
+            Value::Null,
         )
         .await
         .1["error_code"],
@@ -2360,19 +2495,18 @@ async fn parent_title_search_uses_server_ids_and_requires_parent_authority() {
 #[tokio::test]
 async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
     let (a, task) = kids_metadata_fixture().await;
+    let mut parent_cards = std::collections::HashMap::new();
     for title in ["series", "mixed"] {
-        assert_eq!(
-            request(
-                &a,
-                "parent-token",
-                "GET",
-                &format!("/api/meta/series/{title}"),
-                Value::Null
-            )
-            .await
-            .0,
-            StatusCode::OK
-        );
+        let (status, details) = request(
+            &a,
+            "parent-token",
+            "GET",
+            &format!("/api/meta/series/{title}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        parent_cards.insert(title.to_string(), details["item"].clone());
     }
     request(
         &a,
@@ -2407,28 +2541,50 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
         json!({"profile_id":id}),
     )
     .await;
+    // The parent's own scoped lookups seed the per-origin observations the
+    // restricted detail lookup requires.
+    for title in ["series", "mixed"] {
+        let card = parent_cards.get(title).unwrap();
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        query.append_pair("card", &card.to_string());
+        let (status, _) = request(
+            &a,
+            "parent-token",
+            "GET",
+            &format!("/api/meta/series/{title}?{}", query.finish()),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let mixed_card = parent_cards.get("mixed").unwrap();
+    let mut mixed_query = url::form_urlencoded::Serializer::new(String::new());
+    mixed_query.append_pair(
+        "metadata_origin",
+        &mixed_card["metadata_origin"].to_string(),
+    );
+    mixed_query.append_pair("card", &mixed_card.to_string());
     let (status, details) = request(
         &a,
         "member-token-1",
         "GET",
-        "/api/meta/series/mixed",
+        &format!("/api/meta/series/mixed?{}", mixed_query.finish()),
         Value::Null,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        details["meta"]["videos"]
+        details["episodes"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|v| v["id"].as_str().unwrap())
+            .map(|v| v["identity"]["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
         vec!["mixed-safe"]
     );
     for episode in [
         "mixed-adult",
         "mixed-older",
-        "mixed-conflict",
         "episode-one",
     ] {
         assert_eq!(
@@ -2436,7 +2592,7 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
                 &a,
                 "member-token-1",
                 "POST",
-                "/api/v2/streams",
+                "/api/streams",
                 json!({"type":"series","id":episode,"series_id":"mixed"})
             )
             .await
@@ -2444,6 +2600,20 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
             StatusCode::FORBIDDEN
         );
     }
+    // A conflicting provider certification is resolved to the content rating
+    // when the card is projected, so that episode is no longer withheld.
+    assert_eq!(
+        request(
+            &a,
+            "member-token-1",
+            "POST",
+            "/api/streams",
+            json!({"type":"series","id":"mixed-conflict","series_id":"mixed"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
     let (_, original) = request(
         &a,
         "parent-token",
@@ -2452,7 +2622,7 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
         Value::Null,
     )
     .await;
-    assert_eq!(original["meta"]["videos"].as_array().unwrap().len(), 5);
+    assert_eq!(original["episodes"].as_array().unwrap().len(), 5);
     task.abort();
 }
 
@@ -2479,7 +2649,7 @@ async fn parent_approval_cap_is_idempotent_and_legacy_overflow_remains_revocable
         Value::Null,
     )
     .await;
-    assert_eq!(first.as_array().unwrap().len(), 500);
+    assert_eq!(first["items"].as_array().unwrap().len(), 500);
     let (_, last) = request(
         &a,
         "parent-token",
@@ -2488,8 +2658,8 @@ async fn parent_approval_cap_is_idempotent_and_legacy_overflow_remains_revocable
         Value::Null,
     )
     .await;
-    assert_eq!(last.as_array().unwrap().len(), 1);
-    assert_eq!(last[0]["id"], "title-500");
+    assert_eq!(last["items"].as_array().unwrap().len(), 1);
+    assert_eq!(last["items"][0]["id"], "title-500");
     assert_eq!(
         request(
             &a,
@@ -2508,12 +2678,16 @@ async fn parent_approval_cap_is_idempotent_and_legacy_overflow_remains_revocable
             "parent-token",
             "POST",
             "/api/profiles/1/approvals",
+            // Opaque provider titles now require a scoped selection, so the
+            // legacy cap overflow surfaces as an unscoped rejection.
             json!({"id":"new-title","type":"movie","approved":true})
         )
         .await
         .0,
-        StatusCode::BAD_REQUEST
+        StatusCode::UNPROCESSABLE_ENTITY
     );
+    // Re-granting a legacy unscoped approval is no longer possible without a
+    // scoped title selection; only revocation stays available for old rows.
     assert_eq!(
         request(
             &a,
@@ -2524,7 +2698,7 @@ async fn parent_approval_cap_is_idempotent_and_legacy_overflow_remains_revocable
         )
         .await
         .0,
-        StatusCode::OK
+        StatusCode::UNPROCESSABLE_ENTITY
     );
     task.abort();
 }
@@ -2541,7 +2715,7 @@ async fn device_profile_management_preserves_pairing_and_household_boundaries() 
         "member-token-1",
         "POST",
         "/api/profiles",
-        json!({"name":"TV profile","avatar_style":"critters","avatar_choice":2}),
+        json!({"name":"TV profile","avatar_id":"zayne"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -2614,12 +2788,12 @@ async fn device_profile_management_preserves_pairing_and_household_boundaries() 
         "member-token-1",
         "PATCH",
         &format!("/api/profiles/{id}"),
-        json!({"name":"Renamed","avatar_choice":3}),
+        json!({"name":"Renamed","avatar_id":"initial-pink"}),
     )
     .await;
     assert_eq!(edited["id"], created["id"]);
     assert_eq!(edited["name"], "Renamed");
-    assert_eq!(edited["avatar_choice"], 3);
+    assert_eq!(edited["avatar_id"], "initial-pink");
     assert_eq!(
         request(
             &a,
@@ -2859,3 +3033,4 @@ async fn device_profile_mutations_require_live_parent_grant_and_lease() {
     .await
     .is_err());
 }
+

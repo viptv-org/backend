@@ -144,11 +144,12 @@ async fn legacy_progress_get_exports_authoritative_completion_fields() {
         &app,
         "member-token-1",
         "GET",
-        "/api/profiles/1/progress",
+        "/api/profiles/1/progress/page",
         Value::Null,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    let rows = rows["items"].clone();
     assert_eq!(rows[0]["watched"], true);
     assert_eq!(rows[0]["completion_only"], true);
     assert_eq!(rows[0]["resume_active"], false);
@@ -475,16 +476,19 @@ async fn imported_continuation_does_not_override_new_playback_or_manual_decision
             )
             .unwrap_or_else(|_| panic!("merge failed"));
         }
-        let mut item = json!({"id":"tt2934286:2:9","type":"series","name":"Synthetic title",
-            "series_id":"tt2934286","season":2,"episode":9,"position":40,"duration":100});
-        let path = if action == "playback" {
-            "/api/profiles/1/progress"
+        let (path, body) = if action == "playback" {
+            (
+                "/api/profiles/1/progress",
+                json!({"record":{"identity":{"id":"tt2934286:2:9","kind":"series","ids":[],"episode":{"order":"aired","season":2,"episode":9},"edition":null},"provider_id":"fixture","title":"Synthetic title","poster":null,"landscape":null,"position_millis":40_000,"duration_millis":100_000,"updated_at_millis":0,"completed_at_millis":null,"parent_identity":{"id":"tt2934286","kind":"series","ids":[],"episode":null,"edition":null}}}),
+            )
         } else {
-            item["action"] = json!(action);
-            "/api/profiles/1/progress/correct"
+            (
+                "/api/profiles/1/progress/correct",
+                json!({"id":"tt2934286:2:9","type":"series","name":"Synthetic title","action":action}),
+            )
         };
         assert_eq!(
-            request(&app, "member-token-1", "PUT", path, item).await.0,
+            request(&app, "member-token-1", "PUT", path, body).await.0,
             StatusCode::OK
         );
         let db = app.db.lock().unwrap();
@@ -2389,13 +2393,12 @@ async fn imported_completion_is_replaced_by_newer_rewatch_resume_and_replay_is_i
         &first.app,
         "member-token-1",
         "GET",
-        "/api/profiles/1/continue/page",
+        "/api/profiles/1/continue",
         Value::Null,
     )
     .await;
-    assert_eq!(queue["items"][0]["id"], "tt0000001");
-    assert_eq!(queue["items"][0]["watched"], true);
-    assert_eq!(queue["items"][0]["resume_active"], true);
+    assert_eq!(queue["entries"][0]["record"]["identity"]["id"], "tt0000001");
+    assert_eq!(queue["entries"][0]["status"], "Resume");
 
     let mut resume = movie("tt0000001");
     resume["state"]["lastWatched"] = json!("2025-01-01T01:00:00.123Z");
@@ -2438,14 +2441,13 @@ async fn imported_completion_is_replaced_by_newer_rewatch_resume_and_replay_is_i
         &second.app,
         "member-token-1",
         "GET",
-        "/api/profiles/1/continue/page",
+        "/api/profiles/1/continue",
         Value::Null,
     )
     .await;
-    assert_eq!(queue["items"].as_array().unwrap().len(), 1);
-    assert_eq!(queue["items"][0]["id"], "tt0000001");
-    assert_eq!(queue["items"][0]["position"], 12.345);
-    assert_eq!(queue["items"][0]["watched"], true);
+    assert_eq!(queue["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(queue["entries"][0]["record"]["identity"]["id"], "tt0000001");
+    assert_eq!(queue["entries"][0]["record"]["position_millis"], 12345);
     assert_eq!(
         apply_preview(&second.app, &preview).await.1["already_completed"],
         true
@@ -2561,11 +2563,11 @@ async fn genuine_manual_watched_correction_is_preserved_even_with_import_owned_a
         &f.app,
         "member-token-1",
         "GET",
-        "/api/profiles/1/continue/page",
+        "/api/profiles/1/continue",
         Value::Null,
     )
     .await;
-    assert!(queue["items"].as_array().unwrap().is_empty());
+    assert!(queue["entries"].as_array().unwrap().is_empty());
 }
 
 // ---- anime ids remapped through the VIPTV metadata service ----

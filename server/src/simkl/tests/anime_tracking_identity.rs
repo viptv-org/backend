@@ -21,7 +21,7 @@ async fn anime_tracking_rejects_ambiguous_absolute_numbers_before_any_provider_w
         &app,
         "member-token-1",
         "POST",
-        "/api/v3/profiles/1/simkl/watched",
+        "/api/profiles/1/simkl/watched",
         json!({"category":"anime","id":40,"season":2,"episode":1}),
     )
     .await;

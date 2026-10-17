@@ -29,7 +29,7 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/bootstrap",
+        "/api/bootstrap",
         json!({}),
     )
     .await;
@@ -62,8 +62,8 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
     }
 
     for (path, title) in [
-        ("/api/v3/discover?type=movie", "Trending Movie"),
-        ("/api/v3/discover?type=movie&search=Movie", "Search Movie"),
+        ("/api/discover?type=movie", "Trending Movie"),
+        ("/api/discover?type=movie&search=Movie", "Search Movie"),
     ] {
         let (status, body) = request(&app, "member-token-1", "GET", path, json!({})).await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -73,7 +73,7 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/meta/movie/simkl:movie:10",
+        "/api/meta/movie/simkl:movie:10",
         json!({}),
     )
     .await;
@@ -88,7 +88,7 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         json!({}),
     )
     .await;
@@ -98,7 +98,7 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
         &app,
         "member-token-1",
         "PUT",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         json!({"revision":0,"browsing_plugin":"stremio","assignments":assignments}),
     )
     .await;
@@ -107,7 +107,7 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/home",
+        "/api/profiles/1/home",
         json!({}),
     )
     .await;
@@ -126,7 +126,7 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/simkl/watched",
+            "/api/profiles/1/simkl/watched",
             json!({"category":"movie","id":10})
         )
         .await
@@ -144,7 +144,7 @@ async fn slow_simkl_home_returns_visible_failed_rows_within_assembly_budget() {
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/bootstrap",
+        "/api/bootstrap",
         json!({}),
     )
     .await;

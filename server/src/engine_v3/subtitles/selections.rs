@@ -2,6 +2,7 @@ use crate::*;
 const RETENTION: Duration = Duration::from_secs(180);
 #[derive(Clone)]
 pub(super) struct Selection {
+    pub metadata_proof: Option<crate::engine_v3::origins::MetadataProof>,
     pub scope: viptv_engine::profile::Scope,
     pub lease: ResourceLease,
     pub addon_revision: String,

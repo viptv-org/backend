@@ -29,7 +29,7 @@ async fn required_source_audio_is_negotiated_for_direct_and_enforced_by_gateway(
             &app,
             "member-token-1",
             "POST",
-            "/api/v2/playback",
+            "/api/playback",
             input.clone(),
         )
         .await;
@@ -48,7 +48,7 @@ async fn required_source_audio_is_negotiated_for_direct_and_enforced_by_gateway(
             assert!(peer.outputs.lock().unwrap().is_empty());
             let mut changed = input.clone();
             changed["client"]["supports_required_audio_index"] = json!(false);
-            assert_eq!(request(&app, "member-token-1", "POST", "/api/v2/playback", changed).await.0,
+            assert_eq!(request(&app, "member-token-1", "POST", "/api/playback", changed).await.0,
                 StatusCode::CONFLICT, "negotiation remains bound to the full admission hash");
         } else {
             assert_eq!(ready["delivery"]["kind"], "gateway", "{ready}");
@@ -71,7 +71,7 @@ async fn required_source_audio_is_negotiated_for_direct_and_enforced_by_gateway(
         }
         input["required_audio_index"] = json!(2);
         assert_eq!(
-            request(&app, "member-token-1", "POST", "/api/v2/playback", input)
+            request(&app, "member-token-1", "POST", "/api/playback", input)
                 .await
                 .0,
             StatusCode::BAD_REQUEST

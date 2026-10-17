@@ -1,5 +1,5 @@
 //! Host-authored transport context from the native SDK, never client hints.
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use viptv_engine::vsources_runtime::SdkStream;
 
 pub(super) fn sdk_source(stream: &SdkStream) -> Value {
@@ -24,7 +24,7 @@ mod tests {
     #[tokio::test]
     async fn sdk_registration_retains_required_audio_and_transport_headers_privately() {
         let app = fixture();
-        let (status, connection) = request(&app, "member-token-1", "PUT", "/api/v3/profiles/1/source-integrations",
+        let (status, connection) = request(&app, "member-token-1", "PUT", "/api/profiles/1/source-integrations",
             json!({"revision":0,"plugin_id":"vsources","configuration":{"tmdb_api_key":"fixture-sdk-key"}})).await;
         assert_eq!(status, axum::http::StatusCode::OK);
         let source = connection["configuration"]["assignments"]
@@ -81,11 +81,9 @@ mod tests {
             other[0]["source_fingerprint"]
         );
         stream.meta.audio_selection.as_mut().unwrap().audio_index = 65536;
-        assert!(
-            scoped
-                .register(source, vec![sdk_source(&stream)], "movie")
-                .0
-                .is_empty()
-        );
+        assert!(scoped
+            .register(source, vec![sdk_source(&stream)], "movie")
+            .0
+            .is_empty());
     }
 }

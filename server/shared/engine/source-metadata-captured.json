@@ -1,0 +1,1896 @@
+{
+  "description": "140 previously cached provider source cards. No network request. Only an allowlist of technical codec, quality, language and release-format tokens survives; arbitrary words, names, episode IDs, grants, hashes, URLs and provider/account identities are replaced or omitted. Presentation punctuation and original field boundaries retained. Metadata remains unverified provider reports.",
+  "cases": [
+    {
+      "id": "captured-001",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text Text (Text) Text (1080p BluRay x265 10bit EAC3 5.1 Text) [Text]\nText Text (Text) - Text - Text (1080p BluRay x265 Text).mkv\n👤 Text 💾 1.12 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text Text (Text) - Text - Text (1080p BluRay x265 Text).mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-002",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text.COMPLETE.REPACK.720p.Text.WEBRip.x264-Text\nText.REPACK.720p.Text.WEBRip.x264-Text.mkv\n👤 Text 💾 186.91 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.REPACK.720p.Text.WEBRip.x264-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-003",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text Text (Text) Season 1 Text (1080p Text WEB-DL x265 HEVC 10bit EAC3 Atmos 5.1 Text) [Text]\nText Text (Text) - Text - Text (1080p Text WEB-DL x265 Text).mkv\n👤 Text 💾 1.03 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text Text (Text) - Text - Text (1080p Text WEB-DL x265 Text).mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-004",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text 1080p WEBRip x265-\nText.1080p.WEBRip.x265-Text[Text.Text].mp4\n👤 Text 💾 493.1 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.WEBRip.x265-Text[Text.Text].mp4"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-005",
+      "source": {
+        "name": "[TB+] Torrentio\n4k HDR",
+        "title": "Text.2160p.Text.WEB-DL.x265.10bit.HDR.Text.1.Atmos-Text[Text]\nText.HDR.2160p.WEB-DL.Text.1.H.265-Text.mkv\n👤 Text 💾 5.41 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.HDR.2160p.WEB-DL.Text.1.H.265-Text.mkv"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-006",
+      "source": {
+        "name": "[TB+] Torrentio\n4k",
+        "title": "Text Text (Text) Season 1 Text (2160p Text WEB-DL x265 HEVC 10bit DDP 5.1 Text)\nText.2160p.10bit.Text.WEB-DL.Text.1.HEVC-Text.mkv\n👤 Text 💾 1.3 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.2160p.10bit.Text.WEB-DL.Text.1.HEVC-Text.mkv"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-007",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text 1080p BluRay DD+ 5.1 x265-Text\nText.1080p.BluRay.DDP.5.1.x265-Text.mkv\n👤 Text 💾 634.66 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.BluRay.DDP.5.1.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-008",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text Text - Season 1 - Mp4 x264 AC3 1080p\nText.mp4\n👤 Text 💾 828.77 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.mp4"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mp4"
+      }
+    },
+    {
+      "id": "captured-009",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.1080p.Text.WEB-DL.Text.1.Atmos.H264-Text[Text]\nText.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv\n👤 Text 💾 2.34 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-010",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text-10.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.265…\nText.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.265-Text.mkv\n👤 Text 💾 1.85 GB ⚙️ Text\n🇬🇧 / 🇮🇹",
+        "description": "",
+        "filename": "Text.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.265-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-011",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text 1080p Text WEB-DL Text 1 H 264-Text\n👤 Text 💾 2.34 GB ⚙️ Text\n🇬🇧 / 🇯🇵 / 🇷🇺 / 🇮🇹 / 🇵🇹 / 🇪🇸 / 🇰🇷 / 🇨🇳 / 🇫🇷 / 🇩🇪 / 🇳🇱 / 🇮🇳 / 🇵🇱 / 🇨🇿 / 🇭🇺 / 🇧🇬 / 🇺🇦 / 🇩🇰 / 🇸🇪 / 🇳🇴 / 🇹🇷 / 🇸🇦 / 🇮🇱 / 🇻🇳 / 🇮🇩 / 🇲🇾 / 🇹🇭",
+        "description": "",
+        "filename": "Text 1080p Text WEB-DL Text 1 H 264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-012",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text : Season Text Text [Text] 1080p BDRip x265 DTS-HD MA 5.1 Text [Text]\nText 1080p BDRip x265 DTS-HD MA 5.1 Text [Text].mkv\n👤 Text 💾 5.51 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text 1080p BDRip x265 DTS-HD MA 5.1 Text [Text].mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-013",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text Text COMPLETE Text 720p.10bit.WEBRip.x265-Text\nText.720p.10bit.WEBRip.x265-Text/Text.720p.10bit.WEBRip.x265-Text.mkv\n👤 Text 💾 110.94 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.10bit.WEBRip.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-014",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text-10.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.264…\nText.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.264-Text.mkv\n👤 Text 💾 2.48 GB ⚙️ Text\n🇬🇧 / 🇮🇹",
+        "description": "",
+        "filename": "Text.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-015",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.Text.SEASON.Text.Text.COMPLETE.1080p.10bit.WEBRip.Text.x265.HEVC-Text\nText.1080p.10bit.WEBRip.Text.x265.HEVC-Text.mkv\n👤 Text 💾 381.14 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.10bit.WEBRip.Text.x265.HEVC-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-016",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.1080p.WEBRip.x265-Text\nText.1080p.WEBRip.x265-Text.mp4\n👤 Text 💾 493.1 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.WEBRip.x265-Text.mp4"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-017",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text Audio Text 1080p Text WEB-DL Text 1 Text\n👤 Text 💾 2.31 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text Audio Text 1080p Text WEB-DL Text 1 Atmos H 264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-018",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text 1080p Text WEB-DL Text 1 H 264-Text[Text]\n👤 Text 💾 2.34 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text 1080p Text WEB-DL Text 1 H 264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-019",
+      "source": {
+        "name": "[TB+] Torrentio\nWEBRip",
+        "title": "Text WEBRip x265-Text\nText.WEBRip.x265-Text[Text.Text].mp4\n👤 Text 💾 206.54 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.WEBRip.x265-Text[Text.Text].mp4"
+      },
+      "expected": {
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-020",
+      "source": {
+        "name": "[TB+] Torrentio\n4k DV",
+        "title": "Text 2160p Text WEB-DL Text 1 Atmos DV x265-Text\nText.2160p.Text.WEB-DL.DD+5.1.Atmos.Text.HEVC-Text[Text.Text].mp4\n👤 Text 💾 5.44 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.2160p.Text.WEB-DL.DD+5.1.Atmos.Text.HEVC-Text[Text.Text].mp4"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-021",
+      "source": {
+        "name": "[TB+] Torrentio\n4k DV",
+        "title": "Text.2160p.Text.WEB-DL.Text.1.Atmos.DV.x265-Text[Text]\nText.2160p.Text.WEB-DL.DD+5.1.Atmos.Text.HEVC-Text.mp4\n👤 Text 💾 5.44 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.2160p.Text.WEB-DL.DD+5.1.Atmos.Text.HEVC-Text.mp4"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-022",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text Text (Text) Season 1 Text (1080p Text WEBRip AV1 10bit Opus 5.1 Text)\nText Text (Text) - Text (1080p WEBRip AV1 Opus 5.1 Text).mkv\n👤 12 💾 239.52 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text Text (Text) - Text (1080p WEBRip AV1 Opus 5.1 Text).mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv"
+      }
+    },
+    {
+      "id": "captured-023",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text 720p.10bit.WEBRip.x265-Text\nText.720p.10bit.WEBRip.x265-Text/Text.720p.10bit.WEBRip.x265-Text.mkv\n👤 Text 💾 110.94 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.10bit.WEBRip.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-024",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.1080p.WEBRip.AC3.x264-Text\nText.COMPLETE.1080p.WEBRip.AC3.x264-Text/Text.1080p.WEBRip.AC3.x264-Text.mkv\n👤 5 💾 695.2 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.WEBRip.AC3.x264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-025",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.COMPLETE.SPANiSH.1080p.Text.WEB-DL.x264-Text\nText.spa.1080p.Text.web-dl.x264-Text.mkv\n👤 5 💾 2.34 GB ⚙️ Text\n🇪🇸",
+        "description": "",
+        "filename": "Text.spa.1080p.Text.web-dl.x264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-026",
+      "source": {
+        "name": "[TB+] Torrentio\nWEB-DL",
+        "title": "Text WEB-DL x264-Text\nText.WEB-DL.x264-Text[Text.Text].mp4\n👤 5 💾 297.39 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.WEB-DL.x264-Text[Text.Text].mp4"
+      },
+      "expected": {
+        "container": "mp4",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-027",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.1080p.WEBRip.x265-Text\nText.1080p.WEBRip.x265-Text.mp4\n👤 Text 💾 493.1 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.WEBRip.x265-Text.mp4"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-028",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text.COMPLETE.720p.Text.WEBRip.x264-Text\nText.720p.Text.WEBRip.x264-Text.mkv\n👤 Text 💾 186.92 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.Text.WEBRip.x264-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-029",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text.720p.WEB.H264-Text[Text]\n👤 Text 💾 790.21 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.web.h264-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-030",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.WEBRip.1080p.H264.AAC-Text\nText.mp4\n👤 2 💾 734.57 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.mp4"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mp4"
+      }
+    },
+    {
+      "id": "captured-031",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.Complete.1080p.WEBRip.AAC.x265\nText/Text.mkv\n👤 1 💾 249.35 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv"
+      }
+    },
+    {
+      "id": "captured-032",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text 1080p Text WEB-DL Text 1 H 264-Text\n👤 0 💾 2.83 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text 1080p Text WEB-DL Text 1 H 264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-033",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.Text.Season.1.1080p.MKV.HEVC.AC3.Web-DL [10.Text]\nText Text (Text) - Text - Text (1080p Text WEB-DL x265 Text).mkv\n👤 0 💾 1.03 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text Text (Text) - Text - Text (1080p Text WEB-DL x265 Text).mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-034",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text 1080p BluRay REMUX AVC DTS-HD MA 5 1-Text\nText.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-Text.mkv\n👤 0 💾 5.84 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-035",
+      "source": {
+        "name": "[TB+] Torrentio",
+        "title": "Text.WEB.x264-Text\n👤 0 💾 184.72 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.WEB.x264-Text.mkv"
+      },
+      "expected": {
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-036",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text 1080p Text Text WEBRip DD+ 5.1 10bit x265 - Text\nText.1080p.Text.Text.WEBRip.Text.1.10bit.x265-Text.mkv\n👤 0 💾 869.47 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.Text.Text.WEBRip.Text.1.10bit.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-037",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text.Text.SEASON.Text.Text.COMPLETE.720p.10bit.WEBRip.Text.x265.HEVC-Text\nText.720p.10bit.WEBRip.Text.x265.HEVC-Text.mkv\n👤 0 💾 168.53 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.10bit.WEBRip.Text.x265.HEVC-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-038",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.1080p.WEBRip.x265-Text\nText.1080p.WEBRip.x265-Text.mkv\n👤 0 💾 758.11 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.WEBRip.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-039",
+      "source": {
+        "name": "[TB+] Torrentio",
+        "title": "Text Text Season 1 - Text\nText.mp4\n👤 0 💾 88.59 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.mp4"
+      },
+      "expected": {
+        "container": "mp4"
+      }
+    },
+    {
+      "id": "captured-040",
+      "source": {
+        "name": "[TB+] Torrentio\nWEBRip",
+        "title": "Text.WEBRip.x265-Text\nText.WEBRip.x265-Text.mp4\n👤 0 💾 206.54 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.WEBRip.x265-Text.mp4"
+      },
+      "expected": {
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-041",
+      "source": {
+        "name": "[TB+] Torrentio\n4k",
+        "title": "Text.2160p.Text.WEB-DL.Text.1.Atmos.x265-Text[Text]\nText.2160p.WEB.H.265-Text.mkv\n👤 0 💾 5.41 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.2160p.WEB.H.265-Text.mkv"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-042",
+      "source": {
+        "name": "[TB+] Torrentio\nWEB-DL",
+        "title": "Text.WEB-DL.x264-Text\nText.WEB-DL.x264-Text.mp4\n👤 0 💾 297.39 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.WEB-DL.x264-Text.mp4"
+      },
+      "expected": {
+        "container": "mp4",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-043",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text.720p.Text.WEB-DL.Text.1.Atmos.H264-Text[Text]\nText.720p.REPACK.Text.WEB-DL.Text.1.H.264-Text.mkv\n👤 0 💾 790.25 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.REPACK.Text.WEB-DL.Text.1.H.264-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-044",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text SEASON 1 Text 720p WEBRip Text x265 HEVC-Text\nText.720p.WEBRip.Text.x265.HEVC-Text.mkv\n👤 0 💾 127.85 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.WEBRip.Text.x265.HEVC-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-045",
+      "source": {
+        "name": "[TB+] Torrentio",
+        "title": "Text Text Season 1. Text\nText Text.mkv\n👤 0 💾 499.9 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text Text.mkv"
+      },
+      "expected": {
+        "container": "mkv"
+      }
+    },
+    {
+      "id": "captured-046",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text.720p.WEB.x265-Text[Text]\n👤 0 💾 168.95 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.WEB.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-047",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text 1080p HEVC x265-Text\n👤 0 💾 363.49 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.HEVC.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-048",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.1080p.WEB.H264-Text[Text]\n👤 0 💾 2.34 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.web.h264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-049",
+      "source": {
+        "name": "[TB+] Torrentio\n4k HDR",
+        "title": "Text.HDR.2160p.WEB.H265-Text[Text]\n👤 0 💾 5.41 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.HDR.2160p.WEB.H265-Text.mkv"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-050",
+      "source": {
+        "name": "[TB+] Torrentio",
+        "title": "Text.WEB.h264-Text[Text]\n👤 0 💾 499.9 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.web.h264-Text.mkv"
+      },
+      "expected": {
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-051",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text 720p WEB H264-Text [Text]\n👤 0 💾 790.21 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.web.h264-Text[Text.Text].mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-052",
+      "source": {
+        "name": "[TB+] Torrentio\n720p",
+        "title": "Text 720p HEVC x265-Text\n👤 0 💾 321.1 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.HEVC.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-053",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text 1080p WEB H264-Text [Text]\n👤 0 💾 2.34 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.web.h264-Text[Text.Text].mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-054",
+      "source": {
+        "name": "[TB+] Torrentio",
+        "title": "Text.WEB.h264-Text[Text]\n👤 0 💾 499.9 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.web.h264-Text.mkv"
+      },
+      "expected": {
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-055",
+      "source": {
+        "name": "[TB+] Torrentio\n1080p",
+        "title": "Text.1080p.WEB.H264-Text[Text]\n👤 0 💾 2.34 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.web.h264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-056",
+      "source": {
+        "name": "Torrentio\n4k HDR",
+        "title": "Text.2160p.Text.WEB-DL.x265.10bit.HDR.Text.1.Atmos-Text[Text]\nText.HDR.2160p.WEB-DL.Text.1.H.265-Text.mkv\n👤 Text 💾 5.41 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.HDR.2160p.WEB-DL.Text.1.H.265-Text.mkv"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-057",
+      "source": {
+        "name": "Torrentio\n4k DV | HDR10+ | HDR",
+        "title": "Text Text / Text Text / Text: 1 / Text: 1-10 Text 10 [Text HEVC HDR10 HDR10+ Dolby Vision WEB-DL 2160p 4k] [Text] Dub (Text) + Ukr + Text (Eng) + Sub (Rus Ukr Eng)\nText Text.Text.WEB-DL.2160p.mkv\n👤 Text 💾 5.67 GB ⚙️ Text\n🇬🇧 / 🇷🇺 / 🇺🇦",
+        "description": "",
+        "filename": "Text Text.Text.WEB-DL.2160p.mkv"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mkv"
+      }
+    },
+    {
+      "id": "captured-058",
+      "source": {
+        "name": "Torrentio\n4k DV",
+        "title": "Text 2160p Text WEB-DL Text 1 Atmos DV x265-Text\nText.2160p.Text.WEB-DL.DD+5.1.Atmos.Text.HEVC-Text[Text.Text].mp4\n👤 Text 💾 5.44 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.2160p.Text.WEB-DL.DD+5.1.Atmos.Text.HEVC-Text[Text.Text].mp4"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-059",
+      "source": {
+        "name": "Torrentio\n4k DV",
+        "title": "Text.2160p.Text.WEB-DL.Text.1.Atmos.DV.x265-Text[Text]\nText.2160p.Text.WEB-DL.DD+5.1.Atmos.Text.HEVC-Text.mp4\n👤 Text 💾 5.44 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.2160p.Text.WEB-DL.DD+5.1.Atmos.Text.HEVC-Text.mp4"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-060",
+      "source": {
+        "name": "Torrentio\n4k DV",
+        "title": "Text Text / Text Text / Text: 1 / Text: 1-10 Text 10 [Text HEVC Dolby Vision Text WEB-DL 2160p 4k] Dub (Text) + Ukr + Text (Eng) + Sub (Rus Ukr Eng)\nText Text.Text.WEB-DL.2160p.DV.mp4\n👤 Text 💾 5.69 GB ⚙️ Text\n🇬🇧 / 🇷🇺 / 🇺🇦",
+        "description": "",
+        "filename": "Text Text.Text.WEB-DL.2160p.DV.mp4"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mp4"
+      }
+    },
+    {
+      "id": "captured-061",
+      "source": {
+        "name": "Torrentio\n4k",
+        "title": "Text Text (Text) Season 1 Text (2160p Text WEB-DL x265 HEVC 10bit DDP 5.1 Text)\nText.2160p.10bit.Text.WEB-DL.Text.1.HEVC-Text.mkv\n👤 Text 💾 1.3 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.2160p.10bit.Text.WEB-DL.Text.1.HEVC-Text.mkv"
+      },
+      "expected": {
+        "height": 2160,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-062",
+      "source": {
+        "name": "Torrentio\n1080p DV | HDR",
+        "title": "Text 1 (Text) [Text] 1080p H265 DV HDR EAC3 Atmos ITA ENG SUB ITA Text ENG Text WEB-DL [16.5 GB] - Text Text\nText.ITA.ENG.1080p.Text.WEB-DL.Text.1.Atmos.DV.HDR.H265-Text.mkv\n👤 Text 💾 1.63 GB ⚙️ Text\n🇬🇧 / 🇮🇹",
+        "description": "",
+        "filename": "Text.ITA.ENG.1080p.Text.WEB-DL.Text.1.Atmos.DV.HDR.H265-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-063",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text Text (Text) Text (1080p BluRay x265 10bit EAC3 5.1 Text) [Text]\nText Text (Text) - Text - Text (1080p BluRay x265 Text).mkv\n👤 Text 💾 1.12 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text Text (Text) - Text - Text (1080p BluRay x265 Text).mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-064",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text Text (Text) Season 1 Text (1080p Text WEB-DL x265 HEVC 10bit EAC3 Atmos 5.1 Text) [Text]\nText Text (Text) - Text - Text (1080p Text WEB-DL x265 Text).mkv\n👤 Text 💾 1.03 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text Text (Text) - Text - Text (1080p Text WEB-DL x265 Text).mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-065",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text 1080p WEBRip x265-\nText.1080p.WEBRip.x265-Text[Text.Text].mp4\n👤 Text 💾 493.1 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.WEBRip.x265-Text[Text.Text].mp4"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-066",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text 1080p BluRay DD+ 5.1 x265-Text\nText.1080p.BluRay.DDP.5.1.x265-Text.mkv\n👤 Text 💾 634.66 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.BluRay.DDP.5.1.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-067",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text Text - Season 1 - Mp4 x264 AC3 1080p\nText.mp4\n👤 Text 💾 828.77 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.mp4"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mp4"
+      }
+    },
+    {
+      "id": "captured-068",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.1080p.Text.WEB-DL.Text.1.Atmos.H264-Text[Text]\nText.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv\n👤 Text 💾 2.34 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-069",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text Text / Text Text [Text] (Text) WEB-DL 1080p | Text\nText.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv\n👤 Text 💾 2.5 GB ⚙️ Text\n🇬🇧 / 🇷🇺",
+        "description": "",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-070",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.MULTi.Text.AD.1080p.WEB.EAC3.5.1.Atmos.H264-Text\nText.MULTi.AD.1080p.Text.WEB.H264-Text.mkv\n👤 Text 💾 2.81 GB ⚙️ Text\nMulti Audio / 🇫🇷",
+        "description": "",
+        "filename": "Text.MULTi.AD.1080p.Text.WEB.H264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-071",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text-10.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.265…\nText.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.265-Text.mkv\n👤 Text 💾 1.85 GB ⚙️ Text\n🇬🇧 / 🇮🇹",
+        "description": "",
+        "filename": "Text.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.265-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-072",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text 1080p Text WEB-DL Text 1 H 264-Text\n👤 Text 💾 2.34 GB ⚙️ Text\n🇬🇧 / 🇯🇵 / 🇷🇺 / 🇮🇹 / 🇵🇹 / 🇪🇸 / 🇰🇷 / 🇨🇳 / 🇫🇷 / 🇩🇪 / 🇳🇱 / 🇮🇳 / 🇵🇱 / 🇨🇿 / 🇭🇺 / 🇧🇬 / 🇺🇦 / 🇩🇰 / 🇸🇪 / 🇳🇴 / 🇹🇷 / 🇸🇦 / 🇮🇱 / 🇻🇳 / 🇮🇩 / 🇲🇾 / 🇹🇭",
+        "description": "",
+        "filename": "Text 1080p Text WEB-DL Text 1 H 264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-073",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text : Season Text Text [Text] 1080p BDRip x265 DTS-HD MA 5.1 Text [Text]\nText 1080p BDRip x265 DTS-HD MA 5.1 Text [Text].mkv\n👤 Text 💾 5.51 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text 1080p BDRip x265 DTS-HD MA 5.1 Text [Text].mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-074",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text-10.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.264…\nText.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.264-Text.mkv\n👤 Text 💾 2.48 GB ⚙️ Text\n🇬🇧 / 🇮🇹",
+        "description": "",
+        "filename": "Text.1080p.Text.WEB-DL.ITA.ENG.Text.1.Atmos.H.264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-075",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.Text.SEASON.Text.Text.COMPLETE.1080p.10bit.WEBRip.Text.x265.HEVC-Text\nText.1080p.10bit.WEBRip.Text.x265.HEVC-Text.mkv\n👤 Text 💾 381.14 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.10bit.WEBRip.Text.x265.HEVC-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-076",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.1080p.WEBRip.x265-Text\nText.1080p.WEBRip.x265-Text.mp4\n👤 Text 💾 493.1 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.WEBRip.x265-Text.mp4"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-077",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text Text / Text Text / Text: 1 / Text: 1-10 Text 10 [Text WEB-DL 1080p] Text (Text) + Text + Sub (Eng Rus)\nText.1080p.Text.mkv\n👤 Text 💾 2.43 GB ⚙️ Text\n🇬🇧 / 🇷🇺",
+        "description": "",
+        "filename": "Text.1080p.Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv"
+      }
+    },
+    {
+      "id": "captured-078",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text Audio Text 1080p Text WEB-DL Text 1 Text\n👤 Text 💾 2.31 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text Audio Text 1080p Text WEB-DL Text 1 Atmos H 264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-079",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text 1080p Text WEB-DL Text 1 H 264-Text[Text]\n👤 Text 💾 2.34 GB ⚙️ Text",
+        "description": "",
+        "filename": "Text 1080p Text WEB-DL Text 1 H 264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-080",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text [720p]\nText.1080p.WEB-DL.DUAL.Text.Text.mkv\n👤 Text 💾 657.42 MB ⚙️ Text\nDual Audio / 🇬🇧 / 🇵🇹",
+        "description": "",
+        "filename": "Text.1080p.WEB-DL.DUAL.Text.Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv"
+      }
+    },
+    {
+      "id": "captured-081",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text Text (Text) Season 1 Text (1080p Text WEBRip AV1 10bit Opus 5.1 Text)\nText Text (Text) - Text (1080p WEBRip AV1 Opus 5.1 Text).mkv\n👤 12 💾 239.52 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text Text (Text) - Text (1080p WEBRip AV1 Opus 5.1 Text).mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv"
+      }
+    },
+    {
+      "id": "captured-082",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.ITA.ENG.1080p.Text.WEB-Text.H264-Text\nText.ITA.ENG.1080p.Text.WEB-Text.H.264-Text.mkv\n👤 12 💾 2.38 GB ⚙️ Text\n🇬🇧 / 🇮🇹",
+        "description": "",
+        "filename": "Text.ITA.ENG.1080p.Text.WEB-Text.H.264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-083",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.MULTi.1080p.WEB.H265-Text\nText.MULTi.1080p.WEB.H265-Text.mkv\n👤 7 💾 1.09 GB ⚙️ Text\nMulti Audio",
+        "description": "",
+        "filename": "Text.MULTi.1080p.WEB.H265-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-084",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.1080p.WEBRip.AC3.x264-Text\nText.COMPLETE.1080p.WEBRip.AC3.x264-Text/Text.1080p.WEBRip.AC3.x264-Text.mkv\n👤 5 💾 695.2 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.WEBRip.AC3.x264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-085",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.COMPLETE.SPANiSH.1080p.Text.WEB-DL.x264-Text\nText.spa.1080p.Text.web-dl.x264-Text.mkv\n👤 5 💾 2.34 GB ⚙️ Text\n🇪🇸",
+        "description": "",
+        "filename": "Text.spa.1080p.Text.web-dl.x264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-086",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text Text / Text Text [Text-Text] (Text-Text) WEB-Text-HEVC 1080p | Text\nSeason 1/Text.1080p.10bit.WEBRip.Text.x265.HEVC.Rus.mkv\n👤 Text 💾 385.2 MB ⚙️ Text\n🇷🇺",
+        "description": "",
+        "filename": "Text.1080p.10bit.WEBRip.Text.x265.HEVC.Rus.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-087",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.1080p.WEBRip.x265-Text\nText.1080p.WEBRip.x265-Text.mp4\n👤 Text 💾 493.1 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.1080p.WEBRip.x265-Text.mp4"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-088",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.MULTi.1080p.WEB-DL.Text.1.H264-Text\nText.MULTi.1080p.Text.WEB-DL.Text.1.H264-Text.mkv\n👤 3 💾 2.4 GB ⚙️ Text\nMulti Audio / 🇬🇧 / 🇵🇱",
+        "description": "",
+        "filename": "Text.MULTi.1080p.Text.WEB-DL.Text.1.H264-Text.mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-089",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text Text (Text) Text Text (1080p Text x265 HEVC Text-AC3-AAC 5.1)[Text-Text].mkv\n👤 3 💾 502.24 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text Text (Text) Text Text (1080p Text x265 HEVC Text-AC3-AAC 5.1)[Text-Text].mkv"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-090",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.1080p.Text.WEB-DL.Text.1.H.264-Text\n👤 2 💾 2.5 GB ⚙️ Text",
+        "description": ""
+      },
+      "expected": {
+        "height": 1080
+      }
+    },
+    {
+      "id": "captured-091",
+      "source": {
+        "name": "Torrentio\n1080p",
+        "title": "Text.WEBRip.1080p.H264.AAC-Text\nText.mp4\n👤 2 💾 734.57 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.mp4"
+      },
+      "expected": {
+        "height": 1080,
+        "container": "mp4"
+      }
+    },
+    {
+      "id": "captured-092",
+      "source": {
+        "name": "Torrentio\n720p",
+        "title": "Text.COMPLETE.REPACK.720p.Text.WEBRip.x264-Text\nText.REPACK.720p.Text.WEBRip.x264-Text.mkv\n👤 Text 💾 186.91 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.REPACK.720p.Text.WEBRip.x264-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-093",
+      "source": {
+        "name": "Torrentio\n720p",
+        "title": "Text Text COMPLETE Text 720p.10bit.WEBRip.x265-Text\nText.720p.10bit.WEBRip.x265-Text/Text.720p.10bit.WEBRip.x265-Text.mkv\n👤 Text 💾 110.94 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.10bit.WEBRip.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-094",
+      "source": {
+        "name": "Torrentio\n720p",
+        "title": "Text 1 [Text 720p][Text][AC3 5.1 Text][Text]\nText 1 [Text 720p][Text.Text][AC3 5.1 Text][Text].mkv\n👤 Text 💾 1.2 GB ⚙️ Text\n🇪🇸",
+        "description": "",
+        "filename": "Text 1 [Text 720p][Text.Text][AC3 5.1 Text][Text].mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv"
+      }
+    },
+    {
+      "id": "captured-095",
+      "source": {
+        "name": "Torrentio\n720p",
+        "title": "Text 720p.10bit.WEBRip.x265-Text\nText.720p.10bit.WEBRip.x265-Text/Text.720p.10bit.WEBRip.x265-Text.mkv\n👤 Text 💾 110.94 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.10bit.WEBRip.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-096",
+      "source": {
+        "name": "Torrentio\n720p",
+        "title": "Text.720p.WEB-DL.Text.1.Text-Text\nText.720p.Text.WEB-DL.Text.1.Text-Text.avi\n👤 10 💾 878.68 MB ⚙️ Text\n🇵🇱",
+        "description": "",
+        "filename": "Text.720p.Text.WEB-DL.Text.1.Text-Text.avi"
+      },
+      "expected": {
+        "height": 720,
+        "container": "avi"
+      }
+    },
+    {
+      "id": "captured-097",
+      "source": {
+        "name": "Torrentio\n720p",
+        "title": "Text-10 [720p Ita Eng Spa SubS] Text [Text]\nText.Ita.Eng.Spa.720p.h264.SubS-Text.mkv\n👤 10 💾 811.88 MB ⚙️ Text\n🇬🇧 / 🇮🇹 / 🇪🇸",
+        "description": "",
+        "filename": "Text.Ita.Eng.Spa.720p.h264.SubS-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-098",
+      "source": {
+        "name": "Torrentio\n720p",
+        "title": "Text.COMPLETE.720p.Text.WEBRip.x264-Text\nText.720p.Text.WEBRip.x264-Text.mkv\n👤 Text 💾 186.92 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.Text.WEBRip.x264-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-099",
+      "source": {
+        "name": "Torrentio\n720p",
+        "title": "Text.720p.WEB.H264-Text[Text]\n👤 Text 💾 790.21 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.web.h264-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-100",
+      "source": {
+        "name": "Torrentio\n720p",
+        "title": "Text 720p.10bit.WEBRip.x265-Text\nText.720p.10bit.WEBRip.x265-Text/Text.720p.10bit.WEBRip.x265-Text.mkv\n👤 2 💾 110.94 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.720p.10bit.WEBRip.x265-Text.mkv"
+      },
+      "expected": {
+        "height": 720,
+        "container": "mkv",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-101",
+      "source": {
+        "name": "Torrentio\nWEB-DL",
+        "title": "Text Text / Text Text / Text: 1 / Text: 1-10 Text 10 [Text WEB-Text] Text (Text) + Text + Sub (Rus Eng)\nText.WEB-Text.Text.[Text_Text].avi\n👤 Text 💾 486.34 MB ⚙️ Text\n🇬🇧 / 🇷🇺",
+        "description": "",
+        "filename": "Text.WEB-Text.Text.[Text_Text].avi"
+      },
+      "expected": {
+        "container": "avi"
+      }
+    },
+    {
+      "id": "captured-102",
+      "source": {
+        "name": "Torrentio\nWEBRip",
+        "title": "Text WEBRip x265-Text\nText.WEBRip.x265-Text[Text.Text].mp4\n👤 Text 💾 206.54 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.WEBRip.x265-Text[Text.Text].mp4"
+      },
+      "expected": {
+        "container": "mp4",
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-103",
+      "source": {
+        "name": "Torrentio\nWEB-DL",
+        "title": "Text Text / Text Text [Text-Text] (Text-Text) WEB-Text | Text\nText/Text.avi\n👤 5 💾 486.34 MB ⚙️ Text\n🇬🇧 / 🇷🇺",
+        "description": "",
+        "filename": "Text.avi"
+      },
+      "expected": {
+        "container": "avi"
+      }
+    },
+    {
+      "id": "captured-104",
+      "source": {
+        "name": "Torrentio\nWEB-DL",
+        "title": "Text WEB-DL x264-Text\nText.WEB-DL.x264-Text[Text.Text].mp4\n👤 5 💾 297.39 MB ⚙️ Text",
+        "description": "",
+        "filename": "Text.WEB-DL.x264-Text[Text.Text].mp4"
+      },
+      "expected": {
+        "container": "mp4",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-105",
+      "source": {
+        "name": "Torrentio\nWEBRip",
+        "title": "Text (Text-Text) [Text] SD x264 AAC ITA SUB ITA - Text\nText.ITA.WEBRIP.x264-Text.mkv\n👤 2 💾 279.73 MB ⚙️ Text\n🇬🇧 / 🇮🇹",
+        "description": "",
+        "filename": "Text.ITA.WEBRIP.x264-Text.mkv"
+      },
+      "expected": {
+        "container": "mkv",
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-106",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text",
+        "title": "📡 Text (Text) • Text\n🎞️ 1080p • MP4 • x264 • ~7.3 Text\n🛰️ Text: Text\n💾 2.20 GB",
+        "description": "📡 Text (Text) • Text\n🎞️ 1080p • MP4 • x264 • ~7.3 Text\n🛰️ Text: Text\n💾 2.20 GB",
+        "filename": "Text.1080p.web.h264-Text.mkv|^|Text~7.Text~7.Text",
+        "size_bytes": 2362232013
+      },
+      "expected": {
+        "height": 1080,
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-107",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text · Text",
+        "title": "📡 Text Text (Text) • Text\n🎞️ 1080p • MKV • WEB-DL • x264 • DDP 5.1 Atmos • ~7.7 Text\n🛰️ Text: Text · Text\n💾 2.31 GB",
+        "description": "📡 Text Text (Text) • Text\n🎞️ 1080p • MKV • WEB-DL • x264 • DDP 5.1 Atmos • ~7.7 Text\n🛰️ Text: Text · Text\n💾 2.31 GB",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.Atmos.H.264-Text.Text.mkv|^|Text~7.Text~7.Text",
+        "size_bytes": 2480343613
+      },
+      "expected": {
+        "height": 1080,
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-108",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text · Text",
+        "title": "📡 Text Text (Text) • Text\n🎞️ 1080p • MKV • WEB-DL • HEVC • DDP 5.1 Atmos • ~Text.1 Text\n🛰️ Text: Text · Text\n💾 1.23 GB",
+        "description": "📡 Text Text (Text) • Text\n🎞️ 1080p • MKV • WEB-DL • HEVC • DDP 5.1 Atmos • ~Text.1 Text\n🛰️ Text: Text · Text\n💾 1.23 GB",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.Atmos.H.265-Text.Text.mkv|^|Text~Text~Text",
+        "size_bytes": 1320702444
+      },
+      "expected": {
+        "height": 1080,
+        "video_codec": "HEVC"
+      }
+    },
+    {
+      "id": "captured-109",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text · Text",
+        "title": "📡 Text • Text\n🎞️ 1080p • Text • 5.7 Text\n🛰️ Text: Text · Text\n💾 1.71 GB",
+        "description": "📡 Text • Text\n🎞️ 1080p • Text • 5.7 Text\n🛰️ Text: Text · Text\n💾 1.71 GB",
+        "filename": "Text",
+        "size_bytes": 1835670000
+      },
+      "expected": {
+        "height": 1080
+      }
+    },
+    {
+      "id": "captured-110",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text",
+        "title": "📡 Text • Text\n🎞️ 1080p • H.265 • Text • Text Audio • ~2.Text Text\n🛰️ Text: Text\n💾 752 MB",
+        "description": "📡 Text • Text\n🎞️ 1080p • H.265 • Text • Text Audio • ~2.Text Text\n🛰️ Text: Text\n💾 752 MB",
+        "filename": "Text.1080p.Text|^|Text.Text~2.Text.Text~2.Text",
+        "size_bytes": 788147225
+      },
+      "expected": {
+        "height": 1080
+      }
+    },
+    {
+      "id": "captured-111",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text",
+        "title": "📡 Text • Text\n🎞️ 1080p • H.264 • MP4 • Text sub audio • ~1.8 Text\n🛰️ Text: Text\n💾 553 MB",
+        "description": "📡 Text • Text\n🎞️ 1080p • H.264 • MP4 • Text sub audio • ~1.8 Text\n🛰️ Text: Text\n💾 553 MB",
+        "filename": "Text.1080p.mp4|^|Text.Text~1.Text.Text~1.Text",
+        "size_bytes": 580103666
+      },
+      "expected": {
+        "height": 1080
+      }
+    },
+    {
+      "id": "captured-112",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text",
+        "title": "📡 Text • Text\n🎞️ 1080p • H.264 • MP4 • Russian sub audio • ~1.Text Text\n🛰️ Text: Text\n💾 581 MB\n🎧 Audio: Russian",
+        "description": "📡 Text • Text\n🎞️ 1080p • H.264 • MP4 • Russian sub audio • ~1.Text Text\n🛰️ Text: Text\n💾 581 MB\n🎧 Audio: Russian",
+        "filename": "Text.1080p.mp4|^|Text.Text~1.Text.Text~1.Text",
+        "size_bytes": 609644559
+      },
+      "expected": {
+        "height": 1080
+      }
+    },
+    {
+      "id": "captured-113",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text",
+        "title": "📡 Text • Text\n🎞️ 1080p • H.264 • MP4 • Russian dub audio • ~1.Text Text\n🛰️ Text: Text\n💾 581 MB\n🎧 Audio: Russian",
+        "description": "📡 Text • Text\n🎞️ 1080p • H.264 • MP4 • Russian dub audio • ~1.Text Text\n🛰️ Text: Text\n💾 581 MB\n🎧 Audio: Russian",
+        "filename": "Text.Russian.1080p.mp4|^|Text.Text~1.Text.Text~1.Text",
+        "size_bytes": 609698893
+      },
+      "expected": {
+        "height": 1080
+      }
+    },
+    {
+      "id": "captured-114",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text",
+        "title": "📡 Text • Text\n🎞️ 1080p • H.264 • MP4 • Text dub audio • ~1.7 Text\n🛰️ Text: Text\n💾 510 MB\n🎧 Audio: Portuguese",
+        "description": "📡 Text • Text\n🎞️ 1080p • H.264 • MP4 • Text dub audio • ~1.7 Text\n🛰️ Text: Text\n💾 510 MB\n🎧 Audio: Portuguese",
+        "filename": "Text.Portuguese.1080p.mp4|^|Text.Text~1.Text.Text~1.Text",
+        "size_bytes": 534311414
+      },
+      "expected": {
+        "height": 1080
+      }
+    },
+    {
+      "id": "captured-115",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text",
+        "title": "📡 Text Text • Text\n🎞️ 1080p • H.265 • Text • ~1.3 Text\n🛰️ Text: Text\n💾 409 MB",
+        "description": "📡 Text Text • Text\n🎞️ 1080p • H.265 • Text • ~1.3 Text\n🛰️ Text: Text\n💾 409 MB",
+        "filename": "Text.1080p.Text|^|Text.Text~1.Text.Text~1.Text",
+        "size_bytes": 429012148
+      },
+      "expected": {
+        "height": 1080
+      }
+    },
+    {
+      "id": "captured-116",
+      "source": {
+        "name": "🐧 Text 🧊 1080p • Text",
+        "title": "📡 Text • Text\n🎞️ 1080p • MP4 • ~1.0 Text\n🛰️ Text: Text\n💾 303 MB",
+        "description": "📡 Text • Text\n🎞️ 1080p • MP4 • ~1.0 Text\n🛰️ Text: Text\n💾 303 MB",
+        "filename": "Text~1.Text~1.Text",
+        "size_bytes": 317754773
+      },
+      "expected": {
+        "height": 1080
+      }
+    },
+    {
+      "id": "captured-117",
+      "source": {
+        "name": "🐧 Text 🐧 720p • Text · Text",
+        "title": "📡 Text • Text\n🎞️ 720p • Text • 2.Text Text\n🛰️ Text: Text · Text\n💾 808 MB",
+        "description": "📡 Text • Text\n🎞️ 720p • Text • 2.Text Text\n🛰️ Text: Text · Text\n💾 808 MB",
+        "filename": "Text",
+        "size_bytes": 847530000
+      },
+      "expected": {
+        "height": 720
+      }
+    },
+    {
+      "id": "captured-118",
+      "source": {
+        "name": "🐧 Text 🐧 720p • Text · Text",
+        "title": "📡 Text • Text\n🎞️ 720p • Text • Text.Text • Text\n🛰️ Text: Text · Text\n💾 1.31 GB",
+        "description": "📡 Text • Text\n🎞️ 720p • Text • Text.Text • Text\n🛰️ Text: Text · Text\n💾 1.31 GB",
+        "filename": "Text",
+        "size_bytes": 1408071765
+      },
+      "expected": {
+        "height": 720
+      }
+    },
+    {
+      "id": "captured-119",
+      "source": {
+        "name": "🐧 Text 🐧 720p • Text",
+        "title": "📡 Text • Text\n🎞️ 720p • H.265 • Text • Arabic sub audio • ~0.7 Text\n🛰️ Text: Text\n💾 204 MB\n🎧 Audio: Arabic",
+        "description": "📡 Text • Text\n🎞️ 720p • H.265 • Text • Arabic sub audio • ~0.7 Text\n🛰️ Text: Text\n💾 204 MB\n🎧 Audio: Arabic",
+        "filename": "Text.720p.Text|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 214359524
+      },
+      "expected": {
+        "height": 720
+      }
+    },
+    {
+      "id": "captured-120",
+      "source": {
+        "name": "🐧 Text 🐧 720p • Text",
+        "title": "📡 Text • Text\n🎞️ 720p • H.265 • Text • French dub audio • ~0.7 Text\n🛰️ Text: Text\n💾 215 MB\n🎧 Audio: French",
+        "description": "📡 Text • Text\n🎞️ 720p • H.265 • Text • French dub audio • ~0.7 Text\n🛰️ Text: Text\n💾 215 MB\n🎧 Audio: French",
+        "filename": "Text.French.720p.Text|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 225244114
+      },
+      "expected": {
+        "height": 720
+      }
+    },
+    {
+      "id": "captured-121",
+      "source": {
+        "name": "🐧 Text 🐧 720p • Text",
+        "title": "📡 Text • Text\n🎞️ 720p • H.264 • MP4 • Russian sub audio • ~0.8 Text\n🛰️ Text: Text\n💾 240 MB\n🎧 Audio: Russian",
+        "description": "📡 Text • Text\n🎞️ 720p • H.264 • MP4 • Russian sub audio • ~0.8 Text\n🛰️ Text: Text\n💾 240 MB\n🎧 Audio: Russian",
+        "filename": "Text.720p.mp4|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 251534931
+      },
+      "expected": {
+        "height": 720
+      }
+    },
+    {
+      "id": "captured-122",
+      "source": {
+        "name": "🐧 Text 🐧 720p • Text",
+        "title": "📡 Text • Text\n🎞️ 720p • H.264 • MP4 • Russian dub audio • ~0.8 Text\n🛰️ Text: Text\n💾 240 MB\n🎧 Audio: Russian",
+        "description": "📡 Text • Text\n🎞️ 720p • H.264 • MP4 • Russian dub audio • ~0.8 Text\n🛰️ Text: Text\n💾 240 MB\n🎧 Audio: Russian",
+        "filename": "Text.Russian.720p.mp4|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 251549772
+      },
+      "expected": {
+        "height": 720
+      }
+    },
+    {
+      "id": "captured-123",
+      "source": {
+        "name": "🐧 Text 🐧 720p • Text",
+        "title": "📡 Text • Text\n🎞️ 720p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~Text\n🛰️ Text: Text\n💾 1.31 GB\n🙊 Text Text subtitles",
+        "description": "📡 Text • Text\n🎞️ 720p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~Text\n🛰️ Text: Text\n💾 1.31 GB\n🙊 Text Text subtitles",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv|^|Text+5.Text~Text+5.Text~Text",
+        "size_bytes": 1408071765
+      },
+      "expected": {
+        "height": 720,
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-124",
+      "source": {
+        "name": "🐧 Text 🐧 720p • Text",
+        "title": "📡 Text • Text\n🎞️ 720p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~Text\n🛰️ Text: Text\n💾 1.47 GB\n🙊 Text Text subtitles",
+        "description": "📡 Text • Text\n🎞️ 720p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~Text\n🛰️ Text: Text\n💾 1.47 GB\n🙊 Text Text subtitles",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv|^|Text+5.Text~Text+5.Text~Text",
+        "size_bytes": 1581263940
+      },
+      "expected": {
+        "height": 720,
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-125",
+      "source": {
+        "name": "🐧 Text 🐧 720p • Text",
+        "title": "📡 Text • Text\n🎞️ 720p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~Text\n🛰️ Text: Text\n💾 1.31 GB\n🙊 Text Text subtitles",
+        "description": "📡 Text • Text\n🎞️ 720p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~Text\n🛰️ Text: Text\n💾 1.31 GB\n🙊 Text Text subtitles",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv|^|Text+5.Text~Text+5.Text~Text",
+        "size_bytes": 1408071765
+      },
+      "expected": {
+        "height": 720,
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-126",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text · Text",
+        "title": "📡 Text • Text\n🎞️ 480p • Text • Text.Text • 2.7 Text\n🛰️ Text: Text · Text\n💾 840 MB",
+        "description": "📡 Text • Text\n🎞️ 480p • Text • Text.Text • 2.7 Text\n🛰️ Text: Text · Text\n💾 840 MB",
+        "filename": "Text",
+        "size_bytes": 880280520
+      },
+      "expected": {
+        "height": 480
+      }
+    },
+    {
+      "id": "captured-127",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text",
+        "title": "📡 Text • Text\n🎞️ 480p • H.265 • MP4 • ~0.2 Text\n🛰️ Text: Text\n💾 65 MB",
+        "description": "📡 Text • Text\n🎞️ 480p • H.265 • MP4 • ~0.2 Text\n🛰️ Text: Text\n💾 65 MB",
+        "filename": "Text.480p.mp4|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 68331881
+      },
+      "expected": {
+        "height": 480
+      }
+    },
+    {
+      "id": "captured-128",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text",
+        "title": "📡 Text • Text\n🎞️ 480p • H.264 • MP4 • Text sub audio • ~0.5 Text\n🛰️ Text: Text\n💾 151 MB\n🎧 Audio: Text",
+        "description": "📡 Text • Text\n🎞️ 480p • H.264 • MP4 • Text sub audio • ~0.5 Text\n🛰️ Text: Text\n💾 151 MB\n🎧 Audio: Text",
+        "filename": "Text.480p.mp4|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 158483279
+      },
+      "expected": {
+        "height": 480
+      }
+    },
+    {
+      "id": "captured-129",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text",
+        "title": "📡 Text • Text\n🎞️ 480p • H.264 • MP4 • Portuguese dub audio • ~0.5 Text\n🛰️ Text: Text\n💾 139 MB\n🎧 Audio: Portuguese",
+        "description": "📡 Text • Text\n🎞️ 480p • H.264 • MP4 • Portuguese dub audio • ~0.5 Text\n🛰️ Text: Text\n💾 139 MB\n🎧 Audio: Portuguese",
+        "filename": "Text.Portuguese.480p.mp4|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 145509170
+      },
+      "expected": {
+        "height": 480
+      }
+    },
+    {
+      "id": "captured-130",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text",
+        "title": "📡 Text • Text\n🎞️ 480p • H.264 • MP4 • Russian sub audio • ~0.Text Text\n🛰️ Text: Text\n💾 132 MB\n🎧 Audio: Russian",
+        "description": "📡 Text • Text\n🎞️ 480p • H.264 • MP4 • Russian sub audio • ~0.Text Text\n🛰️ Text: Text\n💾 132 MB\n🎧 Audio: Russian",
+        "filename": "Text.480p.mp4|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 137938345
+      },
+      "expected": {
+        "height": 480
+      }
+    },
+    {
+      "id": "captured-131",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text",
+        "title": "📡 Text • Text\n🎞️ 480p • H.264 • MP4 • Russian dub audio • ~0.Text Text\n🛰️ Text: Text\n💾 132 MB\n🎧 Audio: Russian",
+        "description": "📡 Text • Text\n🎞️ 480p • H.264 • MP4 • Russian dub audio • ~0.Text Text\n🛰️ Text: Text\n💾 132 MB\n🎧 Audio: Russian",
+        "filename": "Text.Russian.480p.mp4|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 137935325
+      },
+      "expected": {
+        "height": 480
+      }
+    },
+    {
+      "id": "captured-132",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text",
+        "title": "📡 Text Text • Text\n🎞️ 480p • H.264 • MP4 • ~0.Text Text\n🛰️ Text: Text\n💾 109 MB",
+        "description": "📡 Text Text • Text\n🎞️ 480p • H.264 • MP4 • ~0.Text Text\n🛰️ Text: Text\n💾 109 MB",
+        "filename": "Text.480p.mp4|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 114249263
+      },
+      "expected": {
+        "height": 480
+      }
+    },
+    {
+      "id": "captured-133",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text",
+        "title": "📡 Text • Text\n🎞️ 480p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~2.7 Text\n🛰️ Text: Text\n💾 840 MB\n🙊 Text Text subtitles",
+        "description": "📡 Text • Text\n🎞️ 480p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~2.7 Text\n🛰️ Text: Text\n💾 840 MB\n🙊 Text Text subtitles",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv|^|Text+5.Text~2.Text+5.Text~2.Text",
+        "size_bytes": 880280520
+      },
+      "expected": {
+        "height": 480,
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-134",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text",
+        "title": "📡 Text • Text\n🎞️ 480p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~2.7 Text\n🛰️ Text: Text\n💾 827 MB\n🙊 Text Text subtitles",
+        "description": "📡 Text • Text\n🎞️ 480p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~2.7 Text\n🛰️ Text: Text\n💾 827 MB\n🙊 Text Text subtitles",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv|^|Text+5.Text~2.Text+5.Text~2.Text",
+        "size_bytes": 866780025
+      },
+      "expected": {
+        "height": 480,
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-135",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text",
+        "title": "📡 Text • Text\n🎞️ 480p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~2.7 Text\n🛰️ Text: Text\n💾 840 MB\n🙊 Text Text subtitles",
+        "description": "📡 Text • Text\n🎞️ 480p • WEB-DL • H.264 • DD+ 5.1 • MKV • ~2.7 Text\n🛰️ Text: Text\n💾 840 MB\n🙊 Text Text subtitles",
+        "filename": "Text.1080p.Text.WEB-DL.Text.1.H.264-Text.mkv|^|Text+5.Text~2.Text+5.Text~2.Text",
+        "size_bytes": 880280520
+      },
+      "expected": {
+        "height": 480,
+        "video_codec": "AVC"
+      }
+    },
+    {
+      "id": "captured-136",
+      "source": {
+        "name": "🐧 Text 🐧 480p • Text",
+        "title": "📡 Text • Text\n🎞️ 480p • MP4 • ~0.2 Text\n🛰️ Text: Text\n💾 65 MB",
+        "description": "📡 Text • Text\n🎞️ 480p • MP4 • ~0.2 Text\n🛰️ Text: Text\n💾 65 MB",
+        "filename": "Text~0.Text~0.Text",
+        "size_bytes": 68331881
+      },
+      "expected": {
+        "height": 480
+      }
+    },
+    {
+      "id": "captured-137",
+      "source": {
+        "name": "🐧 Text 🐧 Text • Text",
+        "title": "📡 Text • Text\n🎞️ Text • H.264 • MP4 • Portuguese dub audio • ~0.3 Text\n🛰️ Text: Text\n💾 84 MB\n🎧 Audio: Portuguese",
+        "description": "📡 Text • Text\n🎞️ Text • H.264 • MP4 • Portuguese dub audio • ~0.3 Text\n🛰️ Text: Text\n💾 84 MB\n🎧 Audio: Portuguese",
+        "filename": "Text.Portuguese.Text.mp4|^|Text.Text~0.Text.Text~0.Text",
+        "size_bytes": 88011572
+      },
+      "expected": {}
+    },
+    {
+      "id": "captured-138",
+      "source": {
+        "name": "🐧 Text 🐧 Text • Text",
+        "title": "📡 Text • Text\n🎞️ Text • MP4 • ~0.2 Text\n🛰️ Text: Text\n💾 61 MB",
+        "description": "📡 Text • Text\n🎞️ Text • MP4 • ~0.2 Text\n🛰️ Text: Text\n💾 61 MB",
+        "filename": "Text~0.Text~0.Text",
+        "size_bytes": 63955011
+      },
+      "expected": {}
+    },
+    {
+      "id": "captured-139",
+      "source": {
+        "name": "🐧 Text 🐧 Text • Text · Text",
+        "title": "📡 Text • Text\n🎞️ Text • Text\n🛰️ Text: Text · Text",
+        "description": "📡 Text • Text\n🎞️ Text • Text\n🛰️ Text: Text · Text",
+        "filename": "Text"
+      },
+      "expected": {}
+    },
+    {
+      "id": "captured-140",
+      "source": {
+        "name": "🐧 Text 🐧 Text • Text · Text",
+        "title": "📡 Text • Text\n🎞️ Text • Text • Text.Text • Text Text\n🛰️ Text: Text · Text\n💾 225 MB",
+        "description": "📡 Text • Text\n🎞️ Text • Text • Text.Text • Text Text\n🛰️ Text: Text · Text\n💾 225 MB",
+        "filename": "Text",
+        "size_bytes": 236427975
+      },
+      "expected": {}
+    }
+  ]
+}

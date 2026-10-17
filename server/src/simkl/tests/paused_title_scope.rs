@@ -70,7 +70,7 @@ async fn paused_import_scopes_equal_numeric_ids_to_the_explicit_title_category()
                 &app,
                 "member-token-1",
                 "GET",
-                "/api/v3/profiles/1/library",
+                "/api/profiles/1/library",
                 Value::Null
             )
             .await
@@ -83,7 +83,7 @@ async fn paused_import_scopes_equal_numeric_ids_to_the_explicit_title_category()
                     &app,
                     "member-token-1",
                     "GET",
-                    "/api/v3/profiles/1/imports/simkl",
+                    "/api/profiles/1/imports/simkl",
                     Value::Null,
                 )
                 .await;

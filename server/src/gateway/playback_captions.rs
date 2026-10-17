@@ -54,6 +54,12 @@ pub(crate) async fn attach(
         .as_deref()
         .ok_or_else(auth::forbidden)?;
     let scoped = app.clone().with_lease(lease.clone());
+    crate::engine_v3::subtitles::validate_playback_context(
+        &scoped,
+        &lease,
+        &input.subtitle_id,
+        entry.proof.metadata_proof.as_ref(),
+    )?;
     let caption = crate::engine_v3::subtitles::load(
         &scoped,
         &lease,

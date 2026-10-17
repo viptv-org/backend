@@ -12,7 +12,7 @@ fn known_age(value: &str) -> Option<i64> {
         _ => None,
     }
 }
-fn assessment(meta: &Value) -> (Option<i64>, bool) {
+pub(super) fn assessment(meta: &Value) -> (Option<i64>, bool) {
     let mut ages = HashSet::new();
     let mut unknown = false;
     for key in ["certification", "contentRating", "ageRating", "mpaaRating"] {

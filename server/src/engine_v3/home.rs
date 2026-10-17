@@ -1,6 +1,6 @@
 use super::*;
 use viptv_engine::{
-    home::{assemble, RowRequest},
+    home::{RowRequest, assemble},
     presentation::HomeSnapshot,
 };
 
@@ -16,25 +16,24 @@ pub(super) async fn load(
         profile,
         viptv_engine::capabilities::Capability::Discovery,
     )?;
+    let home_addon_revision = app.addons.revision()?;
     crate::simkl::imports::schedule(&app, &lease, profile);
-    let (queue, favorites, revision) = {
+    // Use the same origin-aware personal projections as the explicit routes.
+    // This snapshot owns its DB lock; never call it inside the favorites lock.
+    let continuation = super::continuation::snapshot(&app, &lease, profile, 0, 12)?;
+    let queue = continuation
+        .entries
+        .into_iter()
+        .map(|entry| entry.card)
+        .collect();
+    let (favorites, revision) = {
         let db = app
             .db
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?;
         app.require_profile(&db, profile)?;
-        let mut queue = crate::continuation::queue(&db, profile, 0, 12)?;
-        queue["items"] = json!(kids::filter_items(
-            &db,
-            &app.identity(),
-            queue["items"].as_array().cloned().unwrap_or_default()
-        )?);
-        let allowed = kids::sql_allowed("favorites.type", "favorites.id", "?1");
-        let mut q=db.prepare(&format!("SELECT id,type,name,poster,context,added_at_millis FROM favorites WHERE profile_id=?1 AND {allowed} ORDER BY added_at_millis DESC,name COLLATE NOCASE,type,id LIMIT 12")).map_err(db_error)?;
-        let favorites=q.query_map([profile],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"added_at_millis":r.get::<_,Option<u64>>(5)?,"engine_favorite":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
         (
-            queue,
-            super::library::cards(&db, &app.identity(), favorites)?,
+            super::scoped_library::home_favorites_db(&db, &app, profile)?,
             configuration_revision.saturating_add(super::history::revision(&db, profile)?),
         )
     };
@@ -45,28 +44,6 @@ pub(super) async fn load(
     } else {
         app.addons.catalogs()?
     };
-    let queue = queue["items"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|item| {
-            let record = super::history::record(item)?;
-            let mut card = record.card();
-            if item["queue_status"] == "next" {
-                if let Ok(verified) = serde_json::from_value::<viptv_engine::presentation::Card>(
-                    item["engine_presentation"].clone(),
-                ) {
-                    if verified.identity == card.identity {
-                        card = viptv_engine::presentation::enrich_card(&card, &verified);
-                        card.metadata = verified.metadata;
-                        card.subtitle = verified.subtitle;
-                    }
-                }
-                card.progress = None;
-            }
-            Some(card)
-        })
-        .collect();
     let mut browse_actions = HashMap::from([
         (
             "continue".to_owned(),
@@ -115,7 +92,7 @@ pub(super) async fn load(
             });
         }
     }
-    for c in catalogs.as_array().into_iter().flatten().take(6) {
+    for c in catalogs.as_array().into_iter().flatten().take(10) {
         let Some(catalog) = c["id"].as_str().map(str::to_owned) else {
             continue;
         };
@@ -197,6 +174,12 @@ pub(super) async fn load(
     );
     snapshot.hero = snapshot.featured.first().cloned();
     snapshot.revision = revision;
+    if app.addons.revision()? != home_addon_revision {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "Home integrations changed. Try again.".into(),
+        ));
+    }
     configuration::validate_revision(&app, profile, configuration_revision)?;
     lease.validate(
         &*app
@@ -209,6 +192,9 @@ pub(super) async fn load(
 
 async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
     use futures::StreamExt;
+    let Ok(addon_revision) = app.addons.revision() else {
+        return;
+    };
     let mut candidates = snapshot
         .featured
         .iter()
@@ -226,33 +212,63 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
     let mut seen = std::collections::HashSet::new();
     candidates.retain(|card| {
         let identity = card.parent_identity.as_ref().unwrap_or(&card.identity);
-        seen.insert((identity.kind.clone(), identity.id.clone()))
+        seen.insert((
+            card.metadata_origin.as_ref().and_then(|o| o.key().ok()),
+            card.provider_id.clone(),
+            serde_json::to_string(identity).unwrap_or_default(),
+        ))
     });
     let mut tasks = futures::stream::iter(candidates.into_iter().map(|card| {
         let app = app.clone();
         async move {
-            let result = if card
-                .parent_identity
+            let simkl_origin = card
+                .metadata_origin
                 .as_ref()
-                .unwrap_or(&card.identity)
-                .id
-                .starts_with("simkl:")
-                || crate::simkl::imports::remote_identity(
-                    &app,
-                    profile,
-                    &card.parent_identity.as_ref().unwrap_or(&card.identity).kind,
-                    &card.parent_identity.as_ref().unwrap_or(&card.identity).id,
-                )
-                .ok()
-                .flatten()
-                .is_some()
+                .map(|origin| origin.provider_id == "simkl");
+            let result = if simkl_origin == Some(true)
+                || simkl_origin.is_none()
+                    && (card
+                        .parent_identity
+                        .as_ref()
+                        .unwrap_or(&card.identity)
+                        .id
+                        .starts_with("simkl:")
+                        || crate::simkl::imports::remote_identity(
+                            &app,
+                            profile,
+                            &card.parent_identity.as_ref().unwrap_or(&card.identity).kind,
+                            &card.parent_identity.as_ref().unwrap_or(&card.identity).id,
+                        )
+                        .ok()
+                        .flatten()
+                        .is_some())
             {
                 crate::simkl::home_metadata(&app, profile, card.clone())
                     .await
                     .ok()
             } else {
                 let identity = card.parent_identity.as_ref().unwrap_or(&card.identity);
-                match app.addons.meta(&identity.kind, &identity.id).await {
+                let metadata = if let Some(origin) = &card.metadata_origin {
+                    let selected = super::origins::selectors(&app, None, None, Some(origin));
+                    selected
+                        .and_then(|(provider, addon)| {
+                            super::search::metadata_scope(
+                                app.clone(),
+                                &app.request_lease(),
+                                profile,
+                                provider.as_deref().ok_or_else(auth::forbidden)?,
+                                addon,
+                            )
+                        })
+                        .map(|(app, _, _)| app)
+                } else {
+                    Ok(app.clone())
+                };
+                let fetched = match metadata {
+                    Ok(host) => host.addons.meta(&identity.kind, &identity.id).await,
+                    Err(_) => Err("Metadata scope unavailable".into()),
+                };
+                match fetched {
                     Ok(raw) => viptv_engine::stremio::detail(
                         &raw.to_string(),
                         &card.provider_id,
@@ -261,7 +277,11 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
                         0,
                     )
                     .ok()
-                    .map(|detail| detail.item),
+                    .map(|detail| {
+                        let mut item = detail.item;
+                        item.metadata_origin = card.metadata_origin.clone();
+                        item
+                    }),
                     Err(_) => None,
                 }
             };
@@ -275,10 +295,19 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
         let Some(metadata) = result else {
             continue;
         };
-        super::source_integrations::cache_card(
+        let mut expected = original.clone();
+        if let Some(parent) = &original.parent_identity {
+            expected.identity = parent.clone();
+            expected.parent_identity = None;
+        }
+        if super::origins::check_expected_at(app, Some(&expected), &metadata).is_err() {
+            continue;
+        }
+        super::source_integrations::cache_card_at(
             app,
             &app.request_lease(),
             snapshot.scope.revision,
+            &addon_revision,
             metadata.clone(),
         );
         apply_metadata(snapshot, &original, &metadata);
@@ -301,10 +330,11 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while let Ok(Some((original, metadata))) = tokio::time::timeout_at(deadline, logos.next()).await
     {
-        super::source_integrations::cache_card(
+        super::source_integrations::cache_card_at(
             app,
             &app.request_lease(),
             snapshot.scope.revision,
+            &addon_revision,
             metadata.clone(),
         );
         apply_metadata(snapshot, &original, &metadata);
@@ -331,7 +361,11 @@ fn apply_metadata(
         )
     {
         let target = card.parent_identity.as_ref().unwrap_or(&card.identity);
-        if target.id == identity.id && target.kind == identity.kind {
+        if target.id == identity.id
+            && target.kind == identity.kind
+            && card.metadata_origin == original.metadata_origin
+            && (card.metadata_origin.is_some() || card.provider_id == original.provider_id)
+        {
             *card = viptv_engine::presentation::enrich_card(card, metadata);
         }
     }

@@ -8,7 +8,7 @@ async fn metadata_and_tracking_require_exact_identity_and_current_profile_link()
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/simkl/search?category=movie&query=Movie",
+        "/api/profiles/1/simkl/search?category=movie&query=Movie",
         json!({}),
     )
     .await;
@@ -18,7 +18,7 @@ async fn metadata_and_tracking_require_exact_identity_and_current_profile_link()
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/simkl/meta/tv/20",
+        "/api/profiles/1/simkl/meta/tv/20",
         json!({}),
     )
     .await;
@@ -29,7 +29,7 @@ async fn metadata_and_tracking_require_exact_identity_and_current_profile_link()
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/profiles/1/simkl/meta/movie/11",
+            "/api/profiles/1/simkl/meta/movie/11",
             json!({})
         )
         .await
@@ -45,7 +45,7 @@ async fn metadata_and_tracking_require_exact_identity_and_current_profile_link()
                 &app,
                 "member-token-1",
                 "POST",
-                "/api/v3/profiles/1/simkl/watched",
+                "/api/profiles/1/simkl/watched",
                 input
             )
             .await
@@ -58,7 +58,7 @@ async fn metadata_and_tracking_require_exact_identity_and_current_profile_link()
         &app,
         "member-token-1",
         "POST",
-        "/api/v3/profiles/1/simkl/watched",
+        "/api/profiles/1/simkl/watched",
         json!({"category":"tv","id":20,"season":1,"episode":2}),
     )
     .await;
@@ -70,7 +70,7 @@ async fn metadata_and_tracking_require_exact_identity_and_current_profile_link()
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1/simkl",
+            "/api/profiles/1/simkl",
             json!({})
         )
         .await
@@ -82,7 +82,7 @@ async fn metadata_and_tracking_require_exact_identity_and_current_profile_link()
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/simkl/watched",
+            "/api/profiles/1/simkl/watched",
             json!({"category":"movie","id":10})
         )
         .await
@@ -102,7 +102,7 @@ async fn unlink_invalidates_pending_oauth_and_disabled_assignment_blocks_trackin
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1/simkl",
+            "/api/profiles/1/simkl",
             json!({})
         )
         .await
@@ -125,7 +125,7 @@ async fn unlink_invalidates_pending_oauth_and_disabled_assignment_blocks_trackin
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         json!({}),
     )
     .await;
@@ -140,7 +140,7 @@ async fn unlink_invalidates_pending_oauth_and_disabled_assignment_blocks_trackin
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/integrations",
+            "/api/profiles/1/integrations",
             json!({"revision":0,"browsing_plugin":"stremio","assignments":[]})
         )
         .await
@@ -152,7 +152,7 @@ async fn unlink_invalidates_pending_oauth_and_disabled_assignment_blocks_trackin
             &app,
             "member-token-1",
             "POST",
-            "/api/v3/profiles/1/simkl/watched",
+            "/api/profiles/1/simkl/watched",
             json!({"category":"movie","id":10})
         )
         .await
@@ -182,7 +182,7 @@ async fn upstream_metadata_authorization_failure_does_not_expire_viptv_session()
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/simkl/meta/movie/10",
+        "/api/profiles/1/simkl/meta/movie/10",
         json!({}),
     )
     .await;
@@ -191,7 +191,7 @@ async fn upstream_metadata_authorization_failure_does_not_expire_viptv_session()
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/simkl",
+        "/api/profiles/1/simkl",
         json!({}),
     )
     .await;
@@ -238,8 +238,8 @@ async fn oauth_required_metadata_uses_profile_link_without_populating_public_cac
     });
     app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
     for path in [
-        "/api/v3/profiles/1/simkl/search?category=movie&query=Movie",
-        "/api/v3/profiles/1/simkl/meta/movie/10",
+        "/api/profiles/1/simkl/search?category=movie&query=Movie",
+        "/api/profiles/1/simkl/meta/movie/10",
     ] {
         assert_eq!(
             request(&app, "member-token-1", "GET", path, json!({}))
@@ -253,7 +253,7 @@ async fn oauth_required_metadata_uses_profile_link_without_populating_public_cac
             &app,
             "member-token-1",
             "DELETE",
-            "/api/v3/profiles/1/simkl",
+            "/api/profiles/1/simkl",
             json!({})
         )
         .await
@@ -265,7 +265,7 @@ async fn oauth_required_metadata_uses_profile_link_without_populating_public_cac
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/profiles/1/simkl/meta/movie/10",
+            "/api/profiles/1/simkl/meta/movie/10",
             json!({})
         )
         .await
@@ -278,7 +278,7 @@ async fn oauth_required_metadata_uses_profile_link_without_populating_public_cac
 #[tokio::test]
 async fn related_titles_and_full_metadata_arrive_in_one_selected_provider_detail_response(){
  let (app,task,_)=server().await;
- let (status,body)=request(&app,"member-token-1","GET","/api/v3/profiles/1/simkl/meta/movie/10",json!({})).await;
+ let (status,body)=request(&app,"member-token-1","GET","/api/profiles/1/simkl/meta/movie/10",json!({})).await;
  assert_eq!(status,StatusCode::OK,"{body}");assert_eq!(body["item"]["metadata"]["runtime_minutes"],120);assert_eq!(body["item"]["description"],"Full movie detail");assert_eq!(body["recommendations"].as_array().unwrap().len(),1);assert_eq!(body["recommendations"][0]["identity"]["id"],"simkl:movie:12");
  task.abort();
 }
@@ -292,7 +292,7 @@ async fn all_search_keeps_anime_subtype_and_ranks_naruto_above_unrelated_movie_o
  .route("/search/anime",get(||async{axum::Json(json!([{ "title":"Naruto","endpoint_type":"anime","type":"tv","ids":{"simkl_id":4},"ratings":{"imdb":{"rating":8.4,"votes":150000}}},{"title":"Naruto movie","endpoint_type":"anime","type":"movie","ids":{"simkl_id":5}}]))}));
  let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();let task=tokio::spawn(async move{axum::serve(listener,router).await.unwrap()});
  app.simkl=Arc::new(Service::fixture(&format!("http://{address}")));
- let (status,body)=request(&app,"member-token-1","GET","/api/v3/discover?type=all&search=Naruto",json!({})).await;
+ let (status,body)=request(&app,"member-token-1","GET","/api/discover?type=all&search=Naruto",json!({})).await;
  assert_eq!(status,StatusCode::OK,"{body}");assert_eq!(body["cards"].as_array().unwrap().len(),5);assert_eq!(body["cards"][0]["identity"]["id"],"simkl:anime:4");assert_eq!(body["cards"][0]["category"],"anime");assert_eq!(body["cards"][0]["identity"]["kind"],"series");
  task.abort();
 }

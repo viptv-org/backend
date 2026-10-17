@@ -103,8 +103,9 @@ pub(super) fn record(item: &Value) -> Option<PlaybackRecord> {
                     })
             });
     Some(PlaybackRecord {
-        times_watched:None,
-        presentation:None,
+        metadata_origin: None,
+        times_watched: None,
+        presentation: None,
         identity,
         parent_identity,
         provider_id: item["engine_provider_id"]
@@ -124,35 +125,67 @@ pub(super) fn record(item: &Value) -> Option<PlaybackRecord> {
     })
 }
 
+#[derive(Deserialize)]
+pub(crate) struct Page {
+    #[serde(default)]
+    offset: u32,
+    #[serde(default = "history_limit")]
+    limit: u32,
+    #[serde(default, rename = "exclude_live")]
+    _exclude_live: Option<bool>,
+}
+fn history_limit() -> u32 {
+    20
+}
 pub(crate) async fn list(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path(profile): Path<i64>,
-    Query(page): Query<crate::library::Page>,
+    Query(page): Query<Page>,
 ) -> ApiResult {
-    let axum::Json(page) = crate::library::history_page(
-        State(app.clone()),
-        Extension(lease.clone()),
-        Path(profile),
-        Query(page),
-    )
-    .await?;
+    if page.offset > 10000 || !(1..=100).contains(&page.limit) {
+        return Err("Invalid history page".into());
+    }
+    let offset = page.offset as usize;
+    let limit = page.limit as usize;
     let app = app.with_lease(lease);
     let db = app
         .db
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
     app.require_profile(&db, profile)?;
-    let items = kids::filter_items(
-        &db,
-        &app.identity(),
-        page["items"].as_array().cloned().unwrap_or_default(),
-    )?;
-    let entries = items
+    let mut q=db.prepare("SELECT id,type,name,poster,position,duration,updated_at,context,title_id FROM progress WHERE profile_id=?1 AND type IN ('movie','series') ORDER BY updated_at DESC LIMIT 50001").map_err(db_error)?;
+    let items=q.query_map([profile],|r|{let context=serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(Value::Null);let mut item=json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"position":r.get::<_,f64>(4)?,"duration":r.get::<_,f64>(5)?,"updated_at":r.get::<_,u64>(6)?,"series_id":r.get::<_,Option<String>>(8)?});restore(&mut item,&context);crate::library::add_watch_fields(&mut item,&context);if let Ok(context)=matching_context(&context){item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());}Ok(item)}).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
+    if items.len() > 50000 {
+        return Err("History exceeds its bounded item limit".into());
+    }
+    let mut records = std::collections::BTreeMap::new();
+    for item in kids::filter_items(&db, &app.identity(), items)? {
+        if let Some(record) = record(&item) {
+            records.insert(scoped_library::raw_key(&record.card())?, record);
+        }
+    }
+    for saved in scoped_library::playback_db(&db, &app, profile)? {
+        if records
+            .get(&saved.key)
+            .is_none_or(|r| r.updated_at_millis <= saved.updated)
+        {
+            records.insert(saved.key, saved.value);
+        }
+    }
+    let mut records = records.into_values().collect::<Vec<_>>();
+    records.sort_by(|a, b| {
+        b.updated_at_millis
+            .cmp(&a.updated_at_millis)
+            .then_with(|| a.identity.id.cmp(&b.identity.id))
+    });
+    let entries = records
         .iter()
-        .filter_map(record)
-        .map(|record| HistoryEntry::from(&record))
+        .skip(offset)
+        .take(limit)
+        .map(HistoryEntry::from)
         .collect::<Vec<_>>();
+
     Ok(axum::Json(
         serde_json::to_value(entries).map_err(|_| ApiError::from("History unavailable"))?,
     ))
@@ -183,9 +216,11 @@ pub(super) fn revision(db: &Connection, profile: i64) -> Result<u64, ApiError> {
 
 /// Clears this selected profile's local progress; never calls a provider history API.
 pub(crate) async fn clear(
-    State(app): State<App>, Extension(lease): Extension<ResourceLease>, Path(profile): Path<i64>,
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(profile): Path<i64>,
 ) -> ApiResult {
-    let app=app.with_lease(lease);
+    let app = app.with_lease(lease);
     tokio::task::spawn_blocking(move || {
         let mut db=app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;
         app.require_profile(&db,profile)?;
@@ -194,6 +229,8 @@ pub(crate) async fn clear(
         transaction.execute("INSERT INTO simkl_import_history_floors VALUES(?1,?2) ON CONFLICT(profile_id) DO UPDATE SET cutoff_millis=MAX(cutoff_millis,excluded.cutoff_millis)",params![profile,util::now_millis()]).map_err(db_error)?;
         transaction.execute("DELETE FROM progress WHERE profile_id=?1",[profile]).map_err(db_error)?;
         transaction.execute("DELETE FROM continuation_cache WHERE profile_id=?1",[profile]).map_err(db_error)?;
+        transaction.execute("DELETE FROM engine_scoped_records WHERE profile_id=?1 AND record_kind='playback'",[profile]).map_err(db_error)?;
+        transaction.execute("DELETE FROM engine_scoped_next WHERE profile_id=?1",[profile]).map_err(db_error)?;
         transaction.commit().map_err(db_error)?;
         Ok(axum::Json(json!({"ok":true})))
     }).await.map_err(|_|ApiError::from("History unavailable"))?

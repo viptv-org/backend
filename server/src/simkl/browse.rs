@@ -14,9 +14,24 @@ impl Service {
         if !path.starts_with('/') || path.starts_with("//") || path.contains("..") {
             return Err("Invalid Simkl document".into());
         }
-        let mut cache = self.public_documents.lock().await;
+        // Only identical documents share a fetch gate. A cold calendar must not
+        // block an unrelated genre index (including already cached documents).
+        let entry = {
+            let mut documents = self.public_documents.lock().await;
+            if !documents.contains_key(path) && documents.len() >= 64 {
+                documents.retain(|_, value| Arc::strong_count(value) > 1);
+                if documents.len() >= 64 {
+                    return Err(ApiError(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Simkl public data is busy".into(),
+                    ));
+                }
+            }
+            documents.entry(path.to_owned()).or_default().clone()
+        };
+        let mut cache = entry.lock().await;
         check()?;
-        if let Some((_, value)) = cache.get(path).filter(|(time, _)| time.elapsed() < ttl) {
+        if let Some((_, value)) = cache.as_ref().filter(|(time, _)| time.elapsed() < ttl) {
             return Ok(value.clone());
         }
         let config = self.config.as_ref().ok_or_else(unavailable)?;
@@ -40,12 +55,8 @@ impl Service {
                 "Simkl public data is unavailable".into(),
             )
         })?;
-        cache.retain(|_, (time, _)| time.elapsed() < Duration::from_secs(5 * 3600));
-        if cache.len() >= 64 {
-            cache.clear();
-        }
         let value = Arc::new(value);
-        cache.insert(path.into(), (Instant::now(), value.clone()));
+        *cache = Some((Instant::now(), value.clone()));
         Ok(value)
     }
 }
@@ -92,6 +103,7 @@ pub(crate) async fn controls(
         value: "all".into(),
         label: "All genres".into(),
     }];
+    let mut seen = std::collections::HashSet::from(["all"]);
     for genre in genres {
         let (Some(slug), Some(name)) = (genre["slug"].as_str(), genre["name"].as_str()) else {
             continue;
@@ -103,6 +115,7 @@ pub(crate) async fn controls(
                 .all(|b| b.is_ascii_lowercase() || b == b'-' || b.is_ascii_digit())
             && name.len() <= 128
             && !name.chars().any(char::is_control)
+            && seen.insert(slug)
         {
             choices.push(Choice {
                 value: slug.into(),

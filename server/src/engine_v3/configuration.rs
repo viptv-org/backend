@@ -68,18 +68,41 @@ pub(crate) fn read(
     lease: &ResourceLease,
     profile: i64,
 ) -> Result<(ProfileConfiguration, Vec<IntegrationConnection>), ApiError> {
+    read_inner(app, lease, profile, None)
+}
+pub(crate) fn read_parent(
+    app: &App,
+    parent: &crate::kids::parent_scope::ParentScope,
+) -> Result<(ProfileConfiguration, Vec<IntegrationConnection>), ApiError> {
+    read_inner(app, parent.lease(), parent.profile(), Some(parent))
+}
+fn read_inner(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    parent: Option<&crate::kids::parent_scope::ParentScope>,
+) -> Result<(ProfileConfiguration, Vec<IntegrationConnection>), ApiError> {
     let account = lease.principal.account_id().ok_or_else(auth::forbidden)?;
     let mut connections = app.addons.engine_connections(account)?;
     let db = app
         .db
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
-    app.require_profile(&db, profile)?;
+    if let Some(parent) = parent {
+        if parent.profile() != profile {
+            return Err(auth::forbidden());
+        }
+        parent.validate(&db)?;
+    } else {
+        app.require_profile(&db, profile)?;
+    }
     if app.simkl.configured() && app.secret_vault.is_some() {
         connections.extend(crate::simkl::connections(&db, account, profile)?);
     }
-    connections.extend(super::source_integrations::connections(&db,account,profile)?);
-    connections.extend(super::live::connections(&db,account,profile)?);
+    connections.extend(super::source_integrations::connections(
+        &db, account, profile,
+    )?);
+    connections.extend(super::live::connections(&db, account, profile)?);
     let stored: Option<String> = db
         .query_row(
             "SELECT value FROM engine_profile_configuration WHERE profile_id=?1 AND account_id=?2",
@@ -88,7 +111,7 @@ pub(crate) fn read(
         )
         .optional()
         .map_err(db_error)?;
-    let mut configuration:ProfileConfiguration = if let Some(value) = stored {
+    let mut configuration: ProfileConfiguration = if let Some(value) = stored {
         serde_json::from_str(&value)
             .map_err(|_| ApiError::from("Profile configuration unavailable"))?
     } else {
@@ -116,8 +139,12 @@ pub(crate) fn read(
                 .collect(),
         }
     };
-    configuration.name=db.query_row("SELECT name FROM profiles WHERE id=?1",[profile],|r|r.get(0)).map_err(db_error)?;
-    configuration.avatar_id=super::profiles::avatar(&db,profile)?;
+    configuration.name = db
+        .query_row("SELECT name FROM profiles WHERE id=?1", [profile], |r| {
+            r.get(0)
+        })
+        .map_err(db_error)?;
+    configuration.avatar_id = super::profiles::avatar(&db, profile)?;
     Ok((configuration, connections))
 }
 

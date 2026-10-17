@@ -1,9 +1,18 @@
 use super::*;
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Visibility {
+    identity: MediaIdentity,
+    parent_identity: Option<MediaIdentity>,
+    hidden: bool,
+    metadata_origin: Option<viptv_engine::origin::MetadataOrigin>,
+    card: Option<Card>,
+}
 pub(crate) async fn update(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path(profile): Path<i64>,
-    axum::Json(input): axum::Json<QueueVisibilityRequest>,
+    axum::Json(input): axum::Json<Visibility>,
 ) -> ApiResult {
     validate(&input.identity, input.parent_identity.as_ref())?;
     let app = app.with_lease(lease.clone());
@@ -14,6 +23,31 @@ pub(crate) async fn update(
     app.require_profile(&db, profile)?;
     lease.validate(&db)?;
     let configuration_revision = configuration_revision(&db, profile)?;
+    if input.metadata_origin.is_some() || input.card.is_some() {
+        let card = input.card.ok_or("Stored continuation card is required")?;
+        let origin = input.metadata_origin.ok_or("Metadata origin is required")?;
+        if card.metadata_origin.as_ref() != Some(&origin)
+            || card.identity != input.identity
+            || card.parent_identity != input.parent_identity
+        {
+            return Err("Continuation selector does not match the stored title".into());
+        }
+        let tx = db.transaction().map_err(db_error)?;
+        let identity =
+            super::super::scoped_library::visibility_db(&tx, &app, profile, &card, input.hidden)?;
+        let revision =
+            configuration_revision.saturating_add(super::super::history::revision(&tx, profile)?);
+        tx.commit().map_err(db_error)?;
+        return Ok(axum::Json(
+            serde_json::to_value(QueueVisibilityReceipt {
+                scope: super::super::scope(&lease, profile, configuration_revision),
+                revision,
+                identity,
+                hidden: input.hidden,
+            })
+            .map_err(|_| ApiError::from("Visibility unavailable"))?,
+        ));
+    }
     kids::require_item(
         &db,
         &lease.principal,

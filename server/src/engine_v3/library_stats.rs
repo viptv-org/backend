@@ -58,7 +58,7 @@ pub(crate) fn entries(
         return Err("Library exceeds its bounded item limit".into());
     }
     let mut cards = super::library::cards(&db, &app.identity(), items)?;
-    super::source_integrations::merge_cached(app, lease, revision, &mut cards);
+    super::source_integrations::merge_cached_with_db(app, lease, revision, &db, &mut cards);
     let mut progress=db.prepare("SELECT p.id,p.type,p.position,p.duration,p.updated_at,p.context,p.title_id,w.count FROM progress p LEFT JOIN engine_watch_counts w ON w.profile_id=p.profile_id AND w.type=p.type AND w.id=p.id WHERE p.profile_id=?1 AND p.type IN ('movie','series') LIMIT 50001").map_err(db_error)?;
     let history = progress
         .query_map([profile], |r| {
@@ -79,10 +79,10 @@ pub(crate) fn entries(
     if history.len() > 50000 {
         return Err("History exceeds its bounded item limit".into());
     }
-    cards
+    let mut entries: Vec<Entry> = cards
         .into_iter()
         .map(|mut card| {
-            crate::simkl::imports::enrich(&db,profile,&mut card)?;
+            crate::simkl::imports::enrich(&db, profile, &mut card)?;
             let mut statistics = LibraryStatistics::empty(card.identity.clone());
             let matched = history
                 .iter()
@@ -150,8 +150,52 @@ pub(crate) fn entries(
                         .count() as u64,
                 );
             }
-            crate::simkl::imports::merge(&db,profile,&mut statistics)?;
+            crate::simkl::imports::merge(&db, profile, &mut statistics)?;
             Ok(Entry { card, statistics })
         })
-        .collect()
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    for (key, mut entry) in super::scoped_library::entries_db(&db, app, profile)? {
+        let observed = entry.statistics.clone();
+        // A canonical legacy observation remains valid for that same shared title.
+        if let Some(old) = entries
+            .iter()
+            .find(|old| super::scoped_library::raw_key(&old.card).is_ok_and(|old| old == key))
+        {
+            if entry.statistics.last_watched_millis.is_none() {
+                entry.statistics = old.statistics.clone();
+                entry.statistics.identity = entry.card.identity.clone();
+                entry.statistics.metadata_origin = entry.card.metadata_origin.clone();
+            }
+        }
+        if key.0 == "shared" {
+            // Only the host-verified storage key may select authoritative imports.
+            // Keep the public lookup ID/origin on the response, not the canonical alias.
+            entry.statistics.identity.id = key.2.clone();
+            entry.statistics.identity.kind = key.1.clone();
+            crate::simkl::imports::merge(&db, profile, &mut entry.statistics)?;
+            entry.statistics.identity = entry.card.identity.clone();
+            entry.statistics.metadata_origin = entry.card.metadata_origin.clone();
+            if observed.last_watched_millis.is_some() {
+                entry.statistics.watched = observed.watched;
+                entry.statistics.last_watched_millis = observed.last_watched_millis;
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            let mut provenance = Vec::new();
+            for source in std::mem::take(&mut entry.statistics.provenance) {
+                let identity = serde_json::to_string(&source)
+                    .map_err(|_| ApiError::from("Invalid import statistics"))?;
+                if seen.insert(identity) {
+                    provenance.push(source)
+                }
+            }
+            entry.statistics.provenance = provenance;
+        }
+        // Only canonical public identities can replace a corresponding legacy view.
+        entries.retain(|old| super::scoped_library::raw_key(&old.card).is_ok_and(|old| old != key));
+        entries.push(entry);
+    }
+    if entries.len() > 10000 {
+        return Err("Library exceeds its bounded item limit".into());
+    }
+    Ok(entries)
 }

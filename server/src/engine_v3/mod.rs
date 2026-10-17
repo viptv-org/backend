@@ -4,13 +4,14 @@ use viptv_engine::{
     capabilities::{builtins, ExecutionMode},
     profile::Scope,
 };
-mod catalog;
 pub(crate) mod account_devices;
 mod bootstrap_facts;
 #[cfg(test)]
 mod bootstrap_facts_tests;
+mod catalog;
 mod controls;
 pub(crate) mod live;
+pub(crate) mod search;
 pub(crate) mod source_integrations;
 pub(crate) use controls::get as discovery_controls;
 pub(crate) mod configuration;
@@ -26,6 +27,9 @@ pub(crate) mod preferences;
 mod profile_tests;
 pub(crate) mod profiles;
 mod projection;
+pub(crate) mod origins;
+pub(crate) mod scoped_library;
+#[cfg(test)] mod origin_tests;
 mod simkl_catalog;
 pub(crate) mod source_ranking;
 pub(crate) mod subtitles;
@@ -93,7 +97,7 @@ pub(crate) async fn bootstrap(
         })
         .transpose()?;
     let subtitle_availability = profile_id
-        .map(|profile|bootstrap_facts::subtitles(&app,&lease,profile))
+        .map(|profile| bootstrap_facts::subtitles(&app, &lease, profile))
         .transpose()?;
     let bootstrap_preferences = if let Some(profile) = profile_id {
         Some(

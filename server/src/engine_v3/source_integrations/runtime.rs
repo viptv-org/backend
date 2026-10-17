@@ -65,12 +65,16 @@ pub(crate) async fn start(
         configuration.scope.revision,
     )]
 }
-async fn canonical_card(
+pub(crate) async fn canonical_card(
     app: &App,
     value: &Value,
     lease: &ResourceLease,
     revision: u64,
 ) -> Option<Card> {
+    if value.get("metadata_origin").is_some() {
+        let expected:Card=serde_json::from_value(value["card"].clone()).ok()?;
+        return crate::engine_v3::origins::verified_card(app,&expected).await.ok();
+    }
     // IDs supplied by a client are lookup hints only; fetch current selected-provider metadata.
     let Some(kind) = value["type"]
         .as_str()
@@ -91,6 +95,37 @@ async fn canonical_card(
     } else {
         request_id
     };
+    let explicit = crate::engine_v3::search::source_origin(app, value).ok()?;
+    let origin = if let Some((_, _, origin)) = &explicit {
+        origin.clone()
+    } else {
+        {
+            let auth::Principal::Account {
+                profile_id: Some(profile),
+                ..
+            } = lease.principal
+            else {
+                return None;
+            };
+            configuration::read(app, lease, profile)
+                .ok()?
+                .0
+                .browsing_plugin
+        }
+    };
+    crate::kids::consumers::require(
+        app,
+        kind,
+        request_id,
+        if origin == "simkl" {
+            "simkl"
+        } else {
+            "stremio"
+        },
+        explicit.is_some(),
+    )
+    .ok()?;
+    let addon_revision = app.addons.revision().ok()?;
     let cached = app
         .verified_cards
         .lock()
@@ -98,8 +133,10 @@ async fn canonical_card(
         .get(&(
             lease.principal.key(),
             revision,
+            origin,
             kind.to_string(),
             request_id.to_string(),
+            addon_revision,
         ))
         .cloned();
     if let Some(card) = cached {
@@ -107,7 +144,14 @@ async fn canonical_card(
     }
     let metadata = async {
         for offset in (0..2400).step_by(128) {
-            let page = crate::engine_v3::catalog::DetailPage { offset,limit:Some(128) };
+            let page = crate::engine_v3::catalog::DetailPage {
+                offset,
+                limit: Some(128),
+                metadata_origin: None,
+                card: None,
+                provider_id: explicit.as_ref().map(|(provider, _, _)| provider.clone()),
+                addon_id: explicit.as_ref().and_then(|(_, addon, _)| *addon),
+            };
             let axum::Json(detail) = crate::engine_v3::catalog::detail(
                 State(app.clone()),
                 Extension(lease.clone()),
@@ -169,11 +213,15 @@ pub(crate) fn spawn(
             return;
         };
         let auth_job = job.clone();
+        let metadata_revision = app.addons.revision().ok();
         let authorize: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
             if auth_job
                 .cancelled
                 .load(std::sync::atomic::Ordering::Acquire)
                 || configuration::validate_revision(&auth_app, profile, revision).is_err()
+                || metadata_revision.as_ref().is_none_or(|expected| {
+                    auth_app.addons.revision().as_ref().ok() != Some(expected)
+                })
             {
                 return false;
             }
@@ -197,7 +245,7 @@ pub(crate) fn spawn(
             if !authorize(){return;}let ttls:std::collections::HashMap<_,_>=streams.iter().map(|s|((s.url.to_string(),s.meta.audio_selection.as_ref().map(|audio|audio.audio_index)),s.ttl.min(Duration::from_secs(1800)))).collect();let limit=job.reserve_sources(streams.len());let raw=streams.iter().take(limit).map(projection::sdk_source).collect::<Vec<_>>();
             // Registration carries the exact credential/assignment proof used by this producer.
             let (cards,error)=app.register_with_configuration(&source,raw,&job.kind,Some(proof));
-            if !authorize(){return;}let mut entries=app.streams.lock().unwrap();for card in &cards{if let Some(entry)=card["id"].as_str().and_then(|id|entries.get_mut(id)){entry.exact_vod=job.exact_vod.clone();entry.media_id=job.media_id.clone();if let Some(ttl)=ttls.get(&(entry.url.clone(),entry.required_audio_index)){entry.created=Instant::now().checked_sub(Duration::from_secs(1800).saturating_sub(*ttl)).unwrap_or_else(Instant::now);}}}drop(entries);
+            if !authorize(){return;}let mut entries=app.streams.lock().unwrap();for card in &cards{if let Some(entry)=card["id"].as_str().and_then(|id|entries.get_mut(id)){entry.profile_revision=job.configuration_revision;entry.metadata_proof=job.metadata_proof.clone();entry.exact_vod=job.exact_vod.clone();entry.media_id=job.media_id.clone();if let Some(ttl)=ttls.get(&(entry.url.clone(),entry.required_audio_index)){entry.created=Instant::now().checked_sub(Duration::from_secs(1800).saturating_sub(*ttl)).unwrap_or_else(Instant::now);}}}drop(entries);
             let mut state=job.state.lock().unwrap();let seq=state.events.len()+1;state.events.push(json!({"seq":seq,"source":source,"streams":cards,"error_code":error.map(|_|"source_format_unsupported")}));drop(state);job.notify.notify_waiters();
         }).await
         } else {

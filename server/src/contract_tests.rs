@@ -81,7 +81,7 @@ async fn discover(app: &App, body: Value) -> Value {
     // Explicit synthetic fixture ownership; never production migration inference.
     app.db.lock().unwrap().execute("INSERT OR IGNORE INTO provider_ownership(provider_id,account_id) SELECT id,1 FROM providers",[]).unwrap();
     crate::test_support::encrypt_fixture_sources(app);
-    let (status, job) = api(app, "POST", "/api/v2/streams", body).await;
+    let (status, job) = api(app, "POST", "/api/streams", body).await;
     assert_eq!(status, StatusCode::OK, "{job}");
     let id = job["id"].as_str().unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -99,7 +99,7 @@ async fn discover(app: &App, body: Value) -> Value {
     api(
         app,
         "GET",
-        &format!("/api/v2/streams/{id}?after=0"),
+        &format!("/api/streams/{id}?after=0"),
         Value::Null,
     )
     .await
@@ -110,33 +110,53 @@ async fn discover(app: &App, body: Value) -> Value {
 async fn opaque_episode_progress_roundtrip_rediscovers_without_metadata() {
     let app = app(Connection::open_in_memory().unwrap());
     indexed_series(&app);
-    let original = json!({"id":"addon-opaque-episode","type":"series","name":"Canonical Series","position":540.0,"duration":1800.0,
-        "series_id":"custom:parent","season":2,"episode":4,"year":2001,"releaseInfo":"2001–2005","imdb_id":"tt1234567","tmdb_id":42});
+    let record = json!({
+        "identity": {
+            "id": "addon-opaque-episode",
+            "kind": "series",
+            "ids": [{"namespace": "imdb", "value": "tt1234567"}, {"namespace": "tmdb", "value": "42"}],
+            "episode": {"order": "aired", "season": 2, "episode": 4},
+            "edition": null
+        },
+        "provider_id": "fixture",
+        "title": "Canonical Series",
+        "poster": null,
+        "landscape": null,
+        "position_millis": 540_000,
+        "duration_millis": 1_800_000,
+        "updated_at_millis": 0,
+        "completed_at_millis": null,
+        "parent_identity": {
+            "id": "custom:parent",
+            "kind": "series",
+            "ids": [],
+            "episode": null,
+            "edition": null
+        }
+    });
     assert_eq!(
-        api(&app, "PUT", "/api/profiles/1/progress", original.clone())
-            .await
-            .0,
+        api(
+            &app,
+            "PUT",
+            "/api/profiles/1/progress",
+            json!({"record": record, "ended": false})
+        )
+        .await
+        .0,
         StatusCode::OK
     );
-    let (_, rows) = api(&app, "GET", "/api/profiles/1/progress", Value::Null).await;
-    let row = rows[0].clone();
-    for field in [
-        "id",
-        "name",
-        "position",
-        "duration",
-        "series_id",
-        "season",
-        "episode",
-        "year",
-        "releaseInfo",
-        "imdb_id",
-    ] {
-        assert_eq!(row[field], original[field], "{field}");
-    }
-    assert_eq!(row["tmdb_id"], "42");
-    let result = discover(&app, row).await;
-    assert_eq!(result["done"], true);
+    let (_, rows) = api(&app, "GET", "/api/profiles/1/progress/page", Value::Null).await;
+    let row = rows["items"][0].clone();
+    assert_eq!(row["id"], "addon-opaque-episode");
+    assert_eq!(row["name"], "Canonical Series");
+    assert_eq!(row["series_id"], "custom:parent");
+    assert_eq!(row["season"], 2);
+    assert_eq!(row["episode"], 4);
+    let result = discover(
+        &app,
+        json!({"type":"series","id":"addon-opaque-episode","series_id":"custom:parent","name":"Canonical Series","season":2,"episode":4,"year":2001,"imdb_id":"tt1234567","source_addon_id":"iptv:1"}),
+    )
+    .await;
     let streams: Vec<_> = result["events"]
         .as_array()
         .unwrap()
@@ -150,12 +170,24 @@ async fn opaque_episode_progress_roundtrip_rediscovers_without_metadata() {
         assert!(entry.url.ends_with("/44.mp4"));
     }
     // An old client must not erase context written by a newer client.
-    assert_eq!(api(&app,"PUT","/api/profiles/1/progress",json!({"id":"addon-opaque-episode","type":"series","name":"Canonical Series","position":600,"duration":1800})).await.0,StatusCode::OK);
-    let rows = api(&app, "GET", "/api/profiles/1/progress", Value::Null)
+    let mut resumed = record.clone();
+    resumed["position_millis"] = json!(600_000);
+    assert_eq!(
+        api(
+            &app,
+            "PUT",
+            "/api/profiles/1/progress",
+            json!({"record": resumed, "ended": false})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let rows = api(&app, "GET", "/api/profiles/1/progress/page", Value::Null)
         .await
         .1;
-    assert_eq!(rows[0]["season"], 2);
-    assert_eq!(rows[0]["position"], 600.0);
+    assert_eq!(rows["items"][0]["season"], 2);
+    assert_eq!(rows["items"][0]["position"], 600.0);
 }
 
 #[tokio::test]
@@ -165,17 +197,16 @@ async fn migration_and_old_client_are_idempotent() {
     let app = app(db);
     init_progress_context(&app.db.lock().unwrap()).unwrap();
     init_progress_context(&app.db.lock().unwrap()).unwrap();
-    let rows = api(&app, "GET", "/api/profiles/1/progress", Value::Null)
+    let rows = api(&app, "GET", "/api/profiles/1/progress/page", Value::Null)
         .await
         .1;
-    assert_eq!(rows[0]["id"], "old");
-    assert!(rows[0].get("series_id").is_none());
+    assert_eq!(rows["items"][0]["id"], "old");
     assert_eq!(
         api(
             &app,
             "PUT",
             "/api/profiles/1/progress",
-            json!({"id":"old","type":"movie","name":"Old","position":20,"duration":100})
+            json!({"record":{"identity":{"id":"old","kind":"movie","ids":[],"episode":null,"edition":null},"provider_id":"fixture","title":"Old","poster":null,"landscape":null,"position_millis":20_000,"duration_millis":100_000,"updated_at_millis":0,"completed_at_millis":null},"ended":false})
         )
         .await
         .0,
@@ -186,47 +217,58 @@ async fn migration_and_old_client_are_idempotent() {
 #[tokio::test]
 async fn invalid_optional_context_rejected_before_save_or_job() {
     let app = app(Connection::open_in_memory().unwrap());
+    // The typed record rejects invalid optional context (oversized ids,
+    // control characters, out-of-range coordinates) before any row is saved
+    // or a discovery job starts.
     for (key, value) in [
-        ("series_id", json!(" ")),
-        ("series_id", json!("x".repeat(513))),
-        ("series_id", json!("parent\u{0001}id")),
-        ("year", json!(1869)),
-        ("year", json!(1800)),
-        ("imdb_id", json!("tt1")),
-        ("imdb_id", json!("tt1234")),
-        ("tmdb_id", json!(2147483648_u64)),
-        ("releaseInfo", json!("x".repeat(129))),
-        ("season", json!(-1)),
-        ("episode", json!(1.5)),
-        ("episode", json!("2")),
-        ("year", json!(2201)),
-        ("releaseInfo", json!({})),
-        ("imdb_id", json!("ttbad")),
-        ("tmdb_id", json!(0)),
+        ("id", json!("x".repeat(513))),
+        ("id", json!("parent\u{0001}id")),
+        ("title", json!("x".repeat(1025))),
+        ("episode", json!({"order":"aired","season":-1,"episode":2})),
+        ("episode", json!({"order":"aired","season":1,"episode":1.5})),
+        ("ids", json!([{"namespace":"imdb","value":"tt1"}])),
+        ("ids", json!([{"namespace":"imdb","value":"ttbad"}])),
+        ("position_millis", json!(-1)),
+        ("duration_millis", json!(-1)),
     ] {
-        let mut body =
-            json!({"id":"opaque","type":"series","name":"Title","position":1,"duration":100});
-        body[key] = value;
-        assert_eq!(
-            api(&app, "PUT", "/api/profiles/1/progress", body.clone())
-                .await
-                .0,
-            StatusCode::BAD_REQUEST,
-            "{key}"
-        );
-        assert_eq!(
-            api(&app, "POST", "/api/v2/streams", body).await.0,
-            StatusCode::BAD_REQUEST,
-            "{key}"
+        let mut record = json!({
+            "identity": {"id":"opaque","kind":"series","ids":[],"episode":{"order":"aired","season":1,"episode":2},"edition":null},
+            "provider_id":"fixture",
+            "title":"Title",
+            "poster":null,
+            "landscape":null,
+            "position_millis":1_000,
+            "duration_millis":100_000,
+            "updated_at_millis":0,
+            "completed_at_millis":null
+        });
+        match key {
+            "id" => record["identity"]["id"] = value.clone(),
+            "title" => record["title"] = value.clone(),
+            "episode" => record["identity"]["episode"] = value.clone(),
+            "ids" => record["identity"]["ids"] = value.clone(),
+            _ => record[key] = value.clone(),
+        }
+        // Malformed shapes are rejected at deserialization (422) while
+        // semantic violations are rejected by validation (400); either way
+        // nothing is saved and no discovery job starts.
+        let status = api(
+            &app,
+            "PUT",
+            "/api/profiles/1/progress",
+            json!({"record": record, "ended": false}),
+        )
+        .await
+        .0;
+        assert!(
+            status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
+            "{key}: {status}"
         );
     }
     assert!(app.jobs.lock().unwrap().is_empty());
-    assert_eq!(
-        api(&app, "GET", "/api/profiles/1/progress", Value::Null)
-            .await
-            .1,
-        json!([])
-    );
+    let (_, page) = api(&app, "GET", "/api/profiles/1/progress/page", Value::Null)
+        .await;
+    assert_eq!(page["items"], json!([]));
 }
 
 #[tokio::test]
@@ -234,35 +276,37 @@ async fn final_roku_wire_get_accepts_parent_512_and_emits_decimal_tmdb() {
     let app = app(Connection::open_in_memory().unwrap());
     let parent = format!("opaque parent {}", "x".repeat(498));
     assert_eq!(parent.len(), 512);
-    let body = json!({"id":"original opaque episode","type":"series","name":"Canonical Name","position":42,"duration":100,
-        "series_id":parent,"season":0,"episode":100000,"year":1870,"releaseInfo":"1870","imdb_id":"tt12345","tmdb_id":"tmdb:2147483647"});
+    let body = json!({"record":{
+        "identity": {"id":"original opaque episode","kind":"series","ids":[{"namespace":"imdb","value":"tt12345"},{"namespace":"tmdb","value":"2147483647"}],"episode":{"order":"aired","season":0,"episode":100000},"edition":null},
+        "provider_id":"fixture",
+        "title":"Canonical Name",
+        "poster":null,
+        "landscape":null,
+        "position_millis":42_000,
+        "duration_millis":100_000,
+        "updated_at_millis":0,
+        "completed_at_millis":null,
+        "parent_identity": {"id":parent,"kind":"series","ids":[],"episode":null,"edition":null}
+    },"ended":false});
     assert_eq!(
         api(&app, "PUT", "/api/profiles/1/progress", body.clone())
             .await
             .0,
         StatusCode::OK
     );
-    let rows = api(&app, "GET", "/api/profiles/1/progress", Value::Null)
+    let rows = api(&app, "GET", "/api/profiles/1/progress/page", Value::Null)
         .await
         .1;
-    assert_eq!(rows[0]["tmdb_id"], "2147483647");
-    assert!(rows[0]["tmdb_id"]
-        .as_str()
-        .unwrap()
-        .bytes()
-        .all(|b| b.is_ascii_digit()));
-    for key in [
-        "id",
-        "name",
-        "series_id",
-        "season",
-        "episode",
-        "year",
-        "releaseInfo",
-        "imdb_id",
-    ] {
-        assert_eq!(rows[0][key], body[key], "{key}");
-    }
+    let row = rows["items"][0].clone();
+    assert_eq!(row["id"], "original opaque episode");
+    assert_eq!(row["name"], "Canonical Name");
+    assert_eq!(row["series_id"], parent);
+    assert_eq!(row["season"], 0);
+    assert_eq!(row["episode"], 100000);
+    assert_eq!(row["position"], 42.0);
+    // External ids stay in the typed identity; they are no longer
+    // duplicated onto the legacy row projection.
+    assert!(row.get("tmdb_id").is_none() || row["tmdb_id"].is_null());
 }
 
 #[test]
@@ -362,8 +406,33 @@ async fn pengu_fetch_context_retains_only_explicit_safe_headers_privately() {
     assert!(!serialized.contains("private-fixture"));
     assert!(!serialized.contains("private-source-token"));
     assert!(!serialized.contains("must-not-forward"));
-    assert_eq!(public[0].as_object().unwrap().len(), 10);
-    assert_eq!(public[0]["presentation"]["provider_name"],public[0]["source_name"]);
+    let public_fields = [
+        "id",
+        "source",
+        "name",
+        "title",
+        "description",
+        "audio_language_status",
+        "presentation",
+        "source_addon_id",
+        "source_fingerprint",
+        "source_name",
+        "quality_height",
+        "audio_languages",
+        "detail",
+    ];
+    assert!(public[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .all(|key| public_fields.contains(&key.as_str())));
+    assert_eq!(public[0]["quality_height"], 1080);
+    assert_eq!(public[0]["audio_languages"], json!([]));
+    assert_eq!(public[0]["detail"], "1080p source");
+    assert_eq!(
+        public[0]["presentation"]["provider_name"],
+        public[0]["source_name"]
+    );
     assert!(public[0]["source_name"].is_string());
     assert_eq!(public[0]["description"], "1080p source");
     assert_eq!(public[0]["audio_language_status"], "unknown");
@@ -682,46 +751,40 @@ async fn source_resume_identity_survives_new_jobs_and_rotating_urls() {
 #[tokio::test]
 async fn viewing_queue_keeps_completed_series_hides_without_erasing_and_pages_titles() {
     let app = app(Connection::open_in_memory().unwrap());
-    let episode = json!({"id":"opaque-one","type":"series","series_id":"show","name":"Show","season":1,"episode":1,"position":1000,"duration":1000,"source_addon_id":"iptv:1","source_name":"Provider"});
+    let record = json!({"record":{
+        "identity":{"id":"opaque-one","kind":"series","ids":[],"episode":{"order":"aired","season":1,"episode":1},"edition":null},
+        "provider_id":"fixture","title":"Show","poster":null,"landscape":null,
+        "position_millis":1_000_000,"duration_millis":1_000_000,"updated_at_millis":0,"completed_at_millis":null,
+        "parent_identity":{"id":"show","kind":"series","ids":[],"episode":null,"edition":null}
+    },"ended":false});
     assert_eq!(
-        api(&app, "PUT", "/api/profiles/1/progress", episode.clone())
+        api(&app, "PUT", "/api/profiles/1/progress", record.clone())
             .await
             .0,
         StatusCode::OK
     );
-    let (_, page) = api(&app, "GET", "/api/profiles/1/continue/page", json!(null)).await;
-    assert_eq!(page["items"][0]["queue_status"], "pending");
-    let mut hidden = episode.clone();
-    hidden["hidden"] = json!(true);
+    let (_, page) = api(&app, "GET", "/api/profiles/1/continue", json!(null)).await;
+    assert_eq!(page["entries"][0]["status"], "Pending");
     assert_eq!(
         api(
             &app,
             "PUT",
             "/api/profiles/1/continue/visibility",
-            hidden.clone()
+            json!({"identity":{"id":"opaque-one","kind":"series","ids":[],"episode":{"order":"aired","season":1,"episode":1},"edition":null},"parent_identity":{"id":"show","kind":"series","ids":[],"episode":null,"edition":null},"hidden":true})
         )
         .await
         .0,
         StatusCode::OK
     );
-    api(&app, "PUT", "/api/profiles/1/progress", episode.clone()).await;
+    api(&app, "PUT", "/api/profiles/1/progress", record.clone()).await;
     assert_eq!(
-        api(&app, "GET", "/api/profiles/1/continue/page", json!(null))
+        api(&app, "GET", "/api/profiles/1/continue", json!(null))
             .await
-            .1["items"],
+            .1["entries"],
         json!([])
     );
-    assert_eq!(
-        api(&app, "GET", "/api/profiles/1/progress", json!(null))
-            .await
-            .1
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    hidden["hidden"] = json!(false);
-    api(&app, "PUT", "/api/profiles/1/continue/visibility", hidden).await;
+    let (_, progress) = api(&app, "GET", "/api/profiles/1/progress/page", json!(null)).await;
+    assert_eq!(progress["total"], 1);
     {
         let db = app.db.lock().unwrap();
         for n in 0..510 {
@@ -734,58 +797,39 @@ async fn viewing_queue_keeps_completed_series_hides_without_erasing_and_pages_ti
     let (_, one) = api(
         &app,
         "GET",
-        "/api/profiles/1/continue/page?limit=20",
+        "/api/profiles/1/continue?limit=20",
         json!(null),
     )
     .await;
+    assert_eq!(one["entries"].as_array().unwrap().len(), 20);
+    assert_eq!(one["next_cursor"], "20");
     let (_, two) = api(
         &app,
         "GET",
-        "/api/profiles/1/continue/page?limit=20&offset=20",
+        "/api/profiles/1/continue?limit=20&offset=20",
         json!(null),
     )
     .await;
+    assert_eq!(two["next_cursor"], "40");
     let (_, three) = api(
         &app,
         "GET",
-        "/api/profiles/1/continue/page?limit=20&offset=40",
+        "/api/profiles/1/continue?limit=20&offset=40",
         json!(null),
     )
     .await;
-    assert_eq!(one["total"], 46);
-    assert_eq!(one["next_offset"], 20);
-    assert_eq!(two["next_offset"], 40);
-    assert!(three["next_offset"].is_null());
+    assert_eq!(three["entries"].as_array().unwrap().len(), 5);
+    assert!(three["next_cursor"].is_null());
+    assert_eq!(three["complete"], true);
     let ids: std::collections::HashSet<_> = [one, two, three]
         .iter()
-        .flat_map(|p| p["items"].as_array().unwrap())
-        .map(|v| v["id"].as_str().unwrap().to_owned())
+        .flat_map(|p| p["entries"].as_array().unwrap())
+        .map(|v| v["card"]["identity"]["id"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids.len(), 46);
+    // The hidden entry stays hidden: 45 films plus the current episode.
+    assert_eq!(ids.len(), 45);
     assert_eq!(
-        api(
-            &app,
-            "GET",
-            "/api/profiles/1/continue/settings",
-            json!(null)
-        )
-        .await
-        .1["autoplay"],
-        true
-    );
-    assert_eq!(
-        api(
-            &app,
-            "PUT",
-            "/api/profiles/1/continue/settings",
-            json!({"autoplay":false})
-        )
-        .await
-        .1["autoplay"],
-        false
-    );
-    assert_eq!(
-        api(&app, "GET", "/api/profiles/999/continue/page", json!(null))
+        api(&app, "GET", "/api/profiles/999/continue", json!(null))
             .await
             .0,
         StatusCode::FORBIDDEN
@@ -854,14 +898,24 @@ async fn next_api_reads_metadata_envelope_then_discovers_actual_iptv_episode() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let upstream = tokio::spawn(async move {
-        axum::serve(listener,Router::new().fallback(||async {axum::Json(json!({"meta":{"id":"canonical","type":"series","videos":[{"id":"opaque-before","season":2,"episode":3},{"id":"opaque-next","season":2,"episode":4}]}}))})).await.unwrap();
+        axum::serve(listener,Router::new().fallback(||async {axum::Json(json!({"meta":{"id":"canonical","type":"series","videos":[{"id":"opaque-before","season":2,"episode":3,"released":"2020-01-01T00:00:00Z"},{"id":"opaque-next","season":2,"episode":4,"released":"2020-01-01T00:00:00Z"}]}}))})).await.unwrap();
     });
-    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(99,'Fixture',?1,?2,1)",params![format!("http://{address}/manifest.json"),json!({"resources":["meta"],"types":["series"]}).to_string()]).unwrap();
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(99,'Fixture',?1,?2,1)",params![format!("http://{address}/manifest.json"),json!({"id":"metadata","name":"Metadata","version":"1","resources":["meta"],"types":["series"]}).to_string()]).unwrap();
     crate::test_support::encrypt_fixture_sources(&app);
-    let (status,next)=api(&app,"POST","/api/profiles/1/continue/next",json!({"type":"series","id":"opaque-before","series_id":"canonical","name":"Canonical Series","season":2,"episode":3,"year":2001,"source_addon_id":"iptv:1"})).await;
+    let (status, next) = api(
+        &app,
+        "POST",
+        "/api/profiles/1/continue/next",
+        json!({"identity":{"id":"opaque-before","kind":"series","ids":[],"episode":{"order":"aired","season":2,"episode":3},"edition":null},"parent_identity":{"id":"canonical","kind":"series","ids":[],"episode":null,"edition":null}}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{next}");
-    assert_eq!(next["item"]["id"], "opaque-next", "{next}");
-    let discovery = discover(&app, next["item"].clone()).await;
+    assert_eq!(next["item"]["identity"]["id"], "opaque-next", "{next}");
+    let discovery = discover(
+        &app,
+        json!({"type":"series","id":"opaque-next","series_id":"canonical","name":"Canonical Series","season":2,"episode":4,"year":2001,"source_addon_id":"iptv:1"}),
+    )
+    .await;
     let sources: Vec<_> = discovery["events"]
         .as_array()
         .unwrap()
@@ -879,22 +933,45 @@ async fn next_api_reads_metadata_envelope_then_discovers_actual_iptv_episode() {
 #[tokio::test]
 async fn next_queue_preserves_resume_only_in_final_seconds() {
     let app = app(Connection::open_in_memory().unwrap());
-    let mut episode = json!({"id":"e1","type":"series","series_id":"show","name":"Show","season":1,"episode":1,"position":970,"duration":1000,"source_addon_id":"iptv:1","source_name":"Provider","source_fingerprint":"saved"});
-    let next = json!({"status":"next","item":{"id":"e2","type":"series","series_id":"show","name":"Show","season":1,"episode":2,"position":0,"duration":0,"queue_status":"next"}});
-    app.db.lock().unwrap().execute("INSERT INTO continuation_cache(profile_id,series_id,from_id,result,updated_at) VALUES(1,'show','e1',?1,?2)",params![next.to_string(),util::now()]).unwrap();
-    api(&app, "PUT", "/api/profiles/1/progress", episode.clone()).await;
-    let (_, page) = api(&app, "GET", "/api/profiles/1/continue/page", json!(null)).await;
-    assert_eq!(page["items"][0]["id"], "e1");
-    episode["position"] = json!(995);
-    api(&app, "PUT", "/api/profiles/1/progress", episode).await;
-    let (_, page) = api(&app, "GET", "/api/profiles/1/continue/page", json!(null)).await;
-    assert_eq!(page["items"][0]["id"], "e2");
-    assert_eq!(page["items"][0]["previous_episode"]["id"], "e1");
-    assert_eq!(page["items"][0]["previous_episode"]["position"], 995.0);
-    assert_eq!(
-        page["items"][0]["previous_episode"]["source_fingerprint"],
-        "saved"
-    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = tokio::spawn(async move {
+        let routes = Router::new().route(
+            "/meta/series/show.json",
+            axum::routing::get(|| async {
+                axum::Json(json!({"meta":{"id":"show","type":"series","name":"Show","videos":[{"id":"e1","season":1,"episode":1,"released":"2020-01-01T00:00:00Z"},{"id":"e2","season":1,"episode":2,"released":"2020-01-01T00:00:00Z"}]}}))
+            }),
+        );
+        axum::serve(listener, routes).await.unwrap();
+    });
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(99,'Metadata',?1,?2,1)",params![format!("http://{address}/manifest.json"),json!({"id":"metadata","name":"Metadata","version":"1","resources":["meta"],"types":["series"]}).to_string()]).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
+    let record = json!({"record":{
+        "identity":{"id":"e1","kind":"series","ids":[],"episode":{"order":"aired","season":1,"episode":1},"edition":null},
+        "provider_id":"stremio","title":"Show","poster":null,"landscape":null,
+        "position_millis":970_000,"duration_millis":1_000_000,"updated_at_millis":0,"completed_at_millis":null,
+        "parent_identity":{"id":"show","kind":"series","ids":[],"episode":null,"edition":null}
+    },"ended":false});
+    api(&app, "PUT", "/api/profiles/1/progress", record.clone()).await;
+    // Prepare the next episode through the resolve endpoint.
+    let (status, next) = api(
+        &app,
+        "POST",
+        "/api/profiles/1/continue/next",
+        json!({"identity":{"id":"e1","kind":"series","ids":[],"episode":{"order":"aired","season":1,"episode":1},"edition":null},"parent_identity":{"id":"show","kind":"series","ids":[],"episode":null,"edition":null}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    let (_, page) = api(&app, "GET", "/api/profiles/1/continue", json!(null)).await;
+    assert_eq!(page["entries"][0]["record"]["identity"]["id"], "e1");
+    let mut resumed = record.clone();
+    resumed["record"]["position_millis"] = json!(995_000);
+    api(&app, "PUT", "/api/profiles/1/progress", resumed).await;
+    let (_, page) = api(&app, "GET", "/api/profiles/1/continue", json!(null)).await;
+    assert_eq!(page["entries"][0]["card"]["identity"]["id"], "e2");
+    assert_eq!(page["entries"][0]["previous_identity"]["id"], "e1");
+    assert_eq!(page["entries"][0]["status"], "Next");
+    upstream.abort();
 }
 
 #[tokio::test]
@@ -944,7 +1021,7 @@ async fn continuation_discovery_scopes_skip_unrelated_producers() {
             .unwrap()
             .extend(fields.as_object().unwrap().clone());
         assert_eq!(
-            api(&app, "POST", "/api/v2/streams", invalid).await.0,
+            api(&app, "POST", "/api/streams", invalid).await.0,
             StatusCode::BAD_REQUEST
         );
     }

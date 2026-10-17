@@ -1,0 +1,14 @@
+{
+  "status": "native-only source overlay; server does not enable the native runtime feature",
+  "base_revision": "47b85b5386617f455ade8b294a7a844b54f537c0",
+  "files": {
+    "crates/viptv-core/src/local_engine.rs": "600ed9fcfc028dabecb90a2e046088cc948ae44614996bf7b89df493daab971b",
+    "crates/viptv-core/src/local_engine/sources.rs": "159228c99d4f80345f75f084dcf5c1907ed8fee3455364beb88aad908d6c4511",
+    "crates/viptv-core/src/local_engine/sources/tests.rs": "b6cb935060f62241a1d45daf44dfa9e269269a5fc9327c4452f1b3ea313c175e",
+    "crates/viptv-core/src/local_engine/source_integrations.rs": "6238214d2f87cdbab1090fe24b4029c26f444d9a604d19f7962dc113e7fec641",
+    "crates/viptv-core/src/local_engine/source_integrations/lifecycle_tests.rs": "23a80c4c526f727a12e3950953a451419ed4a85f5d2130a5d70a6c1d26bd6ef8",
+    "crates/viptv-core/src/local_engine/detail.rs": "b2f49e2d2f60e8c49d0d114759451e74fb00f96eb4b9d3fcd9f1c7589f462e62",
+    "crates/viptv-core/src/local_engine/detail_cache.rs": "27a5a95cda9af4ab3d90d69b5c63d3934a6e665b724e615af54c110f38082670",
+    "crates/viptv-core/src/local_engine/addons/tests.rs": "2213b820f993eecb6c26d1b7eacf8f05c609d593365395fb0e5c587c39b9d53a"
+  }
+}

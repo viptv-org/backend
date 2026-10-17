@@ -12,11 +12,11 @@ use tokio::sync::Semaphore;
 pub(crate) mod credentials_v2;
 mod discover;
 mod engine;
-mod subtitles;
 mod extras;
 pub(crate) mod http_v2;
 #[cfg(test)]
 mod http_v2_tests;
+mod subtitles;
 #[cfg(test)]
 mod tests;
 
@@ -87,6 +87,7 @@ impl Addons {
                 credentials_v2::scope_legacy(&tx)?;
             }
             credentials_v2::init(&tx)?;
+            crate::engine_v3::origins::init(&tx).map_err(|_| "Metadata origin initialization failed")?;
             tx.commit().map_err(|_| "Database initialization failed")?;
         }
         Ok(Self {
@@ -127,6 +128,9 @@ impl Addons {
     }
     pub(crate) fn revision(&self) -> Result<String, String> {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
+        self.revision_db(&db)
+    }
+    pub(crate) fn revision_db(&self, db: &Connection) -> Result<String, String> {
         let revision: String = db.query_row(
             "SELECT COALESCE((SELECT revision FROM addon_config_revisions WHERE account_id=?1),'00000000000000000000000000000000')",
             [self.account_id],
@@ -237,7 +241,13 @@ impl Addons {
         let mut errors = vec![];
         for r in rows {
             let (i, u, m, version) = r.map_err(|_| "Database query failed")?;
-            if self.engine_ids.as_ref().is_some_and(|ids| !ids.contains(&i)) { continue; }
+            if self
+                .engine_ids
+                .as_ref()
+                .is_some_and(|ids| !ids.contains(&i))
+            {
+                continue;
+            }
             match credentials_v2::read(
                 &db,
                 self.vault.as_deref(),

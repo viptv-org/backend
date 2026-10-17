@@ -13,9 +13,32 @@ pub(crate) fn dispatch_devices(
         "/auth/device/deny" => {
             let principal = p.as_ref().ok_or_else(unauthorized)?;
             let code = pairing_code(v)?;
+            // Deny only a live pairing: pending codes are deniable by the
+            // signed-in browser user, approved codes only by their owning
+            // account. Expired, consumed, or unknown codes are refused with
+            // the same wording lookup and approve already use.
+            let owner_account = db
+                .query_row(
+                    "SELECT account_id FROM auth_pairings WHERE code_hash=?1 AND expires>?2",
+                    params![hash(&code), now()],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .optional()
+                .map_err(crate::db_error)?
+                .ok_or_else(|| {
+                    ApiError(
+                        StatusCode::BAD_REQUEST,
+                        "Invalid or expired pairing code".into(),
+                    )
+                })?;
+            if let Some(owner) = owner_account {
+                if principal.account_id() != Some(owner) {
+                    return Err(forbidden());
+                }
+            }
             db.execute(
-                "DELETE FROM auth_pairings WHERE code_hash=?1",
-                [hash(&code)],
+                "DELETE FROM auth_pairings WHERE code_hash=?1 AND expires>?2",
+                params![hash(&code), now()],
             )
             .map_err(crate::db_error)?;
             event(db, "device_denied", principal.account_id())?;

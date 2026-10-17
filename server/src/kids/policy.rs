@@ -109,44 +109,58 @@ fn decide_request(
         app.request_lease().validate(&db)?;
         let p = app.identity();
         match parts.as_slice() {
-            ["parent", ..] | ["v3", "parent", ..] => return Ok(PolicyDecision::Pass),
-            ["v3", "bootstrap"] if method == axum::http::Method::GET => {
+            ["parent", ..] => return Ok(PolicyDecision::Pass),
+            ["bootstrap"] if method == axum::http::Method::GET => {
                 return Ok(PolicyDecision::Pass)
             }
-            ["v3", "profiles"] | ["v3", "profiles", _] | ["v3", "profiles", _, "pin"] => {
+            ["profiles"] | ["profiles", _] | ["profiles", _, "pin"] => {
                 return Ok(PolicyDecision::Pass)
             }
-            ["v3", "calendar" | "discovery-controls"] if method == axum::http::Method::GET => {
+            ["calendar" | "discovery-controls" | "search" | "discover"]
+                if method == axum::http::Method::GET =>
+            {
                 return Ok(PolicyDecision::Pass)
             }
-            ["v3", "profiles", _, "library"]
+            ["profiles", _, "library"]
                 if method == axum::http::Method::GET || method == axum::http::Method::PUT =>
             {
                 return Ok(PolicyDecision::Pass)
             }
-            ["v3", "profiles", _, "library", _, _] if method == axum::http::Method::DELETE => {
+            ["profiles", _, "library", _, _] if method == axum::http::Method::DELETE => {
                 return Ok(PolicyDecision::Pass)
             }
-            ["v3", "profiles", _, "continue"] if method == axum::http::Method::GET => {
+            ["profiles", _, "continue"] if method == axum::http::Method::GET => {
                 return Ok(PolicyDecision::Pass)
             }
-            ["v3", "profiles", _, "continue", "next"] if method == axum::http::Method::POST => {
+            ["profiles", _, "continue", "next"] if method == axum::http::Method::POST => {
                 return Ok(PolicyDecision::Pass)
             }
-            ["v3", "profiles", _, "continue", "visibility"]
+            ["profiles", _, "continue", "visibility"]
                 if method == axum::http::Method::PUT =>
             {
                 return Ok(PolicyDecision::Pass)
             }
-            ["v3", "profiles", _, "library", "membership"] if method == axum::http::Method::GET => {
+            ["profiles", _, "library", "membership"] if method == axum::http::Method::GET => {
                 return Ok(PolicyDecision::Pass)
             }
-            ["v3", "profiles", _, "history"]
+            ["profiles", _, "history"]
                 if (method == axum::http::Method::GET || method == axum::http::Method::DELETE) =>
             {
                 return Ok(PolicyDecision::Pass)
             }
-            ["profiles"] if method == axum::http::Method::GET => return Ok(PolicyDecision::Pass),
+            ["meta", kind, id] | ["subtitles", kind, id]
+                if method == axum::http::Method::GET =>
+            {
+                if !q.contains_key("metadata_origin") {
+                    require_item(&db, &p, kind, &decode_path(id)?)?;
+                }
+                return Ok(PolicyDecision::Pass);
+            }
+            // The opaque selection handler checks the exact session/profile,
+            // configuration, provider revision and current title policy.
+            ["subtitle-content", _] if method == axum::http::Method::GET => {
+                return Ok(PolicyDecision::Pass)
+            }
             ["profiles", _, "kids" | "approvals"] => {
                 require_parent(&db, &p)?;
                 return Ok(PolicyDecision::Pass);
@@ -249,6 +263,11 @@ fn decide_request(
     Ok(PolicyDecision::Sanitize)
 }
 fn sanitize_request(app: &App, path: &str, mut value: Value) -> Result<Value, ApiError> {
+    // The modern source handler validates the full scoped expected Card and fresh metadata.
+    if path=="/streams" && value.get("metadata_origin").is_some(){return Ok(value);}
+    // The typed history write validates the scoped record and its metadata
+    // origin itself; the legacy field rewrite below would erase the record.
+    if path.ends_with("/progress") && value.get("record").is_some(){return Ok(value);}
     {
         let db = app.db.lock().unwrap();
         app.request_lease().validate(&db)?;
@@ -286,7 +305,13 @@ fn sanitize_request(app: &App, path: &str, mut value: Value) -> Result<Value, Ap
             // Never let an approved title's opaque request smuggle an unrelated provider ID.
             if path == "/streams" {
                 let mut safe = json!({"type":kind,"id":id,"name":meta["name"]});
-                for key in ["series_id", "season", "episode"] {
+                for key in [
+                    "series_id",
+                    "season",
+                    "episode",
+                    "metadata_provider_id",
+                    "metadata_addon_id",
+                ] {
                     if !value[key].is_null() {
                         safe[key] = value[key].clone();
                     }
@@ -299,7 +324,7 @@ fn sanitize_request(app: &App, path: &str, mut value: Value) -> Result<Value, Ap
     Ok(value)
 }
 pub(crate) async fn before(app: &App, req: &mut Request) -> Result<Option<Value>, ApiError> {
-    let closed_v2_playback = req.uri().path().trim_start_matches("/api") == "/v2/playback";
+    let closed_v2_playback = req.uri().path().trim_start_matches("/api") == "/playback";
     let path = policy_path(req.uri().path().trim_start_matches("/api")).to_owned();
     let method = req.method().clone();
     let q = query(req);
@@ -389,6 +414,19 @@ pub(crate) async fn after(app: &App, path: &str, response: Response) -> Response
                     )?;
                 }
             }
+            if let Some(cards) = value["cards"].as_array() {
+                for card in cards.iter().take(500) {
+                    if let Some(meta) = legacy_meta(card) {
+                        observe(
+                            &db,
+                            p.account_id().unwrap_or(0),
+                            card["identity"]["kind"].as_str().unwrap_or("movie"),
+                            &meta,
+                            false,
+                        )?;
+                    }
+                }
+            }
             if value["meta"].is_object() {
                 let kind = path.trim_matches('/').split('/').nth(1).unwrap_or("movie");
                 observe(
@@ -398,6 +436,33 @@ pub(crate) async fn after(app: &App, path: &str, response: Response) -> Response
                     &value["meta"],
                     false,
                 )?;
+            }
+            if value["item"].is_object() {
+                if let Some(mut meta) = legacy_meta(&value["item"]) {
+                    if let Some(episodes) = value["episodes"].as_array() {
+                        let videos: Vec<Value> = episodes
+                            .iter()
+                            .filter_map(|episode| {
+                                let mut meta = legacy_meta(episode)?;
+                                meta["season"] = episode["identity"]["episode"]["season"].clone();
+                                meta["episode"] =
+                                    episode["identity"]["episode"]["episode"].clone();
+                                Some(meta)
+                            })
+                            .take(2000)
+                            .collect();
+                        if !videos.is_empty() {
+                            meta["videos"] = json!(videos);
+                        }
+                    }
+                    observe(
+                        &db,
+                        p.account_id().unwrap_or(0),
+                        value["item"]["identity"]["kind"].as_str().unwrap_or("movie"),
+                        &meta,
+                        false,
+                    )?;
+                }
             }
         }
         if !restricted_now && observe_response {
@@ -422,27 +487,42 @@ pub(crate) async fn after(app: &App, path: &str, response: Response) -> Response
     Response::from_parts(parts, axum::body::Body::from(value.to_string()))
 }
 
-// V2 source jobs and playback keep the existing title/episode authorization
-// rules. Raw v2 live catalogs/guide and management routes remain separately gated.
+// Source jobs and playback keep the existing title/episode authorization
+// rules. Raw live catalogs/guide and management routes remain separately gated.
 fn policy_path(path: &str) -> &str {
-    if path == "/v2/playback-protocol" || path == "/v2/torrent-runtime-protocol" {
+    if path == "/playback-protocol" || path == "/torrent-runtime-protocol" {
         return "/playback/protocol";
     }
-    if path.starts_with("/v2/playback-requests/") {
+    if path.starts_with("/playback-requests/") {
         return "/playback/requests";
     }
-    match path.strip_prefix("/v2") {
-        Some(rest)
-            if rest == "/streams"
-                || rest.starts_with("/streams/")
-                || rest == "/playback"
-                || rest.starts_with("/playback/") =>
-        {
-            rest
-        }
-        _ => path,
-    }
+    path
 }
+/// Converts an engine Card into the legacy metadata shape the trust store observes.
+fn legacy_meta(card: &Value) -> Option<Value> {
+    let id = card["identity"]["id"].as_str()?;
+    let kind = card["identity"]["kind"].as_str()?;
+    if !["movie", "series"].contains(&kind) || card["title"].is_null() {
+        return None;
+    }
+    let mut meta = json!({"id": id, "type": kind, "name": card["title"]});
+    if !card["poster"].is_null() {
+        meta["poster"] = card["poster"].clone();
+    }
+    if !card["description"].is_null() {
+        meta["description"] = card["description"].clone();
+    }
+    for (target, source) in [("year", "year"), ("contentRating", "certification")] {
+        if !card["metadata"][source].is_null() {
+            meta[target] = card["metadata"][source].clone();
+        }
+    }
+    if let Some(genres) = card["metadata"]["genres"].as_array() {
+        meta["genres"] = json!(genres);
+    }
+    Some(meta)
+}
+
 fn filter_response_items(
     db: &Connection,
     p: &auth::Principal,
@@ -454,14 +534,6 @@ fn filter_response_items(
     }
     if let Some(items) = value["items"].as_array_mut() {
         *items = filter_items(db, p, std::mem::take(items))?;
-    }
-    if value["item"].is_object() {
-        let mut safe = filter_items(db, p, vec![value["item"].clone()])?;
-        if let Some(item) = safe.pop() {
-            value["item"] = item;
-        } else {
-            *value = json!({"status":"unavailable"});
-        }
     }
     Ok(())
 }

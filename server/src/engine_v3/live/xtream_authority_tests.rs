@@ -12,7 +12,7 @@ async fn private_xtream_cached_guide_revalidates_revision_after_waiting_for_dire
             &reader,
             "member-token-1",
             "GET",
-            &format!("/api/v3/profiles/1/live/{channel}/guide"),
+            &format!("/api/profiles/1/live/{channel}/guide"),
             Value::Null,
         )
         .await
@@ -24,7 +24,7 @@ async fn private_xtream_cached_guide_revalidates_revision_after_waiting_for_dire
     })
     .await
     .unwrap();
-    let(status,_)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/source-integrations",json!({"revision":1,"plugin_id":"xtream","configuration":{"server_url":"https://replacement.example","username":"new-user","password":"new-secret"}})).await;
+    let(status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":1,"plugin_id":"xtream","configuration":{"server_url":"https://replacement.example","username":"new-user","password":"new-secret"}})).await;
     assert_eq!(status, StatusCode::OK);
     drop(held);
     let (status, body) = tokio::time::timeout(Duration::from_secs(3), task)
@@ -53,7 +53,7 @@ async fn private_xtream_server_egress_rejects_loopback_before_sending_credential
     });
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let app = crate::auth_integration_tests::fixture();
-    let(status,_)=request(&app,"member-token-1","PUT","/api/v3/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":format!("http://{address}"),"username":"private-user","password":"private-secret"}})).await;
+    let(status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":format!("http://{address}"),"username":"private-user","password":"private-secret"}})).await;
     assert_eq!(
         status,
         StatusCode::OK,
@@ -65,7 +65,7 @@ async fn private_xtream_server_egress_rejects_loopback_before_sending_credential
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/profiles/1/live/channels",
+            "/api/profiles/1/live/channels",
             Value::Null,
         ),
     )
@@ -96,13 +96,13 @@ async fn private_xtream_connections_and_cached_channels_stay_with_their_selected
             )
             .unwrap();
         }
-        let(status,_)=request(&app,"member-token-2","PUT","/api/v3/profiles/2/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":"https://second.example","username":"second-user","password":"second-secret"}})).await;
+        let(status,_)=request(&app,"member-token-2","PUT","/api/profiles/2/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":"https://second.example","username":"second-user","password":"second-secret"}})).await;
         assert_eq!(status, StatusCode::OK);
         let (_, snapshot) = request(
             &app,
             "member-token-2",
             "GET",
-            "/api/v3/profiles/2/source-integrations",
+            "/api/profiles/2/source-integrations",
             Value::Null,
         )
         .await;
@@ -117,7 +117,7 @@ async fn private_xtream_connections_and_cached_channels_stay_with_their_selected
             &app,
             "member-token-2",
             "GET",
-            &format!("/api/v3/profiles/2/live/{channel}/guide"),
+            &format!("/api/profiles/2/live/{channel}/guide"),
             Value::Null,
         )
         .await;
@@ -126,7 +126,7 @@ async fn private_xtream_connections_and_cached_channels_stay_with_their_selected
             &app,
             "member-token-2",
             "DELETE",
-            &format!("/api/v3/profiles/2/source-integrations/{first}?revision=1"),
+            &format!("/api/profiles/2/source-integrations/{first}?revision=1"),
             Value::Null,
         )
         .await;

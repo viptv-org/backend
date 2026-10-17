@@ -17,6 +17,8 @@ fn application() -> (Router, tempfile::TempDir) {
         "<!doctype html><html><body>VIPTV device activation</body></html>",
     )
     .unwrap();
+    // The release-shaped service pins an HTTPS callback origin for Simkl.
+    std::env::set_var("VIPTV_AUTH_ORIGIN", "https://tv.example");
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),
@@ -35,6 +37,8 @@ fn tv_application() -> (Router, tempfile::TempDir, tempfile::TempDir) {
     .unwrap();
     std::fs::write(tv.path().join("index.html"), "<html>tv shell</html>").unwrap();
     std::fs::write(tv.path().join("asset.js"), "window.viptv=true").unwrap();
+    // The release-shaped service pins an HTTPS callback origin for Simkl.
+    std::env::set_var("VIPTV_AUTH_ORIGIN", "https://tv.example");
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),
@@ -75,7 +79,7 @@ async fn conditional_get(app: &Router, uri: &str) -> axum::response::Response {
 async fn explicit_spa_entries_are_html_200_no_store_without_changing_fallbacks() {
     let (app, _root) = application();
 
-    for uri in ["/", "/device?code=AB12CD34"] {
+    for uri in ["/device", "/device?code=AB12CD34"] {
         let response = get(&app, uri).await;
         assert_eq!(response.status(), StatusCode::OK, "{uri}");
         assert!(response.headers()[header::CONTENT_TYPE]
@@ -89,7 +93,7 @@ async fn explicit_spa_entries_are_html_200_no_store_without_changing_fallbacks()
             .any(|window| window == b"VIPTV device activation"));
     }
 
-    for uri in ["/", "/device?code=AB12CD34"] {
+    for uri in ["/device", "/device?code=AB12CD34"] {
         let response = conditional_get(&app, uri).await;
         assert_eq!(
             response.status(),
@@ -103,9 +107,6 @@ async fn explicit_spa_entries_are_html_200_no_store_without_changing_fallbacks()
             .any(|window| window == b"VIPTV device activation"));
     }
 
-    let unknown_page = get(&app, "/missing-browser-route").await;
-    assert_eq!(unknown_page.status(), StatusCode::NOT_FOUND);
-
     let missing_api = get(&app, "/api/definitely-missing").await;
     assert_eq!(missing_api.status(), StatusCode::NOT_FOUND);
 }
@@ -113,21 +114,26 @@ async fn explicit_spa_entries_are_html_200_no_store_without_changing_fallbacks()
 #[tokio::test]
 async fn tv_bundle_has_its_own_same_origin_mount_without_replacing_dashboard_or_api() {
     let (app, _dashboard, _tv) = tv_application();
-    for uri in ["/tv", "/tv/", "/tv/detail/tt123"] {
+    // The KMP viewing app owns the root; /tv is gone. Deep links fall back
+    // to the app shell instead of a legacy bundle.
+    for uri in ["/", "/detail/tt123", "/tv", "/tv/detail/tt123"] {
         let response = get(&app, uri).await;
         assert_eq!(response.status(), StatusCode::OK, "{uri}");
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
-        assert!(body
-            .windows(b"tv shell".len())
-            .any(|window| window == b"tv shell"));
+        assert!(
+            body.windows(b"tv shell".len())
+                .any(|window| window == b"tv shell"),
+            "{uri} must serve the app shell"
+        );
     }
-    let asset = get(&app, "/tv/asset.js").await;
+    let asset = get(&app, "/asset.js").await;
     assert_eq!(asset.status(), StatusCode::OK);
     let body = to_bytes(asset.into_body(), 64 * 1024).await.unwrap();
     assert!(body
         .windows(b"window.viptv=true".len())
         .any(|window| window == b"window.viptv=true"));
-    let dashboard = get(&app, "/").await;
+    // The account dashboard survives as a management-only /device mount.
+    let dashboard = get(&app, "/device").await;
     let body = to_bytes(dashboard.into_body(), 64 * 1024).await.unwrap();
     assert!(body
         .windows(b"dashboard".len())
@@ -137,3 +143,4 @@ async fn tv_bundle_has_its_own_same_origin_mount_without_replacing_dashboard_or_
         StatusCode::NOT_FOUND
     );
 }
+

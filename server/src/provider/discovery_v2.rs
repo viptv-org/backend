@@ -4,6 +4,11 @@ use crate::*;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
 
 fn boundary(error: ApiError) -> Error {
+    if error.0 == StatusCode::UNPROCESSABLE_ENTITY
+        && error.1 == crate::kids::consumers::UNSUPPORTED
+    {
+        return Error::Code("restricted_metadata_unsupported");
+    }
     if error.0 == StatusCode::UNAUTHORIZED
         || error.0 == StatusCode::FORBIDDEN
         || error.api_error_code().is_some()

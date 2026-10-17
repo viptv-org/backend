@@ -221,6 +221,10 @@ pub fn queue(db: &Connection, profile: i64, offset: u32, limit: u32) -> Result<V
             let cached: Option<String> = db.query_row("SELECT result FROM continuation_cache WHERE profile_id=?1 AND series_id=?2 AND from_id=?3 AND updated_at>?4",params![profile,series,item["id"].as_str(),util::now()-3600],|r|r.get(0)).optional().map_err(db_error)?;
             if let Some(raw) = cached {
                 if let Ok(result) = serde_json::from_str::<Value>(&raw) {
+                    if !cached_origin_current(db, profile, &item, &result)? {
+                        items.push(item);
+                        continue;
+                    }
                     if result["status"] == "next" {
                         let previous = item.clone();
                         item = result["item"].clone();
@@ -247,6 +251,57 @@ pub fn queue(db: &Connection, profile: i64, offset: u32, limit: u32) -> Result<V
         json!({"items":items,"offset":offset,"total":total,"next_offset":if has_more { Some(offset+limit) } else { None }}),
     )
 }
+// New typed results carry provenance. Retain legacy cache compatibility while
+// refusing another add-on's identically named opaque episode or stale settings.
+fn cached_origin_current(
+    db: &Connection,
+    profile: i64,
+    item: &Value,
+    result: &Value,
+) -> Result<bool, ApiError> {
+    let Some(origin) = result["metadata_origin"].as_str() else {
+        return Ok(true);
+    };
+    if item["engine_provider_id"].as_str() != Some(origin) {
+        return Ok(false);
+    }
+    let current: u64 = db
+        .query_row(
+            "SELECT revision FROM engine_profile_configuration WHERE profile_id=?1",
+            [profile],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?
+        .unwrap_or(0);
+    if result["metadata_configuration_revision"].as_u64() != Some(current) {
+        return Ok(false);
+    }
+    let Some(account) = result["metadata_account_id"].as_i64() else {
+        return Ok(false);
+    };
+    let owns: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM profile_owners WHERE profile_id=?1 AND account_id=?2)",
+            params![profile, account],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    if !owns {
+        return Ok(false);
+    }
+    let revision: String = db
+        .query_row(
+            "SELECT revision FROM addon_config_revisions WHERE account_id=?1",
+            [account],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?
+        .unwrap_or_else(|| "0".repeat(32));
+    Ok(result["metadata_addon_revision"].as_str() == Some(revision.as_str()))
+}
+
 pub async fn page(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,

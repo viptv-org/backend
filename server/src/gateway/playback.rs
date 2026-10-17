@@ -73,6 +73,7 @@ pub(crate) enum Platform {
     Android,
     AndroidTv,
     Desktop,
+    Ios,
     Web,
     Tizen,
     Webos,
@@ -124,6 +125,7 @@ pub(crate) struct Start {
 }
 #[derive(Clone)]
 struct Proof {
+    metadata_proof:Option<crate::engine_v3::origins::MetadataProof>,
     profile_revision:Option<(i64,u64)>,
     media_id: Option<String>,
     live_channel_id: Option<String>,
@@ -425,7 +427,8 @@ fn gateway_current(db: &Connection, lease: &ResourceLease, id: &str, revision: i
 fn validate_source(db: &Connection, proof: &Proof) -> Result<(), Error> {
     proof.lease.validate(db)?;
     if let Some((profile,expected))=proof.profile_revision{let revision:u64=db.query_row("SELECT revision FROM engine_profile_configuration WHERE profile_id=?1",[profile],|r|r.get(0)).optional().map_err(|_|Error::Code("provider_storage_unavailable"))?.unwrap_or(0);if revision!=expected{return Err(Error::Code("source_configuration_changed"));}}
-    if let Some(media) = proof.media_id.as_deref().or_else(|| proof.exact_vod.as_ref().map(|exact| exact.title.as_str())) {
+    if let Some(metadata)=&proof.metadata_proof {metadata.validate(db,&proof.lease)?;}
+    else if let Some(media) = proof.media_id.as_deref().or_else(|| proof.exact_vod.as_ref().map(|exact| exact.title.as_str())) {
         crate::kids::require_item(db, &proof.lease.principal, &proof.kind, media)?;
     }
     let Some((kind, id)) = proof.producer.split_once(':') else {
@@ -488,6 +491,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
                 .ok_or(Error::Code("source_not_found"))?;
             (
                 Proof {
+                    metadata_proof:entry.metadata_proof.clone(),
                     profile_revision:entry.profile_revision,
                     media_id: entry.media_id.clone(),
                     live_channel_id: entry.live_channel_id.clone(),
@@ -1361,7 +1365,9 @@ async fn start_mode(
         let crate::auth::Principal::Account { profile_id: Some(profile), .. } = &lease.principal else {
             return Err(Error::Code("profile_required"));
         };
-        request.position = super::resume::position(&db, *profile, &input.proof.kind, input.proof.media_id.as_deref())?;
+        request.position=if let Some(metadata)=&input.proof.metadata_proof {
+            crate::engine_v3::scoped_library::resume_db(&db,&app.clone().with_lease(lease.clone()),*profile,&metadata.card)?
+        }else{super::resume::position(&db,*profile,&input.proof.kind,input.proof.media_id.as_deref())?};
     }
     // Snapshot profile defaults only for a new admission. The idempotency hash
     // above is the caller's body, so later preference edits cannot mutate an
@@ -2141,8 +2147,8 @@ pub(crate) async fn control_deadline(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let path = request.uri().path();
-    if !(path.starts_with("/v2/playback")
-        || path.starts_with("/api/v2/playback")
+    if !(path.starts_with("/playback")
+        || path.starts_with("/api/playback")
         || path.ends_with("/torrent-runtime-protocol"))
     {
         return next.run(request).await;

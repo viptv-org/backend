@@ -12,6 +12,9 @@ use viptv_server::{router, App};
 
 pub fn application() -> (Router, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
+    // Integration binaries build the real release-shaped service: a Simkl
+    // configuration requires a pinned callback origin.
+    std::env::set_var("VIPTV_AUTH_ORIGIN", "https://tv.example");
     let app = App::new(
         rusqlite::Connection::open_in_memory().unwrap(),
         reqwest::Client::new(),

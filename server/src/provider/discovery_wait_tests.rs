@@ -12,7 +12,7 @@ fn setup() -> (App, Arc<Job>) {
         session_id: Some("s1".into()),
     });
     owned.own_resource("job", "wait-job");
-    let job = Arc::new(Job {
+    let job = Arc::new(Job {metadata_proof:None,
         source_slots:std::sync::atomic::AtomicUsize::new(0),
         cancelled: std::sync::atomic::AtomicBool::new(false),
         configuration_revision: None,
@@ -41,7 +41,7 @@ async fn long_poll_wakes_for_partial_results_then_returns_terminal_without_waiti
             &poller,
             "member-token-1",
             "GET",
-            "/api/v2/streams/wait-job?wait_ms=10000",
+            "/api/streams/wait-job?wait_ms=10000",
             Value::Null,
         )
         .await
@@ -73,7 +73,7 @@ async fn long_poll_wakes_for_partial_results_then_returns_terminal_without_waiti
             &app,
             "member-token-1",
             "GET",
-            "/api/v2/streams/wait-job?after=1&wait_ms=10000",
+            "/api/streams/wait-job?after=1&wait_ms=10000",
             Value::Null,
         ),
     )
@@ -91,7 +91,7 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
         &app,
         "member-token-1",
         "GET",
-        "/api/v2/streams/wait-job?wait_ms=40",
+        "/api/streams/wait-job?wait_ms=40",
         Value::Null,
     )
     .await;
@@ -103,7 +103,7 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
             &app,
             "member-token-2",
             "GET",
-            "/api/v2/streams/wait-job?wait_ms=10000",
+            "/api/streams/wait-job?wait_ms=10000",
             Value::Null
         )
         .await
@@ -115,7 +115,7 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
             &app,
             "member-token-1",
             "GET",
-            "/api/v2/streams/wait-job?wait_ms=10001",
+            "/api/streams/wait-job?wait_ms=10001",
             Value::Null
         )
         .await
@@ -128,7 +128,7 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
             &poller,
             "member-token-1",
             "GET",
-            "/api/v2/streams/wait-job?wait_ms=10000",
+            "/api/streams/wait-job?wait_ms=10000",
             Value::Null,
         )
         .await
@@ -148,10 +148,10 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
 #[tokio::test]
 async fn cancellation_is_owned_idempotent_and_preserves_published_events(){
  let (app,job)=setup();job.state.lock().unwrap().events.push(json!({"seq":1,"source":"fixture","streams":[{"id":"published-grant"}]}));
- assert_eq!(request(&app,"member-token-2","DELETE","/api/v2/streams/wait-job",Value::Null).await.0,StatusCode::FORBIDDEN);
- for _ in 0..2{let(status,receipt)=request(&app,"member-token-1","DELETE","/api/v2/streams/wait-job",Value::Null).await;assert_eq!(status,StatusCode::OK,"{receipt}");assert_eq!(receipt["cancelled"],true);}
+ assert_eq!(request(&app,"member-token-2","DELETE","/api/streams/wait-job",Value::Null).await.0,StatusCode::FORBIDDEN);
+ for _ in 0..2{let(status,receipt)=request(&app,"member-token-1","DELETE","/api/streams/wait-job",Value::Null).await;assert_eq!(status,StatusCode::OK,"{receipt}");assert_eq!(receipt["cancelled"],true);}
  assert!(job.cancelled.load(std::sync::atomic::Ordering::Acquire));assert_eq!(job.state.lock().unwrap().events[0]["streams"][0]["id"],"published-grant");
- let(status,poll)=request(&app,"member-token-1","GET","/api/v2/streams/wait-job",Value::Null).await;assert_eq!(status,StatusCode::OK);assert_eq!(poll["done"],true);assert_eq!(poll["events"][0]["streams"][0]["id"],"published-grant");
+ let(status,poll)=request(&app,"member-token-1","GET","/api/streams/wait-job",Value::Null).await;assert_eq!(status,StatusCode::OK);assert_eq!(poll["done"],true);assert_eq!(poll["events"][0]["streams"][0]["id"],"published-grant");
 }
 
 #[tokio::test]

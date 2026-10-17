@@ -16,12 +16,22 @@ fn first_page() -> usize {
     1
 }
 
-pub(super) fn allowed(app: &App, cards: Vec<Card>) -> Result<Vec<Card>, ApiError> {
+pub(super) fn allowed(app: &App, mut cards: Vec<Card>) -> Result<Vec<Card>, ApiError> {
     let db = app
         .db
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
     app.require_media(&db)?;
+    for card in &mut cards {
+        card.metadata_origin = Some(viptv_engine::origin::MetadataOrigin {
+            provider_id: "simkl".into(),
+            connection_id: None,
+            incarnation: None,
+        });
+    }
+    if !kids::restricted(&db, &app.identity())? {
+        return Ok(cards);
+    }
     // Metadata acquired by this new adapter is not an approved kids-policy observation.
     // The existing policy remains authoritative, including after an in-flight profile change.
     Ok(cards
@@ -89,7 +99,7 @@ pub(crate) async fn search(
 pub(crate) struct Page {
     #[serde(default)]
     pub(crate) offset: usize,
-    pub(crate) limit:Option<usize>,
+    pub(crate) limit: Option<usize>,
 }
 
 pub(super) async fn title(
@@ -160,7 +170,7 @@ pub(crate) async fn detail(
     Path((profile, category, id)): Path<(i64, String, u64)>,
     Query(q): Query<Page>,
 ) -> ApiResult {
-    if q.offset > 10_000 || q.limit.is_some_and(|limit|!(1..=128).contains(&limit)) {
+    if q.offset > 10_000 || q.limit.is_some_and(|limit| !(1..=128).contains(&limit)) {
         return Err("Invalid episode offset".into());
     }
     let app = app.with_lease(lease);
@@ -191,9 +201,9 @@ pub(crate) async fn detail(
         &app,
         projection::recommendations(&document, &category, &item.identity.id),
     )?;
-    let all=viptv_engine::presentation::canonical_episodes(allowed(&app,all)?);
-    let seasons=viptv_engine::presentation::episode_seasons(&all);
-    let limit=q.limit.unwrap_or(24);
+    let all = viptv_engine::presentation::canonical_episodes(allowed(&app, all)?);
+    let seasons = viptv_engine::presentation::episode_seasons(&all);
+    let limit = q.limit.unwrap_or(24);
     let next_cursor = (all.len() > q.offset + limit).then(|| (q.offset + limit).to_string());
     let episodes = allowed(&app, all.into_iter().skip(q.offset).take(limit).collect())?;
     let _ = tokio::time::timeout(
@@ -223,8 +233,12 @@ pub(crate) async fn home_metadata(
         .parent_identity
         .as_ref()
         .unwrap_or(&original.identity);
-    let mapped=if identity.id.starts_with("simkl:"){None}else{imports::remote_identity(app,profile,&identity.kind,&identity.id)?};
-    let lookup=mapped.as_deref().unwrap_or(&identity.id);
+    let mapped = if identity.id.starts_with("simkl:") {
+        None
+    } else {
+        imports::remote_identity(app, profile, &identity.kind, &identity.id)?
+    };
+    let lookup = mapped.as_deref().unwrap_or(&identity.id);
     let parts = lookup.split(':').collect::<Vec<_>>();
     let ["simkl", category, id] = parts.as_slice() else {
         return Ok(original);
@@ -239,8 +253,15 @@ pub(crate) async fn home_metadata(
         .next()
         .ok_or_else(auth::forbidden)?;
     if mapped.is_some() {
-        if !detail.identity.ids.iter().any(|external|external.namespace=="imdb"&&external.value==identity.id){return Err(ApiError::from("Verified title mapping changed"));}
-        detail.identity.id=identity.id.clone();
+        if !detail
+            .identity
+            .ids
+            .iter()
+            .any(|external| external.namespace == "imdb" && external.value == identity.id)
+        {
+            return Err(ApiError::from("Verified title mapping changed"));
+        }
+        detail.identity.id = identity.id.clone();
     }
     Ok(detail)
 }

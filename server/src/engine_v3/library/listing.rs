@@ -40,17 +40,36 @@ pub(crate) async fn list(
     // The old selector remains a request alias; all imported and saved titles share one collection.
     let legacy = page.source == "simkl";
     let unavailable = legacy && simkl_availability != Availability::Available;
-    let sources = vec![LibrarySource { id:"favorites".into(), label:"Library".into(), availability:Availability::Available, reason:None }];
-    let import = if simkl_availability==Availability::Available {crate::simkl::imports::schedule(&app,&lease,profile)}else{None};
-    let (mut known_genres,mut genre_total,mut genre_running)=(0,0,false);
-    if !unavailable && simkl_availability==Availability::Available {
-        let cached = if legacy {Some(crate::simkl::watchlists::load(&app,profile,&lease).await?)}else{crate::simkl::watchlists::cached(&app,profile,&lease).await?};
-        if let Some((remote,known,total,running))=cached {
-            known_genres=known;genre_total=total;genre_running=running;
-            crate::simkl::imports::publish_membership(&app,&lease,profile,&remote)?;
+    let sources = vec![LibrarySource {
+        id: "favorites".into(),
+        label: "Library".into(),
+        availability: Availability::Available,
+        reason: None,
+    }];
+    let import = if simkl_availability == Availability::Available {
+        crate::simkl::imports::schedule(&app, &lease, profile)
+    } else {
+        None
+    };
+    let (mut known_genres, mut genre_total, mut genre_running) = (0, 0, false);
+    if !unavailable && simkl_availability == Availability::Available {
+        let cached = if legacy {
+            Some(crate::simkl::watchlists::load(&app, profile, &lease).await?)
+        } else {
+            crate::simkl::watchlists::cached(&app, profile, &lease).await?
+        };
+        if let Some((remote, known, total, running)) = cached {
+            known_genres = known;
+            genre_total = total;
+            genre_running = running;
+            crate::simkl::imports::publish_membership(&app, &lease, profile, &remote)?;
         }
     }
-    let mut entries=if unavailable{vec![]}else{super::library_stats::entries(&app,&lease,profile,configuration.scope.revision)?};
+    let mut entries = if unavailable {
+        vec![]
+    } else {
+        super::library_stats::entries(&app, &lease, profile, configuration.scope.revision)?
+    };
     for entry in &mut entries {
         super::source_integrations::merge_cached(
             &app,
@@ -72,8 +91,10 @@ pub(crate) async fn list(
     let now = util::now_millis().max(0) as u64;
     let lower = added_lower_bound(&page, now);
     let filtering_genre = page.genre.is_some();
-    let mut page=page;
-    if linked && assigned {page.source="simkl".into();}
+    let mut page = page;
+    if linked && assigned {
+        page.source = "simkl".into();
+    }
     let mut snapshot = project(
         configuration.scope.clone(),
         revision,
@@ -84,14 +105,17 @@ pub(crate) async fn list(
         lower,
     )
     .map_err(|_| ApiError::from("Invalid or unavailable library filter"))?;
-    snapshot.query.source="favorites".into();
-    if import.as_ref().is_some_and(|s|s.running) {snapshot.refresh_after_millis=Some(4000);}
+    snapshot.query.source = "favorites".into();
+    if import.as_ref().is_some_and(|s| s.running) {
+        snapshot.refresh_after_millis = Some(4000);
+    }
     if unavailable {
         snapshot.availability = simkl_availability;
         snapshot.reason = simkl_reason;
     }
     if !unavailable && known_genres < genre_total {
-        snapshot.refresh_after_millis = (genre_running || import.as_ref().is_some_and(|s|s.running)).then_some(4000);
+        snapshot.refresh_after_millis =
+            (genre_running || import.as_ref().is_some_and(|s| s.running)).then_some(4000);
         snapshot.reason = Some(format!(
             "Genre metadata is {} ({known_genres} of {genre_total} titles verified); genre matches are partial",
             if genre_running {

@@ -129,17 +129,13 @@ async fn registration_profile_avatar_and_history_are_account_isolated() {
         &mut first,
         "POST",
         "/api/profiles",
-        json!({"name":"Kid","avatar_style":"critters"}),
+        json!({"name":"Kid","avatar_id":"vynxc"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(profile["avatar_style"], "critters");
+    assert_eq!(profile["avatar_id"], "vynxc");
     assert_eq!(profile["setup_complete"], true);
     assert!(profile.get("presentation_complete").is_none());
-    assert!(profile["avatar_url"]
-        .as_str()
-        .unwrap()
-        .starts_with("https://api.dicebear.com/10.x/critters/png?seed="));
     let id = profile["id"].as_str().unwrap();
     assert_eq!(
         browser_request(
@@ -158,11 +154,13 @@ async fn registration_profile_avatar_and_history_are_account_isolated() {
         &mut first,
         "PATCH",
         &format!("/api/profiles/{id}"),
-        json!({"name":"Kid Viewer","avatar_style":"moods","setup_complete":true}),
+        json!({"name":"Kid Viewer","avatar_id":"zayne"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["name"], "Kid Viewer");
+    assert_eq!(updated["avatar_id"], "zayne");
+    // Renaming with an avatar completes setup on a fresh profile.
     assert_eq!(updated["setup_complete"], true);
     assert_eq!(
         browser_request(
@@ -170,7 +168,7 @@ async fn registration_profile_avatar_and_history_are_account_isolated() {
             &mut first,
             "PUT",
             &format!("/api/profiles/{id}/progress"),
-            json!({"id":"tt1","type":"movie","name":"Movie","position":13.554,"duration":8888.0})
+            json!({"record":{"identity":{"id":"tt1","kind":"movie","ids":[],"episode":null,"edition":null},"provider_id":"fixture","title":"Movie","poster":null,"landscape":null,"position_millis":13_554,"duration_millis":8_888_000,"updated_at_millis":0,"completed_at_millis":null},"ended":false})
         )
         .await
         .0,
@@ -179,7 +177,7 @@ async fn registration_profile_avatar_and_history_are_account_isolated() {
     assert_eq!(
         browser_request(&app, &mut second, "GET", "/api/profiles", Value::Null)
             .await
-            .1,
+            .1["profiles"],
         json!([])
     );
     assert_eq!(
@@ -187,7 +185,7 @@ async fn registration_profile_avatar_and_history_are_account_isolated() {
             &app,
             &mut second,
             "GET",
-            &format!("/api/profiles/{id}/progress"),
+            &format!("/api/profiles/{id}/progress/page"),
             Value::Null
         )
         .await
@@ -200,25 +198,14 @@ async fn registration_profile_avatar_and_history_are_account_isolated() {
             &mut second,
             "POST",
             "/api/profiles",
-            json!({"name":"Bad","avatar_style":"untrusted-url"})
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    assert_eq!(
-        browser_request(
-            &app,
-            &mut second,
-            "POST",
-            "/api/profiles",
-            json!({"name":"Bad","avatar_url":"https://evil.example/avatar.png"})
+            json!({"name":"Bad","avatar_id":"untrusted-url"})
         )
         .await
         .0,
         StatusCode::BAD_REQUEST
     );
 }
+
 #[tokio::test]
 async fn device_code_deep_link_binds_confirming_account_and_device_manages_profile() {
     let (app, _) = application();
@@ -316,7 +303,7 @@ async fn device_code_deep_link_binds_confirming_account_and_device_manages_profi
     assert_eq!(
         bearer_request(&app, access, "GET", "/api/profiles", Value::Null)
             .await
-            .1,
+            .1["profiles"],
         json!([])
     );
     let (status, profile) = bearer_request(
@@ -324,7 +311,7 @@ async fn device_code_deep_link_binds_confirming_account_and_device_manages_profi
         access,
         "POST",
         "/api/profiles",
-        json!({"name":"TV Kid","avatar_style":"pixel-art"}),
+        json!({"name":"TV Kid","avatar_id":"zayne"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -425,7 +412,7 @@ async fn canonical_devices_are_account_owned_and_revoke_only_the_callers_device(
 #[tokio::test]
 async fn former_static_bearer_never_establishes_identity() {
     let (app, _) = application();
-    for path in ["/api/profiles", "/api/v2/addons", "/api/catalogs"] {
+    for path in ["/api/profiles", "/api/addons", "/api/catalogs"] {
         assert_eq!(
             bearer_request(
                 &app,

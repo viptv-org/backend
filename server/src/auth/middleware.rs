@@ -255,6 +255,7 @@ pub fn router() -> Router<App> {
         "device/code",
         "device/lookup",
         "device/approve",
+        "device/deny",
         "device/token",
         "device/refresh",
         "device/revoke",

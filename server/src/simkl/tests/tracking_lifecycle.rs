@@ -5,7 +5,7 @@ use super::*;
 async fn lifecycle_stop_retains_95_percent_policy_and_rejects_replayed_attempts() {
     let (app, task, writes) = tracking_server().await;
     let mut event = json!({"attempt_id":"first","sequence":1,"identity":media_identity("simkl:tv:20:1:2","series",Some(json!({"order":"aired","season":1,"episode":2}))),"parent_identity":media_identity("simkl:tv:20","series",None),"event":"start","position_millis":0,"duration_millis":100_000,"ended":false});
-    let endpoint = "/api/v3/profiles/1/playback-events";
+    let endpoint = "/api/profiles/1/playback-events";
     assert_eq!(
         request(&app, "member-token-1", "POST", endpoint, event.clone())
             .await
@@ -61,14 +61,14 @@ async fn queued_lifecycle_configuration_revision_change_prevents_scrobble_egress
         &app,
         "member-token-1",
         "GET",
-        "/api/v3/profiles/1/integrations",
+        "/api/profiles/1/integrations",
         json!({}),
     )
     .await;
     let blocked = app.simkl.tracking.workers.acquire_many(4).await.unwrap();
     let scoped = app.clone();
     let pending = tokio::spawn(async move {
-        request(&scoped,"member-token-1","POST","/api/v3/profiles/1/playback-events",json!({"attempt_id":"queued","sequence":1,"identity":media_identity("simkl:movie:10","movie",None),"event":"start","position_millis":0,"duration_millis":100_000})).await
+        request(&scoped,"member-token-1","POST","/api/profiles/1/playback-events",json!({"attempt_id":"queued","sequence":1,"identity":media_identity("simkl:movie:10","movie",None),"event":"start","position_millis":0,"duration_millis":100_000})).await
     });
     tokio::time::timeout(Duration::from_secs(3), async {
         while app.simkl.tracking.pending_count() == 0 {
@@ -83,7 +83,7 @@ async fn queued_lifecycle_configuration_revision_change_prevents_scrobble_egress
             &app,
             "member-token-1",
             "PUT",
-            "/api/v3/profiles/1/integrations",
+            "/api/profiles/1/integrations",
             update
         )
         .await
@@ -99,7 +99,7 @@ async fn queued_lifecycle_configuration_revision_change_prevents_scrobble_egress
 #[tokio::test]
 async fn lifecycle_attempt_cannot_change_media_and_unmapped_provider_does_not_call_upstream() {
     let (app, task, writes) = tracking_server().await;
-    let endpoint = "/api/v3/profiles/1/playback-events";
+    let endpoint = "/api/profiles/1/playback-events";
     let mut event = json!({"attempt_id":"immutable","sequence":1,"identity":media_identity("simkl:movie:10","movie",None),"event":"start","position_millis":0,"duration_millis":100_000});
     assert_eq!(
         request(&app, "member-token-1", "POST", endpoint, event.clone())
@@ -132,7 +132,7 @@ async fn lifecycle_busy_reservation_does_not_consume_an_unsubmitted_sequence() {
     let held =
         automatic::reserve(app.simkl.clone(), "lifecycle:1:simkl:movie:10:start".into()).unwrap();
     let event = json!({"attempt_id":"retry","sequence":1,"identity":media_identity("simkl:movie:10","movie",None),"event":"start","position_millis":0,"duration_millis":100_000});
-    let endpoint = "/api/v3/profiles/1/playback-events";
+    let endpoint = "/api/profiles/1/playback-events";
     assert_eq!(
         request(&app, "member-token-1", "POST", endpoint, event.clone())
             .await
@@ -174,7 +174,7 @@ async fn provider_authorization_failure_is_not_a_viptv_session_expiry() {
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
     app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
-    let (status,result)=request(&app,"member-token-1","POST","/api/v3/profiles/1/playback-events",json!({"attempt_id":"expired-provider","sequence":1,"identity":media_identity("simkl:movie:10","movie",None),"event":"start","position_millis":0,"duration_millis":100_000})).await;
+    let (status,result)=request(&app,"member-token-1","POST","/api/profiles/1/playback-events",json!({"attempt_id":"expired-provider","sequence":1,"identity":media_identity("simkl:movie:10","movie",None),"event":"start","position_millis":0,"duration_millis":100_000})).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["state"], "unavailable");
     assert_eq!(result["reason"], "tracking_authorization_required");
@@ -183,7 +183,7 @@ async fn provider_authorization_failure_is_not_a_viptv_session_expiry() {
             &app,
             "member-token-1",
             "GET",
-            "/api/v3/profiles/1/simkl",
+            "/api/profiles/1/simkl",
             json!({})
         )
         .await
@@ -199,7 +199,7 @@ async fn provider_authorization_failure_is_not_a_viptv_session_expiry() {
 async fn anime_scrobble_uses_verified_sequential_mapping_and_rejects_missing_mapping() {
     let (app, task, writes) = tracking_server().await;
     let mut event = json!({"attempt_id":"anime","sequence":1,"identity":media_identity("simkl:anime:40:2:1","series",Some(json!({"order":"aired","season":2,"episode":1}))),"parent_identity":media_identity("simkl:anime:40","series",None),"event":"start","position_millis":0,"duration_millis":100_000,"ended":false});
-    let endpoint = "/api/v3/profiles/1/playback-events";
+    let endpoint = "/api/profiles/1/playback-events";
     let (status, result) = request(&app, "member-token-1", "POST", endpoint, event.clone()).await;
     assert_eq!(status, StatusCode::OK, "{result}");
     assert_eq!(result["state"], "recorded");

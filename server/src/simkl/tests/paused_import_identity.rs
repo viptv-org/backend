@@ -39,7 +39,7 @@ async fn paused_episode_import_requires_episode_id_and_aired_mapping_to_agree() 
                 &app,
                 "member-token-1",
                 "GET",
-                "/api/v3/profiles/1/library",
+                "/api/profiles/1/library",
                 Value::Null
             )
             .await
@@ -52,7 +52,7 @@ async fn paused_episode_import_requires_episode_id_and_aired_mapping_to_agree() 
                     &app,
                     "member-token-1",
                     "GET",
-                    "/api/v3/profiles/1/imports/simkl",
+                    "/api/profiles/1/imports/simkl",
                     Value::Null,
                 )
                 .await;

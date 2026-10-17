@@ -18,13 +18,13 @@ pub(crate) fn tag(value: &str) -> String {
 
 pub(crate) fn operation(path: &str) -> &'static str {
     let path = path.strip_prefix("/api").unwrap_or(path);
-    if path == "/v2/playback" {
+    if path == "/playback" {
         "playback_start"
-    } else if path.starts_with("/v2/playback/") && path.ends_with("/heartbeat") {
+    } else if path.starts_with("/playback/") && path.ends_with("/heartbeat") {
         "playback_heartbeat"
-    } else if path.starts_with("/v2/playback/") {
+    } else if path.starts_with("/playback/") {
         "playback_session"
-    } else if path.starts_with("/v2/streams") {
+    } else if path.starts_with("/streams") {
         "source_discovery"
     } else {
         "api_other"
@@ -101,13 +101,13 @@ mod tests {
             .finish();
         let app = axum::Router::new()
             .route(
-                "/v2/playback/:id/heartbeat",
+                "/playback/:id/heartbeat",
                 axum::routing::post(|| async { axum::http::StatusCode::BAD_GATEWAY }),
             )
             .layer(axum::middleware::from_fn(observe));
         let request = Request::builder()
             .method("POST")
-            .uri("/v2/playback/private-token/heartbeat?password=never-print")
+            .uri("/playback/private-token/heartbeat?password=never-print")
             .header("authorization", "Bearer never-print")
             .body(axum::body::Body::empty())
             .unwrap();
@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn diagnostic_fields_do_not_include_paths_queries_or_credentials() {
         assert_eq!(
-            operation("/api/v2/playback/private-token/heartbeat"),
+            operation("/api/playback/private-token/heartbeat"),
             "playback_heartbeat"
         );
         assert_eq!(operation("/api/something/private-password"), "api_other");
