@@ -127,6 +127,15 @@ fn timestamp(v: &Value, now: i64) -> Option<i64> {
     (seconds > 0 && date.timestamp_millis() <= now.checked_mul(1000)?).then_some(seconds)
 }
 
+/// A library entry the user removed and never watched: nothing to import or review.
+pub(super) fn removed_without_history(item: &Value) -> bool {
+    let state = &item["state"];
+    item["removed"].as_bool().unwrap_or(false)
+        && milliseconds(&state["timeOffset"]).unwrap_or(0.0) == 0.0
+        && state["timesWatched"].as_u64().unwrap_or(0) == 0
+        && !state["watched"].as_str().is_some_and(|s| !s.is_empty())
+}
+
 pub(super) fn map(
     items: &[Value],
     library: bool,
@@ -175,7 +184,7 @@ pub(super) fn map_verified(
         let duration = milliseconds(&state["duration"]);
         let watched = state["timesWatched"].as_u64().unwrap_or(0) > 0;
         let bitfield = state["watched"].as_str().is_some_and(|s| !s.is_empty());
-        if removed && offset.unwrap_or(0.0) == 0.0 && !watched && !bitfield {
+        if removed_without_history(item) {
             summary.skipped_items += 1;
             continue;
         }

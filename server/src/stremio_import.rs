@@ -501,7 +501,8 @@ pub(crate) async fn preview(
             .iter()
             .filter_map(|item| {
                 let kind = item["type"].as_str()?;
-                if !matches!(kind, "movie" | "series") {
+                // Removed, never-watched entries are skipped like the summary skips them.
+                if !matches!(kind, "movie" | "series") || mapper::removed_without_history(item) {
                     return None;
                 }
                 let id = item["_id"].as_str()?;

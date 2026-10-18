@@ -1223,6 +1223,27 @@ async fn metadata_deadline_keeps_fast_verified_results_and_bounds_inflight() {
     upstream.abort();
 }
 #[tokio::test]
+async fn removed_entries_without_history_are_not_review_rows() {
+    let mut gone = movie("opaque-removed");
+    gone["removed"] = json!(true);
+    gone["state"] = json!({"timeOffset":0,"timesWatched":0});
+    let mut watched = movie("opaque-watched");
+    watched["removed"] = json!(true);
+    let f = fixture(vec![movie("tt0000001"), gone, watched], login()).await;
+    let preview = staged_preview(&f.app).await;
+    let (status, reviewed) = review_selection(&f.app, &preview, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    let rows = reviewed["review_items"].as_array().unwrap();
+    assert_eq!(rows.iter().filter(|r| r["reason"] == "unmatched_identity").count(), 1, "{reviewed}");
+    assert_eq!(reviewed["summary"]["skipped_items"], 1);
+    assert_eq!(reviewed["summary"]["needs_review"], 1);
+    // The dashboard's rowCountKeys invariant: row counts sum to the summary.
+    for key in ["favorites_to_add", "progress_to_add", "progress_to_update", "existing_preserved", "already_imported"] {
+        let sum: u64 = rows.iter().map(|r| r["counts"][key].as_u64().unwrap()).sum();
+        assert_eq!(json!(sum), reviewed["summary"][key], "{key}");
+    }
+}
+#[tokio::test]
 async fn selected_metadata_addon_never_replaces_cinemeta_verification() {
     use axum::extract::Path;
     let id = "tt0000001";
