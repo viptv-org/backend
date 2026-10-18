@@ -25,7 +25,8 @@ const STORAGE: &str = "stremio_storage_unavailable";
 
 pub(crate) enum ReviewError {
     Api(Error),
-    AddonVerification { failed_addon_items: Vec<String> },
+    /// Every selected add-on that failed, in selection order, with a fixed reason code.
+    AddonVerification { failed: Vec<(String, &'static str)> },
 }
 impl From<Error> for ReviewError {
     fn from(error: Error) -> Self {
@@ -46,11 +47,17 @@ impl IntoResponse for ReviewError {
     fn into_response(self) -> Response {
         match self {
             Self::Api(error) => error.into_response(),
-            Self::AddonVerification { failed_addon_items } => (
-                StatusCode::FAILED_DEPENDENCY,
-                Json(json!({"error":account_api::description("stremio_addon_unavailable"),
-                    "error_code":"stremio_addon_unavailable", "failed_addon_items":failed_addon_items})),
-            ).into_response(),
+            Self::AddonVerification { failed } => {
+                let items: Vec<&str> = failed.iter().map(|(id, _)| id.as_str()).collect();
+                let reasons: serde_json::Map<String, Value> =
+                    failed.iter().map(|(id, reason)| (id.clone(), json!(reason))).collect();
+                (
+                    StatusCode::FAILED_DEPENDENCY,
+                    Json(json!({"error":account_api::description("stremio_addon_unavailable"),
+                        "error_code":"stremio_addon_unavailable", "failed_addon_items":items,
+                        "failed_addon_reasons":reasons})),
+                ).into_response()
+            }
         }
     }
 }
@@ -656,12 +663,12 @@ pub(crate) async fn review(
         .fetches
         .try_acquire()
         .map_err(|_| "stremio_import_busy")?;
-    let verified = tokio::time::timeout(
-        Duration::from_secs(34),
-        addon_review::verify(&app, &selected.iter().collect::<Vec<_>>()),
+    let verified = addon_review::verify(
+        &app,
+        &selected.iter().collect::<Vec<_>>(),
+        tokio::time::Instant::now() + addon_review::VERIFY_BUDGET,
     )
-    .await
-    .map_err(|_| UNAVAILABLE)??;
+    .await?;
     let (mut metadata, remapped) = tokio::join!(
         addon_review::metadata(&app, &pending_metadata, &verified),
         remap::remap(&app, &source_items),

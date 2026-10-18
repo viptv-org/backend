@@ -178,6 +178,25 @@ impl Addons {
             .clone()
             .try_acquire_owned()
             .map_err(|_| "addon_checks_busy")?;
+        self.fetch_manifest(url).await
+    }
+    /// Like `prepare_manifest`, but waits for a free manifest check until `deadline`
+    /// instead of failing at once, and bounds the fetch by the same deadline.
+    pub(crate) async fn prepare_manifest_within(
+        &self,
+        url: &str,
+        deadline: tokio::time::Instant,
+    ) -> Result<(String, Value), String> {
+        let url = self.manifest_url(url)?;
+        let _permit = tokio::time::timeout_at(deadline, self.manifest_gate.clone().acquire_owned())
+            .await
+            .map_err(|_| "addon_checks_busy")?
+            .map_err(|_| "addon_checks_busy")?;
+        tokio::time::timeout_at(deadline, self.fetch_manifest(url))
+            .await
+            .map_err(|_| "addon_timeout")?
+    }
+    async fn fetch_manifest(&self, url: url::Url) -> Result<(String, Value), String> {
         let manifest = if self.protected() {
             crate::source_http::json(
                 url.clone(),

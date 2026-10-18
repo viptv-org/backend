@@ -1222,6 +1222,89 @@ async fn metadata_deadline_keeps_fast_verified_results_and_bounds_inflight() {
     assert!(maximum.load(Ordering::SeqCst) <= 8);
     upstream.abort();
 }
+/// A loopback add-on host: `/ok{n}` serve valid manifests (slowly, counting
+/// concurrent checks), `/renamed` changed its id, `/broken` is not JSON.
+async fn addon_host(delay: Duration) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+    use axum::extract::Path;
+    struct Active(Arc<AtomicUsize>);
+    impl Drop for Active {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let active = Arc::new(AtomicUsize::new(0));
+    let maximum = Arc::new(AtomicUsize::new(0));
+    let peak = maximum.clone();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, Router::new()
+            .route("/:name/manifest.json", get(move |Path(name): Path<String>| {
+                let (active, maximum) = (active.clone(), maximum.clone());
+                async move {
+                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    maximum.fetch_max(current, Ordering::SeqCst);
+                    let _guard = Active(active);
+                    tokio::time::sleep(delay).await;
+                    match name.as_str() {
+                        "broken" => "not a manifest".into_response(),
+                        "renamed" => Json(json!({"id":"other.id","name":"Renamed","resources":["stream"]})).into_response(),
+                        _ => Json(json!({"id":format!("synthetic.{name}"),"name":"Synthetic","resources":["stream"]})).into_response(),
+                    }
+                }
+            })))
+            .await.unwrap();
+    });
+    (base, peak, task)
+}
+fn collection(base: &str, names: &[&str]) -> Value {
+    json!({"addons":names.iter().map(|name| {
+        let id = if *name == "renamed" { "synthetic.renamed".to_owned() } else { format!("synthetic.{name}") };
+        json!({"transportUrl":format!("{base}/{name}/manifest.json"),"manifest":{"id":id,"name":"Synthetic","resources":["stream"]}})
+    }).collect::<Vec<_>>()})
+}
+
+#[tokio::test]
+async fn review_reports_every_failing_addon_with_a_fixed_reason() {
+    let mut f = fixture(vec![movie("tt0000001")], login()).await;
+    f.app.addons.allow_test_loopback = true;
+    let (base, _, host) = addon_host(Duration::from_millis(20)).await;
+    *f.addon_response.lock().unwrap() = collection(&base, &["ok1", "renamed", "ok2", "broken"]);
+    let preview = staged_preview(&f.app).await;
+    let ids: Vec<Value> = preview["addons"].as_array().unwrap().iter().map(|a| a["item_id"].clone()).collect();
+    let (status, failure) = review_selection(&f.app, &preview, json!(ids)).await;
+    assert_eq!(status, StatusCode::FAILED_DEPENDENCY, "{failure}");
+    assert_eq!(failure["error_code"], "stremio_addon_unavailable");
+    assert_eq!(failure["failed_addon_items"], json!([ids[1], ids[3]]));
+    let reasons = failure["failed_addon_reasons"].as_object().unwrap();
+    assert_eq!(reasons.len(), 2);
+    assert_eq!(reasons[ids[1].as_str().unwrap()], "manifest_id_changed");
+    assert_eq!(reasons[ids[3].as_str().unwrap()], "addon_protocol_invalid");
+    assert!(!failure.to_string().contains(&base) && !failure.to_string().contains("manifest.json"));
+    // Unticking exactly the reported add-ons succeeds in one step.
+    let path = import_path(&preview, "review");
+    let (status, reviewed) = request(&f.app, "member-token-1", "POST", &path,
+        json!({"selected_addons":[ids[0], ids[2]],"expected_review_revision":0})).await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    assert_eq!(reviewed["addons_to_add"], 2);
+    host.abort();
+}
+
+#[tokio::test]
+async fn many_selected_addons_queue_on_the_manifest_check_limit_instead_of_failing() {
+    let mut f = fixture(vec![movie("tt0000001")], login()).await;
+    f.app.addons.allow_test_loopback = true;
+    let (base, peak, host) = addon_host(Duration::from_millis(150)).await;
+    *f.addon_response.lock().unwrap() = collection(&base, &["ok1", "ok2", "ok3", "ok4", "ok5", "ok6"]);
+    let preview = staged_preview(&f.app).await;
+    let ids: Vec<Value> = preview["addons"].as_array().unwrap().iter().map(|a| a["item_id"].clone()).collect();
+    let (status, reviewed) = review_selection(&f.app, &preview, json!(ids)).await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    assert_eq!(reviewed["addons_to_add"], 6);
+    let peak = peak.load(Ordering::SeqCst);
+    assert!((2..=2).contains(&peak), "server-wide manifest limit is two, observed {peak}");
+    host.abort();
+}
 #[tokio::test]
 async fn removed_entries_without_history_are_not_review_rows() {
     let mut gone = movie("opaque-removed");

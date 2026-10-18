@@ -93,64 +93,100 @@ pub(super) fn display(
     }).collect()
 }
 
+/// Total time for verifying every selected add-on manifest.
+pub(super) const VERIFY_BUDGET: Duration = Duration::from_secs(30);
+
+/// A fixed reason code for a manifest check failure; never upstream text or URLs.
+fn reason(code: &str) -> &'static str {
+    match code {
+        "invalid_addon_endpoint" | "addon_private_destination" => "addon_unsupported_transport",
+        "addon_redirect_rejected" => "addon_redirect_rejected",
+        "addon_timeout" | "Upstream timed out" => "addon_timeout",
+        "addon_access_denied" => "addon_access_denied",
+        "addon_rate_limited" => "addon_rate_limited",
+        "addon_protocol_invalid" | "addon_response_too_large" => "addon_protocol_invalid",
+        "Invalid addon manifest" => "addon_manifest_invalid",
+        "addon_checks_busy" => "addon_checks_busy",
+        _ => "addon_unreachable",
+    }
+}
+
+async fn check(
+    app: &App,
+    addon: &SourceAddon,
+    deadline: tokio::time::Instant,
+) -> Result<(String, Value), &'static str> {
+    let raw = addon.url.as_deref().ok_or("addon_unsupported_transport")?;
+    let (url, manifest) = app
+        .addons
+        .prepare_manifest_within(raw, deadline)
+        .await
+        .map_err(|error| reason(&error))?;
+    if manifest["id"].as_str() != addon.manifest_id.as_deref() {
+        return Err("manifest_id_changed");
+    }
+    if !manifest["resources"].is_array() {
+        return Err("addon_manifest_invalid");
+    }
+    Ok((url, manifest))
+}
+
+/// Checks every selected add-on (manifest checks queue on the server-wide limit
+/// within `deadline`) and reports all failures together, so a user can untick
+/// every failing add-on in one step.
 pub(super) async fn verify(
     app: &App,
     selected: &[&SourceAddon],
+    deadline: tokio::time::Instant,
 ) -> Result<Vec<VerifiedAddon>, ReviewError> {
-    let failed = |id: &str| ReviewError::AddonVerification {
-        failed_addon_items: vec![id.to_owned()],
-    };
-    // Records why verification stopped, by category only (never the add-on URL).
-    let reject = |position: usize, id: &str, reason: &str| {
-        tracing::warn!(position, selected = selected.len(), reason, "Stremio import add-on verification failed");
-        failed(id)
-    };
+    use futures::{stream, StreamExt};
+    let checked: Vec<_> = stream::iter(0..selected.len())
+        .map(|index| {
+            let addon = selected[index];
+            async move { (addon, check(app, addon, deadline).await) }
+        })
+        .buffered(4)
+        .collect()
+        .await;
+    let mut failed = Vec::new();
     let mut verified = Vec::new();
-    for (position, addon) in selected.iter().enumerate() {
-        let raw = addon.url.as_deref().ok_or_else(|| reject(position, &addon.id, "missing_transport"))?;
-        let (url, manifest) = app.addons.prepare_manifest(raw).await.map_err(|error| {
-            // Error strings are static codes in protected mode; anything else is not logged.
-            let code = if error == "Invalid addon manifest" { "manifest_invalid" }
-                else if error.len() <= 64 && error.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') { error.as_str() }
-                else { "manifest_fetch_failed" };
-            reject(position, &addon.id, code)
-        })?;
-        if manifest["id"].as_str() != addon.manifest_id.as_deref() {
-            return Err(reject(position, &addon.id, "manifest_id_changed"));
-        }
-        if !manifest["resources"].is_array() {
-            return Err(reject(position, &addon.id, "manifest_resources_invalid"));
-        }
-        verified.push((addon.id.clone(), url, manifest));
-    }
     let mut urls = std::collections::HashSet::new();
-    for (position, (id, url, _)) in verified.iter().enumerate() {
-        if !urls.insert(url) {
-            return Err(reject(position, id, "duplicate_manifest_url"));
+    for (position, (addon, result)) in checked.into_iter().enumerate() {
+        let outcome = result.and_then(|(url, manifest)| {
+            if urls.insert(url.clone()) { Ok((url, manifest)) } else { Err("duplicate_manifest_url") }
+        });
+        match outcome {
+            Ok((url, manifest)) => verified.push((addon.id.clone(), url, manifest)),
+            Err(reason) => {
+                // Position and category only, never the add-on URL.
+                tracing::warn!(position, selected = selected.len(), reason, "Stremio import add-on verification failed");
+                failed.push((addon.id.clone(), reason));
+            }
         }
     }
-    let account = app.identity().account_id().ok_or_else(auth::unauthorized)?;
+    if !failed.is_empty() {
+        return Err(ReviewError::AddonVerification { failed });
+    }
     if verified.is_empty() {
         return Ok(Vec::new());
     }
-    let vault = app
-        .secret_vault
-        .as_deref()
-        .ok_or_else(|| failed(&verified[0].0))?;
+    let account = app.identity().account_id().ok_or_else(auth::unauthorized)?;
+    let storage = |verified: &[(String, String, Value)]| ReviewError::AddonVerification {
+        failed: verified.iter().map(|(id, _, _)| (id.clone(), "addon_storage_unavailable")).collect(),
+    };
+    let Some(vault) = app.secret_vault.as_deref() else { return Err(storage(&verified)) };
     let db = app.db.lock().map_err(|_| STORAGE)?;
-    verified
-        .into_iter()
-        .map(|(id, url, manifest)| {
-            let expected =
-                credentials_v2::snapshot(&db, vault, account, &url).map_err(|_| failed(&id))?;
-            Ok(VerifiedAddon {
-                url,
-                manifest,
-                expected,
-            })
-        })
-        .collect()
+    let mut failed = Vec::new();
+    let mut out = Vec::new();
+    for (id, url, manifest) in verified {
+        match credentials_v2::snapshot(&db, vault, account, &url) {
+            Ok(expected) => out.push(VerifiedAddon { url, manifest, expected }),
+            Err(_) => failed.push((id, "addon_storage_unavailable")),
+        }
+    }
+    if failed.is_empty() { Ok(out) } else { Err(ReviewError::AddonVerification { failed }) }
 }
+
 
 /// Keep only what identity verification reads, so long series (One Piece,
 /// Detective Conan) are bounded by episode count rather than by overviews
