@@ -100,25 +100,33 @@ pub(super) async fn verify(
     let failed = |id: &str| ReviewError::AddonVerification {
         failed_addon_items: vec![id.to_owned()],
     };
+    // Records why verification stopped, by category only (never the add-on URL).
+    let reject = |position: usize, id: &str, reason: &str| {
+        tracing::warn!(position, selected = selected.len(), reason, "Stremio import add-on verification failed");
+        failed(id)
+    };
     let mut verified = Vec::new();
-    for addon in selected {
-        let raw = addon.url.as_deref().ok_or_else(|| failed(&addon.id))?;
-        let (url, manifest) = app
-            .addons
-            .prepare_manifest(raw)
-            .await
-            .map_err(|_| failed(&addon.id))?;
-        if manifest["id"].as_str() != addon.manifest_id.as_deref()
-            || !manifest["resources"].is_array()
-        {
-            return Err(failed(&addon.id));
+    for (position, addon) in selected.iter().enumerate() {
+        let raw = addon.url.as_deref().ok_or_else(|| reject(position, &addon.id, "missing_transport"))?;
+        let (url, manifest) = app.addons.prepare_manifest(raw).await.map_err(|error| {
+            // Error strings are static codes in protected mode; anything else is not logged.
+            let code = if error == "Invalid addon manifest" { "manifest_invalid" }
+                else if error.len() <= 64 && error.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') { error.as_str() }
+                else { "manifest_fetch_failed" };
+            reject(position, &addon.id, code)
+        })?;
+        if manifest["id"].as_str() != addon.manifest_id.as_deref() {
+            return Err(reject(position, &addon.id, "manifest_id_changed"));
+        }
+        if !manifest["resources"].is_array() {
+            return Err(reject(position, &addon.id, "manifest_resources_invalid"));
         }
         verified.push((addon.id.clone(), url, manifest));
     }
     let mut urls = std::collections::HashSet::new();
-    for (id, url, _) in &verified {
+    for (position, (id, url, _)) in verified.iter().enumerate() {
         if !urls.insert(url) {
-            return Err(failed(id));
+            return Err(reject(position, id, "duplicate_manifest_url"));
         }
     }
     let account = app.identity().account_id().ok_or_else(auth::unauthorized)?;

@@ -103,8 +103,8 @@ pub(crate) async fn shared<T: Send + 'static>(
 
 /// Profile-owned history imports (Stremio history and My List) that a paired
 /// device may run into its own selected profile. Only the import handlers use
-/// this; they must still refuse account-wide effects such as add-on adoption
-/// for device sessions. Parent restrictions apply.
+/// this. Adopting add-ons during an import is allowed exactly as `shared`
+/// allows add-on management. Parent restrictions apply.
 pub(crate) async fn profile_import<T: Send + 'static>(
     app: App,
     lease: ResourceLease,
@@ -114,7 +114,7 @@ pub(crate) async fn profile_import<T: Send + 'static>(
 }
 
 /// Whether the request was made by a paired device rather than an account session.
-pub(crate) fn device_session(lease: &ResourceLease) -> bool {
+fn device_session(lease: &ResourceLease) -> bool {
     matches!(&lease.principal, auth::Principal::Account { role, .. } if role == "device")
 }
 
@@ -144,8 +144,8 @@ fn details(code: &str) -> (StatusCode, &'static str) {
         "stremio_invalid_request" => (StatusCode::BAD_REQUEST,"Check the import credentials, options and confirmation."),
         "stremio_confirmation_required" => (StatusCode::BAD_REQUEST,"Review the preview and explicitly confirm before importing."),
         "stremio_credentials_invalid" => (StatusCode::UNPROCESSABLE_ENTITY,"Stremio rejected these credentials. Check them and try again."),
-        "stremio_source_unavailable" => (StatusCode::BAD_GATEWAY,"Stremio returned an unavailable, invalid or oversized response. Try again later."),
-        "stremio_addon_unavailable" => (StatusCode::BAD_GATEWAY,"A selected addon could not be safely verified or saved. Review a fresh preview."),
+        "stremio_source_unavailable" => (StatusCode::FAILED_DEPENDENCY,"Stremio returned an unavailable, invalid or oversized response. Try again later."),
+        "stremio_addon_unavailable" => (StatusCode::FAILED_DEPENDENCY,"A selected addon could not be safely verified or saved. Review a fresh preview."),
         "stremio_restricted_profile" => (StatusCode::FORBIDDEN,"Import is not available for restricted profiles. Choose your personal profile."),
         "stremio_preview_not_found" => (StatusCode::NOT_FOUND,"This preview is unavailable in this session. Create another preview."),
         "stremio_preview_expired" => (StatusCode::GONE,"This preview expired. Create another preview before importing."),

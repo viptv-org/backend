@@ -1046,7 +1046,7 @@ async fn failed_changed_review_preserves_published_plan_and_version() {
         json!({"selected_addons":[preview["addons"][0]["item_id"]],"expected_review_revision":1}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(status, StatusCode::FAILED_DEPENDENCY);
     assert_eq!(failure["error_code"], "stremio_addon_unavailable");
     assert_eq!(
         failure["failed_addon_items"],
@@ -1494,7 +1494,7 @@ async fn real_collection_shape_unsafe_and_duplicate_addons_remain_read_only() {
         review_selection(&f.app, &preview, json!([preview["addons"][0]["item_id"]]))
             .await
             .0,
-        StatusCode::BAD_GATEWAY
+        StatusCode::FAILED_DEPENDENCY
     );
     assert_eq!(counts(&f.app), (0, 0, 0));
 }
@@ -2057,7 +2057,7 @@ fn import_path(preview: &Value, action: &str) -> String {
         format!("{draft}/{action}")
     }
 }
-/// Add-on storage and Simkl tracking receipts, which a device import must never change.
+/// Account add-on storage and Simkl tracking receipts (an import never pushes to Simkl).
 fn account_side_effects(app: &App) -> (i64, i64, i64) {
     let db = app.db.lock().unwrap();
     let count = |sql: &str| db.query_row(sql, [], |r| r.get(0)).unwrap();
@@ -2164,8 +2164,12 @@ async fn device_session_previews_reviews_and_applies_into_its_own_profile() {
 }
 
 #[tokio::test]
-async fn device_session_cannot_register_addons_through_import() {
+async fn device_session_reviews_and_registers_selected_addons_into_its_own_profile() {
+    use base64::Engine;
     let mut f = fixture(vec![movie("tt0000001")], login()).await;
+    let vault = Arc::new(crate::secret_store::Vault::from_json(&json!({"active":"fixture","keys":{"fixture":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string()).unwrap());
+    f.app.secret_vault = Some(vault.clone());
+    f.app.addons.vault = Some(vault);
     f.app.addons.allow_test_loopback = true;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!(
@@ -2183,102 +2187,101 @@ async fn device_session_cannot_register_addons_through_import() {
     *f.addon_response.lock().unwrap() = json!({"addons":[{"manifest":{"id":"synthetic.meta","name":"Verified addon","resources":["meta"]},"transportUrl":url}]});
     pair_device(&f.app, Some(1));
     let revision_before = f.app.addons.clone().for_account(1).revision().unwrap();
-    let side_effects = account_side_effects(&f.app);
+    let (addons, credentials, receipts) = account_side_effects(&f.app);
     let preview = device_staged_preview(&f.app).await;
     assert_eq!(preview["addons"][0]["status"], "add", "{preview}");
-    let review = import_path(&preview, "review");
-    let (status, refused) = request(
-        &f.app,
-        DEVICE,
-        "POST",
-        &review,
-        json!({"selected_addons":[preview["addons"][0]["item_id"]]}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
-    assert_eq!(refused["error_code"], "account_session_required");
-    assert_eq!(manifest_calls.load(Ordering::SeqCst), 0);
-    // The refused selection left the draft usable for an empty-selection review.
+    assert!(!preview.to_string().contains("secret-token"));
     let (status, reviewed) = request(
         &f.app,
         DEVICE,
         "POST",
-        &review,
-        json!({"selected_addons":[]}),
+        &import_path(&preview, "review"),
+        json!({"selected_addons":[preview["addons"][0]["item_id"]]}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{reviewed}");
-    assert_eq!(reviewed["review_revision"], 1);
-    assert_eq!(reviewed["addons_to_add"], 0);
+    assert_eq!(reviewed["addons_to_add"], 1);
+    assert!(!reviewed.to_string().contains("secret-token"));
+    assert!(manifest_calls.load(Ordering::SeqCst) >= 1);
+    // Review verifies but writes nothing.
+    assert_eq!(counts(&f.app), (0, 0, 0));
+    assert_eq!(account_side_effects(&f.app), (addons, credentials, receipts));
+    assert_eq!(
+        f.app.addons.clone().for_account(1).revision().unwrap(),
+        revision_before
+    );
+    let apply = json!({"confirm":true,"review_revision":reviewed["review_revision"]});
+    // The device's draft stays bound to the device session.
+    assert_eq!(
+        request(
+            &f.app,
+            "member-token-1",
+            "POST",
+            &import_path(&preview, "apply"),
+            apply.clone()
+        )
+        .await
+        .1["error_code"],
+        "stremio_preview_not_found"
+    );
+    assert_eq!(account_side_effects(&f.app), (addons, credentials, receipts));
     let (status, applied) = request(
         &f.app,
         DEVICE,
         "POST",
         &import_path(&preview, "apply"),
-        json!({"confirm":true,"review_revision":reviewed["review_revision"]}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{applied}");
-    assert_eq!(applied["addons_added"], 0);
-    assert_eq!(counts(&f.app), (1, 1, 1));
-    assert_eq!(account_side_effects(&f.app), side_effects);
-    assert_eq!(
-        f.app.addons.clone().for_account(1).revision().unwrap(),
-        revision_before
-    );
-
-    // Defense in depth: a draft holding verified add-ons is never applied by a device.
-    let staged = staged_preview(&f.app).await;
-    let (status, selected) =
-        review_selection(&f.app, &staged, json!([staged["addons"][0]["item_id"]])).await;
-    assert_eq!(status, StatusCode::OK, "{selected}");
-    assert_eq!(selected["addons_to_add"], 1);
-    let before = counts(&f.app);
-    let backups = std::fs::read_dir(f._directory.path().join("backups"))
-        .unwrap()
-        .count();
-    f.app
-        .db
-        .lock()
-        .unwrap()
-        .execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
-        .unwrap();
-    let apply = json!({"confirm":true,"review_revision":selected["review_revision"]});
-    let (status, refused) = request(
-        &f.app,
-        "member-token-1",
-        "POST",
-        &import_path(&staged, "apply"),
-        apply.clone(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
-    assert_eq!(refused["error_code"], "account_session_required");
-    assert_eq!(counts(&f.app), before);
-    assert_eq!(account_side_effects(&f.app), side_effects);
-    assert_eq!(
-        std::fs::read_dir(f._directory.path().join("backups"))
-            .unwrap()
-            .count(),
-        backups
-    );
-    // The account session can still complete the same draft.
-    f.app
-        .db
-        .lock()
-        .unwrap()
-        .execute("UPDATE auth_sessions SET kind='browser' WHERE id='s1'", [])
-        .unwrap();
-    let (status, applied) = request(
-        &f.app,
-        "member-token-1",
-        "POST",
-        &import_path(&staged, "apply"),
         apply,
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["profile_id"], 1);
     assert_eq!(applied["addons_added"], 1);
+    assert_eq!(applied["addons_existing"], 0);
+    assert_eq!(counts(&f.app), (1, 1, 1));
+    // Account-wide, encrypted add-on storage; no Simkl push.
+    assert_eq!(
+        account_side_effects(&f.app),
+        (addons + 1, credentials + 1, receipts)
+    );
+    assert_ne!(
+        f.app.addons.clone().for_account(1).revision().unwrap(),
+        revision_before
+    );
+    {
+        let db = f.app.db.lock().unwrap();
+        let profiles = |table: &str| -> Vec<i64> {
+            db.prepare(&format!("SELECT DISTINCT profile_id FROM {table}"))
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        assert_eq!(profiles("favorites"), vec![1]);
+        assert_eq!(profiles("progress"), vec![1]);
+        let secret: String = db
+            .query_row(
+                "SELECT secret FROM addon_credentials_v2 WHERE account_id=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!secret.contains("secret-token"));
+        assert!(db
+            .query_row(
+                "SELECT manifest_url FROM addons WHERE account_id=1",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap()
+            .starts_with("sealed:addon:"));
+    }
+    // The registered add-on is the account's shared add-on, as listed to the device.
+    let (status, listed) = request(&f.app, DEVICE, "GET", "/api/addons", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{listed}");
+    assert_eq!(listed["items"][0]["name"], "Verified addon");
+    assert!(!listed.to_string().contains("secret-token"));
     upstream.abort();
 }
 
@@ -2337,6 +2340,7 @@ async fn device_session_without_profile_foreign_or_restricted_is_refused() {
     );
     for (method, action, body) in [
         ("POST", "review", json!({"selected_addons":[]})),
+        ("POST", "review", json!({"selected_addons":["unknown"]})),
         ("POST", "apply", json!({"confirm":true})),
         ("DELETE", "", Value::Null),
     ] {
@@ -2572,7 +2576,7 @@ async fn source_redirect_oversize_invalid_and_item_limits_fail_closed() {
             axum::serve(listener, source).await.unwrap();
         });
         let (s, r) = request(&app, "member-token-1", "POST", PATH, credentials()).await;
-        assert_eq!(s, StatusCode::BAD_GATEWAY);
+        assert_eq!(s, StatusCode::FAILED_DEPENDENCY);
         assert_eq!(r["error_code"], UNAVAILABLE);
         assert!(!r.to_string().contains("synthetic"));
         assert_eq!(counts(&app), (0, 0, 0));

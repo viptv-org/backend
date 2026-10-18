@@ -47,7 +47,7 @@ impl IntoResponse for ReviewError {
         match self {
             Self::Api(error) => error.into_response(),
             Self::AddonVerification { failed_addon_items } => (
-                StatusCode::BAD_GATEWAY,
+                StatusCode::FAILED_DEPENDENCY,
                 Json(json!({"error":account_api::description("stremio_addon_unavailable"),
                     "error_code":"stremio_addon_unavailable", "failed_addon_items":failed_addon_items})),
             ).into_response(),
@@ -400,18 +400,12 @@ pub(crate) struct Confirmation {
     excluded_items: Vec<String>,
 }
 // Account sessions and paired devices may import history and My List into the
-// session's own selected, unrestricted profile. Adopting Stremio add-ons is
-// account-wide configuration and stays account-session-only (`addons_allowed`).
+// session's own selected, unrestricted profile, and adopt selected Stremio
+// add-ons into the account's shared add-ons, as `/api/v2/addons` allows them.
 fn authorize(db: &Connection, app: &App, profile: i64) -> Result<(), Error> {
     app.require_profile(db, profile)?;
     if kids::restricted(db, &app.identity())? {
         return Err("stremio_restricted_profile".into());
-    }
-    Ok(())
-}
-fn addons_allowed(app: &App) -> Result<(), Error> {
-    if account_api::device_session(&app.request_lease()) {
-        return Err("account_session_required".into());
     }
     Ok(())
 }
@@ -588,10 +582,6 @@ pub(crate) async fn review(
     let app = app.with_lease(lease);
     check(&app, profile).await?;
     let Json(selection) = body.map_err(|_| "stremio_invalid_request")?;
-    // Refused before the draft is touched, so an empty-selection review still works.
-    if !selection.selected_addons.is_empty() {
-        addons_allowed(&app)?;
-    }
     if selection.selected_addons.len() > 32
         || selection.selected_addons.iter().any(|s| s.len() > 64)
     {
@@ -838,8 +828,6 @@ pub(crate) async fn apply(
             ));
         }
         let preview = slot.preview.as_ref().ok_or("stremio_preview_not_found")?;
-        // Defense in depth: a device apply never registers add-ons and writes nothing (no backup).
-        if !preview.selected_addons.is_empty() { addons_allowed(&worker)?; }
         if !preview.reviewed || preview.review_in_progress { return Err("stremio_invalid_request".into()); }
         if confirmation.review_revision != Some(preview.review_revision)
             && !(preview.review_revision == 0 && confirmation.review_revision.is_none())
