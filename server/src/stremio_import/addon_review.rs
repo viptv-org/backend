@@ -226,76 +226,117 @@ fn retain_metadata(
     found.insert(identity, meta);
     true
 }
+/// Identities worth looking up, in the caller's priority order, without duplicates.
+fn identities(items: &[Value]) -> Vec<(String, String)> {
+    let mut seen = std::collections::HashSet::new();
+    items
+        .iter()
+        .filter_map(|item| {
+            let (kind, id) = (item["type"].as_str()?, item["_id"].as_str()?);
+            seen.insert((kind, id)).then(|| (kind.to_owned(), id.to_owned()))
+        })
+        .collect()
+}
+fn metadata_budget(app: &App) -> Duration {
+    #[cfg(test)]
+    if let Some(duration) = app.stremio_import.metadata_deadline {
+        return duration;
+    }
+    let _ = app;
+    // Leave room for add-on verification and publication within the dashboard's
+    // 45-second request timeout. Completed metadata survives this earlier cutoff.
+    Duration::from_secs(30)
+}
+/// Runs `lookup` for each identity, at most eight at a time, and retains completed
+/// results within both the deadline and the byte budget. Unfinished identities stay
+/// review-only, never guessed.
+async fn collect<F, Fut>(
+    identities: Vec<(String, String)>,
+    deadline: tokio::time::Instant,
+    found: &mut HashMap<(String, String), Value>,
+    remaining: &mut usize,
+    lookup: F,
+) where
+    F: Fn(String, String) -> Fut,
+    Fut: std::future::Future<Output = Option<Value>>,
+{
+    use futures::{stream, StreamExt};
+    let mut pending = stream::iter(identities)
+        .map(|(kind, id)| {
+            let request = lookup(kind.clone(), id.clone());
+            async move { request.await.map(|meta| ((kind, id), meta)) }
+        })
+        .buffer_unordered(8);
+    while let Ok(Some(result)) = tokio::time::timeout_at(deadline, pending.next()).await {
+        if let Some((identity, meta)) = result {
+            if !retain_metadata(found, remaining, identity, meta) {
+                break;
+            }
+        }
+    }
+}
+/// What a review without add-ons verifies: account-owned sources first, then fixed
+/// public Cinemeta for IMDb ids.
+async fn baseline_meta(app: &App, kind: &str, id: &str) -> Option<Value> {
+    let owned = app
+        .addons
+        .clone()
+        .for_account(app.identity().account_id().unwrap_or_default())
+        .with_protected_fetch()
+        .meta(kind, id)
+        .await
+        .ok()
+        .and_then(|r| checked_meta(r, kind, id));
+    match owned {
+        Some(meta) => Some(meta),
+        None => cinemeta(app, kind, id).await,
+    }
+}
+/// The first selected add-on, in selection order, whose metadata names this identity.
+async fn selected_meta(app: &App, selected: &[VerifiedAddon], kind: &str, id: &str) -> Option<Value> {
+    for addon in selected
+        .iter()
+        .filter(|a| crate::addon::supports(&a.manifest, "meta", kind, id))
+        .take(8)
+    {
+        if let Ok(value) = app.addons.metadata_from(&addon.url, kind, id).await {
+            if let Some(meta) = checked_meta(value, kind, id) {
+                return Some(meta);
+            }
+        }
+    }
+    None
+}
+/// Stremio encodes an IMDb series' watched bitfield against Cinemeta's episode
+/// list, so selected add-ons never replace what the baseline already verified:
+/// they are consulted only for identities the baseline could not resolve. Selecting
+/// add-ons can add verification but never lose it, whatever the selection order.
 pub(super) async fn metadata(
     app: &App,
     items: &[Value],
     selected: &[VerifiedAddon],
 ) -> HashMap<(String, String), Value> {
-    use futures::{stream, StreamExt};
     let mut found = HashMap::new();
     let mut remaining = MAX_RETAINED_METADATA_BYTES;
-    let mut seen = std::collections::HashSet::new();
-    let identities: Vec<_> = items
-        .iter()
-        .filter_map(|item| {
-            let (kind, id) = (item["type"].as_str()?, item["_id"].as_str()?);
-            seen.insert((kind, id))
-                .then(|| (kind.to_owned(), id.to_owned()))
+    let identities = identities(items);
+    let deadline = tokio::time::Instant::now() + metadata_budget(app);
+    collect(identities.clone(), deadline, &mut found, &mut remaining, |kind, id| async move {
+        baseline_meta(app, &kind, &id).await
+    })
+    .await;
+    if !selected.is_empty() {
+        let unresolved: Vec<_> = identities
+            .into_iter()
+            .filter(|identity| !found.contains_key(identity))
+            .collect();
+        collect(unresolved, deadline, &mut found, &mut remaining, |kind, id| async move {
+            selected_meta(app, selected, &kind, &id).await
         })
-        .collect();
-    #[cfg(test)]
-    let duration = app
-        .stremio_import
-        .metadata_deadline
-        .unwrap_or(Duration::from_secs(30));
-    #[cfg(not(test))]
-    // Leave room for add-on verification and publication within the dashboard's
-    // 45-second request timeout. Completed metadata survives this earlier cutoff.
-    let duration = Duration::from_secs(30);
-    let deadline = tokio::time::Instant::now() + duration;
-    let mut pending = stream::iter(identities)
-        .map(|(kind, id)| async move {
-            let (kind, id) = (kind.as_str(), id.as_str());
-            let from_owned = app
-                .addons
-                .clone()
-                .for_account(app.identity().account_id().unwrap_or_default())
-                .with_protected_fetch()
-                .meta(kind, id)
-                .await
-                .ok();
-            let mut meta = from_owned.and_then(|r| checked_meta(r, kind, id));
-            if meta.is_none() {
-                for addon in selected
-                    .iter()
-                    .filter(|a| crate::addon::supports(&a.manifest, "meta", kind, id))
-                    .take(8)
-                {
-                    if let Ok(value) = app.addons.metadata_from(&addon.url, kind, id).await {
-                        meta = checked_meta(value, kind, id);
-                        if meta.is_some() {
-                            break;
-                        }
-                    }
-                }
-            }
-            if meta.is_none() {
-                meta = cinemeta(app, kind, id).await;
-            }
-            meta.map(|meta| ((kind.to_owned(), id.to_owned()), meta))
-        })
-        .buffer_unordered(8);
-    // Retain completed results within both the time and total byte budgets.
-    // Dropping unfinished work leaves its identities review-only, never guessed.
-    while let Ok(Some(result)) = tokio::time::timeout_at(deadline, pending.next()).await {
-        if let Some((identity, meta)) = result {
-            if !retain_metadata(&mut found, &mut remaining, identity, meta) {
-                break;
-            }
-        }
+        .await;
     }
     found
 }
+
 
 #[cfg(test)]
 mod budget_tests {

@@ -1223,6 +1223,57 @@ async fn metadata_deadline_keeps_fast_verified_results_and_bounds_inflight() {
     upstream.abort();
 }
 #[tokio::test]
+async fn selected_metadata_addon_never_replaces_cinemeta_verification() {
+    use axum::extract::Path;
+    let id = "tt0000001";
+    let items = vec![json!({"_id":id,"type":"series","name":"Synthetic title","removed":false,"temp":false,
+        "state":{"watched":format!("{id}:1:2:2:eJxjAgAAAwAD")}})];
+    let mut f = fixture(items, login()).await;
+    f.app.addons.allow_test_loopback = true;
+    let addon_meta_calls = Arc::new(AtomicUsize::new(0));
+    let calls = addon_meta_calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        axum::serve(listener, Router::new()
+            // Public Cinemeta: the list the bitfield was encoded against.
+            .route("/meta/series/:id", get(|Path(id): Path<String>| async move {
+                let title = id.trim_end_matches(".json").to_owned();
+                Json(json!({"meta":{"id":title,"type":"series","videos":[
+                    {"id":format!("{title}:1:1"),"season":1,"episode":1},
+                    {"id":format!("{title}:1:2"),"season":1,"episode":2}]}}))
+            }))
+            .route("/addon/manifest.json", get(|| async { Json(json!({"id":"synthetic.meta","name":"Other metadata","types":["series"],"idPrefixes":["tt"],"resources":["meta"]})) }))
+            // A different episode list for the same show, which cannot verify the bitfield.
+            .route("/addon/meta/series/:id", get(move |Path(id): Path<String>| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    let title = id.trim_end_matches(".json").to_owned();
+                    Json(json!({"meta":{"id":title,"type":"series","videos":[
+                        {"id":format!("{title}:1:1"),"season":1,"episode":1},
+                        {"id":format!("{title}:1:3"),"season":1,"episode":3}]}}))
+                }
+            })))
+            .await.unwrap();
+    });
+    Arc::get_mut(&mut f.app.stremio_import).unwrap().public_metadata_endpoint = Some(base.clone());
+    *f.addon_response.lock().unwrap() = json!({"addons":[{"manifest":{"id":"synthetic.meta","name":"Other metadata","resources":["meta"]},
+        "transportUrl":format!("{base}/addon/manifest.json")}]});
+    let preview = staged_preview(&f.app).await;
+    let (status, without) = review_selection(&f.app, &preview, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{without}");
+    let path = import_path(&preview, "review");
+    let (status, with) = request(&f.app, "member-token-1", "POST", &path,
+        json!({"selected_addons":[preview["addons"][0]["item_id"]],"expected_review_revision":1})).await;
+    assert_eq!(status, StatusCode::OK, "{with}");
+    assert_eq!(without["summary"]["progress_to_add"], 1, "{without}");
+    assert_eq!(with["summary"]["progress_to_add"], without["summary"]["progress_to_add"], "{with}");
+    assert_eq!(with["summary"]["needs_review"], without["summary"]["needs_review"]);
+    assert_eq!(episode_rows(&with), episode_rows(&without));
+    assert_eq!(addon_meta_calls.load(Ordering::SeqCst), 0, "verified identities are not looked up again");
+    upstream.abort();
+}
+#[tokio::test]
 async fn removing_metadata_addon_removes_only_its_rows_and_restores_same_handle() {
     use base64::Engine;
     let mut f = fixture(vec![movie("tt0000001"), movie("opaque_movie")], login()).await;
@@ -3223,4 +3274,76 @@ async fn resolved_removed_entry_without_history_is_not_flagged_unmatched() {
         !reviewed["review_items"].as_array().unwrap().iter().any(|r| r["reason"] == "unmatched_identity"),
         "{reviewed}"
     );
+}
+
+/// Opt-in, read-only timing probe against the owner's real Stremio account on a
+/// synthetic VIPTV database: review without add-ons, with every available add-on
+/// (dropping failures until it succeeds), and a re-review without add-ons. Never
+/// applies. Prints aggregate counts, failure categories and timings only. Run with
+/// STREMIO_EMAIL/STREMIO_PASSWORD/SIMKL_CLIENT_ID set:
+/// `cargo test --lib real_library_review_timings -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore]
+async fn real_library_review_timings() {
+    let (Ok(email), Ok(password)) = (std::env::var("STREMIO_EMAIL"), std::env::var("STREMIO_PASSWORD")) else {
+        panic!("STREMIO_EMAIL / STREMIO_PASSWORD not set");
+    };
+    let directory = artifact_directory();
+    let mut app = crate::auth_integration_tests::fixture();
+    let service = Arc::get_mut(&mut app.stremio_import).unwrap();
+    service.backup_directory = Some(directory.path().join("backups"));
+    service.metadata_service = remap::MetadataService::from_env();
+    assert!(service.metadata_service.is_some(), "SIMKL_CLIENT_ID not set");
+    let body = json!({"email":email,"password":password,"import_library":true,"import_progress":true,"inspect_addons":true});
+    let started = std::time::Instant::now();
+    let (status, preview) = request(&app, "member-token-1", "POST", PATH, body).await;
+    assert_eq!(status, StatusCode::OK, "preview failed: {}", preview["error"]);
+    println!("[timings] preview: {:.1}s addons={}", started.elapsed().as_secs_f64(), preview["addons"].as_array().map_or(0, Vec::len));
+    let path = import_path(&preview, "review");
+    let mut revision = 0;
+    let (status, none) = timed_review(&app, &path, revision, "review none (first)", vec![]).await;
+    assert_eq!(status, StatusCode::OK);
+    revision = none["review_revision"].as_u64().unwrap();
+    let mut selected: Vec<Value> = preview["addons"].as_array().unwrap().iter()
+        .filter(|a| a["status"] == "add").map(|a| a["item_id"].clone()).collect();
+    for round in 1..=8 {
+        let label = format!("review add-ons round {round} ({} selected)", selected.len());
+        let (status, body) = timed_review(&app, &path, revision, &label, selected.clone()).await;
+        if status == StatusCode::OK {
+            revision = body["review_revision"].as_u64().unwrap();
+            break;
+        }
+        let failed: Vec<Value> = body["failed_addon_items"].as_array().cloned().unwrap_or_default();
+        assert!(!failed.is_empty(), "review failed: {}", body["error_code"]);
+        selected.retain(|id| !failed.contains(id));
+    }
+    let reversed: Vec<Value> = selected.iter().rev().cloned().collect();
+    let (status, body) = timed_review(&app, &path, revision, "review add-ons reversed order", reversed).await;
+    assert_eq!(status, StatusCode::OK);
+    revision = body["review_revision"].as_u64().unwrap();
+    let (status, again) = timed_review(&app, &path, revision, "review add-ons again (unchanged)", selected.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    revision = again["review_revision"].as_u64().unwrap();
+    let (status, _) = timed_review(&app, &path, revision, "review none (re-review)", vec![]).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+async fn timed_review(app: &App, path: &str, revision: u64, label: &str, selected: Vec<Value>) -> (StatusCode, Value) {
+    let started = std::time::Instant::now();
+    let (status, body) = request(app, "member-token-1", "POST", path,
+        json!({"selected_addons":selected,"expected_review_revision":revision})).await;
+    let elapsed = started.elapsed();
+    let mut statuses: std::collections::BTreeMap<String, usize> = Default::default();
+    for r in body["review_items"].as_array().into_iter().flatten() {
+        *statuses.entry(format!("{}/{}", r["status"].as_str().unwrap_or(""), r["reason"].as_str().unwrap_or("-"))).or_default() += 1;
+    }
+    let mut reasons: std::collections::BTreeMap<String, usize> = Default::default();
+    for reason in body["failed_addon_reasons"].as_object().into_iter().flat_map(|m| m.values()) {
+        *reasons.entry(reason.as_str().unwrap_or("?").to_owned()).or_default() += 1;
+    }
+    let s = &body["summary"];
+    println!("[timings] {label}: {:.1}s status={} favorites_to_add={} progress_to_add={} needs_review={} skipped={} rows={statuses:?} failed={} reasons={reasons:?}",
+        elapsed.as_secs_f64(), status.as_u16(), s["favorites_to_add"], s["progress_to_add"], s["needs_review"], s["skipped_items"],
+        body["failed_addon_items"].as_array().map_or(0, Vec::len));
+    (status, body)
 }
