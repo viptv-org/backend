@@ -399,6 +399,9 @@ pub(crate) struct Confirmation {
     #[serde(default)]
     excluded_items: Vec<String>,
 }
+// Account sessions and paired devices may import history and My List into the
+// session's own selected, unrestricted profile. Adopting Stremio add-ons is
+// account-wide configuration and stays account-session-only (`addons_allowed`).
 fn authorize(db: &Connection, app: &App, profile: i64) -> Result<(), Error> {
     app.require_profile(db, profile)?;
     if kids::restricted(db, &app.identity())? {
@@ -406,9 +409,15 @@ fn authorize(db: &Connection, app: &App, profile: i64) -> Result<(), Error> {
     }
     Ok(())
 }
+fn addons_allowed(app: &App) -> Result<(), Error> {
+    if account_api::device_session(&app.request_lease()) {
+        return Err("account_session_required".into());
+    }
+    Ok(())
+}
 async fn check(app: &App, profile: i64) -> Result<(), Error> {
     let worker = app.clone();
-    account_api::run(app.clone(), app.request_lease(), move |db, _| {
+    account_api::profile_import(app.clone(), app.request_lease(), move |db, _| {
         authorize(db, &worker, profile)
     })
     .await
@@ -535,7 +544,7 @@ pub(crate) async fn preview(
     };
     let worker = app.clone();
     let id = reservation.id.clone();
-    let result = account_api::run(app.clone(), app.request_lease(), move |db, _| {
+    let result = account_api::profile_import(app.clone(), app.request_lease(), move |db, _| {
         authorize(db, &worker, profile)?;
         // A read transaction gives both the plan and its snapshot the same SQLite view.
         let tx = rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Deferred).map_err(|_| STORAGE)?;
@@ -579,6 +588,10 @@ pub(crate) async fn review(
     let app = app.with_lease(lease);
     check(&app, profile).await?;
     let Json(selection) = body.map_err(|_| "stremio_invalid_request")?;
+    // Refused before the draft is touched, so an empty-selection review still works.
+    if !selection.selected_addons.is_empty() {
+        addons_allowed(&app)?;
+    }
     if selection.selected_addons.len() > 32
         || selection.selected_addons.iter().any(|s| s.len() > 64)
     {
@@ -664,7 +677,7 @@ pub(crate) async fn review(
     );
     metadata.extend(remapped.meta.clone());
     let worker = app.clone();
-    account_api::run(app.clone(), app.request_lease(), move |db, _| {
+    account_api::profile_import(app.clone(), app.request_lease(), move |db, _| {
         authorize(db, &worker, profile)?;
         let mut slots = worker.stremio_import.pending.lock().map_err(|_| STORAGE)?;
         let slot = slots.get_mut(&id).filter(|s| s.belongs(&worker, profile)).ok_or("stremio_preview_not_found")?;
@@ -767,7 +780,7 @@ pub(crate) async fn cancel(
 ) -> Result<Json<Value>, Error> {
     let app = app.with_lease(lease);
     let worker = app.clone();
-    account_api::run(app.clone(), app.request_lease(), move |db, _| {
+    account_api::profile_import(app.clone(), app.request_lease(), move |db, _| {
         authorize(db, &worker, profile)?;
         let mut slots = worker.stremio_import.pending.lock().map_err(|_| STORAGE)?;
         let slot = slots
@@ -805,7 +818,7 @@ pub(crate) async fn apply(
         return Err("stremio_confirmation_required".into());
     }
     let worker = app.clone();
-    account_api::run(app.clone(), app.request_lease(), move |db, _| {
+    account_api::profile_import(app.clone(), app.request_lease(), move |db, _| {
         authorize(db, &worker, profile)?;
         let mut slots = worker.stremio_import.pending.lock().map_err(|_| STORAGE)?;
         let slot = slots
@@ -825,6 +838,8 @@ pub(crate) async fn apply(
             ));
         }
         let preview = slot.preview.as_ref().ok_or("stremio_preview_not_found")?;
+        // Defense in depth: a device apply never registers add-ons and writes nothing (no backup).
+        if !preview.selected_addons.is_empty() { addons_allowed(&worker)?; }
         if !preview.reviewed || preview.review_in_progress { return Err("stremio_invalid_request".into()); }
         if confirmation.review_revision != Some(preview.review_revision)
             && !(preview.review_revision == 0 && confirmation.review_revision.is_none())

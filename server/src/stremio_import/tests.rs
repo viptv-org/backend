@@ -2006,12 +2006,10 @@ async fn authorization_unauthorized_foreign_replaced_device_restricted_and_paren
             [],
         )
         .unwrap();
-    assert_eq!(
-        request(&f.app, "member-token-1", "POST", PATH, credentials())
-            .await
-            .1["error_code"],
-        "account_session_required"
-    );
+    // A paired device may import into its own selected, unrestricted profile.
+    let (status, device) = request(&f.app, "member-token-1", "POST", PATH, credentials()).await;
+    assert_eq!(status, StatusCode::OK, "{device}");
+    assert_eq!(f.calls.load(Ordering::SeqCst), 2);
     {
         let db = f.app.db.lock().unwrap();
         db.execute("UPDATE auth_sessions SET kind='browser' WHERE id='s1'", [])
@@ -2038,6 +2036,411 @@ async fn authorization_unauthorized_foreign_replaced_device_restricted_and_paren
         "stremio_restricted_profile"
     );
     assert_eq!(counts(&f.app), (0, 0, 0));
+}
+const DEVICE: &str = "device-token-1";
+/// A paired device session `d1` for account 1, separate from browser session `s1`.
+fn pair_device(app: &App, profile: Option<i64>) {
+    app.db.lock().unwrap().execute(
+        "INSERT INTO auth_sessions(id,account_id,profile_id,access_hash,refresh_hash,csrf_hash,kind,device_name,access_expires,refresh_expires,created_at) VALUES('d1',1,?1,?2,'refresh-device','unused','device','Fixture phone',?3,?3,0)",
+        params![profile, auth::hash(DEVICE), util::now() + 3600],
+    ).unwrap();
+}
+/// The draft's route; an empty action is the cancel (DELETE) route.
+fn import_path(preview: &Value, action: &str) -> String {
+    let draft = format!(
+        "/api/profiles/1/imports/stremio/{}",
+        preview["preview_id"].as_str().unwrap()
+    );
+    if action.is_empty() {
+        draft
+    } else {
+        format!("{draft}/{action}")
+    }
+}
+/// Add-on storage and Simkl tracking receipts, which a device import must never change.
+fn account_side_effects(app: &App) -> (i64, i64, i64) {
+    let db = app.db.lock().unwrap();
+    let count = |sql: &str| db.query_row(sql, [], |r| r.get(0)).unwrap();
+    (
+        count("SELECT COUNT(*) FROM addons"),
+        count("SELECT COUNT(*) FROM addon_credentials_v2"),
+        count("SELECT COUNT(*) FROM simkl_tracking_receipts"),
+    )
+}
+async fn device_staged_preview(app: &App) -> Value {
+    let mut body = credentials();
+    body["inspect_addons"] = json!(true);
+    let (status, preview) = request(app, DEVICE, "POST", PATH, body).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["stage"], "addons", "{preview}");
+    preview
+}
+
+#[tokio::test]
+async fn device_session_previews_reviews_and_applies_into_its_own_profile() {
+    let f = fixture(vec![movie("tt0000001"), movie("tt0000002")], login()).await;
+    pair_device(&f.app, Some(1));
+    *f.addon_response.lock().unwrap() = json!({"addons":[{"transportUrl":"https://addon.example.invalid/manifest.json",
+        "manifest":{"id":"listed","name":"Listed addon","resources":["meta"]}}]});
+    let revision_before = f.app.addons.clone().for_account(1).revision().unwrap();
+    let side_effects = account_side_effects(&f.app);
+    let preview = device_staged_preview(&f.app).await;
+    // Read-only listing for the device, same shape as for account sessions.
+    assert_eq!(preview["addons"].as_array().unwrap().len(), 1, "{preview}");
+    assert_eq!(preview["summary"]["favorites_to_add"], 2);
+    assert_eq!(counts(&f.app), (0, 0, 0));
+    // A browser session of the same account cannot use the device's draft.
+    assert_eq!(
+        request(
+            &f.app,
+            "member-token-1",
+            "POST",
+            &import_path(&preview, "review"),
+            json!({"selected_addons":[]})
+        )
+        .await
+        .1["error_code"],
+        "stremio_preview_not_found"
+    );
+    let (status, reviewed) = request(
+        &f.app,
+        DEVICE,
+        "POST",
+        &import_path(&preview, "review"),
+        json!({"selected_addons":[]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    assert_eq!(reviewed["stage"], "review");
+    assert_eq!(reviewed["addons_to_add"], 0);
+    assert_eq!(
+        apply_preview(&f.app, &preview).await.1["error_code"],
+        "stremio_preview_not_found"
+    );
+    let (status, applied) = request(
+        &f.app,
+        DEVICE,
+        "POST",
+        &import_path(&preview, "apply"),
+        json!({"confirm":true,"review_revision":reviewed["review_revision"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["summary"]["favorites_added"], 2);
+    assert_eq!(applied["summary"]["progress_added"], 2);
+    assert_eq!(applied["addons_added"], 0);
+    assert_eq!(counts(&f.app), (2, 2, 2));
+    assert_eq!(account_side_effects(&f.app), side_effects);
+    assert_eq!(
+        f.app.addons.clone().for_account(1).revision().unwrap(),
+        revision_before
+    );
+    // Device cancel works on its own draft and not on the browser session's.
+    let own = request(&f.app, DEVICE, "POST", PATH, credentials()).await.1;
+    let (status, cancelled) = request(
+        &f.app,
+        DEVICE,
+        "DELETE",
+        &import_path(&own, ""),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["cancelled"], true);
+    let browser = get_preview(&f.app).await;
+    assert_eq!(
+        request(
+            &f.app,
+            DEVICE,
+            "DELETE",
+            &import_path(&browser, ""),
+            Value::Null
+        )
+        .await
+        .1["error_code"],
+        "stremio_preview_not_found"
+    );
+    assert_eq!(apply_preview(&f.app, &browser).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn device_session_cannot_register_addons_through_import() {
+    let mut f = fixture(vec![movie("tt0000001")], login()).await;
+    f.app.addons.allow_test_loopback = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/secret-token/manifest.json",
+        listener.local_addr().unwrap()
+    );
+    let manifest_calls = Arc::new(AtomicUsize::new(0));
+    let served = manifest_calls.clone();
+    let upstream = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/secret-token/manifest.json", get(move || {
+            served.fetch_add(1, Ordering::SeqCst);
+            async { Json(json!({"id":"synthetic.meta","name":"Verified addon","types":["movie","series"],"resources":["meta"]})) }
+        }))).await.unwrap();
+    });
+    *f.addon_response.lock().unwrap() = json!({"addons":[{"manifest":{"id":"synthetic.meta","name":"Verified addon","resources":["meta"]},"transportUrl":url}]});
+    pair_device(&f.app, Some(1));
+    let revision_before = f.app.addons.clone().for_account(1).revision().unwrap();
+    let side_effects = account_side_effects(&f.app);
+    let preview = device_staged_preview(&f.app).await;
+    assert_eq!(preview["addons"][0]["status"], "add", "{preview}");
+    let review = import_path(&preview, "review");
+    let (status, refused) = request(
+        &f.app,
+        DEVICE,
+        "POST",
+        &review,
+        json!({"selected_addons":[preview["addons"][0]["item_id"]]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["error_code"], "account_session_required");
+    assert_eq!(manifest_calls.load(Ordering::SeqCst), 0);
+    // The refused selection left the draft usable for an empty-selection review.
+    let (status, reviewed) = request(
+        &f.app,
+        DEVICE,
+        "POST",
+        &review,
+        json!({"selected_addons":[]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    assert_eq!(reviewed["review_revision"], 1);
+    assert_eq!(reviewed["addons_to_add"], 0);
+    let (status, applied) = request(
+        &f.app,
+        DEVICE,
+        "POST",
+        &import_path(&preview, "apply"),
+        json!({"confirm":true,"review_revision":reviewed["review_revision"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["addons_added"], 0);
+    assert_eq!(counts(&f.app), (1, 1, 1));
+    assert_eq!(account_side_effects(&f.app), side_effects);
+    assert_eq!(
+        f.app.addons.clone().for_account(1).revision().unwrap(),
+        revision_before
+    );
+
+    // Defense in depth: a draft holding verified add-ons is never applied by a device.
+    let staged = staged_preview(&f.app).await;
+    let (status, selected) =
+        review_selection(&f.app, &staged, json!([staged["addons"][0]["item_id"]])).await;
+    assert_eq!(status, StatusCode::OK, "{selected}");
+    assert_eq!(selected["addons_to_add"], 1);
+    let before = counts(&f.app);
+    let backups = std::fs::read_dir(f._directory.path().join("backups"))
+        .unwrap()
+        .count();
+    f.app
+        .db
+        .lock()
+        .unwrap()
+        .execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
+        .unwrap();
+    let apply = json!({"confirm":true,"review_revision":selected["review_revision"]});
+    let (status, refused) = request(
+        &f.app,
+        "member-token-1",
+        "POST",
+        &import_path(&staged, "apply"),
+        apply.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["error_code"], "account_session_required");
+    assert_eq!(counts(&f.app), before);
+    assert_eq!(account_side_effects(&f.app), side_effects);
+    assert_eq!(
+        std::fs::read_dir(f._directory.path().join("backups"))
+            .unwrap()
+            .count(),
+        backups
+    );
+    // The account session can still complete the same draft.
+    f.app
+        .db
+        .lock()
+        .unwrap()
+        .execute("UPDATE auth_sessions SET kind='browser' WHERE id='s1'", [])
+        .unwrap();
+    let (status, applied) = request(
+        &f.app,
+        "member-token-1",
+        "POST",
+        &import_path(&staged, "apply"),
+        apply,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["addons_added"], 1);
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn device_session_without_profile_foreign_or_restricted_is_refused() {
+    let f = fixture(vec![movie("tt0000001")], login()).await;
+    pair_device(&f.app, None);
+    let (status, refused) = request(&f.app, DEVICE, "POST", PATH, credentials()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_ne!(refused["error_code"], "account_session_required");
+    f.app
+        .db
+        .lock()
+        .unwrap()
+        .execute("UPDATE auth_sessions SET profile_id=1 WHERE id='d1'", [])
+        .unwrap();
+    assert_eq!(
+        request(
+            &f.app,
+            DEVICE,
+            "POST",
+            "/api/profiles/2/imports/stremio/preview",
+            credentials()
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(f.calls.load(Ordering::SeqCst), 0);
+    let draft = request(&f.app, DEVICE, "POST", PATH, credentials()).await.1;
+    assert_eq!(f.calls.load(Ordering::SeqCst), 1);
+    f.app
+        .db
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO kids_profiles(profile_id,enabled) VALUES(1,1)",
+            [],
+        )
+        .unwrap();
+    // Without a parent grant the parent rule refuses first; with one, imports stay closed.
+    let (status, refused) = request(&f.app, DEVICE, "POST", PATH, credentials()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    f.app
+        .db
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO parent_grants VALUES('d1',?1)",
+            [util::now() + 3600],
+        )
+        .unwrap();
+    assert_eq!(
+        request(&f.app, DEVICE, "POST", PATH, credentials()).await.1["error_code"],
+        "stremio_restricted_profile"
+    );
+    for (method, action, body) in [
+        ("POST", "review", json!({"selected_addons":[]})),
+        ("POST", "apply", json!({"confirm":true})),
+        ("DELETE", "", Value::Null),
+    ] {
+        assert_eq!(
+            request(&f.app, DEVICE, method, &import_path(&draft, action), body)
+                .await
+                .1["error_code"],
+            "stremio_restricted_profile"
+        );
+    }
+    assert_eq!(f.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(counts(&f.app), (0, 0, 0));
+}
+
+#[tokio::test]
+async fn imported_history_is_visible_in_v3_continue_and_history_and_dedupes_app_records() {
+    let mut f = fixture(vec![movie("tt0000001")], login()).await;
+    f.app.addons.allow_test_loopback = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let addon = tokio::spawn(async move {
+        let meta = get(|Path((kind, id)): Path<(String, String)>| async move {
+            let id = id.trim_end_matches(".json").to_owned();
+            Json(json!({"meta":{"id":id,"type":kind,"name":"Addon title"}}))
+        });
+        axum::serve(listener, Router::new().route("/a/meta/:kind/:id", meta))
+            .await
+            .unwrap();
+    });
+    let manifest = json!({"id":"fixture.meta","name":"Fixture","resources":["meta"],"types":["movie","series"]});
+    f.app.db.lock().unwrap().execute(
+        "INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(101,'Fixture',?1,?2,1)",
+        params![format!("http://{address}/a/manifest.json"), manifest.to_string()],
+    ).unwrap();
+    crate::test_support::encrypt_fixture_sources(&f.app);
+    pair_device(&f.app, Some(1));
+    let call = |path: String| {
+        let app = f.app.clone();
+        async move {
+            let (status, value) = request(&app, DEVICE, "GET", &path, Value::Null).await;
+            assert_eq!(status, StatusCode::OK, "{path}: {value}");
+            value
+        }
+    };
+    let preview = request(&f.app, DEVICE, "POST", PATH, credentials()).await.1;
+    let (status, applied) = request(
+        &f.app,
+        DEVICE,
+        "POST",
+        &import_path(&preview, "apply"),
+        json!({"confirm":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(counts(&f.app), (1, 1, 1));
+    let imported_at = TIME as u64 * 1000;
+
+    let queue = call("/api/profiles/1/continue".into()).await;
+    let entries = queue["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{queue}");
+    assert_eq!(entries[0]["card"]["identity"]["id"], "tt0000001");
+    assert_eq!(entries[0]["record"]["updated_at_millis"], imported_at);
+    let history = call("/api/profiles/1/history".into()).await;
+    assert_eq!(history.as_array().unwrap().len(), 1, "{history}");
+    assert_eq!(history[0]["card"]["identity"]["id"], "tt0000001");
+    assert_eq!(history[0]["updated_at_millis"], imported_at);
+
+    // The app plays the same IMDb title through an add-on origin (a v3 scoped record).
+    let card = call("/api/meta/movie/tt0000001?provider_id=stremio&addon_id=101".into()).await
+        ["item"]
+        .clone();
+    assert!(card["metadata_origin"].is_object(), "{card}");
+    let record = json!({"record":{"identity":card["identity"],"metadata_origin":card["metadata_origin"],
+        "parent_identity":card["parent_identity"],"provider_id":card["provider_id"],"title":"Addon title",
+        "poster":null,"landscape":null,"position_millis":30000,"duration_millis":100000,
+        "updated_at_millis":1,"completed_at_millis":null}});
+    let (status, saved) = request(&f.app, DEVICE, "PUT", "/api/profiles/1/progress", record).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let scope: String = f.app.db.lock().unwrap().query_row(
+        "SELECT identity_scope FROM engine_scoped_records WHERE profile_id=1 AND record_kind='playback' AND kind='movie' AND identity_id='tt0000001'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(scope, "shared");
+    assert_eq!(counts(&f.app), (1, 1, 1), "the imported row is kept");
+
+    // One logical title in both views; the newer app record wins.
+    let queue = call("/api/profiles/1/continue".into()).await;
+    let entries = queue["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{queue}");
+    assert_eq!(entries[0]["card"]["identity"]["id"], "tt0000001");
+    assert_eq!(entries[0]["card"]["progress"], 0.3);
+    let history = call("/api/profiles/1/history".into()).await;
+    assert_eq!(history.as_array().unwrap().len(), 1, "{history}");
+    assert_eq!(history[0]["card"]["progress"], 0.3);
+    assert!(history[0]["updated_at_millis"].as_u64().unwrap() > imported_at);
+
+    // History is newest-wins: an older app record yields to the imported row.
+    f.app.db.lock().unwrap().execute(
+        "UPDATE engine_scoped_records SET updated_at_millis=1000,value=json_set(value,'$.updated_at_millis',1000) WHERE profile_id=1 AND record_kind='playback'",
+        [],
+    ).unwrap();
+    let history = call("/api/profiles/1/history".into()).await;
+    assert_eq!(history.as_array().unwrap().len(), 1, "{history}");
+    assert_eq!(history[0]["updated_at_millis"], imported_at);
+    addon.abort();
 }
 #[tokio::test]
 async fn credentials_and_parser_errors_do_not_echo_secrets_and_failed_reservations_are_disposed() {

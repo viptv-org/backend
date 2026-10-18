@@ -61,7 +61,7 @@ async fn authorized<T: Send + 'static>(
             .lock()
             .map_err(|_| Error::Code("provider_storage_unavailable"))?;
         lease.validate(&db)?;
-        if matches!(&lease.principal, auth::Principal::Account { role, .. } if role == "device") {
+        if device_session(&lease) {
             if !device_read {
                 return Err(Error::Code("account_session_required"));
             }
@@ -99,6 +99,23 @@ pub(crate) async fn shared<T: Send + 'static>(
     action: impl FnOnce(&rusqlite::Connection, i64) -> Result<T, Error> + Send + 'static,
 ) -> Result<T, Error> {
     authorized(app, lease, true, action).await
+}
+
+/// Profile-owned history imports (Stremio history and My List) that a paired
+/// device may run into its own selected profile. Only the import handlers use
+/// this; they must still refuse account-wide effects such as add-on adoption
+/// for device sessions. Parent restrictions apply.
+pub(crate) async fn profile_import<T: Send + 'static>(
+    app: App,
+    lease: ResourceLease,
+    action: impl FnOnce(&rusqlite::Connection, i64) -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    authorized(app, lease, true, action).await
+}
+
+/// Whether the request was made by a paired device rather than an account session.
+pub(crate) fn device_session(lease: &ResourceLease) -> bool {
+    matches!(&lease.principal, auth::Principal::Account { role, .. } if role == "device")
 }
 
 /// Read-only settings metadata for viewing devices with a selected profile.
