@@ -131,6 +131,10 @@ async fn check(
     Ok((url, manifest))
 }
 
+/// Manifests verified earlier in this preview, by add-on handle. Failures are not
+/// kept, so an unticked-and-retried add-on is checked again.
+pub(super) type VerifiedManifests = Mutex<HashMap<String, (String, Value)>>;
+
 /// Checks every selected add-on (manifest checks queue on the server-wide limit
 /// within `deadline`) and reports all failures together, so a user can untick
 /// every failing add-on in one step.
@@ -138,12 +142,26 @@ pub(super) async fn verify(
     app: &App,
     selected: &[&SourceAddon],
     deadline: tokio::time::Instant,
+    known: &VerifiedManifests,
 ) -> Result<Vec<VerifiedAddon>, ReviewError> {
     use futures::{stream, StreamExt};
     let checked: Vec<_> = stream::iter(0..selected.len())
         .map(|index| {
             let addon = selected[index];
-            async move { (addon, check(app, addon, deadline).await) }
+            async move {
+                let cached = known.lock().ok().and_then(|k| k.get(&addon.id).cloned());
+                let result = match cached {
+                    Some(manifest) => Ok(manifest),
+                    None => {
+                        let result = check(app, addon, deadline).await;
+                        if let (Ok(manifest), Ok(mut known)) = (&result, known.lock()) {
+                            known.insert(addon.id.clone(), manifest.clone());
+                        }
+                        result
+                    }
+                };
+                (addon, result)
+            }
         })
         .buffered(4)
         .collect()
@@ -263,7 +281,7 @@ fn retain_metadata(
     true
 }
 /// Identities worth looking up, in the caller's priority order, without duplicates.
-fn identities(items: &[Value]) -> Vec<(String, String)> {
+pub(super) fn identities(items: &[Value]) -> Vec<(String, String)> {
     let mut seen = std::collections::HashSet::new();
     items
         .iter()
@@ -273,7 +291,7 @@ fn identities(items: &[Value]) -> Vec<(String, String)> {
         })
         .collect()
 }
-fn metadata_budget(app: &App) -> Duration {
+pub(super) fn metadata_budget(app: &App) -> Duration {
     #[cfg(test)]
     if let Some(duration) = app.stremio_import.metadata_deadline {
         return duration;
@@ -328,55 +346,219 @@ async fn baseline_meta(app: &App, kind: &str, id: &str) -> Option<Value> {
         None => cinemeta(app, kind, id).await,
     }
 }
+/// Baseline metadata, independent of the add-on selection, and the retained bytes.
+pub(super) async fn baseline_metadata(
+    app: &App,
+    items: &[Value],
+) -> (HashMap<(String, String), Value>, usize) {
+    let mut found = HashMap::new();
+    let mut remaining = MAX_RETAINED_METADATA_BYTES;
+    let deadline = tokio::time::Instant::now() + metadata_budget(app);
+    collect(identities(items), deadline, &mut found, &mut remaining, |kind, id| async move {
+        baseline_meta(app, &kind, &id).await
+    })
+    .await;
+    (found, MAX_RETAINED_METADATA_BYTES - remaining)
+}
+
+/// Per-preview baseline lookups, filled progressively by background work so a
+/// review can use whatever has completed and later reviews see more.
+pub(super) struct BaselineMetadata {
+    found: HashMap<(String, String), Value>,
+    /// Lookups that completed, with or without a result.
+    attempted: std::collections::HashSet<(String, String)>,
+    /// Missing IMDb results already retried once by a review.
+    retried: std::collections::HashSet<(String, String)>,
+    remaining: usize,
+}
+impl Default for BaselineMetadata {
+    fn default() -> Self {
+        Self {
+            found: HashMap::new(),
+            attempted: Default::default(),
+            retried: Default::default(),
+            remaining: MAX_RETAINED_METADATA_BYTES,
+        }
+    }
+}
+pub(super) struct BaselineSnapshot {
+    pub found: HashMap<(String, String), Value>,
+    pub attempted: std::collections::HashSet<(String, String)>,
+    pub retained: usize,
+}
+impl BaselineMetadata {
+    pub(super) fn snapshot(&self) -> BaselineSnapshot {
+        BaselineSnapshot {
+            found: self.found.clone(),
+            attempted: self.attempted.clone(),
+            retained: MAX_RETAINED_METADATA_BYTES - self.remaining,
+        }
+    }
+}
+/// Background work may take longer than one request: the user is choosing add-ons.
+pub(super) fn background_budget(app: &App) -> Duration {
+    #[cfg(test)]
+    if let Some(duration) = app.stremio_import.metadata_deadline {
+        return duration;
+    }
+    let _ = app;
+    Duration::from_secs(120)
+}
+async fn collect_shared(
+    app: &App,
+    identities: Vec<(String, String)>,
+    deadline: tokio::time::Instant,
+    state: &Mutex<BaselineMetadata>,
+    retry: bool,
+) {
+    use futures::{stream, StreamExt};
+    let mut pending = stream::iter(identities)
+        .map(|(kind, id)| async move {
+            let meta = baseline_meta(app, &kind, &id).await;
+            ((kind, id), meta)
+        })
+        .buffer_unordered(8);
+    while let Ok(Some((identity, meta))) = tokio::time::timeout_at(deadline, pending.next()).await {
+        let Ok(mut state) = state.lock() else { break };
+        state.attempted.insert(identity.clone());
+        if retry {
+            state.retried.insert(identity.clone());
+        }
+        if let Some(meta) = meta {
+            let BaselineMetadata { found, remaining, .. } = &mut *state;
+            if !retain_metadata(found, remaining, identity, meta) {
+                break;
+            }
+        }
+    }
+}
+/// Fills `state` for every identity not yet attempted.
+pub(super) async fn fill_baseline(
+    app: &App,
+    items: &[Value],
+    state: &Mutex<BaselineMetadata>,
+    deadline: tokio::time::Instant,
+) {
+    let wanted: Vec<_> = {
+        let Ok(state) = state.lock() else { return };
+        identities(items).into_iter().filter(|i| !state.attempted.contains(i)).collect()
+    };
+    collect_shared(app, wanted, deadline, state, false).await;
+}
+/// Retries, once per identity, IMDb lookups that completed without a result (a
+/// Cinemeta timeout is not evidence the title is unknown).
+pub(super) async fn retry_baseline(app: &App, state: &Mutex<BaselineMetadata>, deadline: tokio::time::Instant) {
+    let wanted: Vec<_> = {
+        let Ok(mut state) = state.lock() else { return };
+        let missing: Vec<_> = state
+            .attempted
+            .iter()
+            .filter(|i| !state.found.contains_key(*i) && !state.retried.contains(*i) && imdb(&i.1))
+            .cloned()
+            .collect();
+        missing
+    };
+    if !wanted.is_empty() {
+        // An identity counts as retried once its retry completes.
+        collect_shared(app, wanted, deadline, state, true).await;
+    }
+}
+
+const MAX_CACHED_ADDON_METADATA_BYTES: usize = 8 * 1024 * 1024;
+/// Per-preview results of selected add-on metadata lookups, keyed by add-on
+/// manifest URL and identity, so changing the add-on choice reuses earlier answers.
+/// Only completed responses are kept; failed requests are retried next review.
+#[derive(Default)]
+pub(super) struct AddonMetadataCache {
+    entries: HashMap<(String, String, String), Option<Value>>,
+    bytes: usize,
+}
+impl AddonMetadataCache {
+    fn get(&self, key: &(String, String, String)) -> Option<Option<Value>> {
+        self.entries.get(key).cloned()
+    }
+    fn insert(&mut self, key: (String, String, String), meta: Option<Value>) {
+        let size = meta.as_ref().map_or(0, |m| serde_json::to_vec(m).map_or(usize::MAX, |v| v.len()));
+        if self.bytes.saturating_add(size) <= MAX_CACHED_ADDON_METADATA_BYTES && self.entries.len() < 65_536 {
+            self.bytes += size;
+            self.entries.insert(key, meta);
+        }
+    }
+}
 /// The first selected add-on, in selection order, whose metadata names this identity.
-async fn selected_meta(app: &App, selected: &[VerifiedAddon], kind: &str, id: &str) -> Option<Value> {
+async fn selected_meta(
+    app: &App,
+    selected: &[&VerifiedAddon],
+    cache: &Mutex<AddonMetadataCache>,
+    kind: &str,
+    id: &str,
+) -> Option<Value> {
     for addon in selected
         .iter()
         .filter(|a| crate::addon::supports(&a.manifest, "meta", kind, id))
         .take(8)
     {
-        if let Ok(value) = app.addons.metadata_from(&addon.url, kind, id).await {
-            if let Some(meta) = checked_meta(value, kind, id) {
-                return Some(meta);
-            }
+        let key = (addon.url.clone(), kind.to_owned(), id.to_owned());
+        let cached = cache.lock().ok().and_then(|c| c.get(&key));
+        let meta = match cached {
+            Some(meta) => meta,
+            None => match app.addons.metadata_from(&addon.url, kind, id).await {
+                Ok(value) => {
+                    let meta = checked_meta(value, kind, id);
+                    if let Ok(mut cache) = cache.lock() {
+                        cache.insert(key, meta.clone());
+                    }
+                    meta
+                }
+                Err(_) => None,
+            },
+        };
+        if meta.is_some() {
+            return meta;
         }
     }
     None
 }
 /// Stremio encodes an IMDb series' watched bitfield against Cinemeta's episode
 /// list, so selected add-ons never replace what the baseline already verified:
-/// they are consulted only for identities the baseline could not resolve. Selecting
-/// add-ons can add verification but never lose it, whatever the selection order.
-pub(super) async fn metadata(
+/// callers pass only identities the baseline (and anime remap) could not resolve.
+/// Selecting add-ons can add verification but never lose it, whatever the order.
+pub(super) async fn selected_metadata(
     app: &App,
-    items: &[Value],
-    selected: &[VerifiedAddon],
+    unresolved: Vec<(String, String)>,
+    selected: &[&VerifiedAddon],
+    cache: &Mutex<AddonMetadataCache>,
+    deadline: tokio::time::Instant,
+    retained: usize,
 ) -> HashMap<(String, String), Value> {
     let mut found = HashMap::new();
-    let mut remaining = MAX_RETAINED_METADATA_BYTES;
-    let identities = identities(items);
-    let deadline = tokio::time::Instant::now() + metadata_budget(app);
-    collect(identities.clone(), deadline, &mut found, &mut remaining, |kind, id| async move {
-        baseline_meta(app, &kind, &id).await
+    if selected.is_empty() || unresolved.is_empty() {
+        return found;
+    }
+    let mut remaining = MAX_RETAINED_METADATA_BYTES.saturating_sub(retained);
+    collect(unresolved, deadline, &mut found, &mut remaining, |kind, id| async move {
+        selected_meta(app, selected, cache, &kind, &id).await
     })
     .await;
-    if !selected.is_empty() {
-        let unresolved: Vec<_> = identities
-            .into_iter()
-            .filter(|identity| !found.contains_key(identity))
-            .collect();
-        collect(unresolved, deadline, &mut found, &mut remaining, |kind, id| async move {
-            selected_meta(app, selected, &kind, &id).await
-        })
-        .await;
-    }
     found
 }
-
 
 #[cfg(test)]
 mod budget_tests {
     use super::*;
+
+    #[test]
+    fn addon_metadata_cache_has_a_byte_bound() {
+        let mut cache = AddonMetadataCache::default();
+        for index in 0..100 {
+            let meta = json!({"id":index,"description":"x".repeat(240_000)});
+            cache.insert(("https://a.invalid".into(), "series".into(), format!("id{index}")), Some(meta));
+        }
+        assert!(cache.bytes <= MAX_CACHED_ADDON_METADATA_BYTES);
+        assert!(cache.entries.len() < 100, "later answers are dropped, not retained without bound");
+        let key = ("https://a.invalid".to_owned(), "series".to_owned(), "id0".to_owned());
+        assert!(cache.get(&key).is_some());
+    }
 
     #[test]
     fn retained_metadata_has_an_aggregate_byte_bound() {

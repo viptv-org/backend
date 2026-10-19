@@ -102,6 +102,99 @@ struct Preview {
     candidates: Vec<mapper::Candidate>,
     snapshot: [u8; 32],
     summary: Summary,
+    /// Review work that does not depend on the add-on selection, computed once
+    /// per preview (started in the background when the add-on stage opens).
+    baseline: Arc<Baseline>,
+    addon_metadata: Arc<Mutex<addon_review::AddonMetadataCache>>,
+    verified_manifests: Arc<addon_review::VerifiedManifests>,
+    _background: Option<Background>,
+}
+/// Anime remap and account-owned/Cinemeta metadata for one preview's source
+/// snapshot. Depends only on the snapshot (and, for metadata, the account's own
+/// add-ons, checked by revision), so every review of the preview shares it. It
+/// lives in the preview, so it expires or is dropped with the preview's slot.
+struct Baseline {
+    remapped: Mutex<RemapState>,
+    metadata: Mutex<addon_review::BaselineMetadata>,
+    /// Set once the background lookups have finished or run out of budget.
+    done: tokio::sync::watch::Sender<bool>,
+    owned_revision: String,
+}
+#[derive(Default)]
+struct RemapState {
+    value: Option<Arc<remap::Remapped>>,
+    /// An incomplete remap (deadline or transient upstream failure) is retried once
+    /// by a review; after that it is kept as is.
+    retried: bool,
+}
+/// Largest trimmed metadata one preview keeps from the anime remap; a larger
+/// result is used but recomputed by later reviews.
+const MAX_RETAINED_REMAP_BYTES: usize = 8 * 1024 * 1024;
+impl Baseline {
+    fn new(owned_revision: String) -> Arc<Self> {
+        Arc::new(Self {
+            remapped: Default::default(),
+            metadata: Default::default(),
+            done: tokio::sync::watch::channel(false).0,
+            owned_revision,
+        })
+    }
+    fn keep(&self, remapped: remap::Remapped, retried: bool) -> Arc<remap::Remapped> {
+        let remapped = Arc::new(remapped);
+        if let Ok(mut state) = self.remapped.lock() {
+            state.retried |= retried;
+            state.value = (remapped.retained_bytes() <= MAX_RETAINED_REMAP_BYTES).then(|| remapped.clone());
+        }
+        remapped
+    }
+    /// The background half: remap and baseline lookups for the whole preview.
+    async fn fill(&self, app: &App, pending_metadata: &[Value], source_items: &[Value]) {
+        let deadline = tokio::time::Instant::now() + addon_review::background_budget(app);
+        let (remapped, ()) = tokio::join!(
+            remap::remap(app, source_items),
+            addon_review::fill_baseline(app, pending_metadata, &self.metadata, deadline),
+        );
+        self.keep(remapped, false);
+        self.done.send_replace(true);
+    }
+    /// What a review uses: the preview's remap, retried once (within `until`) if
+    /// it was incomplete or too large to keep; the items as fetched if the
+    /// background has not produced one yet.
+    async fn remapped_for_review(
+        &self,
+        app: &App,
+        source_items: &[Value],
+        finished: bool,
+        until: tokio::time::Instant,
+    ) -> Arc<remap::Remapped> {
+        let cached = self.remapped.lock().ok().and_then(|s| s.value.clone().map(|v| (v, s.retried)));
+        let usable = |cached: Option<(Arc<remap::Remapped>, bool)>| {
+            cached.map_or_else(|| Arc::new(remap::Remapped::unchanged(source_items)), |c| c.0)
+        };
+        match &cached {
+            Some((value, retried)) if value.complete || *retried => return value.clone(),
+            _ if !finished => return usable(cached),
+            _ => {}
+        }
+        match tokio::time::timeout_at(until, remap::remap(app, source_items)).await {
+            Ok(fresh) => self.keep(fresh, true),
+            Err(_) => usable(cached),
+        }
+    }
+}
+/// Aborts background baseline work once its preview is gone.
+struct Background(tokio::task::AbortHandle);
+impl Drop for Background {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+fn owned_revision(app: &App) -> String {
+    app.addons
+        .clone()
+        .for_account(app.identity().account_id().unwrap_or_default())
+        .revision()
+        .unwrap_or_default()
 }
 struct Slot {
     account: i64,
@@ -128,6 +221,9 @@ impl Slot {
 pub(crate) struct Service {
     pending: Mutex<HashMap<String, Slot>>,
     fetches: tokio::sync::Semaphore,
+    /// Previews' add-on-independent lookups run a few at a time, so they never take
+    /// fetch permits from reviews and cannot multiply upstream traffic.
+    background: tokio::sync::Semaphore,
     client: reqwest::Client,
     /// Simkl (`SIMKL_CLIENT_ID`) maps anime ids to IMDb. Unset: anime ids stay
     /// review-only unless an add-on verifies them.
@@ -147,6 +243,7 @@ impl Service {
         Ok(Arc::new(Self {
             pending: Default::default(),
             fetches: tokio::sync::Semaphore::new(4),
+            background: tokio::sync::Semaphore::new(4),
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(12))
@@ -544,6 +641,9 @@ pub(crate) async fn preview(
     } else {
         Vec::new()
     };
+    let baseline_cell = Baseline::new(owned_revision(&app));
+    let background_cell = baseline_cell.clone();
+    let background_inputs = inspect_addons.then(|| (pending_metadata.clone(), items.clone()));
     let worker = app.clone();
     let id = reservation.id.clone();
     let result = account_api::profile_import(app.clone(), app.request_lease(), move |db, _| {
@@ -566,10 +666,25 @@ pub(crate) async fn preview(
             "Existing manual corrections, newer or equal progress, source context and hidden queue titles are preserved."
         ]});
         if let Some(rows) = addon_rows { response["stage"] = json!("addons"); response["addons"] = json!(rows); }
-        slot.preview = Some(Preview { source, source_items: items, mapping_now, candidates, snapshot, summary, addons, selected_addons: Vec::new(), reviewed: !inspect_addons, review_revision: 0, review_generation: 0, review_in_progress: false, row_ids, row_handles, pending_metadata, review_only, import_library, import_progress });
+        slot.preview = Some(Preview { source, source_items: items, mapping_now, candidates, snapshot, summary, addons, selected_addons: Vec::new(), reviewed: !inspect_addons, review_revision: 0, review_generation: 0, review_in_progress: false, row_ids, row_handles, pending_metadata, review_only, import_library, import_progress,
+            baseline: baseline_cell, addon_metadata: Default::default(), verified_manifests: Default::default(), _background: None });
         Ok(Json(response))
     }).await?;
     reservation.retained = true;
+    if let Some((pending_metadata, source_items)) = background_inputs {
+        // Start the add-on-independent review work while the user chooses add-ons.
+        let (baseline, worker) = (background_cell, app.clone());
+        let task = tokio::spawn(async move {
+            let Ok(_turn) = worker.stremio_import.background.acquire().await else { return };
+            baseline.fill(&worker, &pending_metadata, &source_items).await;
+        });
+        let guard = Background(task.abort_handle());
+        if let Ok(mut slots) = app.stremio_import.pending.lock() {
+            if let Some(preview) = slots.get_mut(&reservation.id).and_then(|s| s.preview.as_mut()) {
+                preview._background = Some(guard);
+            }
+        }
+    }
     Ok(result)
 }
 
@@ -599,7 +714,8 @@ pub(crate) async fn review(
     if !selection.selected_addons.iter().all(|s| unique.insert(s)) {
         return Err("stremio_invalid_request".into());
     }
-    let (selected, pending_metadata, source_items, reserved_revision) = {
+    let started = tokio::time::Instant::now();
+    let (selected, pending_metadata, source_items, reserved_revision, baseline_cell, addon_cache, known_manifests) = {
         let mut slots = app.stremio_import.pending.lock().map_err(|_| STORAGE)?;
         let slot = slots
             .get_mut(&id)
@@ -619,11 +735,13 @@ pub(crate) async fn review(
             .selected_addons
             .iter()
             .map(|id| {
-                let addon = addons
+                let (rank, addon) = addons
                     .iter()
-                    .find(|a| &a.id == id)
+                    .enumerate()
+                    .find(|(_, a)| &a.id == id)
                     .ok_or("stremio_invalid_request")?;
                 Ok((
+                    rank,
                     addon.id.clone(),
                     addon.name.clone(),
                     addon.url.clone(),
@@ -641,6 +759,9 @@ pub(crate) async fn review(
             preview.pending_metadata.clone(),
             preview.source_items.clone(),
             preview.review_generation,
+            preview.baseline.clone(),
+            preview.addon_metadata.clone(),
+            preview.verified_manifests.clone(),
         )
     };
     let _reservation = ReviewReservation {
@@ -648,9 +769,10 @@ pub(crate) async fn review(
         id: id.clone(),
         generation: reserved_revision,
     };
+    let ranks: Vec<usize> = selected.iter().map(|s| s.0).collect();
     let selected: Vec<_> = selected
         .into_iter()
-        .map(|(id, name, url, manifest_id)| addon_review::SourceAddon {
+        .map(|(_, id, name, url, manifest_id)| addon_review::SourceAddon {
             id,
             name,
             resources: Vec::new(),
@@ -663,16 +785,54 @@ pub(crate) async fn review(
         .fetches
         .try_acquire()
         .map_err(|_| "stremio_import_busy")?;
-    let verified = addon_review::verify(
-        &app,
-        &selected.iter().collect::<Vec<_>>(),
-        tokio::time::Instant::now() + addon_review::VERIFY_BUDGET,
+    let selected_refs: Vec<_> = selected.iter().collect();
+    let budget = addon_review::metadata_budget(&app);
+    let wait_until = started + budget;
+    let baseline = async {
+        let mut done = baseline_cell.done.subscribe();
+        let finished = tokio::time::timeout_at(wait_until, done.wait_for(|done| *done)).await.is_ok_and(|r| r.is_ok());
+        if baseline_cell.owned_revision != owned_revision(&app) {
+            // Account-owned add-ons changed since the preview: do not reuse their lookups.
+            let remapped = baseline_cell.remapped_for_review(&app, &source_items, finished, wait_until).await;
+            let (found, retained) = addon_review::baseline_metadata(&app, &pending_metadata).await;
+            let attempted = addon_review::identities(&pending_metadata).into_iter().collect();
+            return (remapped, addon_review::BaselineSnapshot { found, attempted, retained });
+        }
+        let retry = async {
+            if finished {
+                addon_review::retry_baseline(&app, &baseline_cell.metadata, wait_until).await;
+            }
+        };
+        let (remapped, ()) = tokio::join!(baseline_cell.remapped_for_review(&app, &source_items, finished, wait_until), retry);
+        let snapshot = baseline_cell.metadata.lock().map(|m| m.snapshot()).unwrap_or_else(|_| addon_review::BaselineMetadata::default().snapshot());
+        (remapped, snapshot)
+    };
+    // Verification runs alongside the selection-independent work and fails fast.
+    let (verified, (remapped, baseline)) = futures::future::try_join(
+        addon_review::verify(&app, &selected_refs, started + addon_review::VERIFY_BUDGET, &known_manifests),
+        async { Ok::<_, ReviewError>(baseline.await) },
     )
     .await?;
-    let (mut metadata, remapped) = tokio::join!(
-        addon_review::metadata(&app, &pending_metadata, &verified),
-        remap::remap(&app, &source_items),
-    );
+    let ready = tokio::time::Instant::now();
+    let deadline = (started + budget).max(ready + budget.min(Duration::from_secs(8))).min(started + budget + Duration::from_secs(8));
+    let unresolved: Vec<_> = addon_review::identities(&pending_metadata)
+        .into_iter()
+        // Only lookups that finished without a result; pending ones may still verify.
+        .filter(|identity| {
+            baseline.attempted.contains(identity)
+                && !baseline.found.contains_key(identity)
+                && !remapped.meta.contains_key(identity)
+                && !remapped.renamed.contains_key(&identity.1)
+        })
+        .collect();
+    // Stremio resolves metadata in the user's add-on collection order, whatever
+    // order the client listed the selection in.
+    let mut by_collection: Vec<(usize, &addon_review::VerifiedAddon)> = ranks.iter().copied().zip(&verified).collect();
+    by_collection.sort_by_key(|(rank, _)| *rank);
+    let by_collection: Vec<_> = by_collection.into_iter().map(|(_, addon)| addon).collect();
+    let extra = addon_review::selected_metadata(&app, unresolved, &by_collection, &addon_cache, deadline, baseline.retained).await;
+    let mut metadata = baseline.found;
+    metadata.extend(extra);
     metadata.extend(remapped.meta.clone());
     let worker = app.clone();
     account_api::profile_import(app.clone(), app.request_lease(), move |db, _| {

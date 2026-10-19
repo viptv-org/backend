@@ -10,6 +10,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     io::Write,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 const PREFIXES: [&str; 4] = ["kitsu", "mal", "anilist", "anidb"];
@@ -41,13 +42,16 @@ impl MetadataService {
         })
     }
 
-    async fn get(&self, client: &reqwest::Client, path: &str) -> Option<Value> {
+    /// `transient` is raised when the answer may differ on a later attempt (network
+    /// error, rate limit, server error), as opposed to a definitive "not found".
+    async fn get(&self, client: &reqwest::Client, path: &str, transient: &AtomicBool) -> Option<Value> {
         {
             // At most ~8 requests per second across every lookup.
             let mut next = self.next.lock().await;
             tokio::time::sleep_until(*next).await;
             *next = tokio::time::Instant::now() + Duration::from_millis(125);
         }
+        let flag = |_| transient.store(true, Ordering::Relaxed);
         let mut response = client
             .get(format!("{}{path}", self.base))
             .header("simkl-api-key", &self.key)
@@ -55,12 +59,17 @@ impl MetadataService {
             .header("app-version", env!("CARGO_PKG_VERSION"))
             .send()
             .await
+            .map_err(flag)
             .ok()?;
-        if !response.status().is_success() {
+        let status = response.status();
+        if !status.is_success() {
+            if status.as_u16() == 429 || status.is_server_error() {
+                transient.store(true, Ordering::Relaxed);
+            }
             return None;
         }
         let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.ok()? {
+        while let Some(chunk) = response.chunk().await.map_err(flag).ok()? {
             if body.len() + chunk.len() > MAX_RESPONSE {
                 return None;
             }
@@ -79,6 +88,20 @@ pub(super) struct Remapped {
     pub meta: HashMap<(String, String), Value>,
     /// Replaced items that lost watched or resume state to verification.
     pub unverified: usize,
+    /// Every lookup finished within the deadline and none failed in a way a later
+    /// attempt could change. An incomplete remap is retried by a later review.
+    pub complete: bool,
+}
+
+impl Remapped {
+    /// No anime remap (unavailable or not finished in time): every item as fetched.
+    pub(super) fn unchanged(items: &[Value]) -> Self {
+        Self { items: items.to_vec(), renamed: HashMap::new(), meta: HashMap::new(), unverified: 0, complete: false }
+    }
+    /// Bytes of trimmed metadata a preview keeps while it retains this result.
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.meta.values().map(|m| serde_json::to_vec(m).map_or(usize::MAX, |v| v.len())).fold(0, usize::saturating_add)
+    }
 }
 
 fn imdb(id: &str) -> bool {
@@ -107,15 +130,16 @@ async fn resolve(
     kind: &str,
     source: &str,
     number: &str,
+    transient: &AtomicBool,
 ) -> Option<Resolution> {
     // Exactly one Simkl anime may claim the id.
-    let found = service.get(client, &format!("/search/id?{source}={number}")).await?;
+    let found = service.get(client, &format!("/search/id?{source}={number}"), transient).await?;
     let [hit] = found.as_array()?.as_slice() else { return None };
     if hit["type"] != "anime" {
         return None;
     }
     let simkl = hit["ids"]["simkl"].as_i64()?;
-    let detail = service.get(client, &format!("/anime/{simkl}?extended=full")).await?;
+    let detail = service.get(client, &format!("/anime/{simkl}?extended=full"), transient).await?;
     if detail["ids"][source].as_str() != Some(number) {
         return None; // the hit does not name this exact work
     }
@@ -123,7 +147,7 @@ async fn resolve(
     if kind == "movie" {
         return (detail["anime_type"] == "movie").then(|| Resolution { imdb, episodes: HashMap::new() });
     }
-    let list = service.get(client, &format!("/anime/episodes/{simkl}?extended=full")).await?;
+    let list = service.get(client, &format!("/anime/episodes/{simkl}?extended=full"), transient).await?;
     let mut episodes = HashMap::new();
     let mut conflicting = HashSet::new();
     for e in list.as_array()?.iter().filter(|e| e["type"] == "episode") {
@@ -306,12 +330,9 @@ fn merge(
 
 pub(super) async fn remap(app: &App, items: &[Value]) -> Remapped {
     use futures::{stream, StreamExt};
-    let mut out = Remapped {
-        items: items.to_vec(),
-        renamed: HashMap::new(),
-        meta: HashMap::new(),
-        unverified: 0,
-    };
+    let mut out = Remapped::unchanged(items);
+    // Nothing to look up is as final as it gets.
+    out.complete = true;
     let Some(service) = app.stremio_import.metadata_service.as_ref() else {
         return out;
     };
@@ -332,19 +353,27 @@ pub(super) async fn remap(app: &App, items: &[Value]) -> Remapped {
     // alongside; unfinished titles stay review-only.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
     let mut resolved: HashMap<(String, String), Resolution> = HashMap::new();
+    let transient = AtomicBool::new(false);
+    let transient = &transient;
+    let mut complete = true;
     let mut pending = stream::iter(wanted)
         .map(|(kind, id)| async move {
             let (source, number) = anime_id(&id)?;
-            let r = resolve(service, client, &kind, source, number).await?;
+            let r = resolve(service, client, &kind, source, number, transient).await?;
             Some(((kind, id), r))
         })
         .buffer_unordered(8);
-    while let Ok(Some(result)) = tokio::time::timeout_at(deadline, pending.next()).await {
-        if let Some((identity, r)) = result {
-            resolved.insert(identity, r);
+    loop {
+        match tokio::time::timeout_at(deadline, pending.next()).await {
+            Ok(Some(Some((identity, r)))) => { resolved.insert(identity, r); }
+            Ok(Some(None)) => {}
+            Ok(None) => break,
+            Err(_) => { complete = false; break; }
         }
     }
     drop(pending);
+    complete &= !transient.load(Ordering::Relaxed);
+    out.complete = complete;
     let targets: HashSet<(String, String)> =
         resolved.iter().map(|((kind, _), r)| (kind.clone(), r.imdb.clone())).collect();
     let mut fetching = stream::iter(targets)
@@ -353,9 +382,12 @@ pub(super) async fn remap(app: &App, items: &[Value]) -> Remapped {
             Some(((kind, id), meta))
         })
         .buffer_unordered(8);
-    while let Ok(Some(result)) = tokio::time::timeout_at(deadline, fetching.next()).await {
-        if let Some((identity, meta)) = result {
-            out.meta.insert(identity, meta);
+    loop {
+        match tokio::time::timeout_at(deadline, fetching.next()).await {
+            Ok(Some(Some((identity, meta)))) => { out.meta.insert(identity, meta); }
+            Ok(Some(None)) => {}
+            Ok(None) => break,
+            Err(_) => { out.complete = false; break; }
         }
     }
     drop(fetching);

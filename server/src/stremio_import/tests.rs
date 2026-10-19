@@ -1,7 +1,7 @@
 use super::*;
 use crate::test_support::request;
 use axum::{body::Body, http::Response as HttpResponse, routing::get};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const PATH: &str = "/api/profiles/1/imports/stremio/preview";
 const DATE: &str = "2025-01-01T00:00:00.123Z";
@@ -1304,6 +1304,37 @@ async fn many_selected_addons_queue_on_the_manifest_check_limit_instead_of_faili
     let peak = peak.load(Ordering::SeqCst);
     assert!((2..=2).contains(&peak), "server-wide manifest limit is two, observed {peak}");
     host.abort();
+}
+#[tokio::test]
+async fn addon_metadata_follows_collection_order_not_selection_order() {
+    let item = json!({"_id":"opaque-show","type":"series","name":"Synthetic title","removed":false,"temp":false,
+        "state":{"watched":"opaque-episode-2:2:eJxjAgAAAwAD"}});
+    let mut f = fixture(vec![item], login()).await;
+    f.app.addons.allow_test_loopback = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let meta = |third: &str| json!({"meta":{"id":"opaque-show","type":"series","videos":[
+        {"id":"opaque-episode-1","season":1,"episode":1},
+        {"id":format!("opaque-episode-{third}"),"season":1,"episode":third.parse::<i64>().unwrap()}]}});
+    let (good, bad) = (meta("2"), meta("3"));
+    let upstream = tokio::spawn(async move {
+        axum::serve(listener, Router::new()
+            .route("/good/manifest.json", get(|| async { Json(json!({"id":"synthetic.good","name":"Good","types":["series"],"resources":["meta"]})) }))
+            .route("/bad/manifest.json", get(|| async { Json(json!({"id":"synthetic.bad","name":"Bad","types":["series"],"resources":["meta"]})) }))
+            .route("/good/meta/series/opaque-show.json", get(move || async move { Json(good) }))
+            .route("/bad/meta/series/opaque-show.json", get(move || async move { Json(bad) })))
+            .await.unwrap();
+    });
+    *f.addon_response.lock().unwrap() = json!({"addons":[
+        {"transportUrl":format!("{base}/good/manifest.json"),"manifest":{"id":"synthetic.good","name":"Good","resources":["meta"]}},
+        {"transportUrl":format!("{base}/bad/manifest.json"),"manifest":{"id":"synthetic.bad","name":"Bad","resources":["meta"]}}]});
+    let preview = staged_preview(&f.app).await;
+    let (good, bad) = (preview["addons"][0]["item_id"].clone(), preview["addons"][1]["item_id"].clone());
+    let (status, reviewed) = review_selection(&f.app, &preview, json!([bad, good])).await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    assert_eq!(reviewed["summary"]["progress_to_add"], 1, "{reviewed}");
+    assert_eq!(reviewed["summary"]["needs_review"], 0, "{reviewed}");
+    upstream.abort();
 }
 #[tokio::test]
 async fn removed_entries_without_history_are_not_review_rows() {
@@ -3255,6 +3286,206 @@ async fn long_cinemeta_series_is_not_rejected_by_size() {
     assert_eq!(episode_rows(&reviewed), vec![(1, 1, false), (1, 2, false)]);
 }
 
+/// Simkl + Cinemeta fixture counting upstream calls; `/search/id` waits `delay`.
+async fn counted_remap_fixture(delay: Duration) -> (Fixture, Arc<AtomicUsize>, Arc<AtomicUsize>, tokio::task::JoinHandle<()>, Arc<AtomicBool>) {
+    use axum::extract::Path;
+    let items = vec![
+        anime_item("kitsu:41982", "kitsu:41982:2:2:eJxjBgAABAAE", None),
+        json!({"_id":"tt0000001","type":"series","name":"Synthetic title","removed":false,"temp":false,
+            "state":{"watched":"tt0000001:1:2:2:eJxjAgAAAwAD"}}),
+    ];
+    let mut f = fixture(items, login()).await;
+    f.app.addons.allow_test_loopback = true;
+    let simkl_calls = Arc::new(AtomicUsize::new(0));
+    let cinemeta_calls = Arc::new(AtomicUsize::new(0));
+    let (simkl, cinemeta) = (simkl_calls.clone(), cinemeta_calls.clone());
+    let simkl_down = Arc::new(AtomicBool::new(false));
+    let down = simkl_down.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let upstream = tokio::spawn(async move {
+        axum::serve(listener, Router::new()
+            .route("/search/id", get(move || {
+                simkl.fetch_add(1, Ordering::SeqCst);
+                let down = down.load(Ordering::SeqCst);
+                async move {
+                    tokio::time::sleep(delay).await;
+                    if down { return StatusCode::SERVICE_UNAVAILABLE.into_response(); }
+                    Json(json!([{"type":"anime","ids":{"simkl":931899}}])).into_response()
+                }
+            }))
+            .route("/anime/:id", get(|| async { Json(json!({"anime_type":"tv","ids":{"simkl":931899,"kitsu":"41982","imdb":AOT}})) }))
+            .route("/anime/episodes/:id", get(|| async {
+                Json(Value::Array((1..=10).map(|a| json!({"type":"episode","episode":a,"tvdb":{"season":3,"episode":a + 12}})).collect()))
+            }))
+            .route("/meta/series/:id", get(move |Path(id): Path<String>| {
+                cinemeta.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    let title = id.trim_end_matches(".json").to_owned();
+                    if title == AOT { return Json(aot_meta(22, 0)).into_response(); }
+                    Json(json!({"meta":{"id":title,"type":"series","videos":[
+                        {"id":format!("{title}:1:1"),"season":1,"episode":1},
+                        {"id":format!("{title}:1:2"),"season":1,"episode":2}]}})).into_response()
+                }
+            }))
+            .route("/addon/manifest.json", get(|| async { Json(json!({"id":"synthetic.stream","name":"Streams","resources":["stream"]})) }))
+            .route("/renamed/manifest.json", get(|| async { Json(json!({"id":"changed","name":"Streams","resources":["stream"]})) })))
+            .await.unwrap();
+    });
+    let service = Arc::get_mut(&mut f.app.stremio_import).unwrap();
+    service.public_metadata_endpoint = Some(base.clone());
+    service.metadata_service = remap::MetadataService::new(&base, "fixture-key");
+    *f.addon_response.lock().unwrap() = json!({"addons":[
+        {"transportUrl":format!("{base}/addon/manifest.json"),"manifest":{"id":"synthetic.stream","name":"Streams","resources":["stream"]}},
+        {"transportUrl":format!("{base}/renamed/manifest.json"),"manifest":{"id":"synthetic.renamed","name":"Renamed","resources":["stream"]}}]});
+    (f, simkl_calls, cinemeta_calls, upstream, simkl_down)
+}
+
+#[tokio::test]
+async fn re_reviews_reuse_the_preview_remap_and_metadata() {
+    let (f, simkl, cinemeta, upstream, _) = counted_remap_fixture(Duration::ZERO).await;
+    let preview = staged_preview(&f.app).await;
+    let path = import_path(&preview, "review");
+    let addon = preview["addons"][0]["item_id"].clone();
+    let (status, first) = review_selection(&f.app, &preview, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let calls = (simkl.load(Ordering::SeqCst), cinemeta.load(Ordering::SeqCst));
+    assert_eq!(calls.0, 1, "one Simkl title lookup");
+    assert!(calls.1 >= 2, "Cinemeta for the IMDb series and the remap target");
+    let mut revision = first["review_revision"].clone();
+    for selection in [json!([addon]), json!([]), json!([addon])] {
+        let (status, again) = request(&f.app, "member-token-1", "POST", &path,
+            json!({"selected_addons":selection,"expected_review_revision":revision})).await;
+        assert_eq!(status, StatusCode::OK, "{again}");
+        assert_eq!(again["summary"], first["summary"]);
+        assert_eq!(episode_rows(&again), episode_rows(&first));
+        revision = again["review_revision"].clone();
+    }
+    assert_eq!((simkl.load(Ordering::SeqCst), cinemeta.load(Ordering::SeqCst)), calls, "no repeated upstream work");
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn baseline_starts_with_the_addon_stage_and_verification_fails_fast_alongside_it() {
+    let (f, simkl, _, upstream, _) = counted_remap_fixture(Duration::from_secs(3)).await;
+    let preview = staged_preview(&f.app).await;
+    // The selection-independent work starts before any review request.
+    let waited = std::time::Instant::now();
+    while simkl.load(Ordering::SeqCst) == 0 && waited.elapsed() < Duration::from_secs(2) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(simkl.load(Ordering::SeqCst), 1);
+    let renamed = preview["addons"][1]["item_id"].clone();
+    let started = std::time::Instant::now();
+    let (status, failure) = review_selection(&f.app, &preview, json!([renamed])).await;
+    assert_eq!(status, StatusCode::FAILED_DEPENDENCY, "{failure}");
+    assert_eq!(failure["failed_addon_reasons"][renamed.as_str().unwrap()], "manifest_id_changed");
+    assert!(started.elapsed() < Duration::from_secs(2), "verification must not wait for the remap");
+    // The interrupted request did not restart the remap; the next review reuses it.
+    let (status, reviewed) = review_selection(&f.app, &preview, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    assert_eq!(simkl.load(Ordering::SeqCst), 1);
+    assert_eq!(reviewed["summary"]["needs_review"], 0, "{reviewed}");
+    upstream.abort();
+}
+
+/// Waits until every open preview's background lookups have finished.
+async fn background_finished(app: &App) {
+    let baselines: Vec<_> = app.stremio_import.pending.lock().unwrap().values()
+        .filter_map(|s| s.preview.as_ref().map(|p| p.baseline.clone())).collect();
+    for baseline in baselines {
+        let mut done = baseline.done.subscribe();
+        tokio::time::timeout(Duration::from_secs(10), done.wait_for(|d| *d)).await.expect("background finished").unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_new_preview_does_not_reuse_another_previews_remap() {
+    let (f, simkl, cinemeta, upstream, _) = counted_remap_fixture(Duration::ZERO).await;
+    let first = staged_preview(&f.app).await;
+    background_finished(&f.app).await;
+    let (status, reviewed) = review_selection(&f.app, &first, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{reviewed}");
+    assert_eq!(simkl.load(Ordering::SeqCst), 1);
+    let cinemeta_after_first = cinemeta.load(Ordering::SeqCst);
+    let second = staged_preview(&f.app).await;
+    background_finished(&f.app).await;
+    assert_eq!(simkl.load(Ordering::SeqCst), 2, "the second preview looks the title up itself");
+    assert!(cinemeta.load(Ordering::SeqCst) > cinemeta_after_first, "and so does its metadata");
+    let (status, other) = review_selection(&f.app, &second, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{other}");
+    assert_eq!(other["summary"], reviewed["summary"]);
+    assert_eq!(episode_rows(&other), episode_rows(&reviewed));
+    assert_eq!(simkl.load(Ordering::SeqCst), 2, "reviewing reuses the preview's own result");
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn a_transient_remap_failure_is_retried_once_by_the_first_review() {
+    let (f, simkl, _, upstream, simkl_down) = counted_remap_fixture(Duration::ZERO).await;
+    simkl_down.store(true, Ordering::SeqCst);
+    let preview = staged_preview(&f.app).await;
+    background_finished(&f.app).await;
+    assert_eq!(simkl.load(Ordering::SeqCst), 1, "the background attempt failed");
+    simkl_down.store(false, Ordering::SeqCst);
+    let (status, first) = review_selection(&f.app, &preview, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(simkl.load(Ordering::SeqCst), 2, "the review retried the failed remap");
+    assert_eq!(first["summary"]["needs_review"], 0, "{first}");
+    assert!(episode_rows(&first).iter().any(|r| r.0 == 3), "the anime entry was remapped: {first}");
+    let path = import_path(&preview, "review");
+    let (status, again) = request(&f.app, "member-token-1", "POST", &path,
+        json!({"selected_addons":[],"expected_review_revision":first["review_revision"]})).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(simkl.load(Ordering::SeqCst), 2, "the healed result is kept");
+    assert_eq!(again["summary"], first["summary"]);
+    upstream.abort();
+}
+
+#[tokio::test]
+async fn selected_addon_manifests_and_metadata_are_reused_across_reviews_of_one_preview() {
+    let item = json!({"_id":"opaque-show","type":"series","name":"Synthetic title","removed":false,"temp":false,
+        "state":{"watched":"opaque-episode-2:2:eJxjAgAAAwAD"}});
+    let mut f = fixture(vec![item], login()).await;
+    f.app.addons.allow_test_loopback = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let counts: Vec<Arc<AtomicUsize>> = (0..4).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+    let meta = json!({"meta":{"id":"opaque-show","type":"series","videos":[
+        {"id":"opaque-episode-1","season":1,"episode":1},{"id":"opaque-episode-2","season":1,"episode":2}]}});
+    let route = |name: &'static str, manifest: Arc<AtomicUsize>, lookups: Arc<AtomicUsize>, meta: Value| {
+        Router::new()
+            .route(&format!("/{name}/manifest.json"), get(move || { manifest.fetch_add(1, Ordering::SeqCst);
+                async move { Json(json!({"id":format!("synthetic.{name}"),"name":name,"types":["series"],"resources":["meta"]})) } }))
+            .route(&format!("/{name}/meta/series/opaque-show.json"), get(move || { lookups.fetch_add(1, Ordering::SeqCst);
+                let meta = meta.clone(); async move { Json(meta) } }))
+    };
+    let router = route("one", counts[0].clone(), counts[1].clone(), meta.clone())
+        .merge(route("two", counts[2].clone(), counts[3].clone(), meta));
+    let upstream = tokio::spawn(async move { axum::serve(listener, router).await.unwrap(); });
+    *f.addon_response.lock().unwrap() = json!({"addons":[
+        {"transportUrl":format!("{base}/one/manifest.json"),"manifest":{"id":"synthetic.one","name":"One","resources":["meta"]}},
+        {"transportUrl":format!("{base}/two/manifest.json"),"manifest":{"id":"synthetic.two","name":"Two","resources":["meta"]}}]});
+    let preview = staged_preview(&f.app).await;
+    let (one, two) = (preview["addons"][0]["item_id"].clone(), preview["addons"][1]["item_id"].clone());
+    let path = import_path(&preview, "review");
+    let mut revision = Value::Null;
+    let mut summaries = Vec::new();
+    for selection in [json!([one]), json!([two, one]), json!([one]), json!([two]), json!([one, two])] {
+        let (status, reviewed) = request(&f.app, "member-token-1", "POST", &path,
+            json!({"selected_addons":selection,"expected_review_revision":revision})).await;
+        assert_eq!(status, StatusCode::OK, "{reviewed}");
+        revision = reviewed["review_revision"].clone();
+        summaries.push(reviewed["summary"].clone());
+    }
+    let counts: Vec<_> = counts.iter().map(|c| c.load(Ordering::SeqCst)).collect();
+    // The title is unresolved by Cinemeta and the account's add-ons (none), so the
+    // first add-on in collection order answers every review from the cache.
+    assert_eq!(counts, vec![1, 1, 1, 1], "each manifest verified once, each title looked up once per add-on: {counts:?}");
+    assert!(summaries.windows(2).all(|w| w[0] == w[1]), "{summaries:?}");
+    upstream.abort();
+}
+
 /// Opt-in, read-only: the owner's real Stremio library through the guided
 /// preview + review on a synthetic VIPTV database. Never applies. Prints
 /// aggregate counts only. Run with STREMIO_EMAIL/STREMIO_PASSWORD set:
@@ -3403,6 +3634,18 @@ async fn real_library_review_timings() {
     let (status, preview) = request(&app, "member-token-1", "POST", PATH, body).await;
     assert_eq!(status, StatusCode::OK, "preview failed: {}", preview["error"]);
     println!("[timings] preview: {:.1}s addons={}", started.elapsed().as_secs_f64(), preview["addons"].as_array().map_or(0, Vec::len));
+    if std::env::var("PROBE_WAIT_BACKGROUND").is_ok() {
+        // Background baseline duration, as when the user spends time choosing add-ons.
+        let baseline = {
+            let slots = app.stremio_import.pending.lock().unwrap();
+            slots.values().find_map(|s| s.preview.as_ref()).unwrap().baseline.clone()
+        };
+        let waited = std::time::Instant::now();
+        let mut done = baseline.done.subscribe();
+        let _ = tokio::time::timeout(Duration::from_secs(150), done.wait_for(|d| *d)).await;
+        let snapshot = baseline.metadata.lock().unwrap().snapshot();
+        println!("[timings] background baseline: {:.1}s attempted={} found={}", waited.elapsed().as_secs_f64(), snapshot.attempted.len(), snapshot.found.len());
+    }
     let path = import_path(&preview, "review");
     let mut revision = 0;
     let (status, none) = timed_review(&app, &path, revision, "review none (first)", vec![]).await;
