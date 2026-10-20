@@ -476,7 +476,28 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     if !versioned {
         db.execute_batch("ALTER TABLE stremio_import_receipts ADD COLUMN completion_version INTEGER NOT NULL DEFAULT 0")?;
     }
-    Ok(())
+    fill_missing_posters(db)
+}
+/// Earlier imports stored no poster. Give import-owned rows that still have none
+/// the poster a new import would store; rows with art and non-IMDb titles are kept.
+fn fill_missing_posters(db: &Connection) -> rusqlite::Result<()> {
+    let tx = db.unchecked_transaction()?;
+    for (table, title) in [("favorites", "id"), ("progress", "CASE WHEN title_id='' THEN id ELSE title_id END")] {
+        let rows = tx
+            .prepare(&format!(
+                "SELECT t.rowid,{title} FROM {table} t WHERE t.poster IS NULL AND EXISTS(SELECT 1 FROM stremio_import_receipts r
+                 WHERE r.profile_id=t.profile_id AND r.type=t.type AND r.id=t.id)"
+            ))?
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut update = tx.prepare(&format!("UPDATE {table} SET poster=?2 WHERE rowid=?1 AND poster IS NULL"))?;
+        for (row, title) in rows {
+            if let Some(poster) = mapper::poster(&title) {
+                update.execute(params![row, poster])?;
+            }
+        }
+    }
+    tx.commit()
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1204,7 +1225,7 @@ fn merge(
             } else if existing {
                 summary.existing_preserved += 1;
             } else if write {
-                db.execute("INSERT INTO favorites(profile_id,type,id,name,poster) VALUES(?1,?2,?3,?4,NULL)",params![profile,c.kind,c.id,c.name]).map_err(|_| STORAGE)?;
+                db.execute("INSERT INTO favorites(profile_id,type,id,name,poster) VALUES(?1,?2,?3,?4,?5)",params![profile,c.kind,c.id,c.name,mapper::poster(&c.title)]).map_err(|_| STORAGE)?;
                 summary.favorites_added += 1;
             } else {
                 summary.favorites_to_add += 1;
@@ -1310,7 +1331,7 @@ fn merge(
                     }
                     summary.progress_updated += 1;
                 } else {
-                    db.execute("INSERT INTO progress(profile_id,type,id,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,NULL,?5,?6,?7,?8,?9)",params![profile,c.kind,c.id,c.name,p.position,p.duration,p.timestamp,p.context.to_string(),c.title]).map_err(|_| STORAGE)?;
+                    db.execute("INSERT INTO progress(profile_id,type,id,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![profile,c.kind,c.id,c.name,mapper::poster(&c.title),p.position,p.duration,p.timestamp,p.context.to_string(),c.title]).map_err(|_| STORAGE)?;
                     summary.progress_added += 1;
                 }
             } else if existing.is_some() {

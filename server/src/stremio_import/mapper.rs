@@ -102,6 +102,12 @@ fn imdb(id: &str) -> bool {
         (5..=12).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
     })
 }
+/// The public Cinemeta poster for a verified IMDb title: the same artwork a
+/// title saved from the Cinemeta catalog carries. The source library's own
+/// poster URL is never stored; it may name a private add-on host or token.
+pub(super) fn poster(title: &str) -> Option<String> {
+    imdb(title).then(|| format!("https://images.metahub.space/poster/small/{title}/img"))
+}
 fn episode(id: &str, title: &str) -> Option<(i64, i64)> {
     let parts: Vec<_> = id.split(':').collect();
     if parts.len() != 3 || parts[0] != title {

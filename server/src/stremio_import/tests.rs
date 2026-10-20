@@ -3694,3 +3694,96 @@ async fn timed_review(app: &App, path: &str, revision: u64, label: &str, selecte
         body["failed_addon_items"].as_array().map_or(0, Vec::len));
     (status, body)
 }
+
+fn public_poster(title: &str) -> String {
+    format!("https://images.metahub.space/poster/small/{title}/img")
+}
+
+#[tokio::test]
+async fn imported_titles_get_the_canonical_public_poster_never_the_source_url() {
+    let source_poster = "https://private-addon.example.invalid/poster.jpg?token=secret";
+    let mut film = movie("tt0000001");
+    film["poster"] = json!(source_poster);
+    let mut series = movie("tt1234567");
+    series["type"] = json!("series");
+    series["poster"] = json!(source_poster);
+    series["state"]["video_id"] = json!("tt1234567:2:3");
+    let mut opaque = movie("kitsu:42");
+    opaque["poster"] = json!(source_poster);
+    let f = fixture(vec![film, series, opaque], login()).await;
+    let preview = staged_preview(&f.app).await;
+    let (status, review) = review_selection(&f.app, &preview, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{review}");
+    // The review keeps neutral type icons: no artwork of any origin is offered.
+    let rendered = review.to_string();
+    assert!(!rendered.contains("poster") && !rendered.contains("metahub") && !rendered.contains("private-addon"), "{rendered}");
+    let (status, result) = request(
+        &f.app,
+        "member-token-1",
+        "POST",
+        &format!("/api/profiles/1/imports/stremio/{}/apply", preview["preview_id"].as_str().unwrap()),
+        json!({"confirm":true,"review_revision":review["review_revision"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    let db = f.app.db.lock().unwrap();
+    let poster = |table: &str, id: &str| -> Option<String> {
+        db.query_row(&format!("SELECT poster FROM {table} WHERE profile_id=1 AND id=?1"), [id], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(poster("favorites", "tt0000001"), Some(public_poster("tt0000001")));
+    assert_eq!(poster("favorites", "tt1234567"), Some(public_poster("tt1234567")));
+    assert_eq!(poster("progress", "tt0000001"), Some(public_poster("tt0000001")));
+    // An episode row shows its series' poster.
+    assert_eq!(poster("progress", "tt1234567:2:3"), Some(public_poster("tt1234567")));
+    let leaked: i64 = db
+        .query_row("SELECT (SELECT COUNT(*) FROM favorites WHERE poster LIKE '%private-addon%')+(SELECT COUNT(*) FROM progress WHERE poster LIKE '%private-addon%')", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(leaked, 0);
+}
+
+#[test]
+fn canonical_poster_requires_a_strict_imdb_title() {
+    assert_eq!(mapper::poster("tt0000001"), Some(public_poster("tt0000001")));
+    assert_eq!(mapper::poster("tt123456789012"), Some(public_poster("tt123456789012")));
+    for id in ["", "tt", "tt1234", "tt1234567890123", "kitsu:42", "tt1234567:1:2", "tt12345a7", "TT1234567", "tt1234567/../x"] {
+        assert_eq!(mapper::poster(id), None, "{id}");
+    }
+}
+
+#[tokio::test]
+async fn startup_fills_missing_posters_only_for_import_owned_imdb_rows() {
+    let app = crate::auth_integration_tests::fixture();
+    let db = app.db.lock().unwrap();
+    db.execute_batch(
+        "INSERT INTO favorites(profile_id,id,type,name,poster) VALUES
+            (1,'tt0000001','movie','Imported',NULL),
+            (1,'tt0000002','series','Imported with art','https://images.metahub.space/poster/small/tt9999999/img'),
+            (1,'kitsu:42','series','Imported opaque',NULL),
+            (1,'tt0000003','movie','Manual',NULL);
+         INSERT INTO progress(profile_id,type,id,name,poster,position,duration,updated_at,context,title_id) VALUES
+            (1,'series','tt0000002:1:4','Imported episode',NULL,0,0,0,'{}','tt0000002'),
+            (1,'movie','tt0000001','Imported movie',NULL,0,0,0,'{}','tt0000001'),
+            (1,'movie','tt0000003','Manual movie',NULL,5,10,1,'{}','tt0000003');
+         INSERT INTO stremio_import_receipts(profile_id,source_account,type,id,favorite,progress_timestamp) VALUES
+            (1,'source','movie','tt0000001',1,1),
+            (1,'source','series','tt0000002',1,0),
+            (1,'source','series','tt0000002:1:4',0,0),
+            (1,'source','series','kitsu:42',1,0);",
+    )
+    .unwrap();
+    for _ in 0..2 {
+        init(&db).unwrap();
+    }
+    let poster = |table: &str, id: &str| -> Option<String> {
+        db.query_row(&format!("SELECT poster FROM {table} WHERE profile_id=1 AND id=?1"), [id], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(poster("favorites", "tt0000001"), Some(public_poster("tt0000001")));
+    assert_eq!(poster("favorites", "tt0000002"), Some(public_poster("tt9999999")), "existing art is kept");
+    assert_eq!(poster("favorites", "kitsu:42"), None);
+    assert_eq!(poster("favorites", "tt0000003"), None, "rows the import does not own are untouched");
+    assert_eq!(poster("progress", "tt0000002:1:4"), Some(public_poster("tt0000002")));
+    assert_eq!(poster("progress", "tt0000001"), Some(public_poster("tt0000001")));
+    assert_eq!(poster("progress", "tt0000003"), None);
+}
