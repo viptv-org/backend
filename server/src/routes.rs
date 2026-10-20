@@ -323,6 +323,14 @@ pub fn router_with_tv(
         )
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         .with_state(app);
+    let app_links = android_links::configured();
+    r = r.route(
+        "/.well-known/assetlinks.json",
+        get(move || {
+            let body = app_links.clone();
+            async move { android_links::response(body) }
+        }),
+    );
     r = r
         .route("/privacy", get(privacy_page))
         .route("/terms", get(terms_page));

@@ -1,4 +1,5 @@
 mod account_api;
+mod android_links;
 pub mod addon;
 pub mod auth;
 mod continuation;

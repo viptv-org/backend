@@ -144,3 +144,27 @@ async fn tv_bundle_has_its_own_same_origin_mount_without_replacing_dashboard_or_
     );
 }
 
+
+#[tokio::test]
+async fn android_app_links_file_is_json_only_when_configured_and_never_the_app_shell() {
+    const FINGERPRINT: &str = "14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A8:8A:04:96:B2:3F:CF:44:E5";
+    std::env::remove_var("VIPTV_ANDROID_PACKAGE");
+    std::env::remove_var("VIPTV_ANDROID_CERT_SHA256");
+    let (unconfigured, _dashboard, _tv) = tv_application();
+    // Without configuration Android must see a failure, not the SPA shell the fallback would serve.
+    let response = get(&unconfigured, "/.well-known/assetlinks.json").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    std::env::set_var("VIPTV_ANDROID_PACKAGE", "org.viptv.experiment");
+    std::env::set_var("VIPTV_ANDROID_CERT_SHA256", FINGERPRINT);
+    let (configured, _dashboard, _tv) = tv_application();
+    std::env::remove_var("VIPTV_ANDROID_PACKAGE");
+    std::env::remove_var("VIPTV_ANDROID_CERT_SHA256");
+    let response = get(&configured, "/.well-known/assetlinks.json").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value[0]["target"]["package_name"], "org.viptv.experiment");
+    assert_eq!(value[0]["target"]["sha256_cert_fingerprints"][0], FINGERPRINT);
+}
