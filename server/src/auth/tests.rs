@@ -466,6 +466,39 @@ fn refresh_replay_revokes_only_its_family_and_devices_are_not_admins() {
     .is_err());
 }
 #[test]
+fn signed_in_native_device_can_approve_and_deny_another_devices_code_but_nothing_else() {
+    let db = db();
+    claim(&db);
+    let device = || Principal::Account {
+        account_id: 1,
+        role: "device".into(),
+        profile_id: Some(1),
+        session_id: None,
+    };
+    let new_code = |db: &Connection| {
+        dispatch(db, "/auth/device/code", None, &HeaderMap::new(), &json!({"device_name":"Living room TV"}), SESSION_TOKEN)
+            .unwrap()
+            .0
+    };
+    let code = new_code(&db);
+    let looked = dispatch(&db, "/auth/device/lookup", Some(device()), &headers(), &json!({"user_code":code["user_code"]}), SESSION_TOKEN)
+        .unwrap()
+        .0;
+    assert_eq!(looked["device"]["device_name"], "Living room TV");
+    assert_eq!(looked["device"]["status"], "pending");
+    dispatch(&db, "/auth/device/approve", Some(device()), &headers(), &json!({"user_code":code["user_code"]}), SESSION_TOKEN).unwrap();
+    let approved = dispatch(&db, "/auth/device/token", None, &HeaderMap::new(), &json!({"device_code":code["device_code"]}), SESSION_TOKEN)
+        .unwrap()
+        .0;
+    assert_eq!(identifier(&approved, "account_id").unwrap(), 1);
+    let other = new_code(&db);
+    dispatch(&db, "/auth/device/deny", Some(device()), &headers(), &json!({"user_code":other["user_code"]}), SESSION_TOKEN).unwrap();
+    assert!(dispatch(&db, "/auth/device/lookup", Some(device()), &headers(), &json!({"user_code":other["user_code"]}), SESSION_TOKEN).is_err());
+    for path in ["/auth/accounts", "/auth/device/revoke-admin", "/auth/devices-own"] {
+        assert!(dispatch(&db, path, Some(device()), &headers(), &json!({}), SESSION_TOKEN).is_err(), "{path}");
+    }
+}
+#[test]
 fn configured_https_origin_is_pinned_without_forwarded_host_trust() {
     for bad in [
         "http://tv.example",

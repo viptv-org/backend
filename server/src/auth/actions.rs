@@ -164,7 +164,14 @@ pub(crate) fn dispatch_prepared(
     prepared: &PreparedAuth,
 ) -> Result<(Value, Option<(String, String)>), ApiError> {
     if matches!(p,Some(Principal::Account{ref role,..}) if role=="device")
-        && !matches!(path, "/auth/profile" | "/auth/logout")
+        && !matches!(
+            path,
+            "/auth/profile"
+                | "/auth/logout"
+                | "/auth/device/lookup"
+                | "/auth/device/approve"
+                | "/auth/device/deny"
+        )
     {
         return Err(forbidden());
     }
