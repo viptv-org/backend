@@ -68,6 +68,7 @@ pub(crate) enum Platform {
     Android,
     AndroidTv,
     Desktop,
+    Ios,
     Web,
     Tizen,
     Webos,
