@@ -166,6 +166,10 @@ fn decide_request(
                 return Ok(PolicyDecision::Pass);
             }
             ["profiles", _, "preferences"] => return Ok(PolicyDecision::Pass),
+            // Change tokens only; the handler enforces the selected profile.
+            ["profiles", _, "revisions"] if method == axum::http::Method::GET => {
+                return Ok(PolicyDecision::Pass)
+            }
             ["profiles", _, "favorites" | "progress" | "continue", ..] => {}
             ["catalogs"] => {
                 return Ok(PolicyDecision::Respond(

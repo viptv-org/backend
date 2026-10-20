@@ -8,6 +8,27 @@ Reuse the existing browser cookie session or paired-device bearer session. Cooki
 
 After authentication/profile selection, **one** `GET /api/v3/bootstrap` supplies identity, profile management, Home, first Library page, complete lightweight `library_membership`, preferences, `library_import` and the first twelve typed continuation entries. An unselected session has nullable profile content. Do not immediately refetch Home, every Library page, every row, or every card's metadata. Library membership is for toggle state; it is not a requirement to hydrate all saved cards. Profile/connection replacement retires cached results and outstanding operations.
 
+### Change signals
+
+`GET /api/profiles/:id/revisions` is the cheap freshness check for a visible screen (for example every 15 s while Home is in the foreground). It only reads a few SQLite rows; it never runs add-on, Simkl, metadata or Home work. It returns opaque strings:
+
+```json
+{"library":"12","configuration":"3","addons":"9f…","policy":"0","preferences":"2","profiles":"5.0"}
+```
+
+| Token | Changes when |
+|---|---|
+| `library` | progress, favorites/library, hidden queue, history clear, Simkl/Stremio imports for this profile |
+| `configuration` | this profile's integration configuration |
+| `addons` | the account's add-ons (same value as `GET /api/catalogs/revision`; the fixed kids value for a restricted profile) |
+| `policy` | this profile's kids setting or title approvals |
+| `preferences` | this profile's preferences |
+| `profiles` | any profile of the account is created, deleted, renamed or has presentation/avatar changes, a kids `enabled`/`max_age` change, the account parent PIN is set/changed/removed, or this session's parent unlock changes |
+
+Compare values only for equality; never parse them or compare them by order. A missing row reads as a stable default. Authorization matches the other selected-profile routes: 401 without a session, 403 when no profile is selected or `:id` is not the session's selected profile (including another account's profile), 400 for a non-numeric id. Restricted kids sessions may poll without a parent grant. Responses are `Cache-Control: no-store`.
+
+Bootstrap includes the same object as top-level `revisions` (null when no profile is selected). The server reads it **before** building Home, so a write that commits during the build is observed as a change on the next check, not lost. A client stores the bootstrap tokens and refreshes only the areas whose token changed.
+
 Every `HomeRow` has optional `browse: HomeBrowseAction`, default null for old snapshots. Its exact shape is:
 
 ```json

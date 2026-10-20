@@ -99,6 +99,10 @@ pub fn router_with_tv(
         )
         .route("/profiles/:id/home", get(engine_v3::home))
         .route(
+            "/profiles/:id/revisions",
+            get(engine_v3::revisions::get),
+        )
+        .route(
             "/profiles/:id/history",
             get(engine_v3::history::list).delete(engine_v3::history::clear),
         )

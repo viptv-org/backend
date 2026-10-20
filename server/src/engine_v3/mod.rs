@@ -26,6 +26,9 @@ pub(crate) mod preferences;
 #[cfg(test)]
 mod profile_tests;
 pub(crate) mod profiles;
+pub(crate) mod revisions;
+#[cfg(test)]
+mod revisions_tests;
 mod projection;
 pub(crate) mod origins;
 pub(crate) mod scoped_library;
@@ -57,6 +60,11 @@ pub(crate) async fn bootstrap(
     let identity: Value =
         serde_json::from_slice(&bytes).map_err(|_| ApiError::from("Identity unavailable"))?;
     let auth::Principal::Account { profile_id, .. } = lease.principal;
+    // Read change tokens before Home is built: a write committing during the
+    // build then shows up as a change on the client's next revision check.
+    let revisions = profile_id
+        .map(|profile| revisions::snapshot(&app.clone().with_lease(lease.clone()), profile))
+        .transpose()?;
     let initial = if let Some(profile) = profile_id {
         Some(home::load(app.clone(), lease.clone(), profile).await?)
     } else {
@@ -145,7 +153,7 @@ pub(crate) async fn bootstrap(
         .map(|s| s.json());
     let axum::Json(management) = profiles::list(State(app), Extension(lease)).await?;
     Ok(axum::Json(
-        json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true}}),
+        json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions}),
     ))
 }
 
