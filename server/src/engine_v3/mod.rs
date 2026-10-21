@@ -189,5 +189,9 @@ mod live_tests;
 #[cfg(test)]
 mod episode_page_tests;
 
+mod episode_progress;
+#[cfg(test)]
+mod episode_progress_tests;
+
 #[cfg(test)]
 mod discovery_choice_tests;

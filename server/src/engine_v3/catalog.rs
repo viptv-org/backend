@@ -320,6 +320,8 @@ async fn resolve(
             &addon_revision,
             &result.0,
         );
+        // Private watch state is added after the shared verified-card cache.
+        super::episode_progress::mark(&app, profile, &mut result.0);
         return Ok(result);
     }
     let (app, origin, revision) = if let Some(explicit) = explicit {
@@ -496,7 +498,7 @@ async fn resolve(
             "Metadata integrations changed. Try again.".into(),
         ));
     }
-    let value = serde_json::to_value(DetailSnapshot {
+    let mut value = serde_json::to_value(DetailSnapshot {
         item,
         recommendations,
         episodes,
@@ -505,5 +507,7 @@ async fn resolve(
     })
     .map_err(|_| ApiError::from("Title unavailable"))?;
     super::source_integrations::cache_detail(&app, &lease, revision, &addon_revision, &value);
+    // Private watch state is added after the shared verified-card cache.
+    super::episode_progress::mark(&app, profile, &mut value);
     Ok(axum::Json(value))
 }
