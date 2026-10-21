@@ -1088,6 +1088,19 @@ pub(crate) fn resume_db(
         .map_or(0.0, |saved| saved.value.position_millis as f64 / 1000.0))
 }
 
+/// Storage keys a playback record for this exact host-issued card can live
+/// under: its verified key, then its raw key (unverified writes). A key that
+/// cannot be derived (for example an ambiguous import alias) is skipped.
+pub(crate) fn playback_keys_db(db: &Connection, profile: i64, card: &Card) -> Vec<Key> {
+    let mut keys: Vec<Key> = verified_key_db(db, profile, card).into_iter().collect();
+    if let Ok(raw) = raw_key(card) {
+        if !keys.contains(&raw) {
+            keys.push(raw);
+        }
+    }
+    keys
+}
+
 /// Prepared Home favorites need only the first page, not every saved card/statistic.
 pub(crate) fn home_favorites_db(
     db: &Connection,
