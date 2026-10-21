@@ -181,6 +181,13 @@ pub(super) async fn load(
         ));
     }
     configuration::validate_revision(&app, profile, configuration_revision)?;
+    super::watched::Watched::for_profile(&app, profile).mark_all(
+        snapshot
+            .hero
+            .iter_mut()
+            .chain(snapshot.featured.iter_mut())
+            .chain(snapshot.rows.iter_mut().flat_map(|row| row.cards.iter_mut())),
+    );
     lease.validate(
         &*app
             .db

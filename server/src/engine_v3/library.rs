@@ -57,6 +57,8 @@ pub(crate) async fn save(
     axum::Json(input): axum::Json<Save>,
 ) -> ApiResult {
     let app = app.with_lease(lease);
+    let mut input = input;
+    super::watched::strip(&mut input.card);
     validate(&input.card)?;
     let evidence = if input.card.metadata_origin.is_some() {
         Some(origins::persistence_card(&app, &input.card).await?)

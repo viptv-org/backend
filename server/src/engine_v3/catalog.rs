@@ -6,6 +6,19 @@ pub(crate) async fn discover(
     Extension(lease): Extension<ResourceLease>,
     Query(q): Query<crate::handlers_catalog::Discover>,
 ) -> ApiResult {
+    let profile = super::watched::selected_profile(&lease);
+    let mut page = discover_cards(State(app.clone()), Extension(lease), Query(q)).await?;
+    if let Some(profile) = profile {
+        super::watched::Watched::for_profile(&app, profile).mark_values(&mut page.0["cards"]);
+    }
+    Ok(page)
+}
+
+async fn discover_cards(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Query(q): Query<crate::handlers_catalog::Discover>,
+) -> ApiResult {
     if q.kind != "all" {
         return discover_one(State(app), Extension(lease), Query(q)).await;
     }
@@ -172,7 +185,14 @@ pub(crate) async fn detail(
     Path((kind, id)): Path<(String, String)>,
     Query(page): Query<DetailPage>,
 ) -> ApiResult {
-    resolve(app, lease, kind, id, page, true).await
+    let profile = super::watched::selected_profile(&lease);
+    let mut detail = resolve(app.clone(), lease, kind, id, page, true).await?;
+    // The title itself is the page; its recommendations are cards.
+    if let Some(profile) = profile {
+        super::watched::Watched::for_profile(&app, profile)
+            .mark_values(&mut detail.0["recommendations"]);
+    }
+    Ok(detail)
 }
 
 /// The title card Details shows for the session's selected profile: the same

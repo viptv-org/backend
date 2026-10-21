@@ -54,7 +54,15 @@ pub(crate) async fn get(
     Extension(lease): Extension<ResourceLease>,
     Query(q): Query<SearchQuery>,
 ) -> ApiResult {
-    run(app, lease, q, false).await
+    let profile = super::watched::selected_profile(&lease);
+    let mut result = run(app.clone(), lease, q, false).await?;
+    if let Some(profile) = profile {
+        let watched = super::watched::Watched::for_profile(&app, profile);
+        for row in result.0["rows"].as_array_mut().into_iter().flatten() {
+            watched.mark_values(&mut row["cards"]);
+        }
+    }
+    Ok(result)
 }
 pub(crate) async fn parent(
     State(app): State<App>,

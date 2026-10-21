@@ -135,6 +135,7 @@ pub(crate) async fn list(
             .refresh_after_millis
             .get_or_insert(super::hydration::REFRESH_AFTER_MILLIS);
     }
+    super::super::watched::Watched::for_profile(&app, profile).mark_all(snapshot.cards.iter_mut());
     super::configuration::validate_revision(&app, profile, configuration.scope.revision)?;
     lease.validate(
         &*app

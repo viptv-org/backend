@@ -34,6 +34,9 @@ pub(crate) mod origins;
 pub(crate) mod scoped_library;
 #[cfg(test)] mod origin_tests;
 mod simkl_catalog;
+pub(crate) mod watched;
+#[cfg(test)]
+mod watched_tests;
 pub(crate) mod source_ranking;
 pub(crate) mod subtitles;
 pub(crate) use catalog::{detail, discover};

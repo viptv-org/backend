@@ -422,6 +422,7 @@ fn delete_key(db: &Connection, profile: i64, kind: &str, key: &Key) -> Result<()
 fn clean(mut card: Card) -> Card {
     card.progress = None;
     card.added_at_millis = None;
+    super::watched::strip(&mut card);
     card
 }
 pub(crate) fn save_db(
