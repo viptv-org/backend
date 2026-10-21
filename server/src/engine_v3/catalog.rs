@@ -170,7 +170,37 @@ pub(crate) async fn detail(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path((kind, id)): Path<(String, String)>,
-    Query(mut page): Query<DetailPage>,
+    Query(page): Query<DetailPage>,
+) -> ApiResult {
+    resolve(app, lease, kind, id, page, true).await
+}
+
+/// The title card Details shows for the session's selected profile: the same
+/// metadata selection, policy checks and identity verification, without
+/// episodes paging or genre recommendations.
+pub(crate) async fn title_card(
+    app: App,
+    lease: ResourceLease,
+    kind: String,
+    id: String,
+) -> Result<viptv_engine::presentation::Card, ApiError> {
+    let page = DetailPage {
+        limit: Some(1),
+        ..Default::default()
+    };
+    let value = resolve(app, lease, kind, id, page, false).await?.0;
+    serde_json::from_value::<DetailSnapshot>(value)
+        .map(|detail| detail.item)
+        .map_err(|_| ApiError::from("Metadata unavailable"))
+}
+
+async fn resolve(
+    app: App,
+    lease: ResourceLease,
+    kind: String,
+    id: String,
+    mut page: DetailPage,
+    with_recommendations: bool,
 ) -> ApiResult {
     if id.is_empty()
         || id.len() > 512
@@ -394,7 +424,7 @@ pub(crate) async fn detail(
     let mut recommendations = recommendations;
     super::origins::stamp(&app, &mut recommendations, &origin)?;
     let mut recommendations = super::projection::allowed_cards(&app, recommendations)?;
-    if recommendations.is_empty() {
+    if with_recommendations && recommendations.is_empty() {
         if let Some(genre) = item
             .metadata
             .as_ref()

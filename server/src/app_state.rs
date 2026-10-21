@@ -134,6 +134,7 @@ pub struct App {
             >,
         >,
     >,
+    pub(crate) library_hydration: Arc<engine_v3::library::hydration::Jobs>,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
     // Request-local identity travels with discovery producers; ownership is never upstream-authored.
     pub(crate) principal: Option<auth::Principal>,
@@ -322,6 +323,7 @@ impl App {
             stremio_import,
             jobs: Default::default(),
             verified_cards: Default::default(),
+            library_hydration: Default::default(),
             live_cache: Default::default(),
             live_fetch_gates: Default::default(),
             streams: Default::default(),

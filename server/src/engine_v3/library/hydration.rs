@@ -1,0 +1,359 @@
+//! Thin My List rows — saved without a card, as Stremio imports and legacy
+//! favorites are — gain the card Details shows for the title.
+//!
+//! A run belongs to the profile's own session: it resolves each title through
+//! the Details path (that session's metadata add-ons, profile assignments and
+//! policy checks), never on behalf of nobody at startup. Runs are bounded,
+//! spaced, idempotent and never block the request that scheduled them. They
+//! fill only fields the row is missing; the row's name and artwork columns and
+//! any card a user saved meanwhile win. The favorites update trigger advances
+//! the library revision, so clients refetch.
+use super::*;
+use futures::{stream, StreamExt};
+use std::time::Instant;
+use viptv_engine::presentation::Card;
+
+/// Rows resolved by one pass; a larger backlog continues in the next pass.
+const ROWS_PER_PASS: usize = 200;
+/// Concurrent Details lookups for one profile, and the spacing of their starts.
+const LOOKUPS: usize = 4;
+const LOOKUP_SPACING: Duration = Duration::from_millis(100);
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(15);
+/// Results are written in small transactions so readers are never held up.
+const WRITE_BATCH: usize = 16;
+/// Profiles hydrated at once across the server.
+const RUNS: usize = 2;
+/// A finished profile is not rescanned for this long, unless titles were just imported.
+const COOLDOWN: Duration = Duration::from_secs(10 * 60);
+/// A title Details could not resolve is not asked again for this long.
+const RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
+/// While a run is active the library asks clients to look again this soon.
+pub(super) const REFRESH_AFTER_MILLIS: u64 = 4000;
+
+#[derive(Default)]
+struct Profile {
+    running: bool,
+    again: bool,
+    finished: Option<Instant>,
+    failed: HashMap<(String, String), Instant>,
+}
+
+pub(crate) struct Jobs {
+    profiles: Mutex<HashMap<i64, Profile>>,
+    runs: tokio::sync::Semaphore,
+    /// Tests opt in, so unrelated fixtures never see background writes.
+    #[cfg(test)]
+    pub(crate) enabled: std::sync::atomic::AtomicBool,
+}
+impl Default for Jobs {
+    fn default() -> Self {
+        Self {
+            profiles: Default::default(),
+            runs: tokio::sync::Semaphore::new(RUNS),
+            #[cfg(test)]
+            enabled: Default::default(),
+        }
+    }
+}
+
+/// Whether a stored favorite context lacks the presentation a saved card carries.
+fn thin(card: Option<&Card>) -> bool {
+    card.is_none_or(|card| card.description.is_none() && card.metadata.is_none())
+}
+
+fn stored(raw: &str, kind: &str, id: &str) -> Option<Card> {
+    serde_json::from_str::<Card>(raw)
+        .ok()
+        .filter(|card| card.identity.kind == kind && card.identity.id == id)
+}
+
+/// The resolved card, keeping everything the row already has.
+fn fill(existing: Option<Card>, resolved: Card, name: &str, poster: Option<&str>) -> Card {
+    let mut card = match existing {
+        None => resolved,
+        Some(mut card) => {
+            card.category = card.category.or(resolved.category);
+            card.metadata = card.metadata.or(resolved.metadata);
+            card.subtitle = card.subtitle.or(resolved.subtitle);
+            card.description = card.description.or(resolved.description);
+            card.poster = card.poster.or(resolved.poster);
+            card.landscape = card.landscape.or(resolved.landscape);
+            card.logo = card.logo.or(resolved.logo);
+            if card.badges.is_empty() {
+                card.badges = resolved.badges;
+            }
+            card
+        }
+    };
+    card.title = name.to_owned();
+    if let Some(poster) = poster {
+        card.poster = Some(poster.to_owned());
+    }
+    card.progress = None;
+    card.added_at_millis = None;
+    // A stored context never confers a connector incarnation (see `library::card`).
+    card.metadata_origin = None;
+    card
+}
+
+/// Starts (or extends) the profile's run in the background and reports whether
+/// one is active. `imported` skips the cooldown: new thin rows were just written.
+pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64, imported: bool) -> bool {
+    let jobs = app.library_hydration.clone();
+    #[cfg(test)]
+    if !jobs.enabled.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    let auth::Principal::Account {
+        profile_id: Some(selected),
+        ..
+    } = &lease.principal
+    else {
+        return false;
+    };
+    if *selected != profile {
+        return false;
+    }
+    let Ok(mut profiles) = jobs.profiles.lock() else {
+        return false;
+    };
+    let state = profiles.entry(profile).or_default();
+    if state.running {
+        state.again |= imported;
+        return true;
+    }
+    if !imported && state.finished.is_some_and(|at| at.elapsed() < COOLDOWN) {
+        return false;
+    }
+    state.running = true;
+    state.again = false;
+    drop(profiles);
+    let app = app.clone().with_lease(lease.clone());
+    let lease = lease.clone();
+    tokio::spawn(async move {
+        let _done = Done(app.library_hydration.clone(), profile);
+        loop {
+            let more = match app.library_hydration.runs.acquire().await {
+                Ok(_turn) => pass(&app, &lease, profile).await.unwrap_or(false),
+                Err(_) => false,
+            };
+            // Deciding to stop and clearing `running` happen under one lock, so a
+            // concurrent import either extends this run or starts the next one.
+            let Ok(mut profiles) = app.library_hydration.profiles.lock() else {
+                break;
+            };
+            let state = profiles.entry(profile).or_default();
+            if !(more || std::mem::take(&mut state.again)) {
+                state.running = false;
+                state.finished = Some(Instant::now());
+                break;
+            }
+        }
+    });
+    true
+}
+
+/// Ends a run that panicked, so the profile can be scheduled again.
+struct Done(Arc<Jobs>, i64);
+impl Drop for Done {
+    fn drop(&mut self) {
+        if let Ok(mut profiles) = self.0.profiles.lock() {
+            let state = profiles.entry(self.1).or_default();
+            if state.running {
+                state.running = false;
+                state.finished = Some(Instant::now());
+            }
+        }
+    }
+}
+
+/// Resolves up to one pass of thin rows; true when more remain.
+async fn pass(app: &App, lease: &ResourceLease, profile: i64) -> Result<bool, ApiError> {
+    let rows = {
+        let db = app
+            .db
+            .lock()
+            .map_err(|_| ApiError::from("Database unavailable"))?;
+        app.require_profile(&db, profile)?;
+        // Restricted profiles persist only authoritative approved metadata.
+        if kids::restricted(&db, &lease.principal)? {
+            return Ok(false);
+        }
+        let mut query = db
+            .prepare("SELECT type,id,context FROM favorites WHERE profile_id=?1 AND type IN ('movie','series') ORDER BY added_at_millis DESC,rowid DESC LIMIT 10001")
+            .map_err(db_error)?;
+        let rows = query
+            .query_map([profile], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        rows
+    };
+    let now = Instant::now();
+    let mut wanted: Vec<(String, String)> = {
+        let mut profiles = app
+            .library_hydration
+            .profiles
+            .lock()
+            .map_err(|_| ApiError::from("Library unavailable"))?;
+        let state = profiles.entry(profile).or_default();
+        state
+            .failed
+            .retain(|_, at| now.duration_since(*at) < RETRY_AFTER);
+        rows.into_iter()
+            .filter(|(kind, id, raw)| thin(stored(raw, kind, id).as_ref()))
+            .map(|(kind, id, _)| (kind, id))
+            .filter(|key| !state.failed.contains_key(key))
+            .take(ROWS_PER_PASS + 1)
+            .collect()
+    };
+    let more = wanted.len() > ROWS_PER_PASS;
+    wanted.truncate(ROWS_PER_PASS);
+    if wanted.is_empty() {
+        return Ok(false);
+    }
+    let mut interval = tokio::time::interval(LOOKUP_SPACING);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let pace = tokio::sync::Mutex::new(interval);
+    let mut lookups = stream::iter(wanted)
+        .map(|(kind, id)| {
+            let pace = &pace;
+            async move {
+                pace.lock().await.tick().await;
+                let card = tokio::time::timeout(
+                    LOOKUP_TIMEOUT,
+                    super::super::catalog::title_card(
+                        app.clone(),
+                        lease.clone(),
+                        kind.clone(),
+                        id.clone(),
+                    ),
+                )
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .filter(|card| card.identity.kind == kind && card.identity.id == id);
+                ((kind, id), card)
+            }
+        })
+        .buffer_unordered(LOOKUPS);
+    let mut batch = Vec::new();
+    while let Some((key, card)) = lookups.next().await {
+        match card {
+            Some(card) => batch.push((key, card)),
+            None => {
+                // A revoked session ends the run instead of marking every title failed.
+                lease.validate(
+                    &*app
+                        .db
+                        .lock()
+                        .map_err(|_| ApiError::from("Database unavailable"))?,
+                )?;
+                remember_failed(app, profile, vec![key]);
+            }
+        }
+        if batch.len() >= WRITE_BATCH {
+            let unfilled = write(app, lease, profile, std::mem::take(&mut batch))?;
+            remember_failed(app, profile, unfilled);
+        }
+    }
+    let unfilled = write(app, lease, profile, batch)?;
+    remember_failed(app, profile, unfilled);
+    Ok(more)
+}
+
+/// Titles Details could not fill are not looked up again until `RETRY_AFTER`.
+fn remember_failed(app: &App, profile: i64, keys: Vec<(String, String)>) {
+    if let Ok(mut profiles) = app.library_hydration.profiles.lock() {
+        let failed = &mut profiles.entry(profile).or_default().failed;
+        for key in keys {
+            if failed.len() < 10_000 {
+                failed.insert(key, Instant::now());
+            }
+        }
+    }
+}
+
+/// Stores what the resolved cards can fill and returns the titles that stay thin.
+fn write(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    batch: Vec<((String, String), Card)>,
+) -> Result<Vec<(String, String)>, ApiError> {
+    let mut unfilled = Vec::new();
+    if batch.is_empty() {
+        return Ok(unfilled);
+    }
+    let mut db = app
+        .db
+        .lock()
+        .map_err(|_| ApiError::from("Database unavailable"))?;
+    app.require_profile(&db, profile)?;
+    if kids::restricted(&db, &lease.principal)? {
+        return Err(auth::forbidden());
+    }
+    let tx = db.transaction().map_err(db_error)?;
+    for ((kind, id), resolved) in batch {
+        let row: Option<(String, Option<String>, String)> = tx
+            .query_row(
+                "SELECT name,poster,context FROM favorites WHERE profile_id=?1 AND type=?2 AND id=?3",
+                params![profile, kind, id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .map_err(db_error)?;
+        // Removed meanwhile, or saved with a full card meanwhile: nothing to fill.
+        let Some((name, poster, raw)) = row else {
+            continue;
+        };
+        let existing = stored(&raw, &kind, &id);
+        if !thin(existing.as_ref()) {
+            continue;
+        }
+        let card = fill(existing, resolved, &name, poster.as_deref());
+        let context = serde_json::to_string(&card).ok();
+        let (Some(context), Ok(())) = (context, card.validate_library()) else {
+            unfilled.push((kind, id));
+            continue;
+        };
+        if thin(Some(&card)) {
+            unfilled.push((kind.clone(), id.clone()));
+        }
+        tx.execute(
+            "UPDATE favorites SET context=?4,poster=COALESCE(poster,?5) WHERE profile_id=?1 AND type=?2 AND id=?3 AND context=?6",
+            params![profile, kind, id, context, card.poster, raw],
+        )
+        .map_err(db_error)?;
+    }
+    tx.commit().map_err(db_error)?;
+    Ok(unfilled)
+}
+
+/// Whether the profile's run is active.
+#[cfg(test)]
+pub(crate) fn running(app: &App, profile: i64) -> bool {
+    app.library_hydration
+        .profiles
+        .lock()
+        .is_ok_and(|p| p.get(&profile).is_some_and(|s| s.running))
+}
+
+/// Waits for the profile's run to finish.
+#[cfg(test)]
+pub(crate) async fn settled(app: &App, profile: i64) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while running(app, profile) {
+        assert!(
+            Instant::now() < deadline,
+            "library hydration did not settle"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}

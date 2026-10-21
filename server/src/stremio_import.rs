@@ -997,7 +997,7 @@ pub(crate) async fn apply(
         return Err("stremio_confirmation_required".into());
     }
     let worker = app.clone();
-    account_api::profile_import(app.clone(), app.request_lease(), move |db, _| {
+    let applied = account_api::profile_import(app.clone(), app.request_lease(), move |db, _| {
         authorize(db, &worker, profile)?;
         let mut slots = worker.stremio_import.pending.lock().map_err(|_| STORAGE)?;
         let slot = slots
@@ -1082,7 +1082,11 @@ pub(crate) async fn apply(
             json!({"profile_id":profile,"summary":summary,"already_completed":false,"excluded_items":exclusions.len(),"addons_added":addons_added,"addons_existing":addons_existing}),
         ))
     })
-    .await
+    .await?;
+    // Imported titles carry only a name and poster; give them the card Details
+    // shows, resolved through this session's own metadata add-ons, in the background.
+    crate::engine_v3::library::hydration::schedule(&app, &app.request_lease(), profile, true);
+    Ok(applied)
 }
 
 fn snapshot(db: &Connection, profile: i64) -> Result<[u8; 32], Error> {

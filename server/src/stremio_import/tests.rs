@@ -3787,3 +3787,57 @@ async fn startup_fills_missing_posters_only_for_import_owned_imdb_rows() {
     assert_eq!(poster("progress", "tt0000001"), Some(public_poster("tt0000001")));
     assert_eq!(poster("progress", "tt0000003"), None);
 }
+
+#[tokio::test]
+async fn imported_titles_get_the_full_details_card_through_owned_metadata_addons() {
+    use crate::engine_v3::library::{hydration, hydration_tests};
+    let source_poster = "https://private-addon.example.invalid/poster.jpg?token=secret";
+    let mut series = movie("tt1234567");
+    series["type"] = json!("series");
+    series["poster"] = json!(source_poster);
+    series["state"] = json!({});
+    let mut film = movie("tt0000001");
+    film["poster"] = json!(source_poster);
+    let mut f = fixture(vec![series, film], login()).await;
+    let addon = hydration_tests::metadata_addon(&mut f.app).await;
+    let preview = staged_preview(&f.app).await;
+    let (status, review) = review_selection(&f.app, &preview, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{review}");
+    let rendered = review.to_string();
+    assert!(!rendered.contains("poster") && !rendered.contains("images.example"), "review keeps neutral icons: {rendered}");
+    let (status, result) = request(
+        &f.app,
+        "member-token-1",
+        "POST",
+        &format!("/api/profiles/1/imports/stremio/{}/apply", preview["preview_id"].as_str().unwrap()),
+        json!({"confirm":true,"review_revision":review["review_revision"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert!(hydration::running(&f.app, 1) || addon.calls.load(Ordering::SeqCst) > 0, "apply starts filling at once");
+    hydration::settled(&f.app, 1).await;
+    {
+        let db = f.app.db.lock().unwrap();
+        let stored = |id: &str| -> Value {
+            serde_json::from_str(&db.query_row("SELECT context FROM favorites WHERE profile_id=1 AND id=?1", [id], |r| r.get::<_, String>(0)).unwrap()).unwrap()
+        };
+        let show = stored("tt1234567");
+        assert_eq!(show["identity"]["id"], "tt1234567");
+        assert_eq!(show["description"], "Full description of tt1234567");
+        assert_eq!(show["metadata"]["year"], 2019);
+        assert_eq!(show["landscape"], "https://images.example/tt1234567/background.jpg");
+        assert_eq!(show["poster"], public_poster("tt1234567"), "the canonical poster stays");
+        assert_eq!(stored("tt0000001")["metadata"]["genres"], json!(["Drama", "Mystery"]));
+        let leaked: i64 = db
+            .query_row("SELECT COUNT(*) FROM favorites WHERE poster LIKE '%private-addon%' OR context LIKE '%private-addon%' OR context LIKE '%synthetic-token%'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(leaked, 0, "Stremio's own artwork and tokens are never stored");
+    }
+    f.app.verified_cards.lock().unwrap().clear();
+    let (status, page) = request(&f.app, "member-token-1", "GET", "/api/profiles/1/library", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let listed = page["cards"].as_array().unwrap().iter().find(|c| c["identity"]["id"] == "tt1234567").unwrap();
+    assert_eq!(listed["description"], "Full description of tt1234567");
+    assert_eq!(listed["metadata"]["rating"], 8.4);
+    assert_eq!(listed["logo"], "https://images.example/tt1234567/logo.png");
+}

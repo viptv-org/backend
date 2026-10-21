@@ -51,6 +51,8 @@ pub(crate) async fn list(
     } else {
         None
     };
+    // Thin rows (imported or saved without a card) fill in the background.
+    let hydrating = super::hydration::schedule(&app, &lease, profile, false);
     let (mut known_genres, mut genre_total, mut genre_running) = (0, 0, false);
     if !unavailable && simkl_availability == Availability::Available {
         let cached = if legacy {
@@ -127,6 +129,11 @@ pub(crate) async fn list(
         if filtering_genre {
             snapshot.availability = Availability::TemporarilyUnavailable;
         }
+    }
+    if hydrating {
+        snapshot
+            .refresh_after_millis
+            .get_or_insert(super::hydration::REFRESH_AFTER_MILLIS);
     }
     super::configuration::validate_revision(&app, profile, configuration.scope.revision)?;
     lease.validate(

@@ -43,6 +43,9 @@ fn validate(card: &Card) -> Result<(), ApiError> {
     card.validate_library()
         .map_err(|_| ApiError::from("Invalid library card"))
 }
+pub(crate) mod hydration;
+#[cfg(test)]
+pub(crate) mod hydration_tests;
 mod listing;
 pub(crate) mod membership;
 pub(crate) use listing::list;
