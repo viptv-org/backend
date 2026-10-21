@@ -113,6 +113,8 @@ async fn catalog_home_search_and_library_cards_carry_the_profile_watched_badge()
             params![format!("http://{address}/manifest.json"), manifest.to_string()]).unwrap();
         progress(&db, 1, "movie", "tt1000001", "tt1000001", 100.0, 100.0, 1, json!({}));
         progress(&db, 1, "movie", "tt1000002", "tt1000002", 40.0, 100.0, 2, json!({}));
+        // Finished before, now rewatching: watched, but in Continue Watching.
+        progress(&db, 1, "movie", "tt1000004", "tt1000004", 40.0, 100.0, 3, json!({"stremio_import_watched":true}));
     }
     crate::test_support::encrypt_fixture_sources(&app);
     let (status, body) = request(&app, "member-token-1", "PUT", "/api/profiles/1/integrations",
@@ -136,6 +138,8 @@ async fn catalog_home_search_and_library_cards_carry_the_profile_watched_badge()
     let row = home["rows"].as_array().unwrap().iter().find(|r| r["id"] == "addon:1:movie:top").expect("catalog row");
     assert_eq!(badges(&row["cards"], "tt1000001"), watched);
     assert!(badges(&row["cards"], "tt1000003").is_empty());
+    let resume = home["rows"].as_array().unwrap().iter().find(|r| r["id"] == "continue").expect("continue row");
+    assert!(badges(&resume["cards"], "tt1000004").is_empty(), "an in-progress rewatch is not drawn as watched");
 
     let (status, search) = request(&app, "member-token-1", "GET", "/api/search?query=film", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{search}");

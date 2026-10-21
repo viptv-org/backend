@@ -181,13 +181,17 @@ pub(super) async fn load(
         ));
     }
     configuration::validate_revision(&app, profile, configuration_revision)?;
-    super::watched::Watched::for_profile(&app, profile).mark_all(
-        snapshot
-            .hero
-            .iter_mut()
-            .chain(snapshot.featured.iter_mut())
-            .chain(snapshot.rows.iter_mut().flat_map(|row| row.cards.iter_mut())),
-    );
+    // Continue Watching holds titles in progress, including a rewatch of a
+    // finished movie: a Watched check there would contradict its progress bar.
+    let watched = super::watched::Watched::for_profile(&app, profile);
+    for row in &mut snapshot.rows {
+        if row.id == "continue" {
+            row.cards.iter_mut().for_each(super::watched::strip);
+        } else {
+            watched.mark_all(row.cards.iter_mut());
+        }
+    }
+    watched.mark_all(snapshot.hero.iter_mut().chain(snapshot.featured.iter_mut()));
     lease.validate(
         &*app
             .db
