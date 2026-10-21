@@ -4,6 +4,7 @@ use viptv_engine::{continuation::*, identity::MediaIdentity, presentation::Card}
 mod metadata;
 mod next;
 mod page;
+pub(crate) mod releases;
 use release_millis as clock;
 mod visibility;
 pub(crate) use next::resolve;
@@ -11,6 +12,8 @@ pub(crate) use page::{get, snapshot};
 pub(crate) use visibility::update;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod release_tests;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Page {

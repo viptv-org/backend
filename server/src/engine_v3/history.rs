@@ -193,7 +193,7 @@ pub(crate) async fn list(
 
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_library_revisions(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,revision INTEGER NOT NULL);")?;
-    for table in ["progress", "favorites", "queue_hidden"] {
+    for table in ["progress", "favorites", "queue_hidden", "queue_hidden_times"] {
         for (operation, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
             db.execute_batch(&format!("CREATE TRIGGER IF NOT EXISTS engine_library_{table}_{operation} AFTER {operation} ON {table} BEGIN
                 INSERT INTO engine_library_revisions(profile_id,revision) SELECT {row}.profile_id,1 WHERE EXISTS(SELECT 1 FROM profiles WHERE id={row}.profile_id)

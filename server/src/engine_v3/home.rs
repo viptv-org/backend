@@ -18,6 +18,7 @@ pub(super) async fn load(
     )?;
     let home_addon_revision = app.addons.revision()?;
     crate::simkl::imports::schedule(&app, &lease, profile);
+    super::continuation::releases::schedule(&app, &lease, profile);
     // Use the same origin-aware personal projections as the explicit routes.
     // This snapshot owns its DB lock; never call it inside the favorites lock.
     let continuation = super::continuation::snapshot(&app, &lease, profile, 0, 12)?;

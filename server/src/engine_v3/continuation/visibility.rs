@@ -126,10 +126,7 @@ pub(crate) async fn update(
     kids::require_item(&db, &lease.principal, &identity.kind, &identity.id)?;
     let tx = db.transaction().map_err(db_error)?;
     if input.hidden {
-        tx.execute(
-            "INSERT OR IGNORE INTO queue_hidden(profile_id,type,title_id) VALUES(?1,?2,?3)",
-            params![profile, identity.kind, identity.id],
-        )
+        crate::continuation::hide(&tx, profile, &identity.kind, &identity.id).map(|_| 0)
     } else {
         tx.execute(
             "DELETE FROM queue_hidden WHERE profile_id=?1 AND type=?2 AND title_id=?3",

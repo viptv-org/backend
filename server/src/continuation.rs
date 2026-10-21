@@ -75,7 +75,25 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE INDEX IF NOT EXISTS progress_titles ON progress(profile_id,type,title_id,updated_at DESC);
         CREATE TABLE IF NOT EXISTS queue_hidden(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,type TEXT NOT NULL,title_id TEXT NOT NULL,PRIMARY KEY(profile_id,type,title_id));
         CREATE TABLE IF NOT EXISTS continuation_cache(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,series_id TEXT NOT NULL,from_id TEXT NOT NULL,result TEXT NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(profile_id,series_id,from_id));
-        CREATE TABLE IF NOT EXISTS viewing_settings(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,autoplay INTEGER NOT NULL DEFAULT 1);")
+        CREATE TABLE IF NOT EXISTS viewing_settings(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,autoplay INTEGER NOT NULL DEFAULT 1);")?;
+    // When a title was removed from the queue (seconds). Kept beside queue_hidden
+    // so its positional shape stays stable; titles hidden before this table
+    // existed count as hidden now. A release after this time brings the title back.
+    db.execute_batch("CREATE TABLE IF NOT EXISTS queue_hidden_times(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,type TEXT NOT NULL,title_id TEXT NOT NULL,hidden_at INTEGER NOT NULL,PRIMARY KEY(profile_id,type,title_id));
+        INSERT OR IGNORE INTO queue_hidden_times(profile_id,type,title_id,hidden_at) SELECT profile_id,type,title_id,strftime('%s','now') FROM queue_hidden;
+        CREATE TRIGGER IF NOT EXISTS queue_hidden_times_insert AFTER INSERT ON queue_hidden BEGIN INSERT OR REPLACE INTO queue_hidden_times(profile_id,type,title_id,hidden_at) VALUES(NEW.profile_id,NEW.type,NEW.title_id,strftime('%s','now')); END;
+        CREATE TRIGGER IF NOT EXISTS queue_hidden_times_delete AFTER DELETE ON queue_hidden BEGIN DELETE FROM queue_hidden_times WHERE profile_id=OLD.profile_id AND type=OLD.type AND title_id=OLD.title_id; END;
+        CREATE TABLE IF NOT EXISTS continuation_releases(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,series_id TEXT NOT NULL,from_id TEXT NOT NULL,checked_at INTEGER NOT NULL,document TEXT,PRIMARY KEY(profile_id,series_id));")
+}
+
+/// Hide a queue title now. Re-hiding a title a release brought back restarts its clock.
+pub(crate) fn hide(db: &Connection, profile: i64, kind: &str, title: &str) -> rusqlite::Result<()> {
+    db.execute(
+        "INSERT OR IGNORE INTO queue_hidden(profile_id,type,title_id) VALUES(?1,?2,?3)",
+        params![profile, kind, title],
+    )?;
+    db.execute("INSERT INTO queue_hidden_times(profile_id,type,title_id,hidden_at) VALUES(?1,?2,?3,?4) ON CONFLICT(profile_id,type,title_id) DO UPDATE SET hidden_at=excluded.hidden_at",params![profile,kind,title,util::now()])?;
+    Ok(())
 }
 
 /// Resolve only an unambiguous actual metadata entry. Never synthesize episode IDs.
@@ -191,11 +209,22 @@ pub struct Page {
     limit: Option<u32>,
 }
 pub fn queue(db: &Connection, profile: i64, offset: u32, limit: u32) -> Result<Value, ApiError> {
+    queue_items(db, profile, offset, limit, false)
+}
+/// The queue, optionally with hidden titles marked by `queue_hidden_at` (seconds).
+pub(crate) fn queue_items(
+    db: &Connection,
+    profile: i64,
+    offset: u32,
+    limit: u32,
+    include_hidden: bool,
+) -> Result<Value, ApiError> {
     let allowed = kids::sql_allowed("progress.type", "progress.id", "?1");
-    let sql = format!("WITH ranked AS (SELECT *,rowid AS activity_id,ROW_NUMBER() OVER(PARTITION BY type,CASE WHEN title_id='' THEN id ELSE title_id END ORDER BY updated_at DESC,rowid DESC) AS rank FROM progress WHERE profile_id=?1 AND type!='live' AND json_extract(context,'$.stremio_completion_only') IS NOT 1 AND {allowed}), visible AS (SELECT * FROM ranked p WHERE rank=1 AND (position>0 OR json_extract(context,'$.progress_corrected')=1 OR (json_extract(context,'$.simkl_import.position_basis')='recorded_completion' AND EXISTS(SELECT 1 FROM continuation_cache c WHERE c.profile_id=p.profile_id AND c.series_id=p.title_id AND c.from_id=p.id AND json_extract(c.result,'$.status')='next' AND c.updated_at>strftime('%s','now')-3600))) AND (json_extract(context,'$.simkl_import.position_basis') IS NOT 'recorded_completion' OR EXISTS(SELECT 1 FROM continuation_cache c WHERE c.profile_id=p.profile_id AND c.series_id=p.title_id AND c.from_id=p.id AND json_extract(c.result,'$.status')='next' AND c.updated_at>strftime('%s','now')-3600)) AND (type='series' OR (json_extract(context,'$.watched_override') IS NOT 1 AND (duration<=0 OR position/duration<0.95))) AND NOT EXISTS(SELECT 1 FROM queue_hidden h WHERE h.profile_id=p.profile_id AND h.type=p.type AND h.title_id=CASE WHEN p.title_id='' THEN p.id ELSE p.title_id END)) SELECT id,type,name,poster,position,duration,updated_at,context,title_id,COUNT(*) OVER() FROM visible ORDER BY updated_at DESC,activity_id DESC LIMIT ?2 OFFSET ?3");
+    let sql = format!("WITH ranked AS (SELECT *,rowid AS activity_id,ROW_NUMBER() OVER(PARTITION BY type,CASE WHEN title_id='' THEN id ELSE title_id END ORDER BY updated_at DESC,rowid DESC) AS rank FROM progress WHERE profile_id=?1 AND type!='live' AND json_extract(context,'$.stremio_completion_only') IS NOT 1 AND {allowed}), visible AS (SELECT * FROM ranked p WHERE rank=1 AND (position>0 OR json_extract(context,'$.progress_corrected')=1 OR (json_extract(context,'$.simkl_import.position_basis')='recorded_completion' AND EXISTS(SELECT 1 FROM continuation_cache c WHERE c.profile_id=p.profile_id AND c.series_id=p.title_id AND c.from_id=p.id AND json_extract(c.result,'$.status')='next' AND c.updated_at>strftime('%s','now')-3600))) AND (json_extract(context,'$.simkl_import.position_basis') IS NOT 'recorded_completion' OR EXISTS(SELECT 1 FROM continuation_cache c WHERE c.profile_id=p.profile_id AND c.series_id=p.title_id AND c.from_id=p.id AND json_extract(c.result,'$.status')='next' AND c.updated_at>strftime('%s','now')-3600)) AND (type='series' OR (json_extract(context,'$.watched_override') IS NOT 1 AND (duration<=0 OR position/duration<0.95))) AND (?4 OR NOT EXISTS(SELECT 1 FROM queue_hidden h WHERE h.profile_id=p.profile_id AND h.type=p.type AND h.title_id=CASE WHEN p.title_id='' THEN p.id ELSE p.title_id END))) SELECT id,type,name,poster,position,duration,updated_at,context,title_id,COUNT(*) OVER(),(SELECT COALESCE(t.hidden_at,0) FROM queue_hidden h LEFT JOIN queue_hidden_times t ON t.profile_id=h.profile_id AND t.type=h.type AND t.title_id=h.title_id WHERE h.profile_id=visible.profile_id AND h.type=visible.type AND h.title_id=CASE WHEN visible.title_id='' THEN visible.id ELSE visible.title_id END) FROM visible ORDER BY updated_at DESC,activity_id DESC LIMIT ?2 OFFSET ?3");
     let mut query = db.prepare(&sql).map_err(db_error)?;
-    let rows = query.query_map(params![profile,limit+1,offset], |r| {
+    let rows = query.query_map(params![profile,limit+1,offset,include_hidden], |r| {
         let mut item = json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"position":r.get::<_,f64>(4)?,"duration":r.get::<_,f64>(5)?,"updated_at":r.get::<_,i64>(6)?});
+        if let Some(hidden) = r.get::<_,Option<i64>>(10)? { item["queue_hidden_at"] = json!(hidden); }
         let mut manual_watched = false;
         if let Ok(raw) = serde_json::from_str::<Value>(&r.get::<_,String>(7)?) { manual_watched = raw["watched_override"] == true; library::add_watch_fields(&mut item,&raw); engine_v3::history::restore(&mut item,&raw); if let Ok(context) = matching_context(&raw) { item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone()); } }
         Ok((item,r.get::<_,String>(8)?,r.get::<_,u32>(9)?,manual_watched))
@@ -204,6 +233,7 @@ pub fn queue(db: &Connection, profile: i64, offset: u32, limit: u32) -> Result<V
     let has_more = rows.len() > limit as usize;
     let mut items = Vec::new();
     for (mut item, series, _, mut manual_watched) in rows.into_iter().take(limit as usize) {
+        let hidden_at = item["queue_hidden_at"].clone();
         item["queue_title_id"] = json!(if series.is_empty() {
             title_id(&item)
         } else {
@@ -222,6 +252,9 @@ pub fn queue(db: &Connection, profile: i64, offset: u32, limit: u32) -> Result<V
             if let Some(raw) = cached {
                 if let Ok(result) = serde_json::from_str::<Value>(&raw) {
                     if !cached_origin_current(db, profile, &item, &result)? {
+                        if !hidden_at.is_null() {
+                            item["queue_hidden_at"] = hidden_at;
+                        }
                         items.push(item);
                         continue;
                     }
@@ -244,6 +277,9 @@ pub fn queue(db: &Connection, profile: i64, offset: u32, limit: u32) -> Result<V
                     }
                 }
             }
+        }
+        if !hidden_at.is_null() {
+            item["queue_hidden_at"] = hidden_at;
         }
         items.push(item);
     }
@@ -336,10 +372,7 @@ pub async fn visibility(
         let db = app.db.lock().unwrap();
         app.require_profile(&db, profile)?;
         if hidden {
-            db.execute(
-                "INSERT OR IGNORE INTO queue_hidden(profile_id,type,title_id) VALUES(?1,?2,?3)",
-                params![profile, kind, title_id(&item)],
-            )
+            hide(&db, profile, kind, &title_id(&item)).map(|_| 0)
         } else {
             db.execute(
                 "DELETE FROM queue_hidden WHERE profile_id=?1 AND type=?2 AND title_id=?3",

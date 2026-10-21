@@ -126,6 +126,11 @@ impl Addons {
             false
         }
     }
+    /// Lets a test serve changed add-on documents without waiting out their TTL.
+    #[cfg(test)]
+    pub(crate) fn forget_responses(&self) {
+        self.cache.lock().unwrap().clear();
+    }
     pub(crate) fn revision(&self) -> Result<String, String> {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
         self.revision_db(&db)

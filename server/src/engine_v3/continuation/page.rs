@@ -16,17 +16,23 @@ pub(crate) fn snapshot(
     app.require_profile(&db, profile)?;
     lease.validate(&db)?;
     let configuration_revision = configuration_revision(&db, profile)?;
-    let queue = crate::continuation::queue(&db, profile, 0, 50000)?;
+    let queue = crate::continuation::queue_items(&db, profile, 0, 50000, true)?;
+    let now = util::now_millis().max(0) as u64;
     let items = kids::filter_items(
         &db,
         &lease.principal,
         queue["items"].as_array().cloned().unwrap_or_default(),
     )?;
+    // Each entry with the time that orders it: its latest activity, or the
+    // release that made its series new (see `releases`).
     let mut entries = Vec::new();
     for item in items {
         let Some(rendered) = super::super::history::record(&item) else {
             continue;
         };
+        let hidden_at = item["queue_hidden_at"]
+            .as_u64()
+            .map(|seconds| seconds.saturating_mul(1000));
         let previous = item
             .get("previous_episode")
             .and_then(super::super::history::record);
@@ -55,6 +61,39 @@ pub(crate) fn snapshot(
             card.progress = None;
             card.subtitle = None;
         }
+        let mut status = status;
+        let mut previous_identity = previous.map(|record| record.identity);
+        let mut order = record.updated_at_millis;
+        let found = match (&record.parent_identity, &status) {
+            (Some(series), status) if *status != ContinuationStatus::Resume => {
+                super::releases::state_db(&db, app, lease, profile, &series.id, &record, now)?
+                    .filter(|found| {
+                        kids::require_item(&db, &lease.principal, &found.next.identity.kind, &found.next.identity.id)
+                            .is_ok()
+                    })
+            }
+            _ => None,
+        };
+        // A removed title stays removed, through replays too, until an episode
+        // is released after its removal; it then returns at that release (and
+        // the next Home load un-hides it, see `releases::schedule`).
+        if let Some(hidden) = hidden_at {
+            match found
+                .as_ref()
+                .and_then(|found| found.released_at_millis.iter().find(|at| **at > hidden))
+            {
+                Some(at) => order = *at,
+                None => continue,
+            }
+        } else if let Some(found) = &found {
+            order = order.max(found.first_released_at_millis);
+        }
+        if let Some(found) = &found {
+            let verified = (status == ContinuationStatus::Next).then(|| card.clone());
+            card = super::releases::present(found, &record, verified);
+            previous_identity = Some(record.identity.clone());
+            status = ContinuationStatus::Next;
+        }
         crate::simkl::imports::enrich(&db, profile, &mut card)?;
         super::super::source_integrations::merge_cached_with_db(
             app,
@@ -63,19 +102,21 @@ pub(crate) fn snapshot(
             &db,
             std::slice::from_mut(&mut card),
         );
-        let previous_identity = previous.map(|record| record.identity);
-        entries.push(ContinuationEntry {
-            card,
-            record,
-            status,
-            previous_identity,
-        });
+        entries.push((
+            order,
+            ContinuationEntry {
+                card,
+                record,
+                status,
+                previous_identity,
+            },
+        ));
     }
     if queue["next_offset"].is_number() {
         return Err("History exceeds its bounded item limit".into());
     }
     for (key, entry) in super::super::scoped_library::continuation_db(&db, app, profile)? {
-        entries.retain(|old| {
+        entries.retain(|(_, old)| {
             let mut card = old.record.card();
             if let Some(parent) = &old.record.parent_identity {
                 card.identity = parent.clone();
@@ -83,12 +124,11 @@ pub(crate) fn snapshot(
             }
             super::super::scoped_library::raw_key(&card).is_ok_and(|old| old != key)
         });
-        entries.push(entry);
+        entries.push((entry.record.updated_at_millis, entry));
     }
-    entries.sort_by(|a, b| {
-        b.record
-            .updated_at_millis
-            .cmp(&a.record.updated_at_millis)
+    entries.sort_by(|(a_order, a), (b_order, b)| {
+        b_order
+            .cmp(a_order)
             .then_with(|| a.card.identity.id.cmp(&b.card.identity.id))
     });
     let total = entries.len();
@@ -98,6 +138,7 @@ pub(crate) fn snapshot(
         .into_iter()
         .skip(offset as usize)
         .take(limit as usize)
+        .map(|(_, entry)| entry)
         .collect();
     let revision =
         configuration_revision.saturating_add(super::super::history::revision(&db, profile)?);

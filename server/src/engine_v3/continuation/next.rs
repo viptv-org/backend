@@ -211,6 +211,17 @@ pub(crate) async fn resolve(
         db.execute("INSERT INTO engine_library_revisions VALUES(?1,1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",[profile]).map_err(db_error)?;
     }
     db.execute("DELETE FROM continuation_cache WHERE profile_id=?1 AND rowid NOT IN(SELECT rowid FROM continuation_cache WHERE profile_id=?1 ORDER BY updated_at DESC,rowid DESC LIMIT 200)",[profile]).map_err(db_error)?;
+    // The same document tells Continue Watching when later episodes are released.
+    let _ = super::releases::store_db(
+        &db,
+        &lease,
+        profile,
+        &parent.identity.id,
+        &input.identity,
+        &episodes,
+        config.scope.revision,
+        &addon_revision,
+    );
     drop(db);
     if let Some(card) = output.item.as_ref() {
         super::super::source_integrations::cache_card_at(
