@@ -194,23 +194,17 @@ pub(crate) async fn resolve(
             serde_json::to_value(output).map_err(|_| ApiError::from("Next episode unavailable"))?,
         ));
     }
-    // Keep legacy Home/queue projection coherent without manufacturing a progress record.
-    let mut legacy = if let Some(card) = output.item.as_ref() {
-        let coordinates = card.identity.episode.as_ref();
-        json!({"status":"next","item":{"id":card.identity.id,"type":card.identity.kind,"name":parent.title,"poster":parent.poster,"position":0,"duration":0,"series_id":parent.identity.id,"season":coordinates.and_then(|e|e.season),"episode":coordinates.map(|e|e.episode),"watched":false,"queue_status":"next","engine_identity":card.identity,"engine_parent_identity":parent.identity,"engine_provider_id":card.provider_id,"engine_presentation":card,"background":parent.landscape}})
-    } else {
-        json!({"status":match output.status{ContinuationStatus::CaughtUp=>"caught_up",ContinuationStatus::Upcoming=>"upcoming",_=>"unavailable"}})
-    };
-    legacy["metadata_origin"] = json!(parent.provider_id);
-    legacy["metadata_account_id"] = json!(lease.principal.account_id());
-    legacy["metadata_addon_revision"] = json!(addon_revision);
-    legacy["metadata_configuration_revision"] = json!(config.scope.revision);
-    let previous:Option<String>=db.query_row("SELECT result FROM continuation_cache WHERE profile_id=?1 AND series_id=?2 AND from_id=?3",params![profile,parent.identity.id,input.identity.id],|r|r.get(0)).optional().map_err(db_error)?;
-    db.execute("INSERT INTO continuation_cache(profile_id,series_id,from_id,result,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(profile_id,series_id,from_id) DO UPDATE SET result=excluded.result,updated_at=excluded.updated_at",params![profile,parent.identity.id,input.identity.id,legacy.to_string(),util::now()]).map_err(db_error)?;
-    if previous.as_deref() != Some(&legacy.to_string()) {
-        db.execute("INSERT INTO engine_library_revisions VALUES(?1,1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",[profile]).map_err(db_error)?;
-    }
-    db.execute("DELETE FROM continuation_cache WHERE profile_id=?1 AND rowid NOT IN(SELECT rowid FROM continuation_cache WHERE profile_id=?1 ORDER BY updated_at DESC,rowid DESC LIMIT 200)",[profile]).map_err(db_error)?;
+    cache_legacy_db(
+        &db,
+        &lease,
+        profile,
+        &parent,
+        &input.identity,
+        &output,
+        &addon_revision,
+        config.scope.revision,
+        true,
+    )?;
     // The same document tells Continue Watching when later episodes are released.
     let _ = super::releases::store_db(
         &db,
@@ -242,4 +236,48 @@ pub(crate) async fn resolve(
     Ok(axum::Json(
         serde_json::to_value(output).map_err(|_| ApiError::from("Next episode unavailable"))?,
     ))
+}
+
+/// Record a next-episode verdict in the legacy queue cache (`continuation_cache`),
+/// which the queue's prepared targets and the Watched badge read. Bumps the
+/// library revision when the stored verdict changes.
+///
+/// `prepared` verdicts (a client resolving after playback) are fresh for the
+/// queue's one-hour prepared-target window. Background verdicts are facts
+/// only: a new row is stored as already expired, so it never turns a queue
+/// card into a prepared target, and an existing row keeps its clock.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn cache_legacy_db(
+    db: &Connection,
+    lease: &ResourceLease,
+    profile: i64,
+    parent: &Card,
+    from: &MediaIdentity,
+    output: &NextEpisodeResult,
+    addon_revision: &str,
+    configuration_revision: u64,
+    prepared: bool,
+) -> Result<(), ApiError> {
+    // Keep legacy Home/queue projection coherent without manufacturing a progress record.
+    let mut legacy = if let Some(card) = output.item.as_ref() {
+        let coordinates = card.identity.episode.as_ref();
+        json!({"status":"next","item":{"id":card.identity.id,"type":card.identity.kind,"name":parent.title,"poster":parent.poster,"position":0,"duration":0,"series_id":parent.identity.id,"season":coordinates.and_then(|e|e.season),"episode":coordinates.map(|e|e.episode),"watched":false,"queue_status":"next","engine_identity":card.identity,"engine_parent_identity":parent.identity,"engine_provider_id":card.provider_id,"engine_presentation":card,"background":parent.landscape}})
+    } else {
+        json!({"status":match output.status{ContinuationStatus::CaughtUp=>"caught_up",ContinuationStatus::Upcoming=>"upcoming",_=>"unavailable"}})
+    };
+    legacy["metadata_origin"] = json!(parent.provider_id);
+    legacy["metadata_account_id"] = json!(lease.principal.account_id());
+    legacy["metadata_addon_revision"] = json!(addon_revision);
+    legacy["metadata_configuration_revision"] = json!(configuration_revision);
+    let previous:Option<String>=db.query_row("SELECT result FROM continuation_cache WHERE profile_id=?1 AND series_id=?2 AND from_id=?3",params![profile,parent.identity.id,from.id],|r|r.get(0)).optional().map_err(db_error)?;
+    if prepared {
+        db.execute("INSERT INTO continuation_cache(profile_id,series_id,from_id,result,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(profile_id,series_id,from_id) DO UPDATE SET result=excluded.result,updated_at=excluded.updated_at",params![profile,parent.identity.id,from.id,legacy.to_string(),util::now()]).map_err(db_error)?;
+    } else {
+        db.execute("INSERT INTO continuation_cache(profile_id,series_id,from_id,result,updated_at) VALUES(?1,?2,?3,?4,0) ON CONFLICT(profile_id,series_id,from_id) DO UPDATE SET result=excluded.result",params![profile,parent.identity.id,from.id,legacy.to_string()]).map_err(db_error)?;
+    }
+    if previous.as_deref() != Some(&legacy.to_string()) {
+        db.execute("INSERT INTO engine_library_revisions VALUES(?1,1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",[profile]).map_err(db_error)?;
+    }
+    db.execute("DELETE FROM continuation_cache WHERE profile_id=?1 AND rowid NOT IN(SELECT rowid FROM continuation_cache WHERE profile_id=?1 ORDER BY updated_at DESC,rowid DESC LIMIT 200)",[profile]).map_err(db_error)?;
+    Ok(())
 }

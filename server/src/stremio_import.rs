@@ -1086,6 +1086,9 @@ pub(crate) async fn apply(
     // Imported titles carry only a name and poster; give them the card Details
     // shows, resolved through this session's own metadata add-ons, in the background.
     crate::engine_v3::library::hydration::schedule(&app, &app.request_lease(), profile);
+    // Imported history never went through the next-episode check: run it, so
+    // Continue Watching and the Watched badge know which shows are caught up.
+    crate::engine_v3::continuation::releases::schedule(&app, &app.request_lease(), profile);
     Ok(applied)
 }
 

@@ -24,6 +24,8 @@ const RELEASE_RECHECK_SECS: i64 = 15 * 60;
 /// Series refreshed by one Home load, and metadata requests in flight.
 const CANDIDATES_PER_RUN: usize = 24;
 const CONCURRENCY: usize = 3;
+/// Passes one schedule runs before leaving the rest to the next Home load.
+const PASSES: usize = 10;
 
 #[derive(Serialize, Deserialize)]
 struct Stored {
@@ -307,18 +309,42 @@ struct Candidate {
 /// Refresh stale release facts for this profile's finished series in the
 /// background. Bounded per call; a no-op when every document is fresh.
 pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64) {
+    // Only the profile's own session refreshes it (as Details hydration does).
+    let auth::Principal::Account {
+        profile_id: Some(selected),
+        ..
+    } = &lease.principal
+    else {
+        return;
+    };
+    if *selected != profile {
+        return;
+    }
     let candidates = match claim(app, lease, profile) {
         Ok(candidates) if !candidates.is_empty() => candidates,
         _ => return,
     };
-    let app = app.clone();
+    let app = app.clone().with_lease(lease.clone());
     let lease = lease.clone();
     tokio::spawn(async move {
-        let _ = tokio::time::timeout(
-            Duration::from_secs(120),
-            refresh(&app, &lease, profile, candidates),
-        )
-        .await;
+        // A fresh import can hold more finished series than one pass takes;
+        // later passes continue it. Each pass claims before fetching, so a
+        // concurrent Home load never fetches the same series twice.
+        let mut candidates = candidates;
+        for _ in 0..PASSES {
+            let pass = tokio::time::timeout(
+                Duration::from_secs(120),
+                refresh(&app, &lease, profile, candidates),
+            )
+            .await;
+            if pass.is_err() {
+                return;
+            }
+            candidates = match claim(&app, &lease, profile) {
+                Ok(next) if !next.is_empty() => next,
+                _ => return,
+            };
+        }
     });
 }
 
@@ -529,6 +555,21 @@ async fn refresh_one(
         &episodes,
         configuration,
         &addon_revision,
+    )?;
+    // The same document answers the next-episode check for this finished
+    // episode, which imported history otherwise never gets (the Watched badge
+    // reads it).
+    let verdict = viptv_engine::continuation::next_episode(&input.identity, &episodes, now);
+    super::next::cache_legacy_db(
+        &db,
+        lease,
+        profile,
+        &parent,
+        &input.identity,
+        &verdict,
+        &addon_revision,
+        configuration,
+        false,
     )?;
     let after = summary(state_db(
         &db,

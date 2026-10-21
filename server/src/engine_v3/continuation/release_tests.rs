@@ -401,3 +401,49 @@ async fn imported_watched_history_is_a_finished_episode_for_the_refresh() {
     }
     assert_eq!(badge, json!(["New episode"]));
 }
+
+#[tokio::test]
+async fn the_refresh_records_next_episode_verdicts_for_imported_history_without_preparing_targets() {
+    let start = now();
+    // Imported, finished on the newest episode: caught up, so the series is Watched.
+    let show = show(vec![(1, start - 30 * DAY), (2, start + 7 * DAY)]).await;
+    let app = &show.app;
+    app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,'tt100:1:1','series','Fixture Show',NULL,5,100,?1,?2,'tt100')",params![((start - 10 * DAY) / 1000) as i64,json!({"season":1,"episode":1,"series_id":"tt100","stremio_import_watched":true}).to_string()]).unwrap();
+    request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    let mut verdict = None;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        verdict = app
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT json_extract(result,'$.status'),updated_at FROM continuation_cache WHERE profile_id=1 AND series_id='tt100' AND from_id='tt100:1:1'", [], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .optional()
+            .unwrap();
+        if verdict.is_some() {
+            break;
+        }
+    }
+    // A background verdict is a fact, not a prepared target.
+    assert_eq!(verdict, Some(("upcoming".to_owned(), 0)));
+    let card: viptv_engine::presentation::Card = serde_json::from_value(json!({"identity":series(),"provider_id":"addon:1","title":"Fixture Show","subtitle":null,"description":null,"poster":null,"landscape":null,"logo":null,"progress":null,"badges":[]})).unwrap();
+    let watched = super::super::watched::Watched::load(&app.db.lock().unwrap(), 1).unwrap();
+    assert!(watched.contains(&card));
+    let entries = queue(app).await;
+    assert_eq!(show_entry(&entries)["status"], "Pending");
+    // Episode 2 airs: the next check now says `next`, so the series is not Watched.
+    show.releases.lock().unwrap()[1].1 = start - HOUR;
+    app.addons.forget_responses();
+    app.db.lock().unwrap().execute("UPDATE continuation_releases SET checked_at=0", []).unwrap();
+    request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let status: String = app.db.lock().unwrap().query_row("SELECT json_extract(result,'$.status') FROM continuation_cache WHERE series_id='tt100'", [], |r| r.get(0)).unwrap();
+        if status == "next" {
+            break;
+        }
+    }
+    let watched = super::super::watched::Watched::load(&app.db.lock().unwrap(), 1).unwrap();
+    assert!(!watched.contains(&card));
+    assert_eq!(show_entry(&queue(app).await)["card"]["badges"], json!(["New episode"]));
+}
