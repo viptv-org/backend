@@ -51,8 +51,8 @@ pub(crate) async fn list(
     } else {
         None
     };
-    // Thin rows (imported or saved without a card) fill in the background.
-    let hydrating = super::hydration::schedule(&app, &lease, profile, false);
+    // A Stremio import's background fill is still writing cards: look again soon.
+    let hydrating = super::hydration::running(&app, profile);
     let (mut known_genres, mut genre_total, mut genre_running) = (0, 0, false);
     if !unavailable && simkl_availability == Availability::Available {
         let cached = if legacy {

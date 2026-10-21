@@ -1085,7 +1085,7 @@ pub(crate) async fn apply(
     .await?;
     // Imported titles carry only a name and poster; give them the card Details
     // shows, resolved through this session's own metadata add-ons, in the background.
-    crate::engine_v3::library::hydration::schedule(&app, &app.request_lease(), profile, true);
+    crate::engine_v3::library::hydration::schedule(&app, &app.request_lease(), profile);
     Ok(applied)
 }
 

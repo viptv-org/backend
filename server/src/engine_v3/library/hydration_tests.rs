@@ -67,6 +67,22 @@ pub(crate) async fn metadata_addon(app: &mut App) -> MetadataAddon {
     MetadataAddon { calls, peak, task }
 }
 
+/// Starts a run as the member's own session, as applying a Stremio import does.
+fn start(app: &App) -> bool {
+    let principal = auth::Principal::Account {
+        account_id: 1,
+        role: "member".into(),
+        profile_id: Some(1),
+        session_id: Some("s1".into()),
+    };
+    let lease = ResourceLease {
+        policy_revision: 0,
+        principal,
+        session_id: Some("s1".into()),
+    };
+    super::hydration::schedule(app, &lease, 1)
+}
+
 async fn get_ok(app: &App, path: &str) -> Value {
     let (status, value) = request(app, "member-token-1", "GET", path, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{value}");
@@ -111,6 +127,7 @@ async fn thin_rows_gain_the_details_card_in_the_background_without_overwriting_r
             (1,'tt0000003','series','My name',NULL,'{partial}');"
     )).unwrap();
     let before = get_ok(&app, "/api/profiles/1/revisions").await["library"].clone();
+    assert!(start(&app));
     let first = get_ok(&app, "/api/profiles/1/library").await;
     assert_eq!(
         first["refresh_after_millis"], 4000,
@@ -172,11 +189,10 @@ async fn thin_rows_gain_the_details_card_in_the_background_without_overwriting_r
         "lookups are bounded"
     );
 
-    // Idempotent and rate-limited: a later listing resolves nothing again.
+    // Idempotent: another import's run resolves nothing already filled.
     let calls = addon.calls.load(Ordering::SeqCst);
-    let again = get_ok(&app, "/api/profiles/1/library").await;
+    start(&app);
     super::hydration::settled(&app, 1).await;
-    assert!(again["refresh_after_millis"].is_null());
     assert_eq!(addon.calls.load(Ordering::SeqCst), calls);
 }
 
@@ -199,7 +215,7 @@ async fn a_full_saved_card_is_never_looked_up_or_replaced() {
         .0,
         StatusCode::OK
     );
-    get_ok(&app, "/api/profiles/1/library").await;
+    start(&app);
     super::hydration::settled(&app, 1).await;
     assert_eq!(
         addon.calls.load(Ordering::SeqCst),
@@ -220,14 +236,7 @@ async fn restricted_profiles_never_store_unapproved_metadata() {
         "INSERT INTO favorites(profile_id,id,type,name,poster) VALUES(1,'tt0000001','series','Imported',NULL);
          INSERT INTO kids_profiles(profile_id,enabled,max_age,revision) VALUES(1,1,7,1);",
     ).unwrap();
-    let _ = request(
-        &app,
-        "member-token-1",
-        "GET",
-        "/api/profiles/1/library",
-        Value::Null,
-    )
-    .await;
+    start(&app);
     super::hydration::settled(&app, 1).await;
     assert_eq!(addon.calls.load(Ordering::SeqCst), 0);
     assert_eq!(context(&app, "tt0000001"), json!({}));
@@ -248,6 +257,7 @@ async fn a_request_never_waits_for_metadata_lookups() {
         }
     }
     let started = std::time::Instant::now();
+    assert!(start(&app));
     let page = get_ok(&app, "/api/profiles/1/library").await;
     // 40 spaced lookups take well over a second; the listing does not.
     assert!(
@@ -262,4 +272,24 @@ async fn a_request_never_waits_for_metadata_lookups() {
         "SELECT COUNT(*) FROM favorites WHERE profile_id=1 AND json_extract(context,'$.description') IS NOT NULL",
         [], |r| r.get(0)).unwrap();
     assert_eq!(filled, 40);
+}
+
+#[tokio::test]
+async fn listing_my_list_never_starts_metadata_lookups() {
+    let mut app = fixture();
+    let addon = metadata_addon(&mut app).await;
+    app.db.lock().unwrap().execute(
+        "INSERT INTO favorites(profile_id,id,type,name) VALUES(1,'tt0000001','series','Imported')",
+        [],
+    ).unwrap();
+    let page = get_ok(&app, "/api/profiles/1/library").await;
+    get_ok(&app, "/api/bootstrap").await;
+    assert!(page["refresh_after_millis"].is_null(), "{page}");
+    assert!(
+        !super::hydration::running(&app, 1),
+        "only a Stremio import starts a run"
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(addon.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(context(&app, "tt0000001"), json!({}));
 }

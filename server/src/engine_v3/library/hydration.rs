@@ -1,9 +1,10 @@
 //! Thin My List rows — saved without a card, as Stremio imports and legacy
 //! favorites are — gain the card Details shows for the title.
 //!
-//! A run belongs to the profile's own session: it resolves each title through
-//! the Details path (that session's metadata add-ons, profile assignments and
-//! policy checks), never on behalf of nobody at startup. Runs are bounded,
+//! Runs start only when a Stremio import is applied; listing My List never
+//! starts one. A run belongs to the profile's own session: it resolves each
+//! title through the Details path (that session's metadata add-ons, profile
+//! assignments and policy checks), never on behalf of nobody at startup. Runs are bounded,
 //! spaced, idempotent and never block the request that scheduled them. They
 //! fill only fields the row is missing; the row's name and artwork columns and
 //! any card a user saved meanwhile win. The favorites update trigger advances
@@ -23,8 +24,6 @@ const LOOKUP_TIMEOUT: Duration = Duration::from_secs(15);
 const WRITE_BATCH: usize = 16;
 /// Profiles hydrated at once across the server.
 const RUNS: usize = 2;
-/// A finished profile is not rescanned for this long, unless titles were just imported.
-const COOLDOWN: Duration = Duration::from_secs(10 * 60);
 /// A title Details could not resolve is not asked again for this long.
 const RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
 /// While a run is active the library asks clients to look again this soon.
@@ -34,7 +33,6 @@ pub(super) const REFRESH_AFTER_MILLIS: u64 = 4000;
 struct Profile {
     running: bool,
     again: bool,
-    finished: Option<Instant>,
     failed: HashMap<(String, String), Instant>,
 }
 
@@ -97,8 +95,8 @@ fn fill(existing: Option<Card>, resolved: Card, name: &str, poster: Option<&str>
 }
 
 /// Starts (or extends) the profile's run in the background and reports whether
-/// one is active. `imported` skips the cooldown: new thin rows were just written.
-pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64, imported: bool) -> bool {
+/// one is active.
+pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64) -> bool {
     let jobs = app.library_hydration.clone();
     #[cfg(test)]
     if !jobs.enabled.load(std::sync::atomic::Ordering::SeqCst) {
@@ -119,11 +117,8 @@ pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64, imported:
     };
     let state = profiles.entry(profile).or_default();
     if state.running {
-        state.again |= imported;
+        state.again = true;
         return true;
-    }
-    if !imported && state.finished.is_some_and(|at| at.elapsed() < COOLDOWN) {
-        return false;
     }
     state.running = true;
     state.again = false;
@@ -145,7 +140,6 @@ pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64, imported:
             let state = profiles.entry(profile).or_default();
             if !(more || std::mem::take(&mut state.again)) {
                 state.running = false;
-                state.finished = Some(Instant::now());
                 break;
             }
         }
@@ -159,10 +153,7 @@ impl Drop for Done {
     fn drop(&mut self) {
         if let Ok(mut profiles) = self.0.profiles.lock() {
             let state = profiles.entry(self.1).or_default();
-            if state.running {
-                state.running = false;
-                state.finished = Some(Instant::now());
-            }
+            state.running = false;
         }
     }
 }
@@ -337,7 +328,6 @@ fn write(
 }
 
 /// Whether the profile's run is active.
-#[cfg(test)]
 pub(crate) fn running(app: &App, profile: i64) -> bool {
     app.library_hydration
         .profiles
