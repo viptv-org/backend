@@ -1,31 +1,51 @@
-//! New-episode facts for Continue Watching.
+//! New-episode facts for Continue Watching, and the durable next-episode
+//! verdict per finished series.
 //!
 //! A series whose latest finished episode was the newest released one gets a
-//! "New episode" / "+N new episodes" badge and moves up once, when the next
-//! episode is released. The rule itself is `viptv_engine::continuation::new_episodes`;
-//! this module keeps the metadata it needs. Per profile and series it stores the
-//! episodes after the finished one (identity, release time, aired flag, and the
-//! first few cards) so Home stays synchronous: ordering and badges come from the
-//! stored release times and the clock. Home schedules a bounded background
-//! refresh of stale documents and bumps the library revision when a refresh
-//! changes what the queue shows, so clients refresh quietly.
+//! compact "+N" badge and moves up once, when the next episode is released.
+//! The rule itself is `viptv_engine::continuation::new_episodes`; this module
+//! keeps the metadata it needs. Per profile and series it stores the episodes
+//! after the finished one (identity, release time, aired flag, and the first
+//! few cards) in `continuation_releases`, so Home stays synchronous: ordering,
+//! badges and the next-episode verdict (`verdicts_db`, read by the Watched
+//! badge) come from stored release times and the clock. Rows are never
+//! evicted.
+//!
+//! Each row carries `next_check_at`. Home loads and Stremio imports start a
+//! background run for the profile's own session that refreshes every due
+//! series in rate-limited batches until none is due, so a whole import is
+//! covered and an interrupted run resumes on the next trigger. A series is
+//! checked again shortly after its next known air time (bypassing the add-on
+//! response cache), daily without a known date, weekly once dormant, and with
+//! growing back-off while its metadata is unavailable. A refresh that changes
+//! what the queue shows bumps the library revision, so clients refresh quietly.
 use super::*;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use viptv_engine::playback::PlaybackRecord;
 
-/// Episodes kept after the finished one, and how many of them keep a card.
-const STORED_EPISODES: usize = 2000;
+/// The provider bound on one series' episode list (`next_episode` takes at
+/// most this many); the first few after the finished one keep their cards.
+const STORED_EPISODES: usize = 10000;
 const STORED_CARDS: usize = 4;
-/// A stored document is refetched after this long, or after a shorter wait
-/// once a release time it knows about has passed (to pick up the actual card).
-const REFRESH_SECS: i64 = 6 * 3600;
-const RELEASE_RECHECK_SECS: i64 = 15 * 60;
-/// Series refreshed by one Home load, and metadata requests in flight.
-const CANDIDATES_PER_RUN: usize = 24;
+/// Re-check this long after a known air time passes.
+const AIRED_GRACE_SECS: i64 = 5 * 60;
+/// Without a known future air date: daily, or weekly once the newest known
+/// episode is older than `DORMANT_AFTER_SECS`.
+const ACTIVE_SECS: i64 = 24 * 3600;
+const DORMANT_SECS: i64 = 7 * 24 * 3600;
+const DORMANT_AFTER_SECS: i64 = 180 * 24 * 3600;
+/// Unavailable metadata: one hour, doubling per failure, at most a week.
+const RETRY_SECS: i64 = 3600;
+/// A claimed series is retried after this long if its run never finished.
+const CLAIM_SECS: i64 = 15 * 60;
+/// Series claimed per batch, lookups in flight per run and server-wide, and
+/// the spacing of lookup starts: the add-on request rate limit.
+const BATCH: usize = 24;
 const CONCURRENCY: usize = 3;
-/// Passes one schedule runs before leaving the rest to the next Home load.
-const PASSES: usize = 10;
+const SERVER_LOOKUPS: usize = 4;
+const LOOKUP_SPACING: Duration = Duration::from_millis(250);
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Serialize, Deserialize)]
 struct Stored {
@@ -109,8 +129,46 @@ pub(crate) fn store_db(
     };
     let document = serde_json::to_string(&document)
         .map_err(|_| ApiError::from("Release facts unavailable"))?;
-    db.execute("INSERT INTO continuation_releases(profile_id,series_id,from_id,checked_at,document) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(profile_id,series_id) DO UPDATE SET from_id=excluded.from_id,checked_at=excluded.checked_at,document=excluded.document",params![profile,series,anchor.id,util::now(),document]).map_err(db_error)?;
+    let now = util::now();
+    let (next_check_at, failures) = if at.is_some() {
+        (next_check(now, episodes), 0)
+    } else {
+        // The finished episode is not in the provider's list: unavailable.
+        let failures: i64 = db
+            .query_row(
+                "SELECT failures FROM continuation_releases WHERE profile_id=?1 AND series_id=?2",
+                params![profile, series],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .unwrap_or(0);
+        (now + retry_after(failures + 1), failures + 1)
+    };
+    db.execute("INSERT INTO continuation_releases(profile_id,series_id,from_id,checked_at,document,next_check_at,failures) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(profile_id,series_id) DO UPDATE SET from_id=excluded.from_id,checked_at=excluded.checked_at,document=excluded.document,next_check_at=excluded.next_check_at,failures=excluded.failures",params![profile,series,anchor.id,now,document,next_check_at,failures]).map_err(db_error)?;
     Ok(())
+}
+
+/// When to look at a series again: just after its next known air time, else
+/// daily, or weekly when its newest known episode is long past.
+fn next_check(now: i64, episodes: &[EpisodeAvailability]) -> i64 {
+    let now_millis = (now as u64).saturating_mul(1000);
+    let releases = episodes.iter().filter_map(|e| e.released_at_millis);
+    if let Some(next) = releases.clone().filter(|at| *at > now_millis).min() {
+        return (next / 1000) as i64 + AIRED_GRACE_SECS;
+    }
+    let newest = releases.max().map(|at| (at / 1000) as i64);
+    if newest.is_some_and(|at| at < now - DORMANT_AFTER_SECS) {
+        now + DORMANT_SECS
+    } else {
+        now + ACTIVE_SECS
+    }
+}
+
+fn retry_after(failures: i64) -> i64 {
+    RETRY_SECS
+        .saturating_mul(1i64 << failures.clamp(1, 20).saturating_sub(1))
+        .min(DORMANT_SECS)
 }
 
 /// The episodes this profile has finished in `series`, by identity and by
@@ -227,17 +285,7 @@ pub(crate) fn state_db(
     if stored_anchor.id != anchor.identity.id {
         return Ok(None);
     }
-    let episodes = document
-        .episodes
-        .into_iter()
-        .map(|stored| EpisodeAvailability {
-            card: stored
-                .card
-                .unwrap_or_else(|| bare(stored.identity, stored.parent_identity)),
-            released_at_millis: stored.released_at_millis,
-            aired: stored.aired,
-        })
-        .collect::<Vec<_>>();
+    let episodes = availability(document.episodes);
     let watched = Watched::read(db, profile, series)?;
     Ok(viptv_engine::continuation::new_episodes(
         &stored_anchor,
@@ -306,8 +354,71 @@ struct Candidate {
     anchor: PlaybackRecord,
 }
 
-/// Refresh stale release facts for this profile's finished series in the
-/// background. Bounded per call; a no-op when every document is fresh.
+/// The durable next-episode verdict per series for the finished episode it
+/// was computed from: `(from_id, "next" | "caught_up" | "upcoming" |
+/// "unavailable")`, evaluated against the clock (the spelling the queue cache
+/// uses).
+pub(crate) fn verdicts_db(
+    db: &Connection,
+    profile: i64,
+) -> Result<HashMap<String, (String, &'static str)>, ApiError> {
+    let now = util::now_millis().max(0) as u64;
+    let mut query = db
+        .prepare("SELECT series_id,from_id,document FROM continuation_releases WHERE profile_id=?1 AND document IS NOT NULL")
+        .map_err(db_error)?;
+    let rows = query
+        .query_map([profile], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })
+        .map_err(db_error)?;
+    let mut verdicts = HashMap::new();
+    for row in rows {
+        let (series, from, raw) = row.map_err(db_error)?;
+        let status = match serde_json::from_str::<Document>(&raw) {
+            Ok(document) if document.episodes.first().is_some_and(|e| e.identity.id == from) => {
+                let anchor = document.episodes[0].identity.clone();
+                let episodes = availability(document.episodes);
+                match viptv_engine::continuation::next_episode(&anchor, &episodes, now).status {
+                    ContinuationStatus::Next => "next",
+                    ContinuationStatus::CaughtUp => "caught_up",
+                    ContinuationStatus::Upcoming => "upcoming",
+                    _ => "unavailable",
+                }
+            }
+            _ => "unavailable",
+        };
+        verdicts.insert(series, (from, status));
+    }
+    Ok(verdicts)
+}
+
+fn availability(stored: Vec<Stored>) -> Vec<EpisodeAvailability> {
+    stored
+        .into_iter()
+        .map(|stored| EpisodeAvailability {
+            card: stored
+                .card
+                .unwrap_or_else(|| bare(stored.identity, stored.parent_identity)),
+            released_at_millis: stored.released_at_millis,
+            aired: stored.aired,
+        })
+        .collect()
+}
+
+/// One background run per profile at a time; a trigger during a run asks it
+/// to look for due series once more before it ends.
+fn runs() -> &'static std::sync::Mutex<HashMap<(usize, i64), bool>> {
+    static RUNS: std::sync::OnceLock<std::sync::Mutex<HashMap<(usize, i64), bool>>> =
+        std::sync::OnceLock::new();
+    RUNS.get_or_init(Default::default)
+}
+fn lookups() -> &'static tokio::sync::Semaphore {
+    static LOOKUPS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    LOOKUPS.get_or_init(|| tokio::sync::Semaphore::new(SERVER_LOOKUPS))
+}
+
+/// Refresh every due series of this profile in the background, batch after
+/// batch until none is due. Never blocks the caller.
 pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64) {
     // Only the profile's own session refreshes it (as Details hydration does).
     let auth::Principal::Account {
@@ -320,36 +431,41 @@ pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64) {
     if *selected != profile {
         return;
     }
-    let candidates = match claim(app, lease, profile) {
-        Ok(candidates) if !candidates.is_empty() => candidates,
-        _ => return,
-    };
+    let key = (Arc::as_ptr(&app.db) as usize, profile);
+    {
+        let Ok(mut runs) = runs().lock() else {
+            return;
+        };
+        if let Some(again) = runs.get_mut(&key) {
+            *again = true;
+            return;
+        }
+        runs.insert(key, false);
+    }
     let app = app.clone().with_lease(lease.clone());
     let lease = lease.clone();
     tokio::spawn(async move {
-        // A fresh import can hold more finished series than one pass takes;
-        // later passes continue it. Each pass claims before fetching, so a
-        // concurrent Home load never fetches the same series twice.
-        let mut candidates = candidates;
-        for _ in 0..PASSES {
-            let pass = tokio::time::timeout(
-                Duration::from_secs(120),
-                refresh(&app, &lease, profile, candidates),
-            )
-            .await;
-            if pass.is_err() {
-                return;
+        loop {
+            match claim(&app, &lease, profile) {
+                Ok(batch) if !batch.is_empty() => refresh(&app, &lease, profile, batch).await,
+                _ => {
+                    let Ok(mut runs) = runs().lock() else {
+                        return;
+                    };
+                    if runs.get(&key) == Some(&true) {
+                        runs.insert(key, false);
+                        continue;
+                    }
+                    runs.remove(&key);
+                    return;
+                }
             }
-            candidates = match claim(&app, &lease, profile) {
-                Ok(next) if !next.is_empty() => next,
-                _ => return,
-            };
         }
     });
 }
 
-/// Pick the series whose documents are missing or stale and mark them checked
-/// now, so concurrent Home loads do not fetch the same documents twice.
+/// Pick up to one batch of due series and lease them for `CLAIM_SECS`, so a
+/// concurrent run never fetches them twice and an interrupted one resumes.
 fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate>, ApiError> {
     let db = app
         .db
@@ -365,7 +481,7 @@ fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate
     let now = util::now();
     let mut candidates = Vec::new();
     for item in queue["items"].as_array().into_iter().flatten() {
-        if candidates.len() >= CANDIDATES_PER_RUN {
+        if candidates.len() >= BATCH {
             break;
         }
         if item["type"] != "series" {
@@ -419,35 +535,27 @@ fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate
                 .map_err(db_error)?;
             }
         }
-        let row: Option<(String, i64, Option<String>)> = db
+        let row: Option<(String, i64, Option<String>, i64)> = db
             .query_row(
-                "SELECT from_id,checked_at,document FROM continuation_releases WHERE profile_id=?1 AND series_id=?2",
+                "SELECT from_id,next_check_at,document,failures FROM continuation_releases WHERE profile_id=?1 AND series_id=?2",
                 params![profile, series],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()
             .map_err(db_error)?;
         let due = match &row {
             None => true,
-            Some((from, checked, raw)) => {
-                let document = raw
-                    .as_deref()
-                    .and_then(|raw| serde_json::from_str::<Document>(raw).ok());
-                let released_since = document.as_ref().is_some_and(|document| {
-                    document.episodes.iter().any(|e| {
-                        e.released_at_millis.is_some_and(|at| {
-                            at > (*checked as u64).saturating_mul(1000)
-                                && at <= (now as u64).saturating_mul(1000)
-                        })
-                    })
-                });
+            Some((from, next_check_at, raw, failures)) => {
                 *from != anchor.identity.id
-                    || *checked < now - REFRESH_SECS
-                    || (released_since && *checked < now - RELEASE_RECHECK_SECS)
-                    || (*checked < now - RELEASE_RECHECK_SECS
-                        && !document.as_ref().map_or(Ok(false), |document| {
-                            current(&db, app, lease, profile, document)
-                        })?)
+                    || *next_check_at <= now
+                    // Facts from another configuration are refetched once;
+                    // a failing refetch then waits for its back-off.
+                    || *failures == 0 && raw
+                        .as_deref()
+                        .and_then(|raw| serde_json::from_str::<Document>(raw).ok())
+                        .map_or(Ok(false), |document| {
+                            current(&db, app, lease, profile, &document).map(|ok| !ok)
+                        })?
             }
         };
         if !due {
@@ -455,7 +563,7 @@ fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate
         }
         // Keep the previous facts for the same finished episode until the
         // refresh replaces them; another episode's facts no longer apply.
-        db.execute("INSERT INTO continuation_releases(profile_id,series_id,from_id,checked_at,document) VALUES(?1,?2,?3,?4,NULL) ON CONFLICT(profile_id,series_id) DO UPDATE SET document=CASE WHEN continuation_releases.from_id=excluded.from_id THEN continuation_releases.document END,from_id=excluded.from_id,checked_at=excluded.checked_at",params![profile,series,anchor.identity.id,now]).map_err(db_error)?;
+        db.execute("INSERT INTO continuation_releases(profile_id,series_id,from_id,checked_at,document,next_check_at,failures) VALUES(?1,?2,?3,?4,NULL,?5,0) ON CONFLICT(profile_id,series_id) DO UPDATE SET document=CASE WHEN continuation_releases.from_id=excluded.from_id THEN continuation_releases.document END,failures=CASE WHEN continuation_releases.from_id=excluded.from_id THEN continuation_releases.failures ELSE 0 END,from_id=excluded.from_id,next_check_at=excluded.next_check_at",params![profile,series,anchor.identity.id,now,now+CLAIM_SECS]).map_err(db_error)?;
         candidates.push(Candidate { series, anchor });
     }
     Ok(candidates)
@@ -470,11 +578,39 @@ async fn refresh(app: &App, lease: &ResourceLease, profile: i64, candidates: Vec
     let revision = configuration.scope.revision;
     futures::stream::iter(candidates)
         .map(|candidate| async move {
-            let _ = refresh_one(app, lease, profile, simkl, revision, candidate).await;
+            let Ok(_permit) = lookups().acquire().await else {
+                return;
+            };
+            tokio::time::sleep(LOOKUP_SPACING).await;
+            let series = candidate.series.clone();
+            let from = candidate.anchor.identity.id.clone();
+            if refresh_one(app, lease, profile, simkl, revision, candidate).await.is_err() {
+                failed(app, profile, &series, &from);
+            }
         })
         .buffer_unordered(CONCURRENCY)
         .collect::<Vec<_>>()
         .await;
+}
+
+/// Back off a series whose metadata could not be read.
+fn failed(app: &App, profile: i64, series: &str, from: &str) {
+    let Ok(db) = app.db.lock() else {
+        return;
+    };
+    let now = util::now();
+    let failures: i64 = db
+        .query_row(
+            "SELECT failures FROM continuation_releases WHERE profile_id=?1 AND series_id=?2 AND from_id=?3",
+            params![profile, series, from],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+        + 1;
+    let _ = db.execute(
+        "UPDATE continuation_releases SET failures=?4,next_check_at=?5 WHERE profile_id=?1 AND series_id=?2 AND from_id=?3",
+        params![profile, series, from, failures, now + retry_after(failures)],
+    );
 }
 
 async fn refresh_one(
@@ -491,9 +627,11 @@ async fn refresh_one(
         parent_identity: candidate.anchor.parent_identity.clone(),
     };
     validate(&input.identity, input.parent_identity.as_ref())?;
+    // Background checks are spaced and rare, so they skip the add-on response
+    // cache: a check right after an air time must see the provider's list.
     let (parent, episodes) = tokio::time::timeout(
-        Duration::from_secs(10),
-        super::metadata::document(app, lease, profile, &input, simkl, None, None),
+        LOOKUP_TIMEOUT,
+        super::metadata::document(app, lease, profile, &input, simkl, None, None, true),
     )
     .await
     .map_err(|_| ApiError::from("Metadata unavailable"))??;
@@ -527,25 +665,15 @@ async fn refresh_one(
         return Ok(());
     }
     let now = util::now_millis().max(0) as u64;
-    let summary = |found: Option<NewEpisodes>| {
-        found.map(|f| {
-            (
-                f.count,
-                f.next.identity.id,
-                f.first_released_at_millis,
-                f.released_at_millis,
-            )
-        })
+    let visible = |db: &Connection| -> Result<_, ApiError> {
+        let found = state_db(db, app, lease, profile, &candidate.series, &candidate.anchor, now)?;
+        let verdict = verdicts_db(db, profile)?.remove(&candidate.series);
+        Ok((
+            found.map(|f| (f.count, f.next.identity.id, f.first_released_at_millis, f.released_at_millis)),
+            verdict,
+        ))
     };
-    let before = summary(state_db(
-        &db,
-        app,
-        lease,
-        profile,
-        &candidate.series,
-        &candidate.anchor,
-        now,
-    )?);
+    let before = visible(&db)?;
     store_db(
         &db,
         lease,
@@ -556,31 +684,7 @@ async fn refresh_one(
         configuration,
         &addon_revision,
     )?;
-    // The same document answers the next-episode check for this finished
-    // episode, which imported history otherwise never gets (the Watched badge
-    // reads it).
-    let verdict = viptv_engine::continuation::next_episode(&input.identity, &episodes, now);
-    super::next::cache_legacy_db(
-        &db,
-        lease,
-        profile,
-        &parent,
-        &input.identity,
-        &verdict,
-        &addon_revision,
-        configuration,
-        false,
-    )?;
-    let after = summary(state_db(
-        &db,
-        app,
-        lease,
-        profile,
-        &candidate.series,
-        &candidate.anchor,
-        now,
-    )?);
-    if before != after {
+    if visible(&db)? != before {
         db.execute("INSERT INTO engine_library_revisions VALUES(?1,1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",[profile]).map_err(db_error)?;
     }
     Ok(())

@@ -83,7 +83,7 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
         INSERT OR IGNORE INTO queue_hidden_times(profile_id,type,title_id,hidden_at) SELECT profile_id,type,title_id,strftime('%s','now') FROM queue_hidden;
         CREATE TRIGGER IF NOT EXISTS queue_hidden_times_insert AFTER INSERT ON queue_hidden BEGIN INSERT OR REPLACE INTO queue_hidden_times(profile_id,type,title_id,hidden_at) VALUES(NEW.profile_id,NEW.type,NEW.title_id,strftime('%s','now')); END;
         CREATE TRIGGER IF NOT EXISTS queue_hidden_times_delete AFTER DELETE ON queue_hidden BEGIN DELETE FROM queue_hidden_times WHERE profile_id=OLD.profile_id AND type=OLD.type AND title_id=OLD.title_id; END;
-        CREATE TABLE IF NOT EXISTS continuation_releases(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,series_id TEXT NOT NULL,from_id TEXT NOT NULL,checked_at INTEGER NOT NULL,document TEXT,PRIMARY KEY(profile_id,series_id));")
+        CREATE TABLE IF NOT EXISTS continuation_releases(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,series_id TEXT NOT NULL,from_id TEXT NOT NULL,checked_at INTEGER NOT NULL,document TEXT,next_check_at INTEGER NOT NULL DEFAULT 0,failures INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(profile_id,series_id));")
 }
 
 /// Hide a queue title now. Re-hiding a title a release brought back restarts its clock.

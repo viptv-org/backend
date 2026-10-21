@@ -6,7 +6,7 @@
   "files": {
     "Cargo.toml": "f6615d130dfbf592cb4a99f984e406ff842237d1bce07238a81815e682e852e8",
     "src/capabilities.rs": "79905a097058b43742381c916958c0d88a2ff878d55139d08c2b94e40baa3656",
-    "src/continuation.rs": "989f728554b43955d5178c9cc7699a3b66847a66edff7beb4eba97cf4ad129e8",
+    "src/continuation.rs": "2a72ff9f838a8864b93c9c7529a24ac21fccc932008c2cad2d1414b985547be4",
     "src/egress.rs": "da6a756c86afc810c784fe26da8b668894de4dbbf129460d7ae0a0d7e2295ef1",
     "src/home.rs": "bbc3a1f5e461fd1defd53aac5230c4d0c281d5c6da26aae718a6ce9d2b757ab3",
     "src/home_browse.rs": "747615ea4f61848e03a70bb6fc40a02ac4c3f8cee7089ab4cd9c552ffd155ac5",
@@ -50,7 +50,7 @@
     "src/stremio.rs": "23626dcb996e88dbe73e18424c1d76e2a5862471de4cc684beaed1894543eded",
     "src/vsources_runtime.rs": "2304ed31380cdc4e0ada8be14bb73dd1ec347426c4918c18970cecda976d7c60",
     "tests/catalog_cache.rs": "2073e5b34bde48b6e5cda0426e80a3eb4a5e2e016384f57cd4280c5db4e1b142",
-    "tests/continuation.rs": "95fb2891d7f9f2a7bd9b7cfad72949e8d56976ae7c602414724bffd42b5baa88",
+    "tests/continuation.rs": "b22db7650b0275f91436ce32eb18d1042aa58ee9d4217fd51a18af6f7bc83601",
     "tests/discovery_choices.rs": "5d0ef17d86a4f034fd186cdc1c72d239dfe687d15a5e282bd6e2e973bfe9b364",
     "tests/engine.rs": "a8e5176dba93ba48d6e230e3d753c56047b909a45530aece16a2ed81c20ad560",
     "tests/history.rs": "4db38966b7ef8585f7da0041b8ef7c5d02aac71cb4b1ee7ab61bbc168f3eee23",

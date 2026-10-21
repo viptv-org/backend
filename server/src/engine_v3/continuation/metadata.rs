@@ -7,6 +7,7 @@ pub(super) async fn document(
     simkl: bool,
     explicit: Option<&(String, Option<i64>, String)>,
     metadata_origin: Option<&viptv_engine::origin::MetadataOrigin>,
+    fresh: bool,
 ) -> Result<(Card, Vec<EpisodeAvailability>), ApiError> {
     let parent = request
         .parent_identity
@@ -34,6 +35,9 @@ pub(super) async fn document(
         )?;
         (host, "stremio".to_owned(), revision)
     };
+    if fresh {
+        let _ = host.addons.forget_meta("series", &parent.id).await;
+    }
     let raw = host.addons.meta("series", &parent.id).await?;
     configuration::validate_revision(app, profile, revision)?;
     let meta = if raw["meta"].is_object() {

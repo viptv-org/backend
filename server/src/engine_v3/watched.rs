@@ -50,8 +50,11 @@ impl Watched {
         }
         // The newest activity per show decides; the resolver verdict must be for
         // that exact episode, so an older "caught up" never outlives a rewatch.
+        // The durable verdict (`continuation::releases`, kept for every finished
+        // series and evaluated against the clock) wins over the queue cache.
+        let durable = super::continuation::releases::verdicts_db(db, profile)?;
         let mut series = db
-            .prepare("WITH ranked AS (SELECT id,title_id,position,duration,context,ROW_NUMBER() OVER(PARTITION BY title_id ORDER BY updated_at DESC,rowid DESC) AS rank FROM progress WHERE profile_id=?1 AND type='series' AND title_id!='') SELECT r.title_id,r.position,r.duration,r.context,c.result FROM ranked r JOIN continuation_cache c ON c.profile_id=?1 AND c.series_id=r.title_id AND c.from_id=r.id WHERE r.rank=1 LIMIT 50001")
+            .prepare("WITH ranked AS (SELECT id,title_id,position,duration,context,ROW_NUMBER() OVER(PARTITION BY title_id ORDER BY updated_at DESC,rowid DESC) AS rank FROM progress WHERE profile_id=?1 AND type='series' AND title_id!='') SELECT r.title_id,r.position,r.duration,r.context,c.result,r.id FROM ranked r LEFT JOIN continuation_cache c ON c.profile_id=?1 AND c.series_id=r.title_id AND c.from_id=r.id WHERE r.rank=1 LIMIT 50001")
             .map_err(db_error)?;
         let rows = series
             .query_map([profile], |r| {
@@ -60,15 +63,21 @@ impl Watched {
                     r.get::<_, f64>(1)?,
                     r.get::<_, f64>(2)?,
                     r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, String>(5)?,
                 ))
             })
             .map_err(db_error)?;
         for row in rows {
-            let (title, position, duration, context, verdict) = row.map_err(db_error)?;
+            let (title, position, duration, context, cached, from) = row.map_err(db_error)?;
             let context = serde_json::from_str::<Value>(&context).unwrap_or(Value::Null);
-            let verdict = serde_json::from_str::<Value>(&verdict).unwrap_or(Value::Null);
-            if matches!(verdict["status"].as_str(), Some("caught_up" | "upcoming"))
+            let status = match durable.get(&title) {
+                Some((verified, status)) if *verified == from => Some((*status).to_owned()),
+                _ => cached
+                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                    .and_then(|verdict| verdict["status"].as_str().map(str::to_owned)),
+            };
+            if matches!(status.as_deref(), Some("caught_up" | "upcoming"))
                 && crate::library::watched(&json!({"position":position,"duration":duration}), &context)
             {
                 watched.insert("series", &title, &context);

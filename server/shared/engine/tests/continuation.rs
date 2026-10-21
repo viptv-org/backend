@@ -139,16 +139,18 @@ fn a_release_after_the_last_finished_episode_is_new_and_later_releases_only_coun
     assert_eq!(first.next.identity.id, "unparsed-child-2");
     assert!(first.next.progress.is_none() && first.next.added_at_millis.is_none());
     assert_eq!(first.first_released_at_millis, 2000);
-    assert_eq!(new_episodes_badge(first.count), "New episode");
+    assert_eq!(new_episodes_badge(first.count), "+1");
     // A later release only increments the count; the promotion time stays E2's.
     let second = new_episodes(&current, 1000, &show, never_watched, 3500).unwrap();
     assert_eq!(second.count, 2);
     assert_eq!(second.first_released_at_millis, 2000);
     assert_eq!(second.released_at_millis, vec![2000, 3000]);
     assert_eq!(second.next.identity.id, "unparsed-child-2");
-    assert_eq!(new_episodes_badge(second.count), "+2 new episodes");
-    assert!(is_new_episodes_badge("New episode") && is_new_episodes_badge("+2 new episodes"));
-    assert!(!is_new_episodes_badge("Watched") && !is_new_episodes_badge("+x new episodes"));
+    assert_eq!(new_episodes_badge(second.count), "+2");
+    assert_eq!(new_episodes_description(second.count), "2 new episodes");
+    assert_eq!(new_episodes_description(1), "1 new episode");
+    assert!(is_new_episodes_badge("+1") && is_new_episodes_badge("+12"));
+    assert!(!is_new_episodes_badge("Watched") && !is_new_episodes_badge("+") && !is_new_episodes_badge("+2 new"));
     // Episodes already finished out of order neither count nor become the target.
     let skipped = new_episodes(
         &current,

@@ -244,20 +244,24 @@ pub fn new_episodes(
     })
 }
 
-/// The card label for `count` new episodes: "New episode", then "+2 new episodes".
+/// The compact card label for `count` new episodes: "+1", "+2", ...
 pub fn new_episodes_badge(count: u32) -> String {
-    if count <= 1 {
-        "New episode".into()
+    format!("+{}", count.max(1))
+}
+
+/// What a screen reader says for [`new_episodes_badge`]: "1 new episode", "2 new episodes".
+pub fn new_episodes_description(count: u32) -> String {
+    let count = count.max(1);
+    if count == 1 {
+        "1 new episode".into()
     } else {
-        format!("+{count} new episodes")
+        format!("{count} new episodes")
     }
 }
 
 /// Whether a card badge is a [`new_episodes_badge`] label.
 pub fn is_new_episodes_badge(badge: &str) -> bool {
-    badge == "New episode"
-        || badge
-            .strip_prefix('+')
-            .and_then(|rest| rest.strip_suffix(" new episodes"))
-            .is_some_and(|count| !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit()))
+    badge
+        .strip_prefix('+')
+        .is_some_and(|count| !count.is_empty() && count.bytes().all(|b| b.is_ascii_digit()))
 }

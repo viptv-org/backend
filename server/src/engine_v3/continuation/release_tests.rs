@@ -44,18 +44,20 @@ async fn show(releases: Vec<(u32, u64)>) -> Show {
     let releases = Arc::new(Mutex::new(releases));
     let calls = Arc::new(AtomicUsize::new(0));
     let (served, counted) = (releases.clone(), calls.clone());
+    // Every `tt…` series shares the controlled release times.
     let routes = Router::new().route(
-        "/meta/series/tt100.json",
-        axum::routing::get(move || {
+        "/meta/series/:file",
+        axum::routing::get(move |axum::extract::Path(file): axum::extract::Path<String>| {
+            let id = file.trim_end_matches(".json").to_owned();
             let videos = served
                 .lock()
                 .unwrap()
                 .iter()
-                .map(|(number, at)| json!({"id":format!("tt100:1:{number}"),"title":format!("Chapter {number}"),"season":1,"episode":number,"released":iso(*at),"thumbnail":format!("https://img.invalid/{number}.jpg")}))
+                .map(|(number, at)| json!({"id":format!("{id}:1:{number}"),"title":format!("Chapter {number}"),"season":1,"episode":number,"released":iso(*at),"thumbnail":format!("https://img.invalid/{number}.jpg")}))
                 .collect::<Vec<_>>();
             counted.fetch_add(1, Ordering::SeqCst);
             async move {
-                axum::Json(json!({"meta":{"id":"tt100","type":"series","name":"Fixture Show","videos":videos}}))
+                axum::Json(json!({"meta":{"id":id,"type":"series","name":"Fixture Show","videos":videos}}))
             }
         }),
     );
@@ -167,7 +169,7 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
     assert_eq!(ids(&entries), ["tt100:1:2", "tt200"]);
     let new = show_entry(&entries);
     assert_eq!(new["status"], "Next");
-    assert_eq!(new["card"]["badges"], json!(["New episode"]));
+    assert_eq!(new["card"]["badges"], json!(["+1"]));
     assert_eq!(new["card"]["title"], "Fixture Show");
     assert_eq!(new["card"]["subtitle"], "S1 E2 · Chapter 2");
     assert_eq!(new["card"]["parent_identity"]["id"], "tt100");
@@ -185,7 +187,7 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
     assert_eq!(ids(&entries), ["tt300", "tt100:1:2", "tt200"]);
     assert_eq!(
         show_entry(&entries)["card"]["badges"],
-        json!(["+2 new episodes"])
+        json!(["+2"])
     );
 
     // Home carries the same card, so every client renders the badge.
@@ -204,7 +206,7 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
         .iter()
         .find(|row| row["id"] == "continue")
         .unwrap();
-    assert_eq!(row["cards"][1]["badges"], json!(["+2 new episodes"]));
+    assert_eq!(row["cards"][1]["badges"], json!(["+2"]));
 
     // Removing it hides it until an episode is released after the removal.
     let (status, receipt) = request(
@@ -232,7 +234,7 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
     assert_eq!(ids(&entries), ["tt100:1:2", "tt300", "tt200"]);
     assert_eq!(
         show_entry(&entries)["card"]["badges"],
-        json!(["+3 new episodes"])
+        json!(["+3"])
     );
     // The next Home load un-hides it for good, so playing it keeps it listed.
     request(
@@ -326,9 +328,12 @@ async fn home_refreshes_stale_release_facts_in_the_background_and_bumps_the_revi
             break;
         }
     }
-    assert_eq!(badge, json!(["New episode"]));
+    assert_eq!(badge, json!(["+1"]));
     assert!(revision() > before);
-    assert_eq!(show.calls.load(Ordering::SeqCst), 1);
+    // Home's own card enrichment may read the same document; the refresh adds one.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let calls = show.calls.load(Ordering::SeqCst);
+    assert!((1..=2).contains(&calls), "{calls}");
     // A fresh document is not fetched again by the next Home load.
     request(
         app,
@@ -339,7 +344,7 @@ async fn home_refreshes_stale_release_facts_in_the_background_and_bumps_the_revi
     )
     .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(show.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(show.calls.load(Ordering::SeqCst), calls);
 }
 
 #[tokio::test]
@@ -351,7 +356,7 @@ async fn a_removed_series_stays_removed_through_replays_without_a_new_release() 
     resolve(app, 1).await;
     assert_eq!(
         show_entry(&queue(app).await)["card"]["badges"],
-        json!(["New episode"])
+        json!(["+1"])
     );
     let (status, _) = request(
         app,
@@ -399,51 +404,97 @@ async fn imported_watched_history_is_a_finished_episode_for_the_refresh() {
             break;
         }
     }
-    assert_eq!(badge, json!(["New episode"]));
+    assert_eq!(badge, json!(["+1"]));
+}
+
+fn import(app: &App, series: &str, at: u64) {
+    app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,?1,'series','Fixture Show',NULL,5,100,?2,?3,?4)",params![format!("{series}:1:1"),(at / 1000) as i64,json!({"season":1,"episode":1,"series_id":series,"stremio_import_watched":true}).to_string(),series]).unwrap();
+}
+fn verdict(app: &App, series: &str) -> Option<(String, &'static str)> {
+    super::releases::verdicts_db(&app.db.lock().unwrap(), 1)
+        .unwrap()
+        .remove(series)
+}
+async fn until(mut done: impl FnMut() -> bool) {
+    for _ in 0..200 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("background refresh did not finish");
 }
 
 #[tokio::test]
-async fn the_refresh_records_next_episode_verdicts_for_imported_history_without_preparing_targets() {
+async fn imported_history_gets_a_durable_next_episode_verdict_for_the_watched_badge() {
     let start = now();
-    // Imported, finished on the newest episode: caught up, so the series is Watched.
+    // Imported, finished on the newest episode, the next one announced: caught up.
     let show = show(vec![(1, start - 30 * DAY), (2, start + 7 * DAY)]).await;
     let app = &show.app;
-    app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,'tt100:1:1','series','Fixture Show',NULL,5,100,?1,?2,'tt100')",params![((start - 10 * DAY) / 1000) as i64,json!({"season":1,"episode":1,"series_id":"tt100","stremio_import_watched":true}).to_string()]).unwrap();
+    import(app, "tt100", start - 10 * DAY);
     request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
-    let mut verdict = None;
-    for _ in 0..100 {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        verdict = app
-            .db
-            .lock()
-            .unwrap()
-            .query_row("SELECT json_extract(result,'$.status'),updated_at FROM continuation_cache WHERE profile_id=1 AND series_id='tt100' AND from_id='tt100:1:1'", [], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
-            .optional()
-            .unwrap();
-        if verdict.is_some() {
-            break;
-        }
-    }
-    // A background verdict is a fact, not a prepared target.
-    assert_eq!(verdict, Some(("upcoming".to_owned(), 0)));
+    until(|| verdict(app, "tt100").is_some()).await;
+    assert_eq!(verdict(app, "tt100"), Some(("tt100:1:1".to_owned(), "upcoming")));
+    // Durable, not the evictable queue cache, and no prepared queue target.
+    let cached: i64 = app.db.lock().unwrap().query_row("SELECT COUNT(*) FROM continuation_cache", [], |r| r.get(0)).unwrap();
+    assert_eq!(cached, 0);
+    assert_eq!(show_entry(&queue(app).await)["status"], "Pending");
     let card: viptv_engine::presentation::Card = serde_json::from_value(json!({"identity":series(),"provider_id":"addon:1","title":"Fixture Show","subtitle":null,"description":null,"poster":null,"landscape":null,"logo":null,"progress":null,"badges":[]})).unwrap();
-    let watched = super::super::watched::Watched::load(&app.db.lock().unwrap(), 1).unwrap();
-    assert!(watched.contains(&card));
-    let entries = queue(app).await;
-    assert_eq!(show_entry(&entries)["status"], "Pending");
-    // Episode 2 airs: the next check now says `next`, so the series is not Watched.
-    show.releases.lock().unwrap()[1].1 = start - HOUR;
-    app.addons.forget_responses();
-    app.db.lock().unwrap().execute("UPDATE continuation_releases SET checked_at=0", []).unwrap();
+    let watched = || super::super::watched::Watched::load(&app.db.lock().unwrap(), 1).unwrap();
+    assert!(watched().contains(&card));
+    // The check is booked for just after the known air time.
+    let next_check: i64 = app.db.lock().unwrap().query_row("SELECT next_check_at FROM continuation_releases WHERE series_id='tt100'", [], |r| r.get(0)).unwrap();
+    assert_eq!(next_check, ((start + 7 * DAY) / 1000) as i64 + 5 * 60);
+    // The stored air time passes: the verdict and badge flip from stored data
+    // alone, before any refetch.
+    let calls = show.calls.load(Ordering::SeqCst);
+    {
+        let db = app.db.lock().unwrap();
+        let raw: String = db.query_row("SELECT document FROM continuation_releases WHERE series_id='tt100'", [], |r| r.get(0)).unwrap();
+        let mut document: Value = serde_json::from_str(&raw).unwrap();
+        document["episodes"][1]["released_at_millis"] = json!(start - HOUR);
+        db.execute("UPDATE continuation_releases SET document=?1 WHERE series_id='tt100'", [document.to_string()]).unwrap();
+    }
+    assert_eq!(verdict(app, "tt100").unwrap().1, "next");
+    assert!(!watched().contains(&card));
+    assert_eq!(show_entry(&queue(app).await)["card"]["badges"], json!(["+1"]));
+    // Once due, the refresh asks the add-on again despite its response cache.
+    app.db.lock().unwrap().execute("UPDATE continuation_releases SET next_check_at=0", []).unwrap();
     request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
-    for _ in 0..100 {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let status: String = app.db.lock().unwrap().query_row("SELECT json_extract(result,'$.status') FROM continuation_cache WHERE series_id='tt100'", [], |r| r.get(0)).unwrap();
-        if status == "next" {
+    until(|| show.calls.load(Ordering::SeqCst) > calls).await;
+}
+
+#[tokio::test]
+async fn one_run_refreshes_every_finished_series_and_never_evicts_their_verdicts() {
+    let start = now();
+    let show = show(vec![(1, start - 30 * DAY)]).await;
+    let app = &show.app;
+    // More finished series than one batch.
+    for n in 0..60 {
+        import(app, &format!("tt{}", 5000 + n), start - (n as u64 + 1) * HOUR);
+    }
+    request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    let checked = || -> i64 {
+        app.db.lock().unwrap().query_row("SELECT COUNT(*) FROM continuation_releases WHERE document IS NOT NULL", [], |r| r.get(0)).unwrap()
+    };
+    for _ in 0..600 {
+        if checked() == 60 {
             break;
         }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let watched = super::super::watched::Watched::load(&app.db.lock().unwrap(), 1).unwrap();
-    assert!(!watched.contains(&card));
-    assert_eq!(show_entry(&queue(app).await)["card"]["badges"], json!(["New episode"]));
+    assert_eq!(checked(), 60);
+    // One refresh per series (Home's own enrichment of its first cards aside).
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let calls = show.calls.load(Ordering::SeqCst);
+    assert!((60..=72).contains(&calls), "{calls}");
+    let verdicts = super::releases::verdicts_db(&app.db.lock().unwrap(), 1).unwrap();
+    assert_eq!(verdicts.len(), 60);
+    assert!(verdicts.values().all(|(_, status)| *status == "caught_up"));
+    // Caught up with nothing announced: checked again daily, not sooner.
+    let soonest: i64 = app.db.lock().unwrap().query_row("SELECT MIN(next_check_at) FROM continuation_releases", [], |r| r.get(0)).unwrap();
+    assert!(soonest >= (start / 1000) as i64 + 24 * 3600 - 60, "{soonest}");
+    request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(show.calls.load(Ordering::SeqCst), calls);
 }

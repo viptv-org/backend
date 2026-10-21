@@ -169,6 +169,23 @@ impl Addons {
         Ok((items, failed))
     }
 
+    /// Drops this title's cached `meta` responses, so the next `meta` asks the
+    /// add-ons again (a known air date passed; the cache may predate it).
+    pub(crate) async fn forget_meta(&self, kind: &str, id: &str) -> Result<(), String> {
+        let entries = self.async_entries().await?;
+        let mut cache = self.cache.lock().map_err(|_| "Add-on cache unavailable")?;
+        for (_, base, manifest) in entries {
+            if !supports(&manifest, "meta", kind, id) {
+                continue;
+            }
+            if let Ok(key) = Self::endpoint(&base, &["meta", kind, &format!("{id}.json")])
+                .and_then(|url| self.cache_key(&url))
+            {
+                cache.remove(&key);
+            }
+        }
+        Ok(())
+    }
     pub async fn meta(&self, kind: &str, id: &str) -> Result<Value, String> {
         self.meta_with_origin(kind, id)
             .await
