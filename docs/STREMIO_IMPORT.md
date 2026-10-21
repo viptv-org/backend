@@ -59,6 +59,7 @@ Routes, under `/api`:
 - `POST /profiles/{profile}/imports/stremio/{preview}/apply` with `{confirm:true}`.
 - Guided confirmation also sends `excluded_items` and the finalized `review_revision`; completed retries must use exactly the same selection and revision.
 - `DELETE /profiles/{profile}/imports/stremio/{preview}` to discard.
+- After apply, `GET /profiles/{profile}/library/details` returns `{running,done,filled,total}` for the background run that gives imported titles their Details card (see [Library contract](LIBRARY_V3.md)).
 
 Run `cargo test --locked --manifest-path server/Cargo.toml --lib stremio_import`, and dashboard `npm test -- --run` / `npm run build`. Synthetic tests and browser rendering do not establish real credential validity or prove a personal import. Test a separate synthetic profile first; never impersonate a personal account or apply a personal merge without the owner's explicit destination/preview authorization.
 

@@ -3815,7 +3815,12 @@ async fn imported_titles_get_the_full_details_card_through_owned_metadata_addons
     .await;
     assert_eq!(status, StatusCode::OK, "{result}");
     assert!(hydration::running(&f.app, 1) || addon.calls.load(Ordering::SeqCst) > 0, "apply starts filling at once");
+    let (status, progress) = request(&f.app, "member-token-1", "GET", "/api/profiles/1/library/details", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{progress}");
+    assert!(progress["running"] == true || progress == json!({"running":false,"done":2,"filled":2,"total":2}), "{progress}");
     hydration::settled(&f.app, 1).await;
+    let (_, progress) = request(&f.app, "member-token-1", "GET", "/api/profiles/1/library/details", Value::Null).await;
+    assert_eq!(progress, json!({"running":false,"done":2,"filled":2,"total":2}), "both imported titles were looked up and filled");
     {
         let db = f.app.db.lock().unwrap();
         let stored = |id: &str| -> Value {

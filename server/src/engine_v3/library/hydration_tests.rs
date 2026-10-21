@@ -293,3 +293,118 @@ async fn listing_my_list_never_starts_metadata_lookups() {
     assert_eq!(addon.calls.load(Ordering::SeqCst), 0);
     assert_eq!(context(&app, "tt0000001"), json!({}));
 }
+
+#[tokio::test]
+async fn details_progress_counts_the_titles_of_a_run_until_it_finishes() {
+    let mut app = fixture();
+    let _addon = metadata_addon(&mut app).await;
+    // Nothing ran yet: an idle, empty status.
+    assert_eq!(
+        get_ok(&app, "/api/profiles/1/library/details").await,
+        json!({"running":false,"done":0,"filled":0,"total":0})
+    );
+    {
+        let db = app.db.lock().unwrap();
+        for n in 1..=24 {
+            db.execute(
+                "INSERT INTO favorites(profile_id,id,type,name) VALUES(1,?1,'movie','Imported')",
+                [format!("tt{n:07}")],
+            )
+            .unwrap();
+        }
+        // An unresolvable title is still counted once it has been looked up.
+        db.execute(
+            "INSERT INTO favorites(profile_id,id,type,name) VALUES(1,'kitsu:42','series','Opaque')",
+            [],
+        )
+        .unwrap();
+    }
+    assert!(start(&app));
+    let (mut seen_partial, mut last_done) = (false, 0);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    let finished = loop {
+        let status = get_ok(&app, "/api/profiles/1/library/details").await;
+        let object = status.as_object().unwrap();
+        assert_eq!(object.len(), 4, "only the four counters: {status}");
+        let (done, total) = (
+            status["done"].as_u64().unwrap(),
+            status["total"].as_u64().unwrap(),
+        );
+        assert!(done >= last_done, "done never goes back: {status}");
+        assert!(
+            status["filled"].as_u64().unwrap() <= done,
+            "only looked-up titles can be filled: {status}"
+        );
+        assert!(total == 0 || done <= total, "{status}");
+        assert!(total == 0 || total == 25, "{status}");
+        last_done = done;
+        if status["running"] == false {
+            break status;
+        }
+        seen_partial |= total == 25 && done > 0 && done < total;
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run never finished"
+        );
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    };
+    assert!(seen_partial, "progress is visible while the run is active");
+    // The opaque id is looked up but has no metadata to give it a card.
+    assert_eq!(
+        finished,
+        json!({"running":false,"done":25,"filled":24,"total":25})
+    );
+}
+
+#[tokio::test]
+async fn details_progress_belongs_to_the_session_profile_only() {
+    let mut app = fixture();
+    let _addon = metadata_addon(&mut app).await;
+    for (token, path) in [
+        ("member-token-1", "/api/profiles/2/library/details"),
+        ("member-token-2", "/api/profiles/1/library/details"),
+    ] {
+        let (status, _) = request(&app, token, "GET", path, Value::Null).await;
+        assert!(
+            status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
+            "{token} {path}: {status}"
+        );
+    }
+    let (status, _) = request(
+        &app,
+        "no-such-token",
+        "GET",
+        "/api/profiles/1/library/details",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn finished_counts_stay_until_the_next_run() {
+    let mut app = fixture();
+    let _addon = metadata_addon(&mut app).await;
+    {
+        let db = app.db.lock().unwrap();
+        for n in 1..=12 {
+            db.execute(
+                "INSERT INTO favorites(profile_id,id,type,name) VALUES(1,?1,'movie','Imported')",
+                [format!("tt{n:07}")],
+            )
+            .unwrap();
+        }
+    }
+    assert!(start(&app));
+    super::hydration::settled(&app, 1).await;
+    assert_eq!(
+        get_ok(&app, "/api/profiles/1/library/details").await,
+        json!({"running":false,"done":12,"filled":12,"total":12})
+    );
+    // Listing My List starts nothing; the finished counts stay.
+    get_ok(&app, "/api/profiles/1/library").await;
+    assert_eq!(
+        get_ok(&app, "/api/profiles/1/library/details").await,
+        json!({"running":false,"done":12,"filled":12,"total":12})
+    );
+}

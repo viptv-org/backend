@@ -9,6 +9,9 @@
 //! fill only fields the row is missing; the row's name and artwork columns and
 //! any card a user saved meanwhile win. The favorites update trigger advances
 //! the library revision, so clients refetch.
+//!
+//! `GET /api/profiles/:id/library/details` reports the profile's run as a few
+//! counters, so an import can show how far the fill has got.
 use super::*;
 use futures::{stream, StreamExt};
 use std::time::Instant;
@@ -34,6 +37,10 @@ struct Profile {
     running: bool,
     again: bool,
     failed: HashMap<(String, String), Instant>,
+    /// Titles of the current (or last) run looked up so far, those that gained a card, and its known size.
+    done: usize,
+    filled: usize,
+    total: usize,
 }
 
 pub(crate) struct Jobs {
@@ -122,6 +129,9 @@ pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64) -> bool {
     }
     state.running = true;
     state.again = false;
+    state.done = 0;
+    state.filled = 0;
+    state.total = 0;
     drop(profiles);
     let app = app.clone().with_lease(lease.clone());
     let lease = lease.clone();
@@ -197,12 +207,15 @@ async fn pass(app: &App, lease: &ResourceLease, profile: i64) -> Result<bool, Ap
         state
             .failed
             .retain(|_, at| now.duration_since(*at) < RETRY_AFTER);
-        rows.into_iter()
+        let wanted: Vec<_> = rows
+            .into_iter()
             .filter(|(kind, id, raw)| thin(stored(raw, kind, id).as_ref()))
             .map(|(kind, id, _)| (kind, id))
             .filter(|key| !state.failed.contains_key(key))
-            .take(ROWS_PER_PASS + 1)
-            .collect()
+            .collect();
+        // Later passes (a backlog, or titles imported meanwhile) extend the run's size.
+        state.total = state.done + wanted.len();
+        wanted
     };
     let more = wanted.len() > ROWS_PER_PASS;
     wanted.truncate(ROWS_PER_PASS);
@@ -236,6 +249,10 @@ async fn pass(app: &App, lease: &ResourceLease, profile: i64) -> Result<bool, Ap
         .buffer_unordered(LOOKUPS);
     let mut batch = Vec::new();
     while let Some((key, card)) = lookups.next().await {
+        if let Ok(mut profiles) = app.library_hydration.profiles.lock() {
+            let state = profiles.entry(profile).or_default();
+            state.done = (state.done + 1).min(state.total);
+        }
         match card {
             Some(card) => batch.push((key, card)),
             None => {
@@ -279,6 +296,7 @@ fn write(
     batch: Vec<((String, String), Card)>,
 ) -> Result<Vec<(String, String)>, ApiError> {
     let mut unfilled = Vec::new();
+    let mut filled = 0;
     if batch.is_empty() {
         return Ok(unfilled);
     }
@@ -314,17 +332,60 @@ fn write(
             unfilled.push((kind, id));
             continue;
         };
-        if thin(Some(&card)) {
+        let still_thin = thin(Some(&card));
+        if still_thin {
             unfilled.push((kind.clone(), id.clone()));
         }
-        tx.execute(
+        let changed = tx.execute(
             "UPDATE favorites SET context=?4,poster=COALESCE(poster,?5) WHERE profile_id=?1 AND type=?2 AND id=?3 AND context=?6",
             params![profile, kind, id, context, card.poster, raw],
         )
         .map_err(db_error)?;
+        filled += usize::from(changed == 1 && !still_thin);
     }
     tx.commit().map_err(db_error)?;
+    drop(db);
+    if let Ok(mut profiles) = app.library_hydration.profiles.lock() {
+        profiles.entry(profile).or_default().filled += filled;
+    }
     Ok(unfilled)
+}
+
+/// The profile's run as `{running, done, filled, total}`: whether it is active, titles looked
+/// up so far, those that gained a card, and the titles it has found to fill.
+pub(crate) fn progress(app: &App, profile: i64) -> Value {
+    let (running, done, filled, total) = app
+        .library_hydration
+        .profiles
+        .lock()
+        .ok()
+        .and_then(|profiles| {
+            profiles
+                .get(&profile)
+                .map(|s| (s.running, s.done, s.filled, s.total))
+        })
+        .unwrap_or_default();
+    json!({"running":running,"done":done,"filled":filled,"total":total})
+}
+
+/// `GET /api/profiles/:id/library/details`: in-memory counters only, no titles.
+pub(crate) async fn status(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(profile): Path<i64>,
+) -> ApiResult {
+    let app = app.with_lease(lease);
+    blocking(move || {
+        app.require_profile(
+            &*app
+                .db
+                .lock()
+                .map_err(|_| ApiError::from("Database unavailable"))?,
+            profile,
+        )?;
+        Ok(axum::Json(progress(&app, profile)))
+    })
+    .await
 }
 
 /// Whether the profile's run is active.

@@ -28,6 +28,10 @@ pub fn router_with_tv(
             get(engine_v3::library::membership::get),
         )
         .route(
+            "/profiles/:id/library/details",
+            get(engine_v3::library::hydration::status),
+        )
+        .route(
             "/profiles/:id/imports/simkl",
             get(simkl::imports::read).post(simkl::imports::read),
         )
