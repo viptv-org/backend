@@ -317,14 +317,21 @@ fn watched_series_resume_candidates() -> Vec<mapper::Candidate> {
 }
 
 fn series_resume_candidates_with_bits(bits: [u8; 2]) -> Vec<mapper::Candidate> {
+    series_candidates(
+        bits,
+        json!({"lastWatched":DATE,"video_id":"tt2934286:2:9","timeOffset":30000,"duration":100000}),
+    )
+}
+
+/// One series item with `state` and episodes 1–12 of season 2 watched per `bits`.
+fn series_candidates(bits: [u8; 2], mut state: Value) -> Vec<mapper::Candidate> {
     use base64::Engine;
     use std::io::Write;
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(&bits).unwrap();
     let bits = base64::engine::general_purpose::STANDARD.encode(encoder.finish().unwrap());
-    let item = json!({"_id":"tt2934286","type":"series","name":"Synthetic title",
-        "state":{"lastWatched":DATE,"video_id":"tt2934286:2:9","timeOffset":30000,
-            "duration":100000,"watched":format!("tt2934286:2:12:12:{bits}")}});
+    state["watched"] = json!(format!("tt2934286:2:12:12:{bits}"));
+    let item = json!({"_id":"tt2934286","type":"series","name":"Synthetic title","state":state});
     let videos: Vec<_> = (1..=12)
         .map(|episode| {
             json!({"id":format!("tt2934286:2:{episode}"),
@@ -336,6 +343,40 @@ fn series_resume_candidates_with_bits(bits: [u8; 2]) -> Vec<mapper::Candidate> {
         json!({"videos":videos}),
     )]);
     mapper::map_verified(&[item], false, true, TIME + 1, &metadata).0
+}
+
+#[tokio::test]
+async fn a_finished_current_episode_is_a_dated_completion_that_updates_an_undated_one() {
+    let app = crate::auth_integration_tests::fixture();
+    let db = app.db.lock().unwrap();
+    // An earlier import knew episode 12 only as watched, without a date.
+    let undated = series_candidates([0xff, 0x0f], json!({"timesWatched":1}));
+    merge(&db, 1, "synthetic-source", &undated, Summary::default(), true)
+        .unwrap_or_else(|_| panic!("merge failed"));
+    // Stremio now has it as the current video, finished: offset reset to 0.
+    let finished = series_candidates(
+        [0xff, 0x0f],
+        json!({"lastWatched":DATE,"video_id":"tt2934286:2:12","timeOffset":0,"duration":100000,"timesWatched":1}),
+    );
+    let twelve = finished
+        .iter()
+        .filter(|c| c.id == "tt2934286:2:12")
+        .collect::<Vec<_>>();
+    assert_eq!(twelve.len(), 1);
+    let progress = twelve[0].progress.as_ref().unwrap();
+    assert_eq!(progress.timestamp, TIME);
+    assert_eq!(progress.context["watched_override"], true);
+    assert_eq!(progress.context["stremio_import_watched"], true);
+    assert!(progress.context["stremio_completion_only"].is_null());
+    merge(&db, 1, "synthetic-source", &finished, Summary::default(), true)
+        .unwrap_or_else(|_| panic!("merge failed"));
+    let row: (f64, f64, i64) = db.query_row(
+        "SELECT position,duration,updated_at FROM progress WHERE profile_id=1 AND id='tt2934286:2:12'",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    assert_eq!(row, (100.0, 100.0, TIME));
+    let queue = continuation::queue(&db, 1, 0, 10).unwrap();
+    assert_eq!(queue["items"][0]["id"], "tt2934286:2:12");
+    assert_eq!(queue["items"][0]["watched"], true);
 }
 
 #[tokio::test]
