@@ -59,6 +59,39 @@ pub(crate) async fn schemas(
         schema.state = viptv_engine::source_integration::IntegrationState::Unavailable;
         schema.runtime_enabled = false;
     }
+    // The saved provider *count* (never the ids) feeds the list's
+    // "TMDB key saved · 8 providers" line; an empty selection means the default set.
+    #[cfg(feature = "vsources-runtime")]
+    if let (Some(id), Some(vault)) = (id, app.secret_vault.as_ref()) {
+        if let Ok(envelope) = db.query_row(
+            "SELECT secret FROM engine_source_integrations WHERE id=?1",
+            [id],
+            |r| r.get::<_, String>(0),
+        ) {
+            if let Ok(secret) = vault.open(
+                lease.principal.account_id().unwrap_or_default(),
+                "vsources",
+                &format!("{profile}:{id}"),
+                &envelope,
+            ) {
+                if let Ok(saved) = serde_json::from_slice::<VsourcesConfiguration>(secret.expose()) {
+                    let selected = saved.providers.len() as u32;
+                    schema.saved_provider_count = Some(if selected > 0 {
+                        selected
+                    } else {
+                        viptv_engine::vsources_runtime::engine(
+                            &saved,
+                            Arc::new(viptv_engine::vsources_runtime::ScopedFetcher::new(
+                                Arc::new(|| false),
+                            )),
+                        )
+                        .map(|engine| engine.providers().len() as u32)
+                        .unwrap_or(0)
+                    });
+                }
+            }
+        }
+    }
     drop(db);
     let (configuration, connections) = configuration::read(&app, &lease, profile)?;
     let mut schemas = vec![schema];

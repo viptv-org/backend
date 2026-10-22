@@ -30,6 +30,10 @@ pub struct SourceIntegrationSchema {
     pub connection_id: Option<String>,
     pub provider_choices: Vec<ProviderChoice>,
     pub maximum_providers: u32,
+    /// The saved selection's size when configured (a count, never the ids):
+    /// the list copy is "TMDB key saved · 8 providers" without exposing values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_provider_count: Option<u32>,
 }
 /// The provider-selection budget: the engine resolves with bounded concurrency
 /// and a total deadline, so a bigger fleet mostly lengthens the tail. The schema
@@ -58,6 +62,7 @@ pub fn vsources_schema(configured: bool, connection_id: Option<String>) -> Sourc
         connection_id,
         provider_choices: provider_choices(),
         maximum_providers: MAX_PROVIDERS,
+        saved_provider_count: None,
     }
 }
 /// Never serialize this into a public response or include it in diagnostics.
@@ -165,5 +170,6 @@ pub fn live_schema(
         connection_id,
         provider_choices: vec![],
         maximum_providers: 0,
+        saved_provider_count: None,
     }
 }
