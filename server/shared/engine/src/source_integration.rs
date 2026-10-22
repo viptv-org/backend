@@ -31,6 +31,11 @@ pub struct SourceIntegrationSchema {
     pub provider_choices: Vec<ProviderChoice>,
     pub maximum_providers: u32,
 }
+/// The provider-selection budget: the engine resolves with bounded concurrency
+/// and a total deadline, so a bigger fleet mostly lengthens the tail. The schema
+/// and the configuration validator must never disagree, so both read this.
+pub const MAX_PROVIDERS: u32 = 12;
+
 pub fn vsources_schema(configured: bool, connection_id: Option<String>) -> SourceIntegrationSchema {
     let enabled = cfg!(feature = "vsources-runtime");
     SourceIntegrationSchema {
@@ -52,7 +57,7 @@ pub fn vsources_schema(configured: bool, connection_id: Option<String>) -> Sourc
         }],
         connection_id,
         provider_choices: provider_choices(),
-        maximum_providers: 12,
+        maximum_providers: MAX_PROVIDERS,
     }
 }
 /// Never serialize this into a public response or include it in diagnostics.
@@ -68,7 +73,7 @@ impl VsourcesConfiguration {
         if self.tmdb_api_key.trim().is_empty()
             || self.tmdb_api_key.len() > 512
             || self.tmdb_api_key.chars().any(char::is_control)
-            || self.providers.len() > 12
+            || self.providers.len() > MAX_PROVIDERS as usize
             || self.providers.iter().any(|p| {
                 p.is_empty()
                     || p.len() > 64
@@ -113,7 +118,52 @@ fn provider_choices() -> Vec<ProviderChoice> {
         vec![]
     }
 }
-pub fn live_schema(plugin:&str,configured:bool,connection_id:Option<String>,enabled:bool)->SourceIntegrationSchema{
- let (name,fields)=if plugin=="xtream"{("Xtream live TV",vec![("server_url","Server URL",true,false),("username","Username",true,false),("password","Password",true,true)])}else{("M3U live TV",vec![("playlist_url","Playlist URL",true,true),("epg_url","XMLTV guide URL",false,true)])};
- SourceIntegrationSchema{plugin_id:plugin.into(),name:name.into(),state:if !enabled{IntegrationState::Unavailable}else if configured{IntegrationState::Ready}else{IntegrationState::NeedsConfiguration},runtime_enabled:enabled,credential_fields:fields.into_iter().map(|(id,label,required,secret)|CredentialField{id:id.into(),label:label.into(),required,secret}).collect(),connection_id,provider_choices:vec![],maximum_providers:0}
+pub fn live_schema(
+    plugin: &str,
+    configured: bool,
+    connection_id: Option<String>,
+    enabled: bool,
+) -> SourceIntegrationSchema {
+    let (name, fields) = if plugin == "xtream" {
+        (
+            "Xtream live TV",
+            vec![
+                ("server_url", "Server URL", true, false),
+                ("username", "Username", true, false),
+                ("password", "Password", true, true),
+            ],
+        )
+    } else {
+        (
+            "M3U live TV",
+            vec![
+                ("playlist_url", "Playlist URL", true, true),
+                ("epg_url", "XMLTV guide URL", false, true),
+            ],
+        )
+    };
+    SourceIntegrationSchema {
+        plugin_id: plugin.into(),
+        name: name.into(),
+        state: if !enabled {
+            IntegrationState::Unavailable
+        } else if configured {
+            IntegrationState::Ready
+        } else {
+            IntegrationState::NeedsConfiguration
+        },
+        runtime_enabled: enabled,
+        credential_fields: fields
+            .into_iter()
+            .map(|(id, label, required, secret)| CredentialField {
+                id: id.into(),
+                label: label.into(),
+                required,
+                secret,
+            })
+            .collect(),
+        connection_id,
+        provider_choices: vec![],
+        maximum_providers: 0,
+    }
 }

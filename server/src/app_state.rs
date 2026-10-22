@@ -116,6 +116,10 @@ pub struct App {
     pub addons: Addons,
     pub providers: ProviderService,
     pub(crate) secret_vault: Option<Arc<secret_store::Vault>>,
+    /// Operator-hosted FlareSolverr daemon for source scraping challenges;
+    /// absent unless VIPTV_FLARESOLVERR_URL is set and the runtime is built in.
+    #[cfg(feature = "vsources-runtime")]
+    pub(crate) cloudflare: Option<Arc<viptv_engine::vsources_cloudflare::SolverChain>>,
     pub(crate) gateway_client: gateway::client::Client,
     pub(crate) direct_probe: Arc<gateway::direct_probe::Probe>,
     pub(crate) gateway_playbacks: Arc<gateway::playback::Registry>,
@@ -314,6 +318,12 @@ impl App {
             addons,
             providers,
             secret_vault,
+            #[cfg(feature = "vsources-runtime")]
+            cloudflare: std::env::var("VIPTV_FLARESOLVERR_URL")
+                .ok()
+                .and_then(|url| url::Url::parse(&url).ok())
+                .and_then(|url| viptv_engine::vsources_runtime::flaresolverr_chain(url).ok())
+                .map(Arc::new),
             gateway_client: Default::default(),
             direct_probe: Default::default(),
             gateway_playbacks,

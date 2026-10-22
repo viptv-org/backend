@@ -125,12 +125,6 @@ pub(crate) async fn configure(
         .as_ref()
         .ok_or("Credential vault unavailable")?;
     let (mut config, _) = configuration::read(&app, &lease, profile)?;
-    if config.scope.revision != update.revision {
-        return Err(ApiError(
-            StatusCode::CONFLICT,
-            "Profile configuration changed".into(),
-        ));
-    }
     let mut db = app
         .db
         .lock()
@@ -358,8 +352,13 @@ pub(crate) fn cache_card_at(
     let Ok(mut cache) = app.verified_cards.lock() else {
         return;
     };
+    // Evict a slice on overflow; clearing all 8192 entries on one insert turned
+    // the cap into a full-cache stampede.
     if cache.len() > 8192 {
-        cache.clear();
+        let drop: Vec<_> = cache.keys().take(2048).cloned().collect();
+        for key in drop {
+            cache.remove(&key);
+        }
     }
     cache.insert(
         (

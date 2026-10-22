@@ -34,6 +34,8 @@ pub enum Error {
 pub mod source_integration;
 #[cfg(feature = "vsources-runtime")]
 pub mod vsources_runtime;
+#[cfg(feature = "vsources-runtime")]
+pub use vsources_cloudflare;
 
 pub mod preferences;
 

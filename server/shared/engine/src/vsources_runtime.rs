@@ -6,7 +6,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::{sync::Arc, time::Duration};
-#[cfg(test)]
 use url::Url;
 use vsources::error::FetchError;
 use vsources::traits::{FetchRequest, FetchResponse, Fetcher, ProbeResponse};
@@ -75,6 +74,141 @@ pub fn media_ref(
 }
 
 pub use crate::egress::{public_ip, public_url};
+
+/// Provider requests carry a browser identity by default: plenty of sources
+/// reject or empty-answer a bare library user agent before any challenge runs.
+const EMULATED_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+fn decorate(request: &mut FetchRequest) {
+    let has_agent = request
+        .headers
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case("user-agent"));
+    if !has_agent {
+        request
+            .headers
+            .insert("User-Agent".into(), EMULATED_USER_AGENT.into());
+    }
+    if !request.headers.keys().any(|k| k.eq_ignore_ascii_case("accept")) {
+        request.headers.insert(
+            "Accept".into(),
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,*/*;q=0.8".into(),
+        );
+    }
+}
+
+/// The SDK's browser-emulating fetcher cannot express host scoping, so the
+/// chain runs here instead: scoped transport first, then challenge detection
+/// and a solve-and-replay with the clearance cookies and the solving agent
+/// (Cloudflare binds the pair).
+pub struct SolvingFetcher {
+    transport: ScopedFetcher,
+    chain: Option<Arc<vsources_cloudflare::SolverChain>>,
+}
+
+impl SolvingFetcher {
+    pub fn new(
+        authorize: Arc<dyn Fn() -> bool + Send + Sync>,
+        chain: Option<Arc<vsources_cloudflare::SolverChain>>,
+    ) -> Self {
+        Self {
+            transport: ScopedFetcher::new(authorize),
+            chain,
+        }
+    }
+}
+
+#[async_trait]
+impl Fetcher for SolvingFetcher {
+    async fn request(&self, request: FetchRequest) -> Result<FetchResponse, FetchError> {
+        let mut request = request;
+        decorate(&mut request);
+        let response = self.transport.request(request.clone()).await?;
+        let Some(chain) = &self.chain else {
+            return Ok(response);
+        };
+        let Some(challenge) = vsources_cloudflare::detect(&response) else {
+            return Ok(response);
+        };
+        if !challenge.is_solvable() {
+            return Ok(response);
+        }
+        let Ok(clearance) = chain.solve(&request.url, challenge).await else {
+            return Ok(response);
+        };
+        let mut replay = request;
+        replay
+            .headers
+            .insert("User-Agent".into(), clearance.user_agent.clone());
+        replay
+            .headers
+            .insert("Cookie".into(), clearance.cookie_header());
+        self.transport.request(replay).await
+    }
+    async fn probe(
+        &self,
+        request: FetchRequest,
+        max_bytes: usize,
+    ) -> Result<Option<ProbeResponse>, FetchError> {
+        self.transport.probe(request, max_bytes).await
+    }
+}
+
+/// The operator-hosted FlareSolverr daemon dialed over plain local HTTP: its
+/// address is operator configuration, so these calls never enter source scope.
+struct DirectFetcher(reqwest::Client);
+
+#[async_trait]
+impl Fetcher for DirectFetcher {
+    async fn request(&self, request: FetchRequest) -> Result<FetchResponse, FetchError> {
+        let method = reqwest::Method::from_bytes(request.method.as_bytes())
+            .map_err(|_| FetchError::Transport { url: request.url.clone(), message: "bad method".into() })?;
+        let mut outgoing = self.0.request(method, request.url.clone());
+        for (k, v) in &request.headers {
+            outgoing = outgoing.header(k, v);
+        }
+        if let Some(body) = request.binary_body {
+            outgoing = outgoing.body(body);
+        } else if let Some(body) = request.body {
+            outgoing = outgoing.body(body);
+        }
+        let response = outgoing.send().await.map_err(|e| FetchError::Transport {
+            url: request.url.clone(),
+            message: e.to_string(),
+        })?;
+        let status = response.status().as_u16();
+        let url = response.url().clone();
+        let headers = response
+            .headers()
+            .iter()
+            .filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_string(), v.to_string())))
+            .collect();
+        let body = response.text().await.map_err(|e| FetchError::Transport {
+            url: url.clone(),
+            message: e.to_string(),
+        })?;
+        Ok(FetchResponse { url, status, headers, body })
+    }
+    async fn probe(
+        &self,
+        _request: FetchRequest,
+        _max_bytes: usize,
+    ) -> Result<Option<ProbeResponse>, FetchError> {
+        Ok(None)
+    }
+}
+
+/// A solver chain that clears challenges through an operator-hosted
+/// FlareSolverr daemon (the lazy, server-side answer; device-local WebView
+/// solvers plug into the same chain type).
+pub fn flaresolverr_chain(url: Url) -> Result<vsources_cloudflare::SolverChain, Error> {
+    let daemon = vsources_cloudflare::FlareSolverr::new(url, Arc::new(DirectFetcher(reqwest::Client::new())));
+    Ok(vsources_cloudflare::SolverChain::new(vec![Arc::new(
+        vsources_cloudflare::FlareSolverrSolver::new(daemon),
+    )]))
+}
+
 pub struct ScopedFetcher(crate::egress::ScopedHttp);
 impl ScopedFetcher {
     pub fn new(authorize: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
@@ -165,12 +299,16 @@ pub async fn resolve_progressive(
     config: VsourcesConfiguration,
     media: MediaRef,
     authorize: Arc<dyn Fn() -> bool + Send + Sync>,
+    cloudflare: Option<Arc<vsources_cloudflare::SolverChain>>,
     mut publish: impl FnMut(Vec<vsources::Stream>),
 ) -> Result<(), Error> {
     if !authorize() {
         return Err(Error::Forbidden);
     }
-    let engine = engine(&config, Arc::new(ScopedFetcher::new(authorize.clone())))?;
+    let engine = engine(
+        &config,
+        Arc::new(SolvingFetcher::new(authorize.clone(), cloudflare)),
+    )?;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let resolve = engine.resolve_progressive(&media, tx);
     tokio::pin!(resolve);

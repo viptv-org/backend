@@ -241,7 +241,7 @@ pub(crate) fn spawn(
             &[],
         );
         let result = if let Ok(media) = media {
-            viptv_engine::vsources_runtime::resolve_progressive(config,media,authorize.clone(),|streams|{
+            viptv_engine::vsources_runtime::resolve_progressive(config,media,authorize.clone(),app.cloudflare.clone(),|streams|{
             if !authorize(){return;}let ttls:std::collections::HashMap<_,_>=streams.iter().map(|s|((s.url.to_string(),s.meta.audio_selection.as_ref().map(|audio|audio.audio_index)),s.ttl.min(Duration::from_secs(1800)))).collect();let limit=job.reserve_sources(streams.len());let raw=streams.iter().take(limit).map(projection::sdk_source).collect::<Vec<_>>();
             // Registration carries the exact credential/assignment proof used by this producer.
             let (cards,error)=app.register_with_configuration(&source,raw,&job.kind,Some(proof));
