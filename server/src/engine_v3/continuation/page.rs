@@ -126,6 +126,9 @@ pub(crate) fn snapshot(
         });
         entries.push((entry.record.updated_at_millis, entry));
     }
+    for (_, entry) in &mut entries {
+        mark_finished(entry);
+    }
     entries.sort_by(|(a_order, a), (b_order, b)| {
         b_order
             .cmp(a_order)
@@ -150,6 +153,22 @@ pub(crate) fn snapshot(
         next_cursor,
     })
 }
+/// A series whose newest finished episode has no released next one (caught
+/// up, upcoming, or not resolved yet) keeps that episode on its card. Without
+/// a progress bar it would read as an episode still to watch, so it carries
+/// the Watched check. In-progress titles (a movie rewatch included) and the
+/// next episode to play never do; any other `Watched` (cached cards) goes.
+fn mark_finished(entry: &mut ContinuationEntry) {
+    super::super::watched::strip(&mut entry.card);
+    if !matches!(entry.status, ContinuationStatus::Resume | ContinuationStatus::Next)
+        && entry.card.identity.episode.is_some()
+        && entry.card.identity == entry.record.identity
+        && entry.card.badges.len() < 32
+    {
+        entry.card.badges.push(super::super::watched::BADGE.into());
+    }
+}
+
 pub(crate) async fn get(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,

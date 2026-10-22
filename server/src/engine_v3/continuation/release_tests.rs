@@ -152,14 +152,12 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
     watch(app, film, None, false, start - 5 * DAY).await;
     resolve(app, 1).await;
 
-    // Caught up: nothing new, the film watched later stays first.
+    // Caught up: nothing new, the film watched later stays first, and the
+    // finished episode the series stays on is drawn watched.
     let entries = queue(app).await;
     assert_eq!(ids(&entries), ["tt200", "tt100:1:1"]);
     let caught_up = show_entry(&entries);
-    assert!(
-        caught_up["card"]["badges"].as_array().unwrap().is_empty(),
-        "{caught_up}"
-    );
+    assert_eq!(caught_up["card"]["badges"], json!(["Watched"]), "{caught_up}");
 
     // Episode 2 is released: the series moves to the front with a badge and
     // opens episode 2, titled by the series with the episode as caption.
@@ -294,6 +292,47 @@ async fn a_backlog_and_an_in_progress_episode_are_never_promoted() {
 }
 
 #[tokio::test]
+async fn credits_count_as_finished_and_the_newest_finished_episode_is_drawn_watched() {
+    let start = now();
+    let show = show(vec![
+        (1, start - 30 * DAY),
+        (2, start - 20 * DAY),
+        (3, start + 7 * DAY),
+    ])
+    .await;
+    let app = &show.app;
+    // Episode 1 stopped in the credits (96 %, 58 s left): finished, so the
+    // series moves on to episode 2, which is not drawn watched.
+    let (status, value) = request(app, "member-token-1", "PUT", "/api/profiles/1/progress", json!({"ended":false,"record":{"identity":episode(1),"parent_identity":series(),"provider_id":"stremio","title":"Fixture Show","poster":null,"landscape":null,"position_millis":1_382_000,"duration_millis":1_440_000,"updated_at_millis":1,"completed_at_millis":null}})).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    resolve(app, 1).await;
+    let next = show_entry(&queue(app).await);
+    assert_eq!(next["status"], "Next", "{next}");
+    assert_eq!(next["card"]["identity"]["id"], "tt100:1:2");
+    assert!(next["card"]["badges"].as_array().unwrap().is_empty(), "{next}");
+
+    // Episode 2 is the newest released one: the card stays on it, watched,
+    // on the queue and on Home.
+    watch(app, episode(2), Some(series()), true, now() + 2000).await;
+    resolve(app, 2).await;
+    let finished = show_entry(&queue(app).await);
+    assert_eq!(finished["status"], "Upcoming", "{finished}");
+    assert_eq!(finished["card"]["identity"]["id"], "tt100:1:2");
+    assert_eq!(finished["card"]["badges"], json!(["Watched"]));
+    let (status, home) = request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{home}");
+    let row = home["rows"].as_array().unwrap().iter().find(|row| row["id"] == "continue").unwrap();
+    assert_eq!(row["cards"][0]["identity"]["id"], "tt100:1:2");
+    assert_eq!(row["cards"][0]["badges"], json!(["Watched"]));
+
+    // Rewatching episode 1 is in progress again: resumed, not watched.
+    watch(app, episode(1), Some(series()), false, now() + 4000).await;
+    let resumed = show_entry(&queue(app).await);
+    assert_eq!(resumed["status"], "Resume", "{resumed}");
+    assert!(resumed["card"]["badges"].as_array().unwrap().is_empty(), "{resumed}");
+}
+
+#[tokio::test]
 async fn home_refreshes_stale_release_facts_in_the_background_and_bumps_the_revision() {
     let start = now();
     let show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
@@ -324,7 +363,7 @@ async fn home_refreshes_stale_release_facts_in_the_background_and_bumps_the_revi
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(50)).await;
         badge = show_entry(&queue(app).await)["card"]["badges"].clone();
-        if badge != json!([]) {
+        if badge == json!(["+1"]) {
             break;
         }
     }
@@ -400,7 +439,7 @@ async fn imported_watched_history_is_a_finished_episode_for_the_refresh() {
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(50)).await;
         badge = show_entry(&queue(app).await)["card"]["badges"].clone();
-        if badge != json!([]) {
+        if badge == json!(["+1"]) {
             break;
         }
     }

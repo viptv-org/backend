@@ -12,8 +12,9 @@
 //!   the badge disappears. A Simkl import whose show is `completed` with no
 //!   unwatched aired episode also counts.
 //!
-//! Episode cards never get this badge; their own completion is shown on the
-//! episode rows. The badge is private profile state, so every response
+//! Episode cards never get this badge here; their own completion is shown on
+//! the episode rows, and Continue Watching marks the finished episode a series
+//! stays on (`continuation::page`). The badge is private profile state, so every response
 //! recomputes it and any `Watched` already on a card (cached metadata, a
 //! client-sent card) is removed first.
 use super::*;
