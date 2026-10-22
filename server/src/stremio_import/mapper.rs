@@ -245,9 +245,17 @@ pub(super) fn map_verified(
             let resume =
                 matches!((offset, duration), (Some(p), Some(d)) if p > 0.0 && d > 0.0 && p <= d);
             let time = timestamp(&state["lastWatched"], now);
+            // Stremio leaves a finished episode as the series' current video with
+            // its offset reset to 0: watched at lastWatched, a dated completion.
+            let episode_completed = kind == "series"
+                && offset == Some(0.0)
+                && time.is_some()
+                && completed.as_ref().is_some_and(|episodes| {
+                    episodes.iter().any(|(video, _, _)| state["video_id"] == *video)
+                });
             if let Some(episodes) = &completed {
                 for (video, season, episode_number) in episodes {
-                    if state["video_id"] == *video && resume && time.is_some() {
+                    if state["video_id"] == *video && (resume || episode_completed) && time.is_some() {
                         continue;
                     }
                     let mut context = json!({"series_id":id,"season":season,"episode":episode_number,
@@ -273,7 +281,7 @@ pub(super) fn map_verified(
             }
             // A rewatch resume wins over timesWatched. Counts alone never identify an episode.
             let movie_completed = kind == "movie" && watched && offset == Some(0.0);
-            if resume || movie_completed {
+            if resume || movie_completed || episode_completed {
                 let identity = if kind == "series" {
                     state["video_id"].as_str().and_then(|video| {
                         (if imdb(id) { episode(video, id) } else { None })
