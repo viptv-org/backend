@@ -1,9 +1,18 @@
 use super::*;
 
+/// API responses are never stored, except where a handler has explicitly
+/// allowed a private (browser/app-only) cache, such as add-on logos.
 pub(crate) async fn private_api_response(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    let private = response
+        .headers()
+        .get(header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("private"));
+    if !private {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    }
     response
 }
 

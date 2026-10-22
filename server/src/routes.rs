@@ -182,6 +182,7 @@ pub fn router_with_tv(
             "/addons/:id",
             axum::routing::patch(addon::http_v2::update).delete(addon::http_v2::delete),
         )
+        .route("/addons/:id/logo", get(addon::http_v2::logo))
         .route(
             "/iptv/connections",
             get(provider::connections_v2::list).post(provider::connections_v2::create),

@@ -56,6 +56,17 @@ account's shared addons, as TV settings require; parent restrictions apply and
 browser/native account sessions are unchanged. `/api/catalogs`, `/api/discover`
 and `/api/meta` remain the catalog read contract.
 
+A manifest's `logo` URL can repeat the add-on's private token, so list rows never
+carry it. When the manifest has a public HTTP(S) logo, the row's `logo` is the
+relative path `/api/addons/:id/logo?v=<revision>` (otherwise `null`); the
+revision changes when the manifest's logo does. That route rechecks ownership
+like the list, fetches through the same pinned source egress (redirects
+revalidated, 512 KiB, 8 s), and serves only PNG, JPEG, WebP or GIF identified
+by their bytes, with `Cache-Control: private` and `nosniff`. SVG, other types,
+oversized or failed logos, and add-ons without one return 404
+`addon_logo_unavailable`. Logos are cached in memory per account, add-on and
+revision (16 MiB); failures are retried after five minutes.
+
 ## Storage and runtime behavior
 
 The addon manifest URL can contain a token, and the manifest can repeat it in

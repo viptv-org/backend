@@ -492,15 +492,15 @@ mod tests {
         let id = store(&app.db.lock().unwrap(), &vault, 1, url, &manifest).unwrap();
         let entries = addons.entries().unwrap();
         assert_eq!(entries[0], (id, url.to_owned(), manifest.clone()));
-        let public = super::super::http_v2::record(&app.db.lock().unwrap(), Some(&vault), 1, id)
+        let public = super::super::http_v2::record(&app.db.lock().unwrap(), Some(&vault), 1, id, false)
             .ok()
             .unwrap();
         assert_eq!(public["manifest_url"], Value::Null);
         assert_eq!(public["credentials_encrypted"], true);
-        // The validated manifest logo is shown as artwork; the manifest URL stays secret.
-        let mut secret_fields = public.clone();
-        secret_fields.as_object_mut().unwrap().remove("logo");
-        assert!(!secret_fields.to_string().contains("private-addon-token"));
+        // The manifest's logo can repeat the private token: only the server's route is listed.
+        assert_eq!(public["logo"].as_str().unwrap().split('?').next(), Some(&*format!("/api/addons/{id}/logo")));
+        assert!(!public.to_string().contains("private-addon-token"));
+        assert!(!public.to_string().contains("art.invalid"));
         let before =
             crate::sources::source_configuration(&app.db.lock().unwrap(), &format!("addon:{id}"))
                 .unwrap();
