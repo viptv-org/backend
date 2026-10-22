@@ -242,6 +242,9 @@ pub(crate) fn queue_items(
         if let Some(anchor) = stremio_import::continuation_item(db, profile, &item)? {
             item = anchor;
             manual_watched = true;
+        } else if let Some(anchor) = furthest_watched(db, profile, &series, &item)? {
+            item = anchor;
+            manual_watched = true;
         }
         let position = item["position"].as_f64().unwrap_or(0.0);
         let duration = item["duration"].as_f64().unwrap_or(0.0);
@@ -289,6 +292,89 @@ pub(crate) fn queue_items(
     Ok(
         json!({"items":items,"offset":offset,"total":total,"next_offset":if has_more { Some(offset+limit) } else { None }}),
     )
+}
+/// An episode only opened (under 1 % played) is not where the profile stands
+/// when a later episode of the series is already watched: imported Stremio
+/// history can name an opened episode as the last one played while a later
+/// one is marked watched. The queue then stands at the furthest watched
+/// episode in the same regular/special sequence, finished. Real progress,
+/// a rewatch included, still resumes.
+fn furthest_watched(
+    db: &Connection,
+    profile: i64,
+    series: &str,
+    current: &Value,
+) -> Result<Option<Value>, ApiError> {
+    let position = current["position"].as_f64().unwrap_or(0.0);
+    let duration = current["duration"].as_f64().unwrap_or(0.0);
+    if series.is_empty() || current["type"] != "series" || !(duration > 0.0 && position < duration * 0.01) {
+        return Ok(None);
+    }
+    let raw: Option<String> = db
+        .query_row(
+            "SELECT context FROM progress WHERE profile_id=?1 AND type='series' AND id=?2",
+            params![profile, current["id"].as_str()],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some(own) = raw.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()) else {
+        return Ok(None);
+    };
+    // A manual correction ("Mark unwatched" included) is the profile's decision.
+    if own["progress_corrected"] == true || library::watched(current, &own) {
+        return Ok(None);
+    }
+    let coordinate = |v: &Value| Some((v["season"].as_u64()?, v["episode"].as_u64()?));
+    let Some(from) = coordinate(&own) else {
+        return Ok(None);
+    };
+    let mut query = db
+        .prepare("SELECT id,name,poster,position,duration,context FROM progress WHERE profile_id=?1 AND type='series' AND title_id=?2 LIMIT 10001")
+        .map_err(db_error)?;
+    let rows = query
+        .query_map(params![profile, series], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, f64>(3)?,
+                r.get::<_, f64>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(db_error)?;
+    let mut furthest: Option<((u64, u64), Value)> = None;
+    for row in rows {
+        let (id, name, poster, position, duration, raw) = row.map_err(db_error)?;
+        let Ok(context) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        let Some(at) = coordinate(&context) else {
+            continue;
+        };
+        if (at.0 == 0) != (from.0 == 0)
+            || at <= from
+            || furthest.as_ref().is_some_and(|(best, _)| *best >= at)
+        {
+            continue;
+        }
+        let mut item = json!({"id":id,"type":"series","name":name,"poster":poster,
+            "position":position,"duration":duration,"updated_at":current["updated_at"],
+            "queue_title_id":current["queue_title_id"]});
+        if !library::watched(&item, &context) {
+            continue;
+        }
+        let Ok(fields) = matching_context(&context) else {
+            continue;
+        };
+        library::add_watch_fields(&mut item, &context);
+        item.as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        furthest = Some((at, item));
+    }
+    Ok(furthest.map(|(_, item)| item))
 }
 // New typed results carry provenance. Retain legacy cache compatibility while
 // refusing another add-on's identically named opaque episode or stale settings.

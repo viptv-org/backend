@@ -333,6 +333,40 @@ async fn credits_count_as_finished_and_the_newest_finished_episode_is_drawn_watc
 }
 
 #[tokio::test]
+async fn an_opened_episode_before_a_watched_one_leaves_the_series_at_the_watched_one() {
+    let start = now();
+    let show = show(vec![
+        (1, start - 30 * DAY),
+        (2, start - 20 * DAY),
+        (3, start - 10 * DAY),
+        (4, start + 7 * DAY),
+    ])
+    .await;
+    let app = &show.app;
+    // Imported Stremio history: episodes 1 and 3 watched without a date, and
+    // episode 2 the last one played, opened for 0.1 s.
+    for number in [1, 3] {
+        app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,?1,'series','Fixture Show',NULL,0,0,0,?2,'tt100')",params![format!("tt100:1:{number}"),json!({"season":1,"episode":number,"series_id":"tt100","watched_override":true,"stremio_import_watched":true,"stremio_completion_only":true,"stremio_watch_date_unknown":true}).to_string()]).unwrap();
+    }
+    let opened = |position: f64| {
+        app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,'tt100:1:2','series','Fixture Show',NULL,?1,1420.053,?2,?3,'tt100') ON CONFLICT(profile_id,type,id) DO UPDATE SET position=excluded.position",params![position,((start - 2 * DAY) / 1000) as i64,json!({"season":1,"episode":2,"series_id":"tt100"}).to_string()]).unwrap();
+    };
+    opened(0.135);
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["record"]["identity"]["id"], "tt100:1:3", "{entry}");
+    assert_eq!(entry["card"]["identity"]["id"], "tt100:1:3");
+    assert_ne!(entry["status"], "Resume");
+    assert_eq!(entry["card"]["badges"], json!(["Watched"]));
+
+    // Real progress on episode 2 is resumed.
+    opened(600.0);
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["status"], "Resume", "{entry}");
+    assert_eq!(entry["card"]["identity"]["id"], "tt100:1:2");
+    assert!(entry["card"]["badges"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn home_refreshes_stale_release_facts_in_the_background_and_bumps_the_revision() {
     let start = now();
     let show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
