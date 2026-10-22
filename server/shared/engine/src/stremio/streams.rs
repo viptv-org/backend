@@ -1,3 +1,4 @@
+use super::release_facts::{ReleaseFacts, source_release_facts, stream_delivery};
 use super::source_metadata::{source_audio_languages, source_detail, source_quality_height};
 use crate::Error;
 use facet::Facet;
@@ -68,7 +69,9 @@ impl SourcePresentation {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
+/// Release facts (SRC-BEST-MATCH-001) are omitted when unknown so earlier
+/// payloads still parse; see `release_facts` for the value vocabularies.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Facet)]
 pub struct SourceCandidate {
     pub id: String,
     pub provider_id: String,
@@ -80,6 +83,33 @@ pub struct SourceCandidate {
     pub audio_languages: Vec<String>,
     #[serde(default)]
     pub presentation: Option<SourcePresentation>,
+    /// `web_dl`, `webrip`, `bluray`, `remux`, `hdtv`, `dvd`, `other_rip` or `cam`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_type: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub three_d: bool,
+    /// Any of `dv`, `hdr10_plus`, `hdr10`, `hdr`, `hlg`; empty is unknown, not SDR.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dynamic_range: Vec<String>,
+    /// Any of `dual`, `multi`, `dubbed`; never audio languages.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_flags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seeders: Option<u32>,
+    /// `direct` or `torrent`, from the stream transport only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<String>,
+}
+impl SourceCandidate {
+    /// Copy normalized release facts onto this candidate.
+    pub fn with_release_facts(mut self, facts: ReleaseFacts) -> Self {
+        self.release_type = facts.release_type;
+        self.three_d = facts.three_d;
+        self.dynamic_range = facts.dynamic_range;
+        self.audio_flags = facts.audio_flags;
+        self.seeders = facts.seeders;
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -89,6 +119,9 @@ pub struct PlayableSource {
     pub quality_height: Option<u32>,
     pub audio_languages: Vec<String>,
     pub presentation: Option<SourcePresentation>,
+    pub release_facts: ReleaseFacts,
+    /// `direct` or `torrent`, from the transport.
+    pub delivery: &'static str,
     pub url: String,
     pub headers: Vec<(String, String)>,
 }
@@ -152,6 +185,8 @@ pub fn read_streams(raw: &str) -> Result<Vec<PlayableSource>, Error> {
                 headers,
                 quality_height: source_quality_height(source),
                 audio_languages: source_audio_languages(source),
+                release_facts: source_release_facts(source),
+                delivery: stream_delivery(source),
             })
         })
         .take(80)

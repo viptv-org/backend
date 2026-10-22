@@ -4,6 +4,9 @@ use viptv_engine::stremio::SourceCandidate;
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rank {
     ids: Vec<String>,
+    /// The height the device shows; caps quality together with the profile cap.
+    #[serde(default)]
+    device_max_height: Option<u32>,
 }
 pub(crate) async fn rank(
     State(app): State<App>,
@@ -13,6 +16,9 @@ pub(crate) async fn rank(
 ) -> ApiResult {
     if input.ids.len() > crate::app_state::MAX_SOURCES_PER_JOB
         || input.ids.iter().any(|id| id.is_empty() || id.len() > 128)
+        || input
+            .device_max_height
+            .is_some_and(|height| !(144..=4320).contains(&height))
     {
         return Err("Invalid source selection".into());
     }
@@ -86,27 +92,41 @@ pub(crate) async fn rank(
             kids::require_item(&db, &lease.principal, &grant.kind, media)?;
         }
         let card = cards.get(&id).ok_or_else(auth::forbidden)?;
-        candidates.push(SourceCandidate {
-            presentation: viptv_engine::stremio::SourcePresentation::from_stream(card),
-            id,
-            provider_id: grant.producer.clone(),
-            label: card["name"].as_str().unwrap_or("Stream").into(),
-            detail: viptv_engine::stremio::source_detail(card),
-            quality_height: viptv_engine::stremio::source_quality_height(card),
-            audio_languages: card["audio_languages"]
-                .as_array()
-                .map(|languages| {
-                    languages
-                        .iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        });
+        candidates.push(
+            SourceCandidate {
+                presentation: viptv_engine::stremio::SourcePresentation::from_stream(card),
+                id,
+                provider_id: grant.producer.clone(),
+                label: card["name"].as_str().unwrap_or("Stream").into(),
+                detail: viptv_engine::stremio::source_detail(card),
+                quality_height: viptv_engine::stremio::source_quality_height(card),
+                audio_languages: card["audio_languages"]
+                    .as_array()
+                    .map(|languages| {
+                        languages
+                            .iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                delivery: card["delivery"]
+                    .as_str()
+                    .filter(|delivery| viptv_engine::stremio::DELIVERIES.contains(delivery))
+                    .map(str::to_owned),
+                ..Default::default()
+            }
+            .with_release_facts(viptv_engine::stremio::source_release_facts(card)),
+        );
     }
     drop(grants);
     drop(db);
-    viptv_engine::preferences::rank_sources(&mut candidates, &preferences.preferences);
+    // Title original-language metadata is not plumbed to ranking yet.
+    viptv_engine::preferences::rank_sources(
+        &mut candidates,
+        &preferences.preferences,
+        None,
+        input.device_max_height,
+    );
     configuration::validate_revision(&app, profile, configuration.scope.revision)?;
     Ok(axum::Json(
         json!({"streams":candidates.into_iter().filter_map(|candidate|cards.remove(&candidate.id)).collect::<Vec<_>>()}),

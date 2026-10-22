@@ -9,6 +9,8 @@ pub(super) struct Input {
     pub file_index: Option<u32>,
     pub trackers: Vec<String>,
     pub requires_gateway: bool,
+    /// BitTorrent transport (infoHash, magnet or `.torrent`), never text.
+    pub torrent: bool,
     pub private_values: Vec<String>,
 }
 
@@ -148,6 +150,7 @@ impl Input {
             file_index,
             trackers,
             requires_gateway: torrent || archive,
+            torrent,
             private_values,
         })
     }

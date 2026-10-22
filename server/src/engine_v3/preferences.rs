@@ -38,7 +38,8 @@ fn read(db: &Connection, account: i64, profile: i64) -> Result<PreferencesSnapsh
 #[serde(deny_unknown_fields)]
 pub(crate) struct Update {
     revision: u64,
-    preferences: ProfilePreferences,
+    /// Parsed against the stored row so an on/off-only client keeps `foreign`.
+    preferences: Value,
 }
 pub(crate) async fn update(
     State(app): State<App>,
@@ -46,10 +47,6 @@ pub(crate) async fn update(
     Path(profile): Path<i64>,
     axum::Json(update): axum::Json<Update>,
 ) -> ApiResult {
-    update
-        .preferences
-        .validate()
-        .map_err(|_| ApiError::from("Invalid profile preferences"))?;
     let app = app.with_lease(lease.clone());
     let account = lease.principal.account_id().ok_or_else(auth::forbidden)?;
     let mut db = app
@@ -59,17 +56,30 @@ pub(crate) async fn update(
     app.require_profile(&db, profile)?;
     lease.validate(&db)?;
     let tx = db.transaction().map_err(db_error)?;
-    if read(&tx, account, profile)?.revision != update.revision {
+    let previous = read(&tx, account, profile)?;
+    if previous.revision != update.revision {
         return Err(ApiError(
             StatusCode::CONFLICT,
             "Profile preferences changed".into(),
         ));
     }
+    // Shape errors (unknown fields, unknown enum values) keep the JSON
+    // extractor's 422; well-formed values that fail validation are 400.
+    let preferences = ProfilePreferences::from_update(update.preferences, &previous.preferences)
+        .map_err(|_| {
+            ApiError(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Invalid profile preferences".into(),
+            )
+        })?;
+    preferences
+        .validate()
+        .map_err(|_| ApiError::from("Invalid profile preferences"))?;
     let revision = update
         .revision
         .checked_add(1)
         .ok_or("Preference revision unavailable")?;
-    let changed=tx.execute("INSERT INTO engine_profile_preferences VALUES(?1,?2,?3,?4) ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision,value=excluded.value WHERE engine_profile_preferences.account_id=?2 AND engine_profile_preferences.revision=?5",params![profile,account,revision,serde_json::to_string(&update.preferences).map_err(|_|ApiError::from("Invalid preferences"))?,update.revision]).map_err(db_error)?;
+    let changed=tx.execute("INSERT INTO engine_profile_preferences VALUES(?1,?2,?3,?4) ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision,value=excluded.value WHERE engine_profile_preferences.account_id=?2 AND engine_profile_preferences.revision=?5",params![profile,account,revision,serde_json::to_string(&preferences).map_err(|_|ApiError::from("Invalid preferences"))?,update.revision]).map_err(db_error)?;
     if changed != 1 {
         return Err(ApiError(
             StatusCode::CONFLICT,
@@ -78,6 +88,6 @@ pub(crate) async fn update(
     }
     tx.commit().map_err(db_error)?;
     Ok(axum::Json(
-        json!({"revision":revision,"preferences":update.preferences}),
+        json!({"revision":revision,"preferences":preferences}),
     ))
 }

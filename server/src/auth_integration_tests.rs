@@ -1320,6 +1320,48 @@ async fn playback_preferences_are_scoped_validated_and_share_autoplay_setting() 
         .1,
         saved
     );
+    // Subtitle mode and HDR preference round-trip; a sent mode decides
+    // subtitles_enabled, and unknown values are rejected.
+    assert_eq!(defaults["preferences"]["subtitle_mode"], "always");
+    assert_eq!(defaults["preferences"]["hdr_preference"], "any");
+    let mut modes = saved["preferences"].clone();
+    modes["subtitle_mode"] = json!("foreign");
+    modes["subtitles_enabled"] = json!(false);
+    modes["hdr_preference"] = json!("prefer");
+    let (status, foreign) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":1,"preferences":modes})).await;
+    assert_eq!(status, StatusCode::OK, "{foreign}");
+    assert_eq!(foreign["preferences"]["subtitle_mode"], "foreign");
+    assert_eq!(foreign["preferences"]["subtitles_enabled"], true);
+    assert_eq!(foreign["preferences"]["hdr_preference"], "prefer");
+    let (_, read_back) = request(&a,"member-token-1","GET","/api/profiles/1/preferences",Value::Null).await;
+    assert_eq!(read_back, foreign);
+    // An on/off-only client keeps foreign while subtitles stay on.
+    let mut legacy_client = foreign["preferences"].clone();
+    legacy_client.as_object_mut().unwrap().remove("subtitle_mode");
+    let (status, kept) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":2,"preferences":legacy_client})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kept["preferences"]["subtitle_mode"], "foreign");
+    for (key, value) in [("subtitle_mode", "sometimes"), ("hdr_preference", "maybe")] {
+        let mut invalid = kept["preferences"].clone();
+        invalid[key] = json!(value);
+        assert_eq!(
+            request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":3,"preferences":invalid})).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{key}"
+        );
+    }
+    // Rows stored before subtitle_mode derive it from subtitles_enabled.
+    for (enabled, mode) in [(true, "always"), (false, "never")] {
+        a.db.lock().unwrap().execute(
+            "UPDATE engine_profile_preferences SET value=?1 WHERE profile_id=1",
+            [json!({"preferred_audio_language":null,"preferred_subtitle_language":null,"subtitles_enabled":enabled,"source_selection":"ask","max_quality_height":null}).to_string()],
+        ).unwrap();
+        let (status, legacy) = request(&a,"member-token-1","GET","/api/profiles/1/preferences",Value::Null).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(legacy["preferences"]["subtitle_mode"], mode);
+        assert_eq!(legacy["preferences"]["subtitles_enabled"], enabled);
+        assert_eq!(legacy["preferences"]["hdr_preference"], "any");
+    }
 }
 
 #[tokio::test]

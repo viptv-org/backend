@@ -332,6 +332,11 @@ pub fn source_audio_languages(source: &Value) -> Vec<String> {
     let mut output = Vec::new();
     for value in values.into_iter().take(32) {
         let text = clean(&value.chars().take(4096).collect::<String>(), 4096).to_lowercase();
+        // Torrentio's `Multi Subs` label is subtitle evidence inside an audio
+        // language line (`Multi Subs / 🇬🇧`); drop the label, keep the line.
+        let text = pattern!(r"\bmulti(?:ple)?[ ._-]*(?:subs?|subtitles?)\b")
+            .replace_all(&text, " ")
+            .into_owned();
         if !declared
             && pattern!(r"\b(?:subtitles?|subs?|subbed|captions?)\b").is_match(&text)
             && !pattern!(r"\b(?:audio|dub|dubbed)\b").is_match(&text)
@@ -394,6 +399,15 @@ pub fn source_audio_languages(source: &Value) -> Vec<String> {
                 }
             }
         }
+    }
+    // VOSTFR/SUBFRENCH is original audio with French subtitles. Indexers
+    // (PTT, therefore Torrentio's 🇫🇷) still list French; that is not audio.
+    if output.iter().any(|language| language == "fr")
+        && pattern!(r"(?i)(?:^|[^a-z0-9])(?:vostfr|subfrench)(?:$|[^a-z0-9])").is_match(&fallback)
+        && !pattern!(r"(?i)(?:^|[^a-z0-9])(?:vff?|vfq|vfi|vf2|truefrench|french)(?:$|[^a-z0-9])")
+            .is_match(&fallback)
+    {
+        output.retain(|language| language != "fr");
     }
     output
 }
