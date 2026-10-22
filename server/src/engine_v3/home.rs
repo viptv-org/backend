@@ -182,13 +182,12 @@ pub(super) async fn load(
         ));
     }
     configuration::validate_revision(&app, profile, configuration_revision)?;
-    // Continue Watching holds titles in progress, including a rewatch of a
-    // finished movie: a Watched check there would contradict its progress bar.
+    // Continue Watching cards come marked by the queue itself: only a finished
+    // episode its series stays on, never a title in progress (a rewatch of a
+    // finished movie keeps its progress bar and no check).
     let watched = super::watched::Watched::for_profile(&app, profile);
     for row in &mut snapshot.rows {
-        if row.id == "continue" {
-            row.cards.iter_mut().for_each(super::watched::strip);
-        } else {
+        if row.id != "continue" {
             watched.mark_all(row.cards.iter_mut());
         }
     }
