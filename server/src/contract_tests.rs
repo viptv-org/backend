@@ -420,6 +420,13 @@ async fn pengu_fetch_context_retains_only_explicit_safe_headers_privately() {
         "quality_height",
         "audio_languages",
         "detail",
+        // SRC-BEST-MATCH-001 release facts; delivery is server-authored.
+        "delivery",
+        "release_type",
+        "three_d",
+        "dynamic_range",
+        "audio_flags",
+        "seeders",
     ];
     assert!(public[0]
         .as_object()

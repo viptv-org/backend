@@ -188,6 +188,8 @@ impl App {
             if source.starts_with("addon:") {
                 public["presentation"]["provider_name"] = public["source_name"].clone();
             }
+            // Delivery is the transport the server just validated, never release text.
+            public["delivery"] = json!(if input.torrent { "torrent" } else { "direct" });
             entries.insert(
                 id.clone(),
                 StreamEntry {
@@ -541,6 +543,18 @@ fn source_card(
     card["audio_languages"] = json!(languages);
     if !languages.is_empty() {
         card["audio_language_status"] = json!("unverified");
+    }
+    // Release facts (SRC-BEST-MATCH-001): add-on declarations first, then the
+    // already redacted release text. Unknown facts are omitted.
+    let mut evidence = card.clone();
+    for key in ["release_type", "three_d", "dynamic_range", "audio_flags", "seeders"] {
+        if let Some(value) = raw.get(key) {
+            evidence[key] = value.clone();
+        }
+    }
+    let facts = viptv_engine::stremio::source_release_facts(&evidence);
+    if let Value::Object(fields) = json!(facts) {
+        card.as_object_mut().unwrap().extend(fields);
     }
     if let Some(detail) = viptv_engine::stremio::source_detail(&card) {
         card["detail"] = json!(detail);
