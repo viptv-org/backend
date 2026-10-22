@@ -159,6 +159,7 @@ fn details(code: &str) -> (StatusCode, &'static str) {
         "addon_private_destination" => (StatusCode::BAD_REQUEST,"The addon uses a private or reserved network address, which the server's source policy does not allow."),
         "invalid_addon_configuration" => (StatusCode::BAD_REQUEST,"Use a valid addon manifest and supported settings."),
         "addon_not_found" => (StatusCode::NOT_FOUND,"This addon is unavailable in your account."),
+        "addon_logo_unavailable" => (StatusCode::NOT_FOUND,"This addon has no logo to show."),
         "addon_configuration_changed" => (StatusCode::CONFLICT,"This addon changed while its manifest was loading. Refresh settings and try again."),
         "addon_checks_busy" => (StatusCode::SERVICE_UNAVAILABLE,"Addon checks are busy. Try again shortly."),
         "addon_redirect_rejected" => (StatusCode::BAD_GATEWAY,"The addon returned an unsafe or excessive redirect. Check its final manifest address."),

@@ -16,6 +16,7 @@ mod extras;
 pub(crate) mod http_v2;
 #[cfg(test)]
 mod http_v2_tests;
+pub(crate) mod logo;
 mod subtitles;
 #[cfg(test)]
 mod tests;
@@ -43,6 +44,7 @@ pub struct Addons {
     account_id: i64,
     engine_ids: Option<Arc<std::collections::HashSet<i64>>>,
     pub(crate) vault: Option<Arc<crate::secret_store::Vault>>,
+    pub(crate) logos: Arc<logo::Cache>,
     protected_fetch: bool,
     #[cfg(test)]
     pub(crate) allow_test_loopback: bool,
@@ -100,6 +102,7 @@ impl Addons {
             account_id: 0,
             engine_ids: None,
             vault: None,
+            logos: Arc::new(logo::Cache::new()),
             protected_fetch: false,
             #[cfg(test)]
             allow_test_loopback: false,

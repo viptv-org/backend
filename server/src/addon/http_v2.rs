@@ -32,32 +32,78 @@ fn own(db: &Connection, account: i64, id: i64) -> Result<(), Error> {
         Err(Error::Code("addon_not_found"))
     }
 }
+/// The public row of one owned add-on. `logo` is the server's logo route, never
+/// the manifest's own address, which can carry private configuration.
 pub(super) fn record(
     db: &Connection,
     vault: Option<&crate::secret_store::Vault>,
     account: i64,
     id: i64,
+    fixture: bool,
 ) -> Result<Value, Error> {
-    own(db, account, id)?;
-    let (name,url,manifest,enabled,version):(String,String,String,bool,i64)=db.query_row("SELECT substr(name,1,256),manifest_url,manifest,enabled,credentials_version FROM addons WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(storage)?;
-    let mut value = json!({"id":id,"name":name,"enabled":enabled,"credentials_encrypted":version==1,"manifest_url":null,"logo":null});
-    match credentials_v2::read(db, vault, account, id, url, manifest, version) {
-        Ok((_, manifest)) => {
-            if let Some(logo) = manifest["logo"].as_str().filter(|s| s.len() <= 4096) {
-                if let Ok(url) = url::Url::parse(logo) {
-                    if crate::source_http::validate(&url, false).is_ok() {
-                        value["logo"] = json!(url.as_str());
-                    }
-                }
+    let (row, manifest) = manifest(db, vault, account, id)?;
+    let mut value = row;
+    match manifest {
+        Ok(manifest) => {
+            if let Some(path) = super::logo::path(id, &manifest, fixture) {
+                value["logo"] = json!(path);
             }
         }
-        Err(raw) => {
-            let code = crate::service_errors::provider(raw).unwrap_or("addon_protocol_invalid");
+        Err(code) => {
             value["configuration_error_code"] = json!(code);
             value["configuration_error"] = json!(account_api::description(code));
         }
     }
     Ok(value)
+}
+/// An owned add-on's public fields and its decrypted manifest (or the safe
+/// configuration error code when it cannot be read).
+fn manifest(
+    db: &Connection,
+    vault: Option<&crate::secret_store::Vault>,
+    account: i64,
+    id: i64,
+) -> Result<(Value, Result<Value, &'static str>), Error> {
+    own(db, account, id)?;
+    let (name,url,manifest,enabled,version):(String,String,String,bool,i64)=db.query_row("SELECT substr(name,1,256),manifest_url,manifest,enabled,credentials_version FROM addons WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(storage)?;
+    let value = json!({"id":id,"name":name,"enabled":enabled,"credentials_encrypted":version==1,"manifest_url":null,"logo":null});
+    let manifest = credentials_v2::read(db, vault, account, id, url, manifest, version)
+        .map(|(_, manifest)| manifest)
+        .map_err(|raw| crate::service_errors::provider(raw).unwrap_or("addon_protocol_invalid"));
+    Ok((value, manifest))
+}
+/// `GET /api/addons/:id/logo`: the owned add-on's logo bytes, fetched by the
+/// server. Any missing, unsafe or unusable logo is a 404.
+pub(crate) async fn logo(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(id): Path<i64>,
+) -> Result<axum::response::Response, Error> {
+    use axum::{http::header, response::IntoResponse};
+    let vault = app.secret_vault.clone();
+    let fixture = app.addons.fixture_transport();
+    let cache = app.addons.logos.clone();
+    let (account, source) = account_api::shared(app, lease, move |db, account| {
+        let (_, manifest) = manifest(db, vault.as_deref(), account, id)?;
+        Ok((account, manifest.ok().and_then(|m| super::logo::source(&m, fixture))))
+    })
+    .await?;
+    let source = source.ok_or(Error::Code("addon_logo_unavailable"))?;
+    let asset = cache
+        .load(account, id, source, fixture)
+        .await
+        .ok_or(Error::Code("addon_logo_unavailable"))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, asset.content_type),
+            // The listing's path changes with the logo, so a client may keep it.
+            (header::CACHE_CONTROL, "private, max-age=86400"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CONTENT_SECURITY_POLICY, "default-src 'none'; sandbox"),
+        ],
+        asset.bytes,
+    )
+        .into_response())
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -85,6 +131,7 @@ pub(crate) async fn create(
         .clone()
         .for_account(account)
         .with_protected_fetch();
+    let fixture = addons.fixture_transport();
     if input.manifest_url.len() > 4096 {
         return Err(Error::Code("invalid_addon_endpoint"));
     }
@@ -105,7 +152,7 @@ pub(crate) async fn create(
     })?;
     account_api::shared(app, lease, move |db, account| {
         let id = credentials_v2::store_checked(db, &vault, account, &url, &manifest, &expected)?;
-        record(db, Some(&vault), account, id)
+        record(db, Some(&vault), account, id, fixture)
     })
     .await
     .map(Json)
@@ -130,6 +177,7 @@ pub(crate) async fn list(
         return Err(Error::Code("invalid_catalog_query"));
     }
     let vault = app.secret_vault.clone();
+    let fixture = app.addons.fixture_transport();
     account_api::view(app, lease, move |db, account| {
         let after = if let Some(cursor) = q.cursor {
             if cursor.len() > 256 {
@@ -169,7 +217,7 @@ pub(crate) async fn list(
         };
         let items = ids
             .into_iter()
-            .map(|id| record(db, vault.as_deref(), account, id))
+            .map(|id| record(db, vault.as_deref(), account, id, fixture))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(json!({"items":items,"next_cursor":next}))
     })
@@ -188,6 +236,7 @@ pub(crate) async fn update(
 ) -> Result<Json<Value>, Error> {
     let Json(patch) = body.map_err(|_| Error::Code("invalid_addon_configuration"))?;
     let vault = app.secret_vault.clone();
+    let fixture = app.addons.fixture_transport();
     account_api::shared(app, lease, move |db, account| {
         own(db, account, id)?;
         db.execute(
@@ -195,7 +244,7 @@ pub(crate) async fn update(
             params![id, patch.enabled, account],
         )
         .map_err(storage)?;
-        record(db, vault.as_deref(), account, id)
+        record(db, vault.as_deref(), account, id, fixture)
     })
     .await
     .map(Json)
