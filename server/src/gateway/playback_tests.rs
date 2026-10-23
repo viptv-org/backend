@@ -943,6 +943,52 @@ async fn v2_profile_preferences_are_scoped_snapshots_without_quality_clamping() 
 }
 
 #[tokio::test]
+async fn unsaved_preferences_match_the_shared_settings_defaults_at_admission() {
+    let (app, peer) = setup().await;
+    let source = source(&app);
+    gateway(&app, "first", 0);
+    let (status, settings) = request(&app,"member-token-1","GET","/api/profiles/1/preferences",Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(settings["preferences"]["preferred_audio_language"].is_null());
+    assert_eq!(settings["preferences"]["subtitle_mode"], "always");
+    let (_, admission) = request(&app,"member-token-1","POST","/api/playback",body(&source,"default_preferences","roku")).await;
+    let ready = settled(&app,admission["id"].as_str().unwrap()).await;
+    assert_eq!(ready["status"], "ready", "{ready}");
+    let output = peer.outputs.lock().unwrap()[0].clone();
+    assert_eq!(output["preferred_audio_language"], settings["preferences"]["preferred_audio_language"]);
+    assert_eq!(output["preferred_subtitle_language"], settings["preferences"]["preferred_subtitle_language"]);
+    assert_eq!(output["subtitles_off"], false);
+    assert_eq!(ready["delivery"]["subtitle_appearance"]["font_scale"], settings["preferences"]["subtitle_font_scale"]);
+}
+
+#[tokio::test]
+async fn legacy_saved_preferences_are_visible_in_settings_until_v3_replaces_them() {
+    let (app, peer) = setup().await;
+    let source = source(&app);
+    gateway(&app, "first", 0);
+    app.db.lock().unwrap().execute("INSERT INTO playback_preferences(profile_id,value) VALUES(1,?1)", [json!({"audio_language":"ja","subtitle_language":"fr","subtitles_enabled":false}).to_string()]).unwrap();
+    let (status, settings) = request(&app,"member-token-1","GET","/api/profiles/1/preferences",Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(settings["preferences"]["preferred_audio_language"], "ja");
+    assert_eq!(settings["preferences"]["preferred_subtitle_language"], "fr");
+    assert_eq!(settings["preferences"]["subtitle_mode"], "never");
+    let (_, admission) = request(&app,"member-token-1","POST","/api/playback",body(&source,"inherited_preferences","roku")).await;
+    assert_eq!(settled(&app,admission["id"].as_str().unwrap()).await["status"],"ready");
+    assert_eq!(peer.outputs.lock().unwrap()[0]["preferred_audio_language"], "ja");
+    assert_eq!(peer.outputs.lock().unwrap()[0]["subtitles_off"], true);
+    let mut preferences = settings["preferences"].clone();
+    preferences["preferred_audio_language"] = json!("ko");
+    let (status, _) = request(&app,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":0,"preferences":preferences})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, current) = request(&app,"member-token-1","GET","/api/profiles/1/preferences",Value::Null).await;
+    assert_eq!(current["preferences"]["preferred_audio_language"], "ko");
+    assert_eq!(current["revision"],1);
+    let (_, admission) = request(&app,"member-token-1","POST","/api/playback",body(&source,"saved_v3_preferences","roku")).await;
+    assert_eq!(settled(&app,admission["id"].as_str().unwrap()).await["status"],"ready");
+    assert_eq!(peer.outputs.lock().unwrap()[1]["preferred_audio_language"], "ko");
+}
+
+#[tokio::test]
 async fn v3_profile_preferences_reach_gateway_and_decoder_without_rewriting_retries() {
     let (app, peer) = setup().await;
     let source = source(&app);

@@ -132,11 +132,20 @@ pub(crate) fn read(db: &Connection, app: &App, profile: i64) -> Result<Value, Ap
         "SELECT revision FROM engine_profile_configuration WHERE profile_id=?1",
         [profile],
     )?;
-    let preferences = scalar(
-        db,
+    let preferences: Option<i64> = db.query_row(
         "SELECT revision FROM engine_profile_preferences WHERE profile_id=?1 AND account_id=?2",
         params![profile, account],
-    )?;
+        |row| row.get(0),
+    ).optional().map_err(db_error)?;
+    let preferences = match preferences {
+        Some(revision) => revision.to_string(),
+        None => {
+            let legacy: Option<String> = db.query_row(
+                "SELECT value FROM playback_preferences WHERE profile_id=?1", [profile], |row| row.get(0),
+            ).optional().map_err(db_error)?;
+            legacy.map(|value| format!("legacy:{:x}", Sha256::digest(value.as_bytes()))).unwrap_or_else(|| "0".into())
+        }
+    };
     let policy = scalar(
         db,
         "SELECT revision FROM kids_profiles WHERE profile_id=?1",
@@ -160,7 +169,7 @@ pub(crate) fn read(db: &Connection, app: &App, profile: i64) -> Result<Value, Ap
         "configuration": configuration.to_string(),
         "addons": addons,
         "policy": policy.to_string(),
-        "preferences": preferences.to_string(),
+        "preferences": preferences,
         "profiles": format!("{profiles}.{unlocked}"),
     }))
 }

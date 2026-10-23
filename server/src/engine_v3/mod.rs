@@ -48,6 +48,8 @@ mod history_tests;
 mod source_integration_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod remote_tv_acceptance;
 
 pub(crate) async fn bootstrap(
     State(app): State<App>,

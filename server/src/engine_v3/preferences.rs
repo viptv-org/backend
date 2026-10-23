@@ -20,7 +20,7 @@ pub(crate) async fn get(
     super::viewing_presentation::preference_controls(&mut value);
     Ok(axum::Json(value))
 }
-fn read(db: &Connection, account: i64, profile: i64) -> Result<PreferencesSnapshot, ApiError> {
+pub(crate) fn read(db: &Connection, account: i64, profile: i64) -> Result<PreferencesSnapshot, ApiError> {
     let row:Option<(u64,String)>=db.query_row("SELECT revision,value FROM engine_profile_preferences WHERE account_id=?1 AND profile_id=?2",params![account,profile],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(db_error)?;
     match row {
         Some((revision, value)) => Ok(PreferencesSnapshot {
@@ -30,9 +30,32 @@ fn read(db: &Connection, account: i64, profile: i64) -> Result<PreferencesSnapsh
         }),
         None => Ok(PreferencesSnapshot {
             revision: 0,
-            preferences: ProfilePreferences::default(),
+            preferences: inherited(db, profile)?,
         }),
     }
+}
+// The settings snapshot and playback admission must resolve the same effective
+// values. Only a persisted legacy row is inherited; an absent row uses the
+// shared v3 defaults, rather than the legacy loader's different defaults.
+fn inherited(db: &Connection, profile: i64) -> Result<ProfilePreferences, ApiError> {
+    let mut result = ProfilePreferences::default();
+    let saved: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM playback_preferences WHERE profile_id=?1)",
+        [profile], |row| row.get(0),
+    ).map_err(db_error)?;
+    if saved {
+        let legacy = crate::preferences::load(db, profile)?;
+        result.preferred_audio_language = Some(legacy.audio_language);
+        result.preferred_subtitle_language = Some(legacy.subtitle_language);
+        result.subtitle_mode = match legacy.subtitle_mode.as_str() {
+            "always" => viptv_engine::preferences::SubtitleMode::Always,
+            "never" => viptv_engine::preferences::SubtitleMode::Never,
+            "foreign" => viptv_engine::preferences::SubtitleMode::Foreign,
+            _ => return Err(ApiError::from("Invalid saved subtitle mode")),
+        };
+        result.subtitles_enabled = result.subtitle_mode != viptv_engine::preferences::SubtitleMode::Never;
+    }
+    Ok(result)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

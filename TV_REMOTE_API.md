@@ -92,15 +92,20 @@ inspection or remux engine. Track/seek changes use a replacement server lease.
 Report observed progress through the existing profile progress/playback-event
 APIs; completion and continuation remain server decisions.
 
-New admissions read saved v3 profile audio/subtitle preferences. Explicit
-track/language/off intents win. Existing legacy-only preference rows keep their
-behavior; idempotent retries keep the original admission's snapshot. Ready
+New admissions and the v3 Settings response use one effective audio/subtitle
+preference resolver. Explicit track/language/off intents win. Persisted legacy
+audio/language/mode values are inherited until a v3 row is saved; when neither
+row exists, both surfaces use the shared v3 defaults (Original audio, Always).
+Inherited values have an opaque preference revision token that changes when the
+legacy row changes. Legacy size/style enums are not newly inferred into decoder
+appearance; the existing v3 appearance defaults apply until saved explicitly.
+Idempotent retries keep the original admission's snapshot. Ready
 delivery adds `subtitle_appearance: {font_scale, text_color, background_color}`
 for decoder execution. These changes do not alter the gateway wire protocol.
 
 The current gateway cannot decide **Foreign audio only** from its selected audio
 track. That choice is omitted from advertised controls. An existing v3 `foreign`
-value produces a visible conflict on admission unless an explicit subtitle
+value (including an inherited legacy value) produces a visible conflict on admission unless an explicit subtitle
 intent is supplied; it never silently becomes Always or client-inferred policy.
 Automatic next/countdown, device display settings and unsupported player actions
 remain unadvertised. Next is explicit through the existing continuation route.
@@ -151,10 +156,21 @@ Roku can consume it alongside its transport/lifecycle fixtures.
 
 The additive action/replacement/default-query producer and canonical engine
 `e42a97fd9734b850b92579e2eb10d800300e39f1` passed the complete single-threaded
-server library suite: **561 passed, 0 failed, 10 ignored**. The ignored cases
+server library suite: **564 passed, 0 failed, 10 ignored** after the effective
+preference resolver/revision cases were added. The ignored cases
 retain their external-runtime requirements. The five parental-policy regression
 cases pass, including all three formerly failing certification observations.
 The native torrent case now feeds an actual producer envelope to the existing
 `NativeTorrentBridge` parser, guarding its closed response shape. Engine checks
 pass both offline and against the canonical commit (51 managed source files).
 These are source/test results, not deployment or physical-device evidence.
+
+The opt-in ignored `engine_v3::remote_tv_acceptance::remote_tv_backend` harness
+also serves the actual router and TV-web static mount from an in-memory fixture
+account. It requires an explicit loopback bind, owned add-on and static output.
+The associated TV-web HTTPS test exercises real device code/approval/token,
+bootstrap/profile selection, durable reload, scoped catalog/detail provenance,
+library save/read and preference persistence. No `/api` responses are intercepted
+in that browser test. Its external add-on content is synthetic, and this harness
+does not qualify gateway transcoding or torrent delivery. It never opens or
+replaces the shared QA database, runtime binary or serving paths.

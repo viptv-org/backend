@@ -55,6 +55,21 @@ fn attach_second_account_profile(app: &App) {
 }
 
 #[tokio::test]
+async fn inherited_preferences_change_only_the_selected_profiles_preference_token() {
+    let app = fixture();
+    attach_second_account_profile(&app);
+    let before = revisions(&app).await;
+    let other = revisions_as(&app,"member-token-2",2).await;
+    app.db.lock().unwrap().execute("INSERT INTO playback_preferences(profile_id,value) VALUES(1,?1)", [json!({"audio_language":"ja","subtitle_language":"fr","subtitles_enabled":false}).to_string()]).unwrap();
+    let inherited = revisions(&app).await;
+    assert_eq!(changed(&before,&inherited), vec!["preferences"]);
+    assert_eq!(revisions_as(&app,"member-token-2",2).await,other);
+    assert_eq!(revisions(&app).await,inherited);
+    app.db.lock().unwrap().execute("UPDATE playback_preferences SET value=?1 WHERE profile_id=1", [json!({"audio_language":"ko","subtitle_language":"fr","subtitles_enabled":false}).to_string()]).unwrap();
+    assert_eq!(changed(&inherited,&revisions(&app).await),vec!["preferences"]);
+}
+
+#[tokio::test]
 async fn revisions_are_opaque_stable_strings_and_private() {
     let app = fixture();
     let first = revisions(&app).await;

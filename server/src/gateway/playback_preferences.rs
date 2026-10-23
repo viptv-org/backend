@@ -16,33 +16,8 @@ pub(super) fn apply(
     else {
         return Ok(());
     };
-    let value: Option<String> = db
-        .query_row(
-            "SELECT value FROM engine_profile_preferences WHERE profile_id=?1 AND account_id=?2",
-            params![profile, account_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|_| Error::Code("provider_storage_unavailable"))?;
-    if let Some(value) = value {
-        let preferences: viptv_engine::preferences::ProfilePreferences =
-            serde_json::from_str(&value)
-                .map_err(|_| Error::Code("provider_storage_unavailable"))?;
-        apply_v3(request, &preferences)?;
-    } else {
-        let preferences = crate::preferences::load(db, profile)?;
-        request
-            .preferred_audio_language
-            .get_or_insert(preferences.audio_language);
-        if !request.subtitles_off
-            && request.subtitle_track.is_none()
-            && preferences.subtitles_enabled
-        {
-            request
-                .preferred_subtitle_language
-                .get_or_insert(preferences.subtitle_language);
-        }
-    }
+    let preferences = crate::engine_v3::preferences::read(db, account_id, profile)?.preferences;
+    apply_v3(request, &preferences)?;
     Ok(())
 }
 
