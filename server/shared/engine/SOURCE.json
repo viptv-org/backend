@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/viptv-org/core",
-  "revision": "613711374b70b08d1f231e55a11153591ca346f9",
+  "revision": "507f7604f50cf26f990e1177f83698a801adaf36",
   "path": "crates/viptv-engine",
   "manifest_transform": "viptv-provider path ../../provider",
   "files": {
@@ -96,7 +96,7 @@
     "src/store.rs": "a2cb0eaacd649c5b60e07f1f901f978c4f95250590a0b8128a3c7987601f1355",
     "src/stremio/browse.rs": "f8882afc599bfc17fbf5358f02c5e1202904dfc8d87c9e867df7158172a92476",
     "src/stremio/manifest.rs": "447633f5106c2bfec9ebf8031bb83e81218ed721cba84d9a3ca609e33ff539b2",
-    "src/stremio/media.rs": "47eb0fc459b6d63ed65e84cd2d4a05951b4492027893eb2442d95c1e497d3e90",
+    "src/stremio/media.rs": "e49560a95bec2842018b30ff2cb6555d47f5542b35c069788a6f6cbba02c8f0f",
     "src/stremio/release_facts.rs": "72ffb4c7d4003e242c6ab35af070efe2ca3ca7dab778f1ef85ae7dcc601c7ad8",
     "src/stremio/source_metadata.rs": "ea9a0090f0086c0a8fcff5b67ba04593b4d5000b777032b03ec0778454d5920e",
     "src/stremio/streams.rs": "43f34789c431b29d7fc3c8c6d0b9583bed4698e4aa7912d11e029ba597ea5f73",

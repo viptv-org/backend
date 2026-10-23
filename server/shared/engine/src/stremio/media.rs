@@ -92,7 +92,17 @@ pub fn episode_cards(meta: &Value, provider: &str, item: &Card) -> Result<Vec<Ca
         .into_iter()
         .next()
         {
-            if let Some(episode) = video["episode"].as_u64() {
+            // Sparse metas number episodes in `number`, or only inside the video
+            // id ("tt1234567:1:2"). Without coordinates the card is dead: Play can
+            // never resolve it and the row shows titles that do nothing.
+            let episode = video["episode"].as_u64()
+                .or_else(|| video["number"].as_u64())
+                .or_else(|| {
+                    let id = video["id"].as_str()?;
+                    let parts: Vec<&str> = id.split(':').collect();
+                    if parts.len() == 3 { parts[2].parse::<u64>().ok() } else { None }
+                });
+            if let Some(episode) = episode {
                 if episode == 0 {
                     continue;
                 }
@@ -194,7 +204,6 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                         .as_f64()
                         .or_else(|| v["imdbRating"].as_str().and_then(|s| s.parse().ok()))
                         .filter(|n| n.is_finite() && (0.0..=10.0).contains(n)),
-                    certification: field(v, "contentRating", 128),
                     ..Default::default()
                 }),
             })
@@ -340,6 +349,24 @@ mod identity_proof_tests {
             )
             .is_ok()
         );
+    }
+    #[test]
+    fn sparse_videos_number_episodes_from_number_or_the_video_id() {
+        // Cinemeta's live meta for obscure series ships videos with no `episode`
+        // field: the number is in `number`, or only inside `id` (tt…:season:n).
+        let detail = detail_page(
+            &serde_json::json!({"meta":{"id":"tt33673360","type":"series","name":"Sparse",
+                "videos":[
+                    {"id":"tt33673360:1:1","season":1,"number":1},
+                    {"id":"tt33673360:1:2","season":1}
+                ]}}).to_string(),
+            "addon:one", "series", "tt33673360", 0, 24,
+        ).unwrap();
+        let coordinates: Vec<_> = detail.episodes.iter().filter_map(|e| e.identity.episode.clone()).collect();
+        assert_eq!(coordinates.len(), 2, "every sparse video must still carry its episode number");
+        assert_eq!(coordinates[0].episode, 1);
+        assert_eq!(coordinates[1].episode, 2);
+        assert_eq!(coordinates[0].season, Some(1));
     }
     #[test]
     fn conflicts_remain_visible_and_invalid_nested_fractional_or_noncanonical_ids_are_ignored() {
