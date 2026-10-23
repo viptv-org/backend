@@ -1,0 +1,111 @@
+{
+  "description": "Synthetic shared producer fixtures. No real account, provider, credentials or media capability URLs. Fields absent from these samples are not capabilities.",
+  "card": {
+    "identity": {
+      "kind": "movie",
+      "id": "fixture-film",
+      "ids": []
+    },
+    "provider_id": "stremio",
+    "title": "Fixture Film",
+    "badges": [
+      "Watched",
+      "5.1",
+      "hdr",
+      "uhd",
+      "4K"
+    ],
+    "metadata": {
+      "year": 2026,
+      "genres": [
+        "Action",
+        "Adventure",
+        "Drama"
+      ],
+      "runtime_minutes": 100,
+      "certification": "PG-13"
+    }
+  },
+  "card_view": {
+    "saved": false,
+    "metadata_parts": [
+      "Movie",
+      "2026",
+      "Action, Adventure",
+      "1h 40m"
+    ],
+    "hero_metadata_parts": [
+      "2026",
+      "Action, Adventure",
+      "1h 40m"
+    ],
+    "compact_metadata_parts": [
+      "2026",
+      "1h 40m"
+    ],
+    "badges": [
+      {
+        "label": "4K",
+        "role": "capability"
+      },
+      {
+        "label": "HDR",
+        "role": "capability"
+      },
+      {
+        "label": "5.1",
+        "role": "capability"
+      },
+      {
+        "label": "PG-13",
+        "role": "certification"
+      },
+      {
+        "label": "Watched",
+        "role": "watched"
+      }
+    ],
+    "hero_badges": [
+      {
+        "label": "4K",
+        "role": "capability"
+      },
+      {
+        "label": "HDR",
+        "role": "capability"
+      },
+      {
+        "label": "5.1",
+        "role": "capability"
+      },
+      {
+        "label": "PG-13",
+        "role": "certification"
+      }
+    ],
+    "tile_badge": {
+      "label": "Watched",
+      "role": "watched"
+    },
+    "progress": null
+  },
+  "source_view": {
+    "title": "LordStreams",
+    "body": "WEB-DL \u00b7 HEVC \u00b7 5.1 \u00b7 18.4 GB",
+    "quality_label": "4K",
+    "format_label": "HDR10",
+    "addon_label": "Add-on A",
+    "provider_label": null
+  },
+  "subtitle_appearance": {
+    "font_scale": 1.25,
+    "text_color": "#FFFFFF",
+    "background_color": "#00000000"
+  },
+  "unavailable": [
+    "automatic_next_countdown",
+    "device_display_preferences",
+    "foreign_audio_subtitle_policy",
+    "unverified_cast_summary"
+  ]
+}

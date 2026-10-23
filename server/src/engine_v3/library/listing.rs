@@ -143,7 +143,7 @@ pub(crate) async fn list(
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?,
     )?;
-    Ok(axum::Json(
-        serde_json::to_value(snapshot).map_err(|_| ApiError::from("Library unavailable"))?,
-    ))
+    let mut value=serde_json::to_value(snapshot).map_err(|_|ApiError::from("Library unavailable"))?;
+    if let Some(cards)=value["cards"].as_array_mut(){for card in cards{if let Ok(typed)=serde_json::from_value::<viptv_engine::presentation::Card>(card.clone()){card["view"]=super::viewing_presentation::card_view(&typed,true);}}}
+    Ok(axum::Json(value))
 }

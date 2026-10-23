@@ -63,3 +63,14 @@ async fn cards_carry_release_facts_and_ranking_reads_them_back(){
  let(_,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids})).await;
  assert_eq!(body["streams"][0]["release_type"],"web_dl");assert_eq!(body["streams"][2]["release_type"],"remux");
 }
+
+#[tokio::test]
+async fn remote_quality_filters_preserve_server_order_and_report_all_facets() {
+    let (app,cards)=rank_fixture(vec![json!({"url":"https://media.example/4k.mp4","name":"4K","quality_height":2160}),json!({"url":"https://media.example/hd.mp4","name":"HD","quality_height":1080})]);
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    let (status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"quality_height":1080})).await;
+    assert_eq!(status,StatusCode::OK,"{body}");assert_eq!(body["streams"].as_array().unwrap().len(),1);assert_eq!(body["streams"][0]["quality_height"],1080);assert_eq!(body["total"],2);assert_eq!(body["quality_filters"].as_array().unwrap().len(),2);assert!(ids.contains(&body["best_match_id"]));
+    assert_eq!(body["streams"][0]["view"]["quality_label"], "1080p");
+    assert_eq!(body["streams"][0]["view"]["title"], "HD");
+    assert_eq!(body["streams"][0]["view"]["addon_label"], "Sources");
+}

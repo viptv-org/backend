@@ -941,6 +941,31 @@ async fn v2_profile_preferences_are_scoped_snapshots_without_quality_clamping() 
     assert_eq!(output["preferred_audio_language"], "it");
     assert!(output["preferred_subtitle_language"].is_null());
 }
+
+#[tokio::test]
+async fn v3_profile_preferences_reach_gateway_and_decoder_without_rewriting_retries() {
+    let (app, peer) = setup().await;
+    let source = source(&app);
+    gateway(&app, "first", 0);
+    let (_, defaults) = request(&app,"member-token-1","GET","/api/profiles/1/preferences",Value::Null).await;
+    let mut preferences = defaults["preferences"].clone();
+    preferences["preferred_audio_language"] = json!("ja");
+    preferences["preferred_subtitle_language"] = json!("en");
+    preferences["subtitle_font_scale"] = json!(1.25);
+    assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":0,"preferences":preferences})).await.0,StatusCode::OK);
+    let start = body(&source,"v3_preferences","roku");
+    let (status, admission) = request(&app,"member-token-1","POST","/api/playback",start.clone()).await;
+    assert_eq!(status,StatusCode::ACCEPTED,"{admission}");
+    let ready = settled(&app,admission["id"].as_str().unwrap()).await;
+    assert_eq!(ready["status"],"ready","{ready}");
+    assert_eq!(peer.outputs.lock().unwrap()[0]["preferred_audio_language"],"ja");
+    assert_eq!(peer.outputs.lock().unwrap()[0]["preferred_subtitle_language"],"en");
+    assert_eq!(ready["delivery"]["subtitle_appearance"]["font_scale"],1.25);
+    preferences["subtitle_font_scale"] = json!(0.8);
+    assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":1,"preferences":preferences})).await.0,StatusCode::OK);
+    let (_, repeated) = request(&app,"member-token-1","POST","/api/playback",start).await;
+    assert_eq!(repeated["delivery"]["subtitle_appearance"]["font_scale"],1.25);
+}
 #[tokio::test]
 async fn gateway_selection_affinity_renewal_and_grant_revocation_are_scoped() {
     let (app, peer) = setup().await;

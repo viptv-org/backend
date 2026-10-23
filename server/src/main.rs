@@ -1,5 +1,5 @@
 use std::{path::PathBuf, time::Duration};
-use viptv_server::{router_with_tv, App};
+use viptv_server::{router_with_viewers, App};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -67,6 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tv_dashboard = std::env::var_os("VIPTV_TV_DIST")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
+    let tv_web=std::env::var_os("VIPTV_TV_WEB_DIST").filter(|value|!value.is_empty()).map(PathBuf::from);
     let bind = std::env::var("VIPTV_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let budget_path = std::path::Path::new(&database)
@@ -92,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     tracing::info!("VIPTV server listening");
     let router =
-        router_with_tv(app, dashboard, tv_dashboard).layer(axum::middleware::from_fn_with_state(
+        router_with_viewers(app, dashboard, tv_dashboard, tv_web).layer(axum::middleware::from_fn_with_state(
             telemetry.clone(),
             service_telemetry::middleware::observe,
         ));

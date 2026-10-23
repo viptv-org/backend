@@ -196,6 +196,18 @@ pub(crate) async fn guide(
     Extension(lease): Extension<ResourceLease>,
     Path((profile, channel)): Path<(i64, String)>,
 ) -> ApiResult {
+    let mut response=guide_inner(State(app),Extension(lease),Path((profile,channel))).await?;
+    let now=util::now_millis().max(0) as u64;
+    let current=response.0["programs"].as_array().and_then(|programs|programs.iter().find(|program|program["start_millis"].as_u64().is_some_and(|start|start<=now)&&program["end_millis"].as_u64().is_some_and(|end|end>now))).map(|program|program["id"].clone());
+    let start=now/1_800_000*1_800_000;
+    response.0["view"]=json!({"current_program_id":current,"now_millis":now,"window_start_millis":start,"window_end_millis":start+7_200_000});
+    Ok(response)
+}
+async fn guide_inner(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path((profile, channel)): Path<(i64, String)>,
+) -> ApiResult {
     let app = app.with_lease(lease.clone());
     let (revision, connection) = connection_for(&app, &lease, profile, &channel).await?;
     if connection.plugin_id == "m3u" || connection.id.starts_with("xtream:") {

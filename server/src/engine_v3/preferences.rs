@@ -16,9 +16,9 @@ pub(crate) async fn get(
     app.require_profile(&db, profile)?;
     lease.validate(&db)?;
     let snapshot = read(&db, lease.principal.account_id().unwrap(), profile)?;
-    Ok(axum::Json(
-        serde_json::to_value(snapshot).map_err(|_| ApiError::from("Preferences unavailable"))?,
-    ))
+    let mut value=serde_json::to_value(snapshot).map_err(|_|ApiError::from("Preferences unavailable"))?;
+    super::viewing_presentation::preference_controls(&mut value);
+    Ok(axum::Json(value))
 }
 fn read(db: &Connection, account: i64, profile: i64) -> Result<PreferencesSnapshot, ApiError> {
     let row:Option<(u64,String)>=db.query_row("SELECT revision,value FROM engine_profile_preferences WHERE account_id=?1 AND profile_id=?2",params![account,profile],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(db_error)?;
@@ -87,7 +87,7 @@ pub(crate) async fn update(
         ));
     }
     tx.commit().map_err(db_error)?;
-    Ok(axum::Json(
-        json!({"revision":revision,"preferences":preferences}),
-    ))
+    let mut value=json!({"revision":revision,"preferences":preferences});
+    super::viewing_presentation::preference_controls(&mut value);
+    Ok(axum::Json(value))
 }

@@ -13,7 +13,18 @@ pub fn router_with_tv(
     dashboard: Option<std::path::PathBuf>,
     tv_dashboard: Option<std::path::PathBuf>,
 ) -> Router {
+    router_with_viewers(app,dashboard,tv_dashboard,None)
+}
+/// An optional TV-web mount shares the API origin without replacing the KMP root.
+pub fn router_with_viewers(
+    app: App,
+    dashboard: Option<std::path::PathBuf>,
+    tv_dashboard: Option<std::path::PathBuf>,
+    tv_web: Option<std::path::PathBuf>,
+) -> Router {
     let api = Router::new()
+        .route("/profiles/:id/viewing-action", post(engine_v3::viewing_action::resolve))
+        .route("/profiles/:id/addon-activation", get(engine_v3::viewing_action::addon_states).put(engine_v3::viewing_action::set_addon))
         .route(
             "/profiles/:id/source-integrations",
             get(engine_v3::source_integrations::schemas)
@@ -365,6 +376,9 @@ pub fn router_with_tv(
             }),
         );
     }
+    if let Some(path) = tv_web {
+        r=r.nest_service("/tv",tower_http::services::ServeDir::new(&path).fallback(tower_http::services::ServeFile::new(path.join("index.html"))));
+    }
     if let Some(path) = tv_dashboard {
         // The KMP viewing app is the site root; /tv is gone (legacy route
         // removed). Unknown paths fall back to the app so client-side
@@ -433,5 +447,26 @@ async fn dashboard_entry(path: PathBuf) -> Response {
             "Dashboard entry unavailable",
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tv_web_mount_tests {
+    use super::*;
+    use tower::ServiceExt;
+    #[tokio::test]
+    async fn optional_tv_mount_preserves_root_dashboard_api_and_deep_links() {
+        let root=tempfile::tempdir().unwrap();let tv=tempfile::tempdir().unwrap();let dashboard=tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("index.html"),"KMP root").unwrap();
+        std::fs::write(tv.path().join("index.html"),"TV web").unwrap();
+        std::fs::create_dir(tv.path().join("assets")).unwrap();std::fs::write(tv.path().join("assets/test.js"),"TV asset").unwrap();
+        std::fs::write(dashboard.path().join("index.html"),"Account dashboard").unwrap();
+        let app=router_with_viewers(crate::auth_integration_tests::fixture(),Some(dashboard.path().into()),Some(root.path().into()),Some(tv.path().into()));
+        for (path,expected) in [("/","KMP root"),("/device","Account dashboard"),("/tv?platform=vizio","TV web"),("/tv/?platform=tizen","TV web"),("/tv/detail/title?layout=tv","TV web"),("/tv/assets/test.js","TV asset")] {
+            let response=app.clone().oneshot(axum::http::Request::builder().uri(path).body(axum::body::Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(response.status(),StatusCode::OK,"{path}");
+            let bytes=axum::body::to_bytes(response.into_body(),1024).await.unwrap();assert_eq!(&bytes[..],expected.as_bytes(),"{path}");
+        }
+        let response=app.oneshot(axum::http::Request::builder().uri("/api/health").body(axum::body::Body::empty()).unwrap()).await.unwrap();assert_eq!(response.status(),StatusCode::OK);
     }
 }

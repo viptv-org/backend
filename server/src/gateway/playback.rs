@@ -32,6 +32,8 @@ use std::{
 
 #[path = "playback_captions.rs"]
 mod captions;
+#[path = "playback_preferences.rs"]
+mod profile_preferences;
 pub(crate) use captions::attach as attach_subtitle;
 
 const LEASE: Duration = Duration::from_secs(60);
@@ -102,6 +104,8 @@ pub(crate) struct Facts {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Start {
+    #[serde(skip)]
+    subtitle_appearance: Option<Value>,
     #[serde(skip)]
     decoder_start: bool,
     #[serde(default)]
@@ -1374,26 +1378,13 @@ async fn start_mode(
     // existing playback or turn a safe retry into a conflicting request.
     let database = app.db.clone();
     let preference_lease = lease.clone();
-    let preferences = tokio::task::spawn_blocking(move || {
+    request = tokio::task::spawn_blocking(move || {
         let db = database.lock().unwrap();
-        preference_lease.validate(&db)?;
-        let crate::auth::Principal::Account { profile_id, .. } = preference_lease.principal;
-        profile_id
-            .map(|id| crate::preferences::load(&db, id))
-            .transpose()
-            .map(Option::unwrap_or_default)
-            .map_err(Error::from)
+        profile_preferences::apply(&db, &preference_lease, &mut request)?;
+        Ok::<_, Error>(request)
     })
     .await
     .map_err(|_| Error::Code("provider_storage_unavailable"))??;
-    request
-        .preferred_audio_language
-        .get_or_insert(preferences.audio_language);
-    if !request.subtitles_off && request.subtitle_track.is_none() && preferences.subtitles_enabled {
-        request
-            .preferred_subtitle_language
-            .get_or_insert(preferences.subtitle_language);
-    }
     // Do not apply Preferences::cap: v2 uses actual decoder limits only.
     validate(&request)?;
     if input.live && request.position != 0.0 {
@@ -1651,7 +1642,7 @@ async fn prepare(
     let destination = if direct {
         app.direct_probe.resolve(&source.url, &source.headers, || validate_entry(&app, &entry)).await?
     } else { None };
-    let delivery = if let Some(destination) = destination {
+    let mut delivery = if let Some(destination) = destination {
         if let Some(provider) = source.provider_id {
             let permit = app
                 .providers
@@ -1796,6 +1787,7 @@ async fn prepare(
         cleanup.armed = false;
         delivery
     };
+    if let Some(appearance) = request.subtitle_appearance { delivery["subtitle_appearance"] = appearance; }
     validate_entry(&app, &entry).await?;
     tokio::task::spawn_blocking(move || {
         let db = app.db.lock().map_err(|_| Error::Code("provider_storage_unavailable"))?;

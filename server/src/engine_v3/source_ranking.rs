@@ -4,6 +4,8 @@ use viptv_engine::stremio::SourceCandidate;
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rank {
     ids: Vec<String>,
+    #[serde(default)]
+    quality_height: Option<u32>,
     /// The height the device shows; caps quality together with the profile cap.
     #[serde(default)]
     device_max_height: Option<u32>,
@@ -128,7 +130,50 @@ pub(crate) async fn rank(
         input.device_max_height,
     );
     configuration::validate_revision(&app, profile, configuration.scope.revision)?;
+    let ranked: Vec<_> = candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let mut card = cards.remove(&candidate.id)?;
+            let addon_label = eligible.iter().find(|connection| connection.id == candidate.provider_id).map(|connection| connection.name.clone());
+            card["view"] = display(&candidate, addon_label.as_deref());
+            Some(card)
+        })
+        .collect();
+    let mut heights = std::collections::BTreeMap::<u32, usize>::new();
+    for card in &ranked {
+        if let Some(height) = viptv_engine::stremio::source_quality_height(card) {
+            *heights.entry(height).or_default() += 1;
+        }
+    }
+    let filters=heights.into_iter().rev().map(|(height,count)|json!({"height":height,"label":if height==2160{"4K".into()}else{format!("{height}p")},"count":count})).collect::<Vec<_>>();
+    let best_match_id = ranked
+        .first()
+        .and_then(|card| card["id"].as_str())
+        .map(str::to_owned);
+    let total = ranked.len();
+    let selection_note = if preferences.preferences.source_selection == viptv_engine::preferences::SourceSelection::Best {
+        "Play starts the best match when discovery finishes. Change how it’s chosen in Settings › Playback."
+    } else {
+        "Choose a source to start playback. Change your default in Settings › Playback."
+    };
+    let streams = ranked
+        .into_iter()
+        .filter(|card| {
+            input.quality_height.is_none_or(|height| {
+                viptv_engine::stremio::source_quality_height(card) == Some(height)
+            })
+        })
+        .collect::<Vec<_>>();
     Ok(axum::Json(
-        json!({"streams":candidates.into_iter().filter_map(|candidate|cards.remove(&candidate.id)).collect::<Vec<_>>()}),
+        json!({"streams":streams,"best_match_id":best_match_id,"quality_filters":filters,"total":total,"selection_note":selection_note}),
     ))
+}
+
+fn display(candidate: &SourceCandidate, addon: Option<&str>) -> Value {
+    let presentation = candidate.presentation.as_ref();
+    let quality = presentation.and_then(|p| p.quality.clone()).or_else(|| candidate.quality_height.map(|height| if height == 2160 { "4K".into() } else { format!("{height}p") }));
+    let format = candidate.dynamic_range.iter().map(|value| match value.as_str() {
+        "dv" => "Dolby Vision", "hdr10_plus" => "HDR10+", "hdr10" => "HDR10", "hdr" => "HDR", "hlg" => "HLG", _ => "",
+    }).filter(|value| !value.is_empty()).collect::<Vec<_>>().join(" · ");
+    json!({"title":candidate.label,"body":candidate.detail,"quality_label":quality,"format_label":format,"addon_label":addon,"provider_label":presentation.and_then(|p|p.provider_name.as_deref())})
 }

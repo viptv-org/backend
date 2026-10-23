@@ -1,0 +1,108 @@
+# Remote viewing clients — additive API contract
+
+The TV-web rebuild consumes the unversioned `/api/*` surface and bootstrap
+`contract_version: 3`. These additions are shared with the concurrent Roku work;
+existing fields/routes remain compatible. They are local source changes, not a
+claim that production has adopted them.
+
+## User intent and presentation
+
+- `POST /api/profiles/:id/viewing-action` accepts `{card, restart?: boolean}`.
+  It resolves the verified title/episode, continuation and profile preferences
+  and returns `{card, label, resume, source_selection}`. A lookup selector needs identity, parent identity, provider, title and metadata
+  origin; omit artwork and synopsis from GET selectors. Use the returned card for
+  discovery and pass `resume` to playback admission. Do not choose the first
+  episode or derive resume thresholds on a client. Exact episodes are checked
+  against the paged server metadata, including episodes beyond the first page.
+- `GET /api/profiles/:id/addon-activation` returns `addons` entries containing
+  `connection_id` and the server-confirmed `enabled` flag for this profile.
+- `PUT /api/profiles/:id/addon-activation` accepts
+  `{connection_id: "addon:<id>", enabled: boolean}`. The server translates this
+  intent into the canonical profile assignments using current supported
+  capabilities and the existing revision check. It returns `configuration`.
+- Cards in bootstrap, Home, discovery and detail include `view.saved`. Library
+  page cards also report `view.saved: true`. This resolves canonical/private
+  identity membership on the server. It is a presentation fact, not an authority
+  token; mutations still validate the card and its metadata origin.
+- `Card.view` also supplies ordered `metadata_parts`, `hero_metadata_parts`
+  (billboard text without the media-kind prefix), `compact_metadata_parts`,
+  typed `badges: [{label, role}]`, `hero_badges`, optional `tile_badge` and
+  nullable `progress`. Capability aliases, genre length and badge ordering are
+  producer decisions. Render the supplied sequence; do not parse raw `badges`.
+- Viewing actions include the exact episode in `label`, plus nullable `progress`
+  and `remaining_label` from the server continuation record. Unknown duration
+  remains null. No cast summary is advertised without a verified source.
+- Home rows include `view.card_shape: "landscape" | "poster"`.
+- Preferences responses include `controls`, with `id`, `group` (`playback` or
+  `subtitles`), `label`, optional `description`, and `choices: [{label, value}]`.
+  Render these options and send the returned preference object with the edited
+  value and its `revision`. Server validation and conflict responses remain
+  authoritative. No local settings store is necessary.
+
+## Sources and playback
+
+`POST /api/profiles/:id/source-ranking` retains `ids` and optional
+`device_max_height`, and adds optional `quality_height`. Its response contains:
+
+- `streams`: server-ranked rows, filtered by the requested height when supplied;
+- `best_match_id`: the best row across the submitted set before the display filter;
+- `quality_filters`: `{height, label, count}` entries for that set;
+- `total`: the submitted eligible ranked set's size before the display filter;
+- `selection_note`: the server preference’s explanatory text for the source panel.
+- Each stream adds `view.title`, `body`, `quality_label`, `format_label`,
+  `addon_label` and `provider_label`. Missing facts remain null/empty. These
+  display fields cannot be used as playback selectors.
+
+Movie/episode discovery still starts `/api/streams` and polls its returned job.
+Live `/api/profiles/:id/live/:channel/sources` can return `streams` immediately;
+do not invent a job ID or a polling URL for that response.
+
+Playback uses `/api/playback`, its returned ID, heartbeat and DELETE routes.
+A cancelled/ambiguous admission can be released by
+`DELETE /api/playback-requests/:request_id`. URLs in `delivery` are transient
+media capabilities and are never backend control URLs. TV-web uses conservative
+H.264/AAC gateway delivery and the platform decoder; it runs no local torrent,
+inspection or remux engine. Track/seek changes use a replacement server lease.
+Report observed progress through the existing profile progress/playback-event
+APIs; completion and continuation remain server decisions.
+
+New admissions read saved v3 profile audio/subtitle preferences. Explicit
+track/language/off intents win. Existing legacy-only preference rows keep their
+behavior; idempotent retries keep the original admission's snapshot. Ready
+delivery adds `subtitle_appearance: {font_scale, text_color, background_color}`
+for decoder execution. These changes do not alter the gateway wire protocol.
+
+The current gateway cannot decide **Foreign audio only** from its selected audio
+track. That choice is omitted from advertised controls. An existing v3 `foreign`
+value produces a visible conflict on admission unless an explicit subtitle
+intent is supplied; it never silently becomes Always or client-inferred policy.
+Automatic next/countdown, device display settings and unsupported player actions
+remain unadvertised. Next is explicit through the existing continuation route.
+Tv3 wording remains the producer wording; KMP-specific wording is not copied
+into the shared API merely for a platform's visual comparison.
+
+Roku handoff reviewed: `roku/docs/BACKEND_HANDOFF.md` (2026-10-23). Producer tests
+cover membership scope, surprising ranking, filters independent of best match,
+exact episode selection and v3 preference delivery. The configured QA binary
+has not been replaced: its reported viewing-action 404 is expected until the
+producer is built and deployed separately.
+
+Guide responses add `view.current_program_id`, `view.now_millis`,
+`view.window_start_millis` and `view.window_end_millis`. Clients draw the timeline
+and move focus; they do not guess which programme is current or autoplay one.
+
+## Optional hosting
+
+`VIPTV_TV_WEB_DIST=/absolute/path/to/tv-web/dist` mounts the shared viewing bundle
+at `/tv`, including assets and SPA fallback. TV launchers keep their platform
+query; browser TV mode is `/tv/?layout=tv`. The existing `VIPTV_TV_DIST` KMP root
+and `/device` account dashboard remain unchanged. The optional mount uses the
+same HTTPS/API origin and does not alter CORS or authorization.
+
+The public Rust `router_with_tv` remains compatible; `router_with_viewers` adds
+an explicit fourth optional TV-web path for hosts/tests. No environment or
+production routing is changed automatically by adopting this source patch.
+
+Shared synthetic fixtures: [`fixtures/remote-viewing-v3.json`](fixtures/remote-viewing-v3.json).
+The ordered card projection is asserted against this file by producer tests;
+Roku can consume it alongside its transport/lifecycle fixtures.

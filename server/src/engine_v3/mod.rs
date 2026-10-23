@@ -30,6 +30,8 @@ pub(crate) mod revisions;
 #[cfg(test)]
 mod revisions_tests;
 mod projection;
+pub(crate) mod viewing_action;
+pub(crate) mod viewing_presentation;
 pub(crate) mod origins;
 pub(crate) mod scoped_library;
 #[cfg(test)] mod origin_tests;
@@ -155,9 +157,9 @@ pub(crate) async fn bootstrap(
         })
         .map(|s| s.json());
     let axum::Json(management) = profiles::list(State(app), Extension(lease)).await?;
-    Ok(axum::Json(
-        json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions}),
-    ))
+    let mut value=json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions});
+    if let Some(membership)=membership.as_ref(){viewing_presentation::decorate(&mut value,membership)?;}
+    Ok(axum::Json(value))
 }
 
 pub(crate) async fn home(
@@ -165,10 +167,9 @@ pub(crate) async fn home(
     Extension(lease): Extension<ResourceLease>,
     Path(profile): Path<i64>,
 ) -> ApiResult {
-    Ok(axum::Json(
-        serde_json::to_value(home::load(app, lease, profile).await?)
-            .map_err(|_| ApiError::from("Home unavailable"))?,
-    ))
+    let mut value=serde_json::to_value(home::load(app.clone(),lease.clone(),profile).await?).map_err(|_|ApiError::from("Home unavailable"))?;
+    viewing_presentation::for_profile(&app,&lease,profile,&mut value)?;
+    Ok(axum::Json(value))
 }
 
 fn scope(lease: &ResourceLease, profile: i64, revision: u64) -> Scope {

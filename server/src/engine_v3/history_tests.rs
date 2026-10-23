@@ -45,7 +45,8 @@ async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
     assert!(entry["completed_at_millis"].is_null());
     assert!(entry["updated_at_millis"].as_u64().unwrap() > 1000);
     let home = get(&app, "/api/bootstrap").await;
-    assert_eq!(home["home"]["rows"][0]["cards"][0], entry["card"]);
+    let mut expected=entry["card"].clone();expected["view"]=super::viewing_presentation::card_view(&serde_json::from_value(expected.clone()).unwrap(),false);
+    assert_eq!(home["home"]["rows"][0]["cards"][0], expected);
     assert!(
         home["home"]["revision"].as_u64().unwrap() > before["home"]["revision"].as_u64().unwrap()
     );
