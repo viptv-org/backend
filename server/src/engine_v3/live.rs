@@ -272,7 +272,7 @@ pub(crate) async fn sources(
     }
     let axum::Json(value) = crate::provider::discovery_v2::live_source(
         State(app.clone()),
-        Extension(lease),
+        Extension(lease.clone()),
         Path(channel.clone()),
     )
     .await
@@ -291,9 +291,30 @@ pub(crate) async fn sources(
         &connection.id,
         &[value["source"].clone()],
     );
+    let card = {
+        let db = app.db.lock().map_err(|_| ApiError::from("Database unavailable"))?;
+        db.query_row("SELECT name FROM provider_live WHERE id=?1", [&channel], |row| {
+            Ok(viptv_engine::live::live_card(channel.clone(), row.get(0)?, None, connection.id.clone()))
+        }).map_err(db_error)?
+    };
+    let action = viewing_action(&app, &lease, profile, &card)?;
     Ok(axum::Json(
-        json!({"streams":[value["source"].clone()],"live":true}),
+        json!({"streams":[value["source"].clone()],"live":true,"action":action}),
     ))
+}
+
+pub(super) fn viewing_action(
+    app: &App, lease: &ResourceLease, profile: i64, card: &viptv_engine::presentation::Card,
+) -> Result<Value, ApiError> {
+    let db = app.db.lock().map_err(|_| ApiError::from("Database unavailable"))?;
+    app.require_profile(&db, profile)?;
+    lease.validate(&db)?;
+    kids::require_parent(&db, &lease.principal)?;
+    let preferences = super::preferences::read(&db, lease.principal.account_id().ok_or_else(auth::forbidden)?, profile)?;
+    // The source envelope remains URL-free. Artwork stays in the channel
+    // directory; this intent needs only the canonical target and display title.
+    let target = viptv_engine::live::live_card(card.identity.id.clone(), card.title.clone(), None, card.provider_id.clone());
+    Ok(json!({"card":target,"label":"Watch live","resume":false,"source_selection":preferences.preferences.source_selection}))
 }
 
 pub(super) fn remember_sources(

@@ -66,6 +66,15 @@ selectable, supported input indices. Unknown/absent action flags are omitted
 from client controls. Native torrent envelopes remain unchanged because their
 existing consumer protocol is deliberately closed.
 
+Live channel source responses additionally return `action` with the canonical
+channel Card, `label`, `resume`, and saved `source_selection`. The intent Card
+contains identity/title without artwork URLs; the existing channel directory
+continues to supply artwork. Live resume is resolved by the producer. Consumers
+send the returned opaque source IDs to the existing source-ranking endpoint and
+honor its named best match only after an explicit Watch intent and when the
+returned selection preference permits it. Explicit source-picker intent still
+requires a user choice. Do not hard-code Ask or select the first Live source.
+
 An explicit source or track replacement can add this to `POST /api/playback`:
 
 ```json

@@ -46,6 +46,17 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
     .await;
     assert_eq!(status, StatusCode::OK, "{sources}");
     assert_eq!(sources["live"], true);
+    assert_eq!(sources["action"]["card"]["identity"]["kind"], "live");
+    assert_eq!(sources["action"]["card"]["identity"]["id"], "opaque-live");
+    assert_eq!(sources["action"]["card"]["title"], "News channel");
+    assert_eq!(sources["action"]["resume"], false);
+    assert_eq!(sources["action"]["source_selection"], "ask");
+    let (_, settings) = request(&app,"member-token-1","GET","/api/profiles/1/preferences",Value::Null).await;
+    let mut preferences = settings["preferences"].clone();
+    preferences["source_selection"] = json!("best");
+    assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":0,"preferences":preferences})).await.0,StatusCode::OK);
+    let (_, selected) = request(&app,"member-token-1","POST","/api/profiles/1/live/opaque-live/sources",Value::Null).await;
+    assert_eq!(selected["action"]["source_selection"], "best");
     assert_eq!(
         request(
             &app,
@@ -125,7 +136,7 @@ async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_
         .unwrap()["id"]
         .as_str()
         .unwrap();
-    let channels=viptv_engine::live::parse_m3u("#EXTM3U\n#EXTINF:-1 tvg-id=\"news\",News TV\n#EXTVLCOPT:http-referrer=https://headers.example/source-context\nhttps://media.example/live.m3u8?token=private\n",&url::Url::parse("https://provider.example/list.m3u").unwrap(),connection).unwrap();
+    let channels=viptv_engine::live::parse_m3u("#EXTM3U\n#EXTINF:-1 tvg-id=\"news\" tvg-logo=\"https://images.example/news.png\",News TV\n#EXTVLCOPT:http-referrer=https://headers.example/source-context\nhttps://media.example/live.m3u8?token=private\n",&url::Url::parse("https://provider.example/list.m3u").unwrap(),connection).unwrap();
     let id = channels[0].channel.id.clone();
     app.live_cache.lock().await.insert(
         connection.into(),
@@ -169,6 +180,10 @@ async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(source["live"], true);
+    assert_eq!(source["action"]["card"]["identity"], page["channels"][0]["card"]["identity"]);
+    assert_eq!(source["action"]["source_selection"], "ask");
+    assert!(source["action"]["card"]["landscape"].is_null());
+    assert!(!source.to_string().contains("https://"));
     assert_eq!(
         request(
             &app,

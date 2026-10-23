@@ -348,5 +348,6 @@ pub(crate) async fn sources(
     }
     drop(entries);
     super::remember_sources(&app, profile, revision, &channel, &connection.id, &cards);
-    Ok(axum::Json(json!({"streams":cards,"live":true})))
+    let action = super::viewing_action(&app, &lease, profile, &selected.channel.card)?;
+    Ok(axum::Json(json!({"streams":cards,"live":true,"action":action})))
 }

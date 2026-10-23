@@ -217,5 +217,23 @@
         "label": "Profile"
       }
     ]
+  },
+  "live_source_action": {
+    "card": {
+      "identity": {
+        "kind": "live",
+        "id": "channel-fixture",
+        "ids": []
+      },
+      "provider_id": "m3u:1",
+      "title": "Fixture channel",
+      "badges": [],
+      "poster": null,
+      "landscape": null,
+      "logo": null
+    },
+    "label": "Watch live",
+    "resume": false,
+    "source_selection": "best"
   }
 }
