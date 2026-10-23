@@ -2296,6 +2296,8 @@ async fn kids_policy_changes_revoke_already_issued_resources() {
         json!({"profile_id":id}),
     )
     .await;
+    let observed = a.db.lock().unwrap().query_row("SELECT age,conflict FROM kids_media WHERE account_id=1 AND kind='movie' AND id='safe'",[],|row|Ok((row.get::<_,Option<i64>>(0)?,row.get::<_,bool>(1)?))).optional().unwrap();
+    assert_eq!(observed,Some((Some(0),false)),"the parent metadata observation must seed the legacy allowed-title proof");
     let (status, job) = request(
         &a,
         "member-token-1",
@@ -2304,7 +2306,7 @@ async fn kids_policy_changes_revoke_already_issued_resources() {
         json!({"type":"movie","id":"safe"}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{job}");
     let job_id = job["id"].as_str().unwrap();
     request(
         &a,

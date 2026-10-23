@@ -107,5 +107,41 @@
     "device_display_preferences",
     "foreign_audio_subtitle_policy",
     "unverified_cast_summary"
-  ]
+  ],
+  "playback_actions": {
+    "vod": {
+      "pause": true,
+      "seek": true,
+      "restart": true,
+      "change_source": true,
+      "episodes": false,
+      "next_episode": false,
+      "tracks": false,
+      "subtitle_style": false,
+      "report_progress": true
+    },
+    "live": {
+      "pause": false,
+      "seek": false,
+      "restart": false,
+      "change_source": true,
+      "episodes": false,
+      "next_episode": false,
+      "tracks": false,
+      "subtitle_style": false,
+      "report_progress": false
+    }
+  },
+  "source_replacement": {
+    "request": {
+      "replace_source": {
+        "playback_id": "fixture-prior-lease",
+        "observed_position": 63.25
+      }
+    },
+    "resolved_hls_clock": {
+      "position": 0,
+      "timeline_offset_seconds": 63.25
+    }
+  }
 }

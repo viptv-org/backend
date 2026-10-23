@@ -966,6 +966,84 @@ async fn v3_profile_preferences_reach_gateway_and_decoder_without_rewriting_retr
     let (_, repeated) = request(&app,"member-token-1","POST","/api/playback",start).await;
     assert_eq!(repeated["delivery"]["subtitle_appearance"]["font_scale"],1.25);
 }
+
+#[tokio::test]
+async fn remote_actions_distinguish_live_delivery_from_vod_and_end_with_the_lease() {
+    let contract: Value = serde_json::from_str(include_str!("../../../fixtures/remote-viewing-v3.json")).unwrap();
+    let (app, _peer) = setup().await;
+    gateway(&app, "first", 0);
+    let vod = source(&app);
+    app.streams.lock().unwrap().get_mut(&vod).unwrap().media_id = Some("tt-fixture".into());
+    let (_, admission) = request(&app,"member-token-1","POST","/api/playback",body(&vod,"remote-actions-vod","roku")).await;
+    let id = admission["id"].as_str().unwrap();
+    let ready = settled(&app,id).await;
+    assert_eq!(ready["actions"],contract["playback_actions"]["vod"]);
+    assert_eq!(ready["actions"]["pause"],true);
+    assert_eq!(ready["actions"]["seek"],true);
+    assert_eq!(ready["actions"]["change_source"],true);
+    assert_eq!(ready["actions"]["next_episode"],false);
+    assert_eq!(ready["actions"]["report_progress"],true);
+    assert_eq!(ready["actions"]["tracks"],false);
+    request(&app,"member-token-1","DELETE",&format!("/api/playback/{id}"),Value::Null).await;
+    let (_, stopped) = request(&app,"member-token-1","GET",&format!("/api/playback/{id}"),Value::Null).await;
+    assert_eq!(stopped["actions"]["seek"],false);
+
+    let live = live_source_fixture(&app).await;
+    let (_, admission) = request(&app,"member-token-1","POST","/api/playback",body(&live,"remote-actions-live","roku")).await;
+    let ready = settled(&app,admission["id"].as_str().unwrap()).await;
+    assert_eq!(ready["live"],true);
+    assert_eq!(ready["actions"],contract["playback_actions"]["live"]);
+    assert_eq!(ready["delivery"]["live"],true);
+    for field in ["pause","seek","restart","next_episode","episodes","report_progress"] { assert_eq!(ready["actions"][field],false,"{field}: {ready}"); }
+    assert_eq!(ready["actions"]["change_source"],true);
+    let previous = ready["id"].as_str().unwrap();
+    request(&app,"member-token-1","DELETE",&format!("/api/playback/{previous}"),Value::Null).await;
+    let mut replacement = body(&live,"remote-actions-live-replace","roku");
+    replacement["replace_source"] = json!({"playback_id":previous,"observed_position":900000.0});
+    let (status,replaced) = request(&app,"member-token-1","POST","/api/playback",replacement).await;
+    assert_eq!(status,StatusCode::ACCEPTED,"{replaced}");
+    let ready = settled(&app,replaced["id"].as_str().unwrap()).await;
+    assert_eq!(ready["delivery"]["position"],0.0);
+    assert_eq!(ready["delivery"]["timeline_offset_seconds"],0.0);
+}
+
+#[tokio::test]
+async fn source_replacement_uses_observed_position_after_release_and_rejects_other_titles() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 0);
+    let first = source(&app);
+    let second = source(&app);
+    let other = source(&app);
+    {
+        let mut grants = app.streams.lock().unwrap();
+        for (id,title) in [(&first,"tt-current"),(&second,"tt-current"),(&other,"tt-other")] {
+            grants.get_mut(id).unwrap().media_id = Some(title.into());
+        }
+    }
+    let (_, admission) = request(&app,"member-token-1","POST","/api/playback",body(&first,"replacement-original","roku")).await;
+    let previous = admission["id"].as_str().unwrap();
+    assert_eq!(settled(&app,previous).await["status"],"ready");
+    request(&app,"member-token-1","DELETE",&format!("/api/playback/{previous}"),Value::Null).await;
+    let mut change = body(&second,"replacement-current","roku");
+    change["replace_source"] = json!({"playback_id":previous,"observed_position":63.25});
+    // An explicit replacement must not depend on the profile's resume threshold
+    // or a periodic progress write catching up with the actual decoder clock.
+    change["resume"] = json!(true);
+    let (status, admitted) = request(&app,"member-token-1","POST","/api/playback",change.clone()).await;
+    assert_eq!(status,StatusCode::ACCEPTED,"{admitted}");
+    let ready = settled(&app,admitted["id"].as_str().unwrap()).await;
+    assert_eq!(ready["delivery"]["position"],0.0,"{ready}");
+    assert_eq!(ready["delivery"]["timeline_offset_seconds"],63.25,"{ready}");
+    let (status,repeated) = request(&app,"member-token-1","POST","/api/playback",change.clone()).await;
+    assert_eq!(status,StatusCode::OK); assert_eq!(repeated["id"],admitted["id"]);
+    assert_eq!(peer.starts.lock().unwrap().len(),2);
+    change["request_id"] = json!("replacement-wrong-title");
+    change["stream_id"] = json!(other);
+    let (status,denied) = request(&app,"member-token-1","POST","/api/playback",change).await;
+    assert_eq!(status,StatusCode::BAD_REQUEST,"{denied}");
+    assert_eq!(denied["error_code"],"playback_replacement_invalid");
+    assert_eq!(peer.starts.lock().unwrap().len(),2);
+}
 #[tokio::test]
 async fn gateway_selection_affinity_renewal_and_grant_revocation_are_scoped() {
     let (app, peer) = setup().await;

@@ -316,6 +316,11 @@ async fn native_grants_are_exact_independent_transient_and_poll_never_renews() {
     let app = setup().await;
     let source = torrent(&app, Some(7));
     let first = ready(&app, body(&source, "first")).await;
+    let wire_start: Start = serde_json::from_value(body(&source,"first")).unwrap();
+    let context=json!({"origin":"https://viptv.fixture.invalid","scope":"compatibility","generation":1,"qualified":true,"negotiated":true,"vod":true,"request":core_request(&wire_start).unwrap_or_else(|_|panic!("valid native request"))});
+    let bridge=viptv_core::native_torrent::NativeTorrentBridge::new(context.to_string()).unwrap();
+    let observation=json!({"scope":"compatibility","generation":1,"sequence":1,"operation":"start","receivedAtMillis":1000,"roundTripMillis":1,"uncertaintyMillis":0,"maxUncertaintyMillis":1000,"trustedWallUpperUnixMillis":crate::util::now()*1000,"suspendAware":true});
+    assert!(bridge.accept(200,first.to_string(),observation.to_string()).is_ok(),"the existing strict native consumer must accept the producer envelope");
     let second = ready(&app, body(&source, "second")).await;
     assert_eq!(first["delivery"]["grant"]["file_index"], 7);
     assert_ne!(

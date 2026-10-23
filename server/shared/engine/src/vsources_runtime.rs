@@ -461,7 +461,7 @@ mod real_qualification {
         };
         let mut count = 0;
         let started = std::time::Instant::now();
-        let result = resolve_progressive(config, media, Arc::new(|| true), |streams| {
+        let result = resolve_progressive(config, media, Arc::new(|| true), None, |streams| {
             count += streams.len();
         })
         .await;

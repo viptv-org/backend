@@ -144,6 +144,29 @@ pub(crate) async fn list(
             .map_err(|_| ApiError::from("Database unavailable"))?,
     )?;
     let mut value=serde_json::to_value(snapshot).map_err(|_|ApiError::from("Library unavailable"))?;
+    // Clear/reset previews consume the same defaults as an omitted query.
+    // Keep this projection tied to the shared query type rather than a client
+    // inventory of sort/filter defaults.
+    value["default_query"] = serde_json::to_value(Page::default())
+        .map_err(|_| ApiError::from("Library defaults unavailable"))?;
     if let Some(cards)=value["cards"].as_array_mut(){for card in cards{if let Ok(typed)=serde_json::from_value::<viptv_engine::presentation::Card>(card.clone()){card["view"]=super::viewing_presentation::card_view(&typed,true);}}}
     Ok(axum::Json(value))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{auth_integration_tests::fixture,test_support::request};
+    use serde_json::Value;
+    use axum::http::StatusCode;
+    #[tokio::test]
+    async fn reset_query_matches_the_producers_unfiltered_normalized_query() {
+        let app=fixture();
+        let (status,defaults)=request(&app,"member-token-1","GET","/api/profiles/1/library",Value::Null).await;
+        assert_eq!(status,StatusCode::OK,"{defaults}");
+        let (status,filtered)=request(&app,"member-token-1","GET","/api/profiles/1/library?sort=name_desc&type=movie&limit=2",Value::Null).await;
+        assert_eq!(status,StatusCode::OK,"{filtered}");
+        assert_ne!(filtered["query"],defaults["query"]);
+        assert_eq!(filtered["default_query"],defaults["query"]);
+        assert_eq!(defaults["default_query"],defaults["query"]);
+    }
 }

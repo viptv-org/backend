@@ -57,6 +57,32 @@ Movie/episode discovery still starts `/api/streams` and polls its returned job.
 Live `/api/profiles/:id/live/:channel/sources` can return `streams` immediately;
 do not invent a job ID or a polling URL for that response.
 
+Standard direct/gateway playback envelopes now project `actions`: `pause`,
+`seek`, `restart`, `change_source`, `episodes`, `next_episode`, `tracks`,
+`subtitle_style`, and `report_progress`. These are server display/execution
+directives, not authorization tokens. Live disables VOD pause/seek/restart,
+episode navigation and profile VOD progress writes. Track selection requires
+selectable, supported input indices. Unknown/absent action flags are omitted
+from client controls. Native torrent envelopes remain unchanged because their
+existing consumer protocol is deliberately closed.
+
+An explicit source or track replacement can add this to `POST /api/playback`:
+
+```json
+{"replace_source":{"playback_id":"previous-lease-id","observed_position":63.25}}
+```
+
+Send the decoder observation, leaving the top-level `position` at zero. The
+producer validates the previous lease's account/session/profile and both source
+proofs, requires the same verified target, and resolves the delivery clock. It
+accepts a ready lease or one released within the 60-second context window. VOD
+keeps the observation without relying on a delayed history write or resume
+threshold; Live starts at the live edge. The resulting HLS clock may be represented
+as `position: 0` plus `timeline_offset_seconds: 63.25`. Clients execute that
+returned representation. Retries remain bound to the original request ID/body;
+new explicit choices use a new request ID. Invalid/revoked/mismatched contexts
+fail visibly. Native torrent replacement is outside this extension.
+
 Playback uses `/api/playback`, its returned ID, heartbeat and DELETE routes.
 A cancelled/ambiguous admission can be released by
 `DELETE /api/playback-requests/:request_id`. URLs in `delivery` are transient
@@ -80,6 +106,20 @@ Automatic next/countdown, device display settings and unsupported player actions
 remain unadvertised. Next is explicit through the existing continuation route.
 Tv3 wording remains the producer wording; KMP-specific wording is not copied
 into the shared API merely for a platform's visual comparison.
+
+Library snapshots now include `default_query`, serialized from the shared
+`LibraryQuery::default()` and matching the normalized unfiltered request. Use
+it for Clear/reset previews, including optional null fields; do not copy a
+platform's hard-coded sort/filter defaults. This addresses the additional
+Library reset request in the Roku handoff.
+
+The shared engine import is now checked by `scripts/sync-engine.py check` and,
+when the canonical checkout is available, `scripts/sync-engine.py check ../core`.
+Its source revision is recorded in `server/shared/engine/SOURCE.json`. Declared
+Stremio certification values survive the typed title/episode projection, which
+restores rating badges and the legacy observation path. Existing origin-scoped
+parental checks continue to evaluate the provider document through their own
+policy implementation; presentation fields are not grants.
 
 Roku handoff reviewed: `roku/docs/BACKEND_HANDOFF.md` (2026-10-23). Producer tests
 cover membership scope, surprising ranking, filters independent of best match,
@@ -106,3 +146,15 @@ production routing is changed automatically by adopting this source patch.
 Shared synthetic fixtures: [`fixtures/remote-viewing-v3.json`](fixtures/remote-viewing-v3.json).
 The ordered card projection is asserted against this file by producer tests;
 Roku can consume it alongside its transport/lifecycle fixtures.
+
+## Source validation — 2026-10-23
+
+The additive action/replacement/default-query producer and canonical engine
+`e42a97fd9734b850b92579e2eb10d800300e39f1` passed the complete single-threaded
+server library suite: **561 passed, 0 failed, 10 ignored**. The ignored cases
+retain their external-runtime requirements. The five parental-policy regression
+cases pass, including all three formerly failing certification observations.
+The native torrent case now feeds an actual producer envelope to the existing
+`NativeTorrentBridge` parser, guarding its closed response shape. Engine checks
+pass both offline and against the canonical commit (51 managed source files).
+These are source/test results, not deployment or physical-device evidence.

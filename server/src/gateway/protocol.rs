@@ -133,6 +133,12 @@ fn track(value: &Value) -> Result<Value> {
             out.insert("disposition".into(), Value::Object(disposition));
         }
     }
+    // Selection intent uses input_index. An output-only descriptor may be
+    // displayed by older clients, but cannot advertise an executable selection.
+    if out.get("selectable") == Some(&Value::Bool(true))
+        && (!out.contains_key("input_index") || out.get("supported") == Some(&Value::Bool(false))) {
+        out.insert("selectable".into(), Value::Bool(false));
+    }
     Ok(Value::Object(out))
 }
 impl Session {

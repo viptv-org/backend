@@ -204,6 +204,7 @@ fn details(code: &str) -> (StatusCode, &'static str) {
         "gateway_processing_failed" => (StatusCode::BAD_GATEWAY,"The gateway could not prepare this stream. Choose another source or check the gateway."),
             "gateway_required" => (StatusCode::CONFLICT, "This device or source requires a playback gateway. Configure one in account settings or ask the server operator."),
             "invalid_playback_request" => (StatusCode::BAD_REQUEST, "Check the source, playback position and device capabilities."),
+            "playback_replacement_invalid" => (StatusCode::BAD_REQUEST, "This source cannot replace the current playback. Open the title and choose a source again."),
             "playback_not_found" | "source_not_found" => (StatusCode::NOT_FOUND, "This source or playback session is unavailable in your account. Refresh the sources."),
             "playback_conflict" => (StatusCode::CONFLICT, "This playback request ID was already used for a different request. Start a new request."),
             "playback_expired" | "authorization_expired" => (StatusCode::GONE, "Playback authorization expired. Reconnect and choose the source again."),

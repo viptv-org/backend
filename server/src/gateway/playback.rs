@@ -34,6 +34,8 @@ use std::{
 mod captions;
 #[path = "playback_preferences.rs"]
 mod profile_preferences;
+#[path = "playback_view.rs"]
+mod viewing;
 pub(crate) use captions::attach as attach_subtitle;
 
 const LEASE: Duration = Duration::from_secs(60);
@@ -104,6 +106,8 @@ pub(crate) struct Facts {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Start {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    replace_source: Option<viewing::ReplaceSource>,
     #[serde(skip)]
     subtitle_appearance: Option<Value>,
     #[serde(skip)]
@@ -248,6 +252,8 @@ impl StateData {
     }
 }
 struct Entry {
+    live: bool,
+    caption_style: bool,
     id: String,
     scope: String,
     request_id: String,
@@ -578,7 +584,7 @@ fn response(entry: &Entry) -> Value {
                 grant.observe_time(now);
                 native.last_server_time = now;
                 if let Ok(body) = grant.ready(&entry.id, native.position, &native.preferences) {
-                    if let Ok(value) = serde_json::from_str(&body) {
+                    if let Ok(value) = serde_json::from_str::<Value>(&body) {
                         return value;
                     }
                 }
@@ -607,7 +613,11 @@ fn response(entry: &Entry) -> Value {
         util::now() as u64
     };
     tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), status = state.status, expires_at, error_code = state.error.unwrap_or("none"), gateway_session_tag = %state.remote.as_ref().map(|remote| super::diagnostics::tag(&remote.viewer)).unwrap_or_default(), "Playback lease state");
-    json!({"id":entry.id,"status":state.status,"delivery":state.delivery,"live":entry.proof.kind=="live","error_code":state.error,"error":error,"expires_at":expires_at,"renew_after_seconds":20})
+    let mut value = json!({"id":entry.id,"status":state.status,"delivery":state.delivery,"live":entry.live,"error_code":state.error,"error":error,"expires_at":expires_at,"renew_after_seconds":20});
+    // Native torrent envelopes are deliberately closed and are outside this
+    // remote wrapper contract. Preserve their existing consumer wire shape.
+    if state.native.is_none() { value["actions"] = viewing::actions(entry,&state); }
+    value
 }
 fn expired(state: &StateData) -> bool {
     state.touched.elapsed() >= LEASE
@@ -745,7 +755,7 @@ fn core_request(request: &Start) -> Result<viptv_core::dto::PlaybackV2Request, E
     }
     serde_json::to_value(request)
         .and_then(|mut v| {
-            if let Some(fields) = v.as_object_mut() { fields.remove("resume"); }
+            if let Some(fields) = v.as_object_mut() { fields.remove("resume"); fields.remove("replace_source"); }
             // Delivery-only native-player negotiation is outside torrent policy.
             // The complete request (including this fact) remains in the admission hash.
             if let Some(fields) = v["client"].as_object_mut() { fields.remove("supports_required_audio_index"); }
@@ -1265,6 +1275,7 @@ fn validate(request: &Start) -> Result<(), Error> {
             !v1 && !v2
         })
         || !protocol::identifier(&request.request_id)
+        || request.replace_source.as_ref().is_some_and(|intent| !intent.valid() || request.position != 0.0 || request.client.native_torrent.is_some())
         || request.stream_id.is_empty()
         || request.stream_id.len() > 128
         || !request.position.is_finite()
@@ -1362,6 +1373,7 @@ async fn start_mode(
         return Ok((StatusCode::OK, Json(response(&entry))));
     }
     let input = source(&app, &lease, request.stream_id.clone()).await?;
+    viewing::replace(&app, &lease, &input, &mut request).await?;
     if request.resume && request.position == 0.0 && !input.live {
         let db = app.db.lock().map_err(|_| Error::Code("provider_storage_unavailable"))?;
         lease.validate(&db)?;
@@ -1499,6 +1511,8 @@ async fn start_mode(
         }
         db.execute("INSERT INTO playback_request_authority(session_id,request_id,scope,request_hash,playback_id) VALUES(?1,?2,?3,?4,?5)", params![session, request.request_id, scope, hash.as_slice(), id]).map_err(|_| Error::Code("provider_storage_unavailable"))?;
         let entry = Arc::new(Entry {
+            live: input.live,
+            caption_style: matches!(request.client.platform, Platform::Web | Platform::Vizio | Platform::Webos),
             id: id.clone(),
             scope,
             request_id: request.request_id.clone(),
@@ -1787,6 +1801,7 @@ async fn prepare(
         cleanup.armed = false;
         delivery
     };
+    delivery["live"] = json!(entry.live);
     if let Some(appearance) = request.subtitle_appearance { delivery["subtitle_appearance"] = appearance; }
     validate_entry(&app, &entry).await?;
     tokio::task::spawn_blocking(move || {

@@ -204,6 +204,11 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                         .as_f64()
                         .or_else(|| v["imdbRating"].as_str().and_then(|s| s.parse().ok()))
                         .filter(|n| n.is_finite() && (0.0..=10.0).contains(n)),
+                    // Preserve the provider's declared display certification.
+                    // Hosts retain raw rating evidence for policy evaluation;
+                    // this field does not infer an age or permission.
+                    certification: ["contentRating", "certification", "ageRating", "mpaaRating"]
+                        .into_iter().find_map(|key| field(v,key,128)),
                     ..Default::default()
                 }),
             })
