@@ -114,6 +114,7 @@ pub(crate) async fn bootstrap(
     let subtitle_availability = profile_id
         .map(|profile| bootstrap_facts::subtitles(&app, &lease, profile))
         .transpose()?;
+    let navigation = bootstrap_facts::navigation(&app, &lease, profile_id)?;
     let bootstrap_preferences = if let Some(profile) = profile_id {
         Some(
             preferences::get(State(app.clone()), Extension(lease.clone()), Path(profile))
@@ -160,6 +161,7 @@ pub(crate) async fn bootstrap(
         .map(|s| s.json());
     let axum::Json(management) = profiles::list(State(app), Extension(lease)).await?;
     let mut value=json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions});
+    value["navigation"] = navigation;
     if let Some(membership)=membership.as_ref(){viewing_presentation::decorate(&mut value,membership)?;}
     Ok(axum::Json(value))
 }

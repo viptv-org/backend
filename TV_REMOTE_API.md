@@ -136,6 +136,24 @@ Guide responses add `view.current_program_id`, `view.now_millis`,
 `view.window_start_millis` and `view.window_end_millis`. Clients draw the timeline
 and move focus; they do not guess which programme is current or autoplay one.
 
+## Navigation availability
+
+Bootstrap now adds ordered `navigation: [{id,label}]` entries. These are shared
+viewing destinations derived from cached profile assignments, cached catalog
+types, search authorization and Live parental permission. No provider probes
+are performed to compute them. Disabled/deleted assignments cannot keep a
+destination visible. Restricted profiles keep the approved-Library discovery
+routes; Live requires the same parent permission as its existing API. With no
+selected profile, only the Profile destination is returned.
+
+Consumers preserve returned ordering and labels for routes they implement,
+omitting unknown/out-of-scope routes. For example, TV-web deliberately omits
+Calendar even when the producer advertises it for another client. A temporary
+provider failure leaves its configured route available for a visible retry;
+it does not silently remove navigation. Configuration/profile revisions refresh
+the projection. The shared fixture includes configured, unconfigured,
+restricted and unselected-profile examples.
+
 ## Optional hosting
 
 `VIPTV_TV_WEB_DIST=/absolute/path/to/tv-web/dist` mounts the shared viewing bundle

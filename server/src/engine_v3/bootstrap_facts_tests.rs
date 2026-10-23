@@ -96,3 +96,50 @@ async fn bootstrap_negotiates_required_audio_api_without_an_extra_request_or_sel
     assert_eq!(status,StatusCode::UNAUTHORIZED);
     assert!(body.get("playback_capabilities").is_none());
 }
+
+#[tokio::test]
+async fn navigation_uses_scoped_cached_catalogs_and_live_assignments() {
+    let app = fixture();
+    let contract: Value = serde_json::from_str(include_str!("../../../fixtures/remote-viewing-v3.json")).unwrap();
+    {
+        let db = app.db.lock().unwrap();
+        for (id, account, kind) in [(21,1,"movie"),(22,2,"series")] {
+            db.execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(?1,'Cached catalog',?2,?3,?4)",params![id,format!("http://127.0.0.1:9/{id}/manifest.json"),json!({"id":format!("navigation-{id}"),"name":"Cached catalog","version":"1","resources":["catalog","meta"],"types":[kind],"catalogs":[{"type":kind,"id":"fixture","name":"Fixture","extra":[{"name":"search","isRequired":false}]}]}).to_string(),account]).unwrap();
+        }
+        db.execute_batch("INSERT INTO providers(id,name,url,username,password,enabled,enable_live,enable_movies,enable_series) VALUES(21,'Owned Live','https://fixture.invalid','fixture','fixture',1,1,0,0); INSERT INTO provider_ownership VALUES(21,1);").unwrap();
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    let configure = |revision, enabled| json!({"revision":revision,"browsing_plugin":"stremio","assignments":[
+        {"connection_id":"addon:21","enabled":if enabled{json!(["Discovery","Metadata","Search"])}else{json!([])}},
+        {"connection_id":"iptv:21","enabled":if enabled{json!(["LiveTv"])}else{json!([])}}
+    ]});
+    let lease = ResourceLease { policy_revision:0, principal:auth::Principal::Account { account_id:1,role:"member".into(),profile_id:Some(1),session_id:Some("s1".into()) },session_id:Some("s1".into()) };
+    let ids = |value:Value| value.as_array().unwrap().iter().map(|item|item["id"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+    for (revision, enabled) in [(0,true),(1,false)] {
+        let (status,value)=request(&app,"member-token-1","PUT","/api/profiles/1/integrations",configure(revision,enabled)).await;
+        assert_eq!(status,StatusCode::OK,"{value}");
+        let navigation=super::bootstrap_facts::navigation(&app,&lease,Some(1)).unwrap();
+        assert_eq!(navigation, contract["navigation"][if enabled {"movie_and_live"} else {"unconfigured"}]);
+        assert_eq!(ids(navigation), if enabled {vec!["search","home","movie","live","library","profiles"]}else{vec!["home","library","profiles"]});
+    }
+    assert_eq!(ids(super::bootstrap_facts::navigation(&app,&lease,None).unwrap()),vec!["profiles"]);
+    assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/integrations",configure(2,true)).await.0,StatusCode::OK);
+    app.db.lock().unwrap().execute_batch("DELETE FROM addons WHERE id=21; UPDATE providers SET enabled=0 WHERE id=21;").unwrap();
+    assert_eq!(ids(super::bootstrap_facts::navigation(&app,&lease,Some(1)).unwrap()),vec!["home","library","profiles"]);
+}
+
+#[tokio::test]
+async fn restricted_navigation_keeps_approved_library_browse_and_omits_live_without_parent_permission() {
+    let app=fixture();
+    app.db.lock().unwrap().execute_batch("INSERT INTO kids_profiles(profile_id,enabled,max_age,revision) VALUES(1,1,12,1); INSERT INTO providers(id,name,url,username,password,enabled,enable_live,enable_movies,enable_series) VALUES(23,'Owned Live','https://fixture.invalid','fixture','fixture',1,1,0,0); INSERT INTO provider_ownership VALUES(23,1);").unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
+    let lease=ResourceLease {policy_revision:1,principal:auth::Principal::Account{account_id:1,role:"member".into(),profile_id:Some(1),session_id:Some("s1".into())},session_id:Some("s1".into())};
+    let nav=super::bootstrap_facts::navigation(&app,&lease,Some(1)).unwrap();
+    let contract: Value = serde_json::from_str(include_str!("../../../fixtures/remote-viewing-v3.json")).unwrap();
+    assert_eq!(nav, contract["navigation"]["restricted_without_parent"]);
+    let ids:Vec<_>=nav.as_array().unwrap().iter().map(|item|item["id"].as_str().unwrap()).collect();
+    assert_eq!(ids,vec!["search","home","movie","series","library","profiles"]);
+    app.db.lock().unwrap().execute("INSERT INTO parent_grants(session_id,expires) VALUES('s1',?1)",[util::now()+60]).unwrap();
+    let nav=super::bootstrap_facts::navigation(&app,&lease,Some(1)).unwrap();
+    assert!(nav.as_array().unwrap().iter().any(|item|item["id"]=="live"));
+}

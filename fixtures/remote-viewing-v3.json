@@ -143,5 +143,79 @@
       "position": 0,
       "timeline_offset_seconds": 63.25
     }
+  },
+  "navigation": {
+    "movie_and_live": [
+      {
+        "id": "search",
+        "label": "Search"
+      },
+      {
+        "id": "home",
+        "label": "Home"
+      },
+      {
+        "id": "movie",
+        "label": "Movies"
+      },
+      {
+        "id": "live",
+        "label": "Live"
+      },
+      {
+        "id": "library",
+        "label": "My List"
+      },
+      {
+        "id": "profiles",
+        "label": "Profile"
+      }
+    ],
+    "unconfigured": [
+      {
+        "id": "home",
+        "label": "Home"
+      },
+      {
+        "id": "library",
+        "label": "My List"
+      },
+      {
+        "id": "profiles",
+        "label": "Profile"
+      }
+    ],
+    "no_selected_profile": [
+      {
+        "id": "profiles",
+        "label": "Profile"
+      }
+    ],
+    "restricted_without_parent": [
+      {
+        "id": "search",
+        "label": "Search"
+      },
+      {
+        "id": "home",
+        "label": "Home"
+      },
+      {
+        "id": "movie",
+        "label": "Movies"
+      },
+      {
+        "id": "series",
+        "label": "Series"
+      },
+      {
+        "id": "library",
+        "label": "My List"
+      },
+      {
+        "id": "profiles",
+        "label": "Profile"
+      }
+    ]
   }
 }
