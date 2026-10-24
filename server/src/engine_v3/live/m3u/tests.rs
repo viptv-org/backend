@@ -84,3 +84,21 @@ async fn cached_m3u_multi_membership_and_xmltv_are_projected_without_new_egress(
     assert_eq!(cache.guides.len(), 2);
     assert_eq!(cache.xmltv.as_ref().unwrap().0, expiry);
 }
+
+#[tokio::test]
+async fn native_directory_snapshot_survives_paging_but_changes_on_cache_replacement() {
+    let app=fixture();
+    assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"m3u","configuration":{"playlist_url":"https://fixture.example/list.m3u"}})).await.0,StatusCode::OK);
+    let (_,schemas)=request(&app,"member-token-1","GET","/api/profiles/1/source-integrations",Value::Null).await;
+    let connection=schemas["connections"].as_array().unwrap().iter().find(|c|c["plugin_id"]=="m3u").unwrap()["id"].as_str().unwrap();
+    let channels=viptv_engine::live::parse_m3u("#EXTM3U\n#EXTINF:-1,One\nhttps://media.example/one.m3u8\n#EXTINF:-1,Two\nhttps://media.example/two.m3u8\n",&url::Url::parse("https://fixture.example/list.m3u").unwrap(),connection).unwrap();
+    app.live_cache.lock().await.insert(connection.into(),crate::engine_v3::live::Cache{revision:1,expires:Instant::now()+Duration::from_secs(300),channels,groups:vec![],guides:Default::default(),xmltv:None});
+    let (_,first)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?limit=1",Value::Null).await;
+    let (_,second)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?offset=1&limit=1",Value::Null).await;
+    assert!(first["snapshot_id"].is_string());
+    assert_eq!(first["snapshot_id"],second["snapshot_id"]);
+    app.live_cache.lock().await.get_mut(connection).unwrap().expires=Instant::now()+Duration::from_secs(301);
+    let (_,changed)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?offset=1&limit=1",Value::Null).await;
+    assert_ne!(second["snapshot_id"],changed["snapshot_id"]);
+    assert_eq!(second["channels"],changed["channels"]);
+}

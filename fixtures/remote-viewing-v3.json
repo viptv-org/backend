@@ -263,5 +263,188 @@
     "label": "Watch live",
     "resume": false,
     "source_selection": "best"
+  },
+  "live_pagination_snapshot": {
+    "first_page": {
+      "snapshot_id": "fixture-directory-a",
+      "channels": [
+        {
+          "id": "channel-one",
+          "connection_id": "m3u:1",
+          "card": {
+            "identity": {
+              "kind": "live",
+              "id": "channel-one",
+              "ids": []
+            },
+            "provider_id": "m3u:1",
+            "title": "Channel One",
+            "badges": [],
+            "poster": null,
+            "landscape": null,
+            "logo": null
+          },
+          "group_id": null,
+          "group_name": null,
+          "group_ids": []
+        }
+      ],
+      "next_cursor": "1",
+      "complete": false,
+      "groups": [],
+      "connections": [
+        {
+          "id": "m3u:1",
+          "plugin_id": "m3u",
+          "account_id": "fixture-account",
+          "private_profile_id": "fixture-profile",
+          "name": "Fixture live connection",
+          "enabled": true,
+          "revision": 1,
+          "capabilities": [
+            "LiveTv",
+            "Sources"
+          ]
+        }
+      ],
+      "availability": "Available",
+      "reason": null
+    },
+    "compatible_next_page": {
+      "snapshot_id": "fixture-directory-a",
+      "channels": [
+        {
+          "id": "channel-two",
+          "connection_id": "m3u:1",
+          "card": {
+            "identity": {
+              "kind": "live",
+              "id": "channel-two",
+              "ids": []
+            },
+            "provider_id": "m3u:1",
+            "title": "Channel Two",
+            "badges": [],
+            "poster": null,
+            "landscape": null,
+            "logo": null
+          },
+          "group_id": null,
+          "group_name": null,
+          "group_ids": []
+        }
+      ],
+      "next_cursor": null,
+      "complete": true,
+      "groups": [],
+      "connections": [
+        {
+          "id": "m3u:1",
+          "plugin_id": "m3u",
+          "account_id": "fixture-account",
+          "private_profile_id": "fixture-profile",
+          "name": "Fixture live connection",
+          "enabled": true,
+          "revision": 1,
+          "capabilities": [
+            "LiveTv",
+            "Sources"
+          ]
+        }
+      ],
+      "availability": "Available",
+      "reason": null
+    },
+    "configuration_changed_next_page": {
+      "snapshot_id": "fixture-directory-b",
+      "channels": [
+        {
+          "id": "channel-changed-two",
+          "connection_id": "m3u:1",
+          "card": {
+            "identity": {
+              "kind": "live",
+              "id": "channel-changed-two",
+              "ids": []
+            },
+            "provider_id": "m3u:1",
+            "title": "Channel Changed Two",
+            "badges": [],
+            "poster": null,
+            "landscape": null,
+            "logo": null
+          },
+          "group_id": null,
+          "group_name": null,
+          "group_ids": []
+        }
+      ],
+      "next_cursor": null,
+      "complete": true,
+      "groups": [],
+      "connections": [
+        {
+          "id": "m3u:1",
+          "plugin_id": "m3u",
+          "account_id": "fixture-account",
+          "private_profile_id": "fixture-profile",
+          "name": "Fixture live connection",
+          "enabled": true,
+          "revision": 2,
+          "capabilities": [
+            "LiveTv",
+            "Sources"
+          ]
+        }
+      ],
+      "availability": "Available",
+      "reason": null
+    },
+    "reload_first_page": {
+      "snapshot_id": "fixture-directory-b",
+      "channels": [
+        {
+          "id": "channel-changed-one",
+          "connection_id": "m3u:1",
+          "card": {
+            "identity": {
+              "kind": "live",
+              "id": "channel-changed-one",
+              "ids": []
+            },
+            "provider_id": "m3u:1",
+            "title": "Channel Changed One",
+            "badges": [],
+            "poster": null,
+            "landscape": null,
+            "logo": null
+          },
+          "group_id": null,
+          "group_name": null,
+          "group_ids": []
+        }
+      ],
+      "next_cursor": "1",
+      "complete": false,
+      "groups": [],
+      "connections": [
+        {
+          "id": "m3u:1",
+          "plugin_id": "m3u",
+          "account_id": "fixture-account",
+          "private_profile_id": "fixture-profile",
+          "name": "Fixture live connection",
+          "enabled": true,
+          "revision": 2,
+          "capabilities": [
+            "LiveTv",
+            "Sources"
+          ]
+        }
+      ],
+      "availability": "Available",
+      "reason": null
+    },
+    "consumer_action_on_mismatch": "Discard the old window and cursor, cancel dependent guide requests, and request offset zero."
   }
 }

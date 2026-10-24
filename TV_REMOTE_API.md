@@ -208,3 +208,30 @@ library save/read and preference persistence. No `/api` responses are intercepte
 in that browser test. Its external add-on content is synthetic, and this harness
 does not qualify gateway transcoding or torrent delivery. It never opens or
 replaces the shared QA database, runtime binary or serving paths.
+
+## Live directory pagination snapshots
+
+Every `GET /api/profiles/:id/live/channels` response now includes an additive
+`snapshot_id` string, including empty/NeedsConfiguration pages. Treat it as
+opaque and compare for equality only. It covers the authenticated account and
+profile, profile configuration, advertised connections, selected connection,
+group/search query, and the server's directory generation. Page offset and page
+size do not change the identity. Stored IPTV catalogs reuse their existing
+transactional catalog generation; private M3U/Xtream directories use their
+in-memory cache instance identity, which changes on directory replacement.
+Guide refreshes alone do not replace the channel-directory snapshot.
+
+A client may append a later page only when its `snapshot_id` equals the retained
+window's identity. On mismatch, discard the incompatible window and cursor,
+cancel dependent guide reads, and reload offset zero for the current query.
+Do not splice the returned later page onto old channels or infer identity from
+names, group labels, connection contents or a client counter. A failed reload
+is retryable; it does not restore the incompatible window. Changing queries or
+profiles also retires the previous window. Existing offset/limit and all other
+response fields remain compatible; this does not create a Roku-specific API.
+
+Producer tests cover stable identities across offsets/limits, changed
+group scope, configuration changes between pages, catalog/category generations,
+private directory cache replacement, and foreign-profile rejection. The shared
+fixture's `live_pagination_snapshot` illustrates matching and mismatched pages;
+its tokens are synthetic opaque examples, not values clients should construct.

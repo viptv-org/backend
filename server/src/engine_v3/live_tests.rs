@@ -258,3 +258,45 @@ async fn real_public_m3u_api_directory_guide_status_and_source_grants() {
         start.elapsed().as_secs()
     );
 }
+
+#[tokio::test]
+async fn live_page_snapshot_changes_for_configuration_catalog_and_query_scope() {
+    let app = fixture();
+    {
+        let db=app.db.lock().unwrap();
+        db.execute_batch("INSERT INTO providers(id,name,url,username,password,enabled,enable_live,enable_movies,enable_series)VALUES(10,'Snapshot live','https://provider.example','private-user','private-password',1,1,0,0);INSERT INTO provider_ownership VALUES(10,1);INSERT INTO provider_live(id,provider_id,stream_id,name,category_id,category,ordinal)VALUES('snap-one',10,'1','One','news','News',1),('snap-two',10,'2','Two','news','News',2);INSERT INTO provider_live_categories_v2 VALUES(10,'news','News',1);").unwrap();
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    async fn read(app:&App,path:&str)->(StatusCode,Value){request(app,"member-token-1","GET",path,Value::Null).await}
+    let (status,first)=read(&app,"/api/profiles/1/live/channels?limit=1").await;
+    assert_eq!(status,StatusCode::OK,"{first}");
+    assert!(first["snapshot_id"].as_str().unwrap().starts_with("live-v1:"));
+    assert_eq!(first["next_cursor"],"1");
+    let (_,second)=read(&app,"/api/profiles/1/live/channels?offset=1&limit=2").await;
+    assert_eq!(first["snapshot_id"],second["snapshot_id"]);
+    let (_,filtered)=read(&app,"/api/profiles/1/live/channels?group_id=news").await;
+    assert_ne!(first["snapshot_id"],filtered["snapshot_id"]);
+    {
+        let db=app.db.lock().unwrap();
+        db.execute("UPDATE provider_live SET name='Changed during paging' WHERE id='snap-two'",[]).unwrap();
+        db.execute("INSERT INTO provider_live_generations VALUES(10,1) ON CONFLICT(provider_id) DO UPDATE SET generation=generation+1",[]).unwrap();
+    }
+    let (_,changed)=read(&app,"/api/profiles/1/live/channels?offset=1&limit=1").await;
+    assert_ne!(first["snapshot_id"],changed["snapshot_id"]);
+    assert_eq!(changed["channels"][0]["card"]["title"],"Changed during paging");
+    {
+        let db=app.db.lock().unwrap();
+        db.execute("UPDATE provider_live_categories_v2 SET name='Updated group' WHERE provider_id=10",[]).unwrap();
+        db.execute("UPDATE provider_live_generations SET generation=generation+1 WHERE provider_id=10",[]).unwrap();
+    }
+    let (_,groups)=read(&app,"/api/profiles/1/live/channels?offset=1&limit=1").await;
+    assert_ne!(changed["snapshot_id"],groups["snapshot_id"]);
+    let (_,config)=read(&app,"/api/profiles/1/integrations").await;
+    let (status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/integrations",json!({"revision":0,"browsing_plugin":config["configuration"]["browsing_plugin"],"assignments":config["configuration"]["assignments"]})).await;
+    assert_eq!(status,StatusCode::OK);
+    let (_,configured)=read(&app,"/api/profiles/1/live/channels?offset=1&limit=1").await;
+    assert_ne!(groups["snapshot_id"],configured["snapshot_id"]);
+    assert_eq!(groups["channels"],configured["channels"]);
+    assert!(!configured.to_string().contains("private-password"));
+    assert_eq!(request(&app,"member-token-2","GET","/api/profiles/1/live/channels?offset=1",Value::Null).await.0,StatusCode::FORBIDDEN);
+}

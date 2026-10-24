@@ -170,7 +170,10 @@ pub(crate) async fn page(
     let limit = query.limit.unwrap_or(100) as usize;
     let end = (query.offset as usize + limit).min(filtered.len());
     super::super::configuration::validate_revision(&app, profile, revision)?;
-    Ok(axum::Json(json!(LivePage {
+    // This monotonic cache-instance timestamp is stable across clones/pages and
+    // changes on every directory replacement; guide refreshes leave it intact.
+    let catalog_generation = format!("{}:{:?}", connection.id, cache.expires);
+    snapshot::project(&app, profile, revision, &query, &catalog_generation, LivePage {
         channels: filtered
             .iter()
             .skip(query.offset as usize)
@@ -183,7 +186,7 @@ pub(crate) async fn page(
         complete: end >= filtered.len(),
         availability: Availability::Available,
         reason: None
-    })))
+    })
 }
 pub(crate) async fn guide(
     app: App,

@@ -7,6 +7,7 @@ use viptv_engine::{
 mod configuration;
 pub(crate) mod favorites;
 mod fetch_gates;
+mod snapshot;
 #[cfg(feature = "live-runtime")]
 mod xtream;
 #[cfg(feature = "live-runtime")]
@@ -70,7 +71,7 @@ pub(crate) async fn channels(
         .iter()
         .find(|c| query.connection_id.as_ref().is_none_or(|id| id == &c.id))
     else {
-        return Ok(axum::Json(json!(LivePage {
+        return snapshot::project(&app, profile, config.scope.revision, &query, "empty", LivePage {
             channels: vec![],
             groups: vec![],
             connections,
@@ -78,7 +79,7 @@ pub(crate) async fn channels(
             complete: true,
             availability: Availability::NeedsConfiguration,
             reason: Some("Assign a live TV connection".into())
-        })));
+        });
     };
     if connection.plugin_id == "m3u" || connection.id.starts_with("xtream:") {
         #[cfg(feature = "live-runtime")]
@@ -143,7 +144,8 @@ pub(crate) async fn channels(
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
     let next = u64::from(query.offset) + u64::from(limit);
-    Ok(axum::Json(json!(LivePage {
+    let catalog_revision = snapshot::catalog_revision(&db, id)?;
+    snapshot::project(&app, profile, config.scope.revision, &query, &catalog_revision, LivePage {
         channels,
         groups,
         connections,
@@ -151,7 +153,7 @@ pub(crate) async fn channels(
         complete: next >= total,
         availability: Availability::Available,
         reason: None
-    })))
+    })
 }
 async fn connection_for(
     app: &App,
