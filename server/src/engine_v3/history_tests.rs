@@ -14,6 +14,20 @@ async fn get(app: &App, path: &str) -> Value {
 }
 
 #[tokio::test]
+async fn home_preview_does_not_share_episode_frames_when_parent_artwork_is_missing() {
+    let app=fixture();
+    assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/progress",body(30_000)).await.0,StatusCode::OK);
+    let mut sibling=get(&app,"/api/profiles/1/history").await[0]["card"].clone();
+    sibling["identity"]=identity("other-episode",true);
+    sibling["identity"]["episode"]["episode"]=json!(5);
+    sibling["landscape"]=json!("https://images.example/other-frame.jpg");
+    assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/library",json!({"card":sibling})).await.0,StatusCode::OK);
+    let home=get(&app,"/api/profiles/1/home").await;
+    assert_eq!(home["rows"][0]["cards"][0]["view"]["preview"]["background"],"https://images.example/frame.jpg");
+    assert_eq!(home["rows"][1]["cards"][0]["view"]["preview"]["background"],"https://images.example/other-frame.jpg");
+}
+
+#[tokio::test]
 async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
     let app = fixture();
     let before = get(&app, "/api/bootstrap").await;

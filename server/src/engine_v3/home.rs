@@ -226,6 +226,9 @@ pub(super) async fn load(
         let parent = card.parent_identity.as_ref()?;
         let mut preview = card.clone();
         preview.identity = parent.clone(); preview.parent_identity = None;
+        // Only verified parent artwork belongs in this shared map. Keeping an
+        // episode frame here could give a sibling card that frame on cache miss.
+        preview.landscape = None;
         Some((preview_key(card), preview))
     }).collect::<Vec<_>>();
     let (keys, mut parents): (Vec<_>, Vec<_>) = parents.into_iter().unzip();
