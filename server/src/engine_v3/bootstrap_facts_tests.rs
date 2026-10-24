@@ -124,7 +124,10 @@ async fn navigation_uses_scoped_cached_catalogs_and_live_assignments() {
     }
     assert_eq!(ids(super::bootstrap_facts::navigation(&app,&lease,None).unwrap()),vec!["profiles"]);
     assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/integrations",configure(2,true)).await.0,StatusCode::OK);
-    app.db.lock().unwrap().execute_batch("DELETE FROM addons WHERE id=21; UPDATE providers SET enabled=0 WHERE id=21;").unwrap();
+    app.db.lock().unwrap().execute_batch("DELETE FROM addons WHERE id=21;").unwrap();
+    let live_only = super::bootstrap_facts::navigation(&app,&lease,Some(1)).unwrap();
+    assert_eq!(live_only,contract["navigation"]["live_only"]);
+    app.db.lock().unwrap().execute("UPDATE providers SET enabled=0 WHERE id=21",[]).unwrap();
     assert_eq!(ids(super::bootstrap_facts::navigation(&app,&lease,Some(1)).unwrap()),vec!["home","library","profiles"]);
 }
 

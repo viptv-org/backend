@@ -56,9 +56,10 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
         let has = |kind: &str| catalogs.as_array().into_iter().flatten().any(|catalog| catalog["type"] == kind);
         (has("movie"), has("series"))
     };
-    let search = restricted || (enabled(Capability::Search)?
+    let media_search = restricted || (enabled(Capability::Search)?
         && (configuration.browsing_plugin != "simkl" || simkl_linked));
     let live = live_allowed && enabled(Capability::LiveTv)?;
+    let search = media_search || live;
     let calendar = !restricted && configuration.browsing_plugin == "simkl" && enabled(Capability::Discovery)?;
     configuration::validate_revision(&scoped, profile, configuration.scope.revision)?;
     let navigation = [
@@ -71,6 +72,13 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
         ("library", "My List", true),
         ("profiles", "Profile", true),
     ].into_iter().filter(|(_,_,visible)| *visible)
-        .map(|(id,label,_)| json!({"id":id,"label":label})).collect::<Vec<_>>();
+        .map(|(id,label,_)| {
+            let mut entry = json!({"id":id,"label":label});
+            if id == "search" {
+                entry["media_search"] = json!(media_search);
+                entry["channel_search"] = json!(live);
+            }
+            entry
+        }).collect::<Vec<_>>();
     Ok(json!(navigation))
 }

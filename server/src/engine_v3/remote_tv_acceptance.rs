@@ -16,6 +16,9 @@ async fn remote_tv_backend() {
     assert!(dist.is_absolute() && dist.join("index.html").is_file());
     let mut app = crate::auth_integration_tests::fixture();
     app.addons.allow_test_loopback = true;
+    // Keep only the seeded test operators alive for a long acceptance session.
+    // Device grants created later still use the normal auth/refresh lifetimes.
+    app.db.lock().unwrap().execute("UPDATE auth_sessions SET access_expires=?1,refresh_expires=?1",[crate::util::now()+172800]).unwrap();
     let (status, result) = crate::test_support::request(
         &app, "member-token-1", "POST", "/api/addons",
         json!({"manifest_url":addon.as_str()}),

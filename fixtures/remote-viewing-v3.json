@@ -148,7 +148,9 @@
     "movie_and_live": [
       {
         "id": "search",
-        "label": "Search"
+        "label": "Search",
+        "media_search": true,
+        "channel_search": true
       },
       {
         "id": "home",
@@ -194,7 +196,9 @@
     "restricted_without_parent": [
       {
         "id": "search",
-        "label": "Search"
+        "label": "Search",
+        "media_search": true,
+        "channel_search": false
       },
       {
         "id": "home",
@@ -207,6 +211,30 @@
       {
         "id": "series",
         "label": "Series"
+      },
+      {
+        "id": "library",
+        "label": "My List"
+      },
+      {
+        "id": "profiles",
+        "label": "Profile"
+      }
+    ],
+    "live_only": [
+      {
+        "id": "search",
+        "label": "Search",
+        "media_search": false,
+        "channel_search": true
+      },
+      {
+        "id": "home",
+        "label": "Home"
+      },
+      {
+        "id": "live",
+        "label": "Live"
       },
       {
         "id": "library",

@@ -155,6 +155,13 @@ destination visible. Restricted profiles keep the approved-Library discovery
 routes; Live requires the same parent permission as its existing API. With no
 selected profile, only the Profile destination is returned.
 
+The Search entry includes `media_search` and `channel_search` facts. A Live-only
+profile can therefore expose channel search without sending an unsupported
+all-types media query. Media results use the existing `/api/discover` all-types
+search; channel results use the existing scoped `/live/channels?search=...`
+query and its opaque paging cursor. The consumer renders each server-ordered
+result set independently and does not derive suggestions or program captions.
+
 Consumers preserve returned ordering and labels for routes they implement,
 omitting unknown/out-of-scope routes. For example, TV-web deliberately omits
 Calendar even when the producer advertises it for another client. A temporary
