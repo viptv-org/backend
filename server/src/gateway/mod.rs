@@ -18,3 +18,5 @@ mod tests;
 mod torrent_browser_acceptance;
 #[cfg(test)]
 mod torrent_native_acceptance;
+#[cfg(test)]
+mod media_lab_acceptance;
