@@ -33,11 +33,22 @@ claim that production has adopted them.
   and `remaining_label` from the server continuation record. Unknown duration
   remains null. No cast summary is advertised without a verified source.
 - Home rows include `view.card_shape: "landscape" | "poster"`.
-- Preferences responses include `controls`, with `id`, `group` (`playback` or
-  `subtitles`), `label`, optional `description`, and `choices: [{label, value}]`.
-  Render these options and send the returned preference object with the edited
-  value and its `revision`. Server validation and conflict responses remain
-  authoritative. No local settings store is necessary.
+- Preferences responses include `controls`, with `id`, `group` (`playback`,
+  `subtitles` or `display`), `label`, optional `description`, and `choices:
+  [{label, value}]`. Render these options and send the returned preference object
+  with the edited value and its `revision`. Server validation and conflict
+  responses remain authoritative. No local settings store is necessary.
+- The preferences snapshot also carries `display`: profile-scoped presentation
+  settings (`accent_color`, `show_ratings`, `text_size`, `reduce_motion`,
+  `screen_saver_minutes`, `screen_inset`) persisted on the server. A `PUT` accepts
+  `{revision, preferences?, display?}` — at least one section — and bumps the
+  shared snapshot revision, so display-only changes still move the `preferences`
+  revision token other devices poll. Display controls use the same `controls`
+  inventory with `group: "display"`; `kind: "swatches"` marks inline palette
+  choices and `kind: "calibration"` carries `min`/`max`/`step` for the overscan
+  inset instead of `choices`. When `show_ratings` is false the producer omits
+  rating parts from card projections everywhere; clients render what they
+  receive and never filter locally.
 
 ## Sources and playback
 
