@@ -120,7 +120,7 @@ pub(crate) async fn request(
     path: &str,
     body: Value,
 ) -> (StatusCode, Value) {
-    let response = router(app.clone(), None)
+    let response = router(app.clone())
         .oneshot(
             Request::builder()
                 .method(method)

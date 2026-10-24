@@ -101,7 +101,7 @@ async fn start(app: &App) -> String {
 async fn link(app: &App) -> String {
     let state = start(app).await;
     use tower::ServiceExt;
-    let response = crate::router(app.clone(), None)
+    let response = crate::router(app.clone())
         .oneshot(
             axum::http::Request::builder()
                 .uri(format!(

@@ -671,7 +671,7 @@ async fn extension_rejects_null_duplicates_wrong_platform_and_oversized_or_encod
         valid.replace("public_dht_tcp_v1", "unknown"),
     ];
     for input in cases {
-        let response = crate::router(app.clone(), None)
+        let response = crate::router(app.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -694,7 +694,7 @@ async fn extension_rejects_null_duplicates_wrong_platform_and_oversized_or_encod
         StatusCode::BAD_REQUEST
     );
     for (input, encoding) in [("x".repeat(16385), "identity"), (valid, "gzip")] {
-        let response = crate::router(app.clone(), None)
+        let response = crate::router(app.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -859,7 +859,7 @@ async fn children_negotiate_cancel_and_keep_duplicate_validation_while_title_pol
     let duplicated = body(&source, "duplicate_child")
         .to_string()
         .replace("\"version\":1", "\"version\":1,\"version\":1");
-    let response = crate::router(app.clone(), None)
+    let response = crate::router(app.clone())
         .oneshot(
             Request::builder()
                 .method("POST")

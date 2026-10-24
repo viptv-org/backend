@@ -64,7 +64,7 @@ async fn subtitle_discovery_hides_urls_content_is_session_scoped_and_configurati
     );
     let (status, _) = request(&app, "member-token-2", "GET", &content, json!({})).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    let response = router(app.clone(), None)
+    let response = router(app.clone())
         .oneshot(
             Request::builder()
                 .uri(&content)

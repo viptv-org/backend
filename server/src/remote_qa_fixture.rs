@@ -129,7 +129,7 @@ async fn remote_addon_browser_fixture() {
         }
     }
     println!("Disposable QA fixture: {}", credentials.display());
-    axum::serve(listener, router(app, None))
+    axum::serve(listener, router(app))
         .with_graceful_shutdown(async {
             tokio::time::sleep(Duration::from_secs(3600)).await;
         })

@@ -740,7 +740,7 @@ async fn raw_get(
     path: &str,
 ) -> (StatusCode, axum::http::HeaderMap, axum::body::Bytes) {
     use tower::ServiceExt;
-    let response = router(app.clone(), None)
+    let response = router(app.clone())
         .oneshot(
             axum::http::Request::builder()
                 .uri(path)

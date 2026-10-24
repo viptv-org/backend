@@ -20,7 +20,7 @@ async fn protocol_route_request(
     body: Body,
     path: &str,
 ) -> (StatusCode, Value, String) {
-    let response = router(app.clone(), None)
+    let response = router(app.clone())
         .oneshot(
             Request::builder()
                 .method("GET")

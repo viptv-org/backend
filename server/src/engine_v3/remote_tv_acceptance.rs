@@ -37,6 +37,6 @@ async fn remote_tv_backend() {
     assert_eq!(status, StatusCode::OK, "{result}");
     let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
     println!("REMOTE_TV_BACKEND_READY");
-    axum::serve(listener, crate::router_with_viewers(app, None, None, Some(dist)))
+    axum::serve(listener, crate::router_with_viewers(app, Some(dist)))
         .await.unwrap();
 }

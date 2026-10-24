@@ -316,7 +316,7 @@ async fn favorites_cookie_mutations_require_csrf_and_restricted_profiles_require
     };
     use tower::ServiceExt;
     let app = legacy();
-    let response = crate::router(app.clone(), None)
+    let response = crate::router(app.clone())
         .oneshot(
             Request::builder()
                 .method("PUT")
@@ -330,7 +330,7 @@ async fn favorites_cookie_mutations_require_csrf_and_restricted_profiles_require
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let response = crate::router(app.clone(), None)
+    let response = crate::router(app.clone())
         .oneshot(
             Request::builder()
                 .uri("/api/auth/status")
@@ -344,7 +344,7 @@ async fn favorites_cookie_mutations_require_csrf_and_restricted_profiles_require
     let status: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
     let csrf = status["csrf_token"].as_str().unwrap();
-    let response = crate::router(app.clone(), None)
+    let response = crate::router(app.clone())
         .oneshot(
             Request::builder()
                 .method("PUT")

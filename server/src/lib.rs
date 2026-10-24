@@ -64,7 +64,7 @@ pub(crate) mod test_support;
 // changing any bodies. These re-exports keep the crate root namespace
 // identical: every `use super::*` consumer (session, kids, guides, the
 // contract tests, ...) keeps resolving the same names, and the public
-// surface (App, ApiError, router, router_with_tv) is unchanged.
+// surface (App, ApiError, router, router_with_viewers) is unchanged.
 pub(crate) use app_state::*;
 pub use app_state::{ApiError, App};
 pub(crate) use handlers_catalog::*;
@@ -72,7 +72,7 @@ pub(crate) use handlers_media::*;
 pub(crate) use handlers_profiles::*;
 pub(crate) use http_middleware::*;
 pub(crate) use matching_context::*;
-pub use routes::{router, router_with_tv, router_with_viewers};
+pub use routes::{router, router_with_viewers};
 
 #[cfg(test)]
 mod remote_qa_fixture;

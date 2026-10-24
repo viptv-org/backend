@@ -37,7 +37,7 @@ fn owner_application() -> (Router, tempfile::TempDir) {
     auth::init(&db).unwrap();
     auth::create_owner_offline(&mut db, "owner", "Owner", "secure-owner-password").unwrap();
     let app = App::new(db, reqwest::Client::new()).unwrap();
-    (router(app, None), root)
+    (router(app), root)
 }
 async fn browser_request(
     app: &Router,

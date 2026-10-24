@@ -78,7 +78,7 @@ async fn negotiation_preserves_legacy_and_changes_only_opt_in_json_assets() {
         assert!(value["poster"].as_str().unwrap().starts_with(prefix));
     }
     let app = crate::auth_integration_tests::fixture();
-    let response = crate::router(app, None)
+    let response = crate::router(app)
         .oneshot(
             axum::http::Request::builder()
                 .uri("/api/images/simkl/other/a_w.webp")
@@ -94,7 +94,7 @@ async fn negotiation_preserves_legacy_and_changes_only_opt_in_json_assets() {
 async fn public_image_preflight_requires_no_account_and_allows_public_image_headers() {
     use tower::ServiceExt;
     let app = crate::auth_integration_tests::fixture();
-    let response = crate::router(app, None)
+    let response = crate::router(app)
         .oneshot(
             axum::http::Request::builder()
                 .method("OPTIONS")

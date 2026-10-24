@@ -1,4 +1,6 @@
-//! Browser SPA entry routes must return a successful, non-cacheable HTML bootstrap.
+//! The KMP viewing app owns every UI route; there is no legacy dashboard or
+//! TV-web mount. `/device` falls through to the KMP app shell, which renders
+//! its own client-side approval route.
 mod common;
 
 use axum::{
@@ -7,14 +9,13 @@ use axum::{
     Router,
 };
 use tower::ServiceExt;
-use viptv_server::{router, router_with_tv, App};
+use viptv_server::{router, router_with_viewers, App};
 
-// Both fixtures keep one session and unavailable media tools; only the mount differs.
 fn application() -> (Router, tempfile::TempDir) {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(
         root.path().join("index.html"),
-        "<!doctype html><html><body>VIPTV device activation</body></html>",
+        "<!doctype html><html><body>KMP app shell</body></html>",
     )
     .unwrap();
     // The release-shaped service pins an HTTPS callback origin for Simkl.
@@ -24,35 +25,7 @@ fn application() -> (Router, tempfile::TempDir) {
         reqwest::Client::new(),
     )
     .unwrap();
-    (router(app, Some(root.path().to_path_buf())), root)
-}
-
-fn tv_application() -> (Router, tempfile::TempDir, tempfile::TempDir) {
-    let dashboard = tempfile::tempdir().unwrap();
-    let tv = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dashboard.path().join("index.html"),
-        "<html>dashboard</html>",
-    )
-    .unwrap();
-    std::fs::write(tv.path().join("index.html"), "<html>tv shell</html>").unwrap();
-    std::fs::write(tv.path().join("asset.js"), "window.viptv=true").unwrap();
-    // The release-shaped service pins an HTTPS callback origin for Simkl.
-    std::env::set_var("VIPTV_AUTH_ORIGIN", "https://tv.example");
-    let app = App::new(
-        rusqlite::Connection::open_in_memory().unwrap(),
-        reqwest::Client::new(),
-    )
-    .unwrap();
-    (
-        router_with_tv(
-            app,
-            Some(dashboard.path().to_path_buf()),
-            Some(tv.path().to_path_buf()),
-        ),
-        dashboard,
-        tv,
-    )
+    (router_with_viewers(app, Some(root.path().to_path_buf())), root)
 }
 
 async fn get(app: &Router, uri: &str) -> axum::response::Response {
@@ -76,23 +49,21 @@ async fn conditional_get(app: &Router, uri: &str) -> axum::response::Response {
 }
 
 #[tokio::test]
-async fn explicit_spa_entries_are_html_200_no_store_without_changing_fallbacks() {
+async fn kmp_app_owns_root_and_device_and_deep_links() {
     let (app, _root) = application();
 
-    for uri in ["/device", "/device?code=AB12CD34"] {
+    for uri in ["/", "/device", "/device?code=AB12CD34", "/tv", "/tv/detail/tt123"] {
         let response = get(&app, uri).await;
         assert_eq!(response.status(), StatusCode::OK, "{uri}");
-        assert!(response.headers()[header::CONTENT_TYPE]
-            .to_str()
-            .unwrap()
-            .starts_with("text/html"));
-        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
-        assert!(body
-            .windows(b"VIPTV device activation".len())
-            .any(|window| window == b"VIPTV device activation"));
+        assert!(
+            body.windows(b"KMP app shell".len())
+                .any(|window| window == b"KMP app shell"),
+            "{uri} must serve the KMP app shell"
+        );
     }
 
+    // The KMP app shell is not cached; its client router renders /device.
     for uri in ["/device", "/device?code=AB12CD34"] {
         let response = conditional_get(&app, uri).await;
         assert_eq!(
@@ -100,11 +71,6 @@ async fn explicit_spa_entries_are_html_200_no_store_without_changing_fallbacks()
             StatusCode::OK,
             "{uri} must not return 304"
         );
-        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
-        assert!(body
-            .windows(b"VIPTV device activation".len())
-            .any(|window| window == b"VIPTV device activation"));
     }
 
     let missing_api = get(&app, "/api/definitely-missing").await;
@@ -112,52 +78,33 @@ async fn explicit_spa_entries_are_html_200_no_store_without_changing_fallbacks()
 }
 
 #[tokio::test]
-async fn tv_bundle_has_its_own_same_origin_mount_without_replacing_dashboard_or_api() {
-    let (app, _dashboard, _tv) = tv_application();
-    // The KMP viewing app owns the root; /tv is gone. Deep links fall back
-    // to the app shell instead of a legacy bundle.
-    for uri in ["/", "/detail/tt123", "/tv", "/tv/detail/tt123"] {
-        let response = get(&app, uri).await;
-        assert_eq!(response.status(), StatusCode::OK, "{uri}");
-        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
-        assert!(
-            body.windows(b"tv shell".len())
-                .any(|window| window == b"tv shell"),
-            "{uri} must serve the app shell"
-        );
-    }
-    let asset = get(&app, "/asset.js").await;
-    assert_eq!(asset.status(), StatusCode::OK);
-    let body = to_bytes(asset.into_body(), 64 * 1024).await.unwrap();
-    assert!(body
-        .windows(b"window.viptv=true".len())
-        .any(|window| window == b"window.viptv=true"));
-    // The account dashboard survives as a management-only /device mount.
-    let dashboard = get(&app, "/device").await;
-    let body = to_bytes(dashboard.into_body(), 64 * 1024).await.unwrap();
-    assert!(body
-        .windows(b"dashboard".len())
-        .any(|window| window == b"dashboard"));
-    assert_eq!(
-        get(&app, "/api/definitely-missing").await.status(),
-        StatusCode::NOT_FOUND
-    );
+async fn server_only_image_answers_root_with_identity() {
+    std::env::set_var("VIPTV_AUTH_ORIGIN", "https://tv.example");
+    let app = App::new(
+        rusqlite::Connection::open_in_memory().unwrap(),
+        reqwest::Client::new(),
+    )
+    .unwrap();
+    let app = router(app);
+    let response = get(&app, "/").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    assert!(body.windows(b"VIPTV server".len()).any(|window| window == b"VIPTV server"));
 }
-
 
 #[tokio::test]
 async fn android_app_links_file_is_json_only_when_configured_and_never_the_app_shell() {
     const FINGERPRINT: &str = "14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A8:8A:04:96:B2:3F:CF:44:E5";
     std::env::remove_var("VIPTV_ANDROID_PACKAGE");
     std::env::remove_var("VIPTV_ANDROID_CERT_SHA256");
-    let (unconfigured, _dashboard, _tv) = tv_application();
+    let (unconfigured, _root) = application();
     // Without configuration Android must see a failure, not the SPA shell the fallback would serve.
     let response = get(&unconfigured, "/.well-known/assetlinks.json").await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     std::env::set_var("VIPTV_ANDROID_PACKAGE", "org.viptv.experiment");
     std::env::set_var("VIPTV_ANDROID_CERT_SHA256", FINGERPRINT);
-    let (configured, _dashboard, _tv) = tv_application();
+    let (configured, _root) = application();
     std::env::remove_var("VIPTV_ANDROID_PACKAGE");
     std::env::remove_var("VIPTV_ANDROID_CERT_SHA256");
     let response = get(&configured, "/.well-known/assetlinks.json").await;

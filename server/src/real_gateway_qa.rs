@@ -36,7 +36,7 @@ async fn real_provider_gateway_backend() {
     }
     let listener = tokio::net::TcpListener::bind(&bind).await.unwrap();
     println!("Real provider/gateway QA backend ready on owned loopback listener");
-    axum::serve(listener, router(app, None))
+    axum::serve(listener, router(app))
         .with_graceful_shutdown(async { tokio::signal::ctrl_c().await.unwrap() })
         .await
         .unwrap();

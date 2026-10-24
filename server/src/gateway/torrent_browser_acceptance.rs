@@ -59,7 +59,7 @@ async fn actual_backend_torrent_browser_server() {
     println!("Actual backend account/profile/vault/addon/gateway router ready.");
     tokio::time::timeout(
         Duration::from_secs(900),
-        axum::serve(listener, crate::router(app, None)),
+        axum::serve(listener, crate::router(app)),
     )
     .await
     .expect("owned backend fixture deadline")

@@ -129,7 +129,7 @@ async fn media_lab_backend() {
     }
     let listener = tokio::net::TcpListener::bind(bind).await.unwrap();
     println!("MEDIA_LAB_BACKEND_READY");
-    axum::serve(listener, crate::router(app, None))
+    axum::serve(listener, crate::router(app))
         .await
         .unwrap();
 }

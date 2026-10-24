@@ -221,7 +221,7 @@ async fn account_devices_cookie_mutations_require_csrf_and_clear_cookies() {
         if let Some(value) = csrf {
             builder = builder.header("x-csrf-token", value);
         }
-        let response = router(app.clone(), None)
+        let response = router(app.clone())
             .oneshot(builder.body(Body::empty()).unwrap())
             .await
             .unwrap();

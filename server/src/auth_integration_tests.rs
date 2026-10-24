@@ -47,7 +47,7 @@ async fn numeric_and_legacy_pairing_codes_support_qr_expiry_and_single_use() {
             params![auth::hash(user_code), auth::hash(&secret), util::now() + 600],
         ).unwrap();
         let qr_path = format!("/api/auth/device/qr?code={user_code}");
-        let qr = router(a.clone(), None)
+        let qr = router(a.clone())
             .oneshot(
                 Request::builder()
                     .uri(&qr_path)
@@ -152,7 +152,7 @@ async fn numeric_and_legacy_pairing_codes_support_qr_expiry_and_single_use() {
                 .0,
             StatusCode::BAD_REQUEST
         );
-        let expired_qr = router(a.clone(), None)
+        let expired_qr = router(a.clone())
             .oneshot(
                 Request::builder()
                     .uri(&qr_path)
@@ -165,7 +165,7 @@ async fn numeric_and_legacy_pairing_codes_support_qr_expiry_and_single_use() {
         assert_eq!(expired_qr.status(), StatusCode::NOT_FOUND);
     }
     a.db.lock().unwrap().execute("INSERT INTO auth_pairings(code_hash,device_hash,device_name,expires) VALUES(?1,?2,'Expired TV',?3)", params![auth::hash("00000002"),auth::hash("expired-secret"),util::now()-1]).unwrap();
-    let expired_qr = router(a.clone(), None)
+    let expired_qr = router(a.clone())
         .oneshot(
             Request::builder()
                 .uri("/api/auth/device/qr?code=00000002")
@@ -246,7 +246,7 @@ async fn public_pairing_qr_guesses_use_a_global_rate_limit() {
             .unwrap()
     };
     assert_eq!(
-        router(a.clone(), None)
+        router(a.clone())
             .oneshot(make_request())
             .await
             .unwrap()
@@ -270,7 +270,7 @@ async fn public_pairing_qr_guesses_use_a_global_rate_limit() {
         .unwrap();
     }
     assert_eq!(
-        router(a.clone(), None)
+        router(a.clone())
             .oneshot(make_request())
             .await
             .unwrap()
@@ -284,7 +284,7 @@ async fn public_pairing_qr_guesses_use_a_global_rate_limit() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(
-        router(a.clone(), None)
+        router(a.clone())
             .oneshot(valid_request)
             .await
             .unwrap()
@@ -299,7 +299,7 @@ async fn public_pairing_qr_guesses_use_a_global_rate_limit() {
         )
         .unwrap();
     assert_eq!(
-        router(a.clone(), None)
+        router(a.clone())
             .oneshot(make_request())
             .await
             .unwrap()
@@ -978,7 +978,7 @@ async fn account_media_requires_selected_profile_and_ignores_profile_header() {
         ("GET", "/api/profiles/1/favorites"),
         ("PUT", "/api/profiles/1/progress"),
     ] {
-        let response = router(a.clone(), None)
+        let response = router(a.clone())
             .oneshot(
                 Request::builder()
                     .method(method)
@@ -1064,7 +1064,7 @@ async fn catalog_revision_is_private_profile_guarded_and_account_scoped() {
             .0,
         StatusCode::FORBIDDEN
     );
-    let response = router(a.clone(), None)
+    let response = router(a.clone())
         .oneshot(
             Request::builder()
                 .uri(path)

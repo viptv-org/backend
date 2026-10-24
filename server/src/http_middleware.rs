@@ -275,7 +275,7 @@ mod v2_error_tests {
             ("/api/playback", "invalid_playback_request"),
             ("/api/streams", "invalid_discovery_request"),
         ] {
-            let response = router(app.clone(), None)
+            let response = router(app.clone())
                 .oneshot(
                     Request::builder()
                         .method("POST")

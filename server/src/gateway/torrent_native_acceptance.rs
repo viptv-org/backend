@@ -132,7 +132,7 @@ async fn actual_backend_android_native_server() {
     println!("Owned Android authorization fixture ready.");
     let result = tokio::time::timeout(
         Duration::from_secs(900),
-        axum::serve(listener, crate::router(app, None)),
+        axum::serve(listener, crate::router(app)),
     )
     .await;
     watcher.abort();

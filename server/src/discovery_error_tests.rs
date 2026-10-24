@@ -523,7 +523,7 @@ async fn discovery_rejections_are_structured_and_do_not_echo_request_details() {
         assert_eq!(error["error_code"], "invalid_discovery_request");
         no_diagnostics(&error, "fixture.invalid");
     }
-    let response = router(app.clone(), None)
+    let response = router(app.clone())
         .oneshot(
             Request::builder()
                 .method("POST")

@@ -60,14 +60,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !args.is_empty() {
         return Err("unknown command".into());
     }
-    // Empty values disable the mounts: server-only images keep booting clean.
-    let dashboard = std::env::var_os("VIPTV_DASHBOARD_DIST")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
+    // Empty values disable the mount: server-only images keep booting clean.
+    // The KMP viewing app is the only UI bundle; there is no legacy dashboard
+    // or TV-web dist.
     let tv_dashboard = std::env::var_os("VIPTV_TV_DIST")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    let tv_web=std::env::var_os("VIPTV_TV_WEB_DIST").filter(|value|!value.is_empty()).map(PathBuf::from);
     let bind = std::env::var("VIPTV_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let budget_path = std::path::Path::new(&database)
@@ -93,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     tracing::info!("VIPTV server listening");
     let router =
-        router_with_viewers(app, dashboard, tv_dashboard, tv_web).layer(axum::middleware::from_fn_with_state(
+        router_with_viewers(app, tv_dashboard).layer(axum::middleware::from_fn_with_state(
             telemetry.clone(),
             service_telemetry::middleware::observe,
         ));

@@ -20,7 +20,6 @@ services:
       VIPTV_AUTH_ORIGIN: "${VIPTV_AUTH_ORIGIN:?Set VIPTV_AUTH_ORIGIN to one exact public HTTPS origin}"
       VIPTV_BIND: "0.0.0.0:8080"
       VIPTV_DATABASE: /data/viptv.sqlite
-      VIPTV_DASHBOARD_DIST: /app/dashboard
       VIPTV_TV_DIST: /app/tv
       # Optional bare mapping: an absent keyring is omitted, never an empty JSON
       # value. Configured host/project values pass through without public defaults.

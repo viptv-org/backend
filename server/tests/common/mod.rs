@@ -20,7 +20,7 @@ pub fn application() -> (Router, tempfile::TempDir) {
         reqwest::Client::new(),
     )
     .unwrap();
-    (router(app, None), root)
+    (router(app), root)
 }
 
 pub async fn bearer_request(

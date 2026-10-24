@@ -94,7 +94,7 @@ async fn revisions_are_opaque_stable_strings_and_private() {
     )
     .await;
     assert_eq!(first["addons"], catalogs["revision"]);
-    let response = router(app.clone(), None)
+    let response = router(app.clone())
         .oneshot(
             axum::http::Request::builder()
                 .uri("/api/profiles/1/revisions")

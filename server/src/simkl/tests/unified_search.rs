@@ -974,7 +974,7 @@ async fn restricted_canonical_episode_consumers_use_verified_policy_and_revoke_r
     );
     {
         use tower::ServiceExt;
-        let response = crate::router(app.clone(), None)
+        let response = crate::router(app.clone())
             .oneshot(
                 axum::http::Request::builder()
                     .uri(&caption)

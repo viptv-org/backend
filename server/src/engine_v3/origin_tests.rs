@@ -125,7 +125,7 @@ async fn private_origin_approval_detail_next_caption_source_and_revocation_are_i
     );
     {
         use tower::ServiceExt;
-        let response = crate::router(app.clone(), None)
+        let response = crate::router(app.clone())
             .oneshot(
                 axum::http::Request::builder()
                     .uri(&caption)
