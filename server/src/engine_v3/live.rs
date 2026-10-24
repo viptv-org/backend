@@ -71,7 +71,7 @@ pub(crate) async fn channels(
         .iter()
         .find(|c| query.connection_id.as_ref().is_none_or(|id| id == &c.id))
     else {
-        return snapshot::project(&app, profile, config.scope.revision, &query, "empty", LivePage {
+        return snapshot::project(&app, profile, config.scope.revision, &query, "empty", 0, LivePage {
             channels: vec![],
             groups: vec![],
             connections,
@@ -145,7 +145,7 @@ pub(crate) async fn channels(
         .map_err(db_error)?;
     let next = u64::from(query.offset) + u64::from(limit);
     let catalog_revision = snapshot::catalog_revision(&db, id)?;
-    snapshot::project(&app, profile, config.scope.revision, &query, &catalog_revision, LivePage {
+    snapshot::project(&app, profile, config.scope.revision, &query, &catalog_revision, total, LivePage {
         channels,
         groups,
         connections,

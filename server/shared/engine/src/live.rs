@@ -68,12 +68,17 @@ pub struct LiveQuery {
     #[serde(default)]
     pub offset: u32,
     pub limit: Option<u32>,
+    /// Retain the navigation budget when a reverse slice near zero is shorter.
+    /// Older requests/serializers omit this optional remote paging fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_size: Option<u32>,
 }
 impl LiveQuery {
     pub fn validate(&self) -> Result<(), Error> {
         // The offset addresses the server's directory; it is not a page-size
         // budget. In particular, emitted cursors must remain valid after 10k.
         if self.limit.is_some_and(|v| v == 0 || v > 200)
+            || self.page_size.is_some_and(|v| v == 0 || v > 200)
             || self
                 .search
                 .as_ref()

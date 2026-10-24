@@ -100,6 +100,8 @@ async fn native_directory_snapshot_survives_paging_but_changes_on_cache_replacem
     let (_,second)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?offset=1&limit=1",Value::Null).await;
     assert!(first["snapshot_id"].is_string());
     assert_eq!(first["snapshot_id"],second["snapshot_id"]);
+    assert_eq!(first["paging"],json!({"origin":"0","limit":1,"page_size":1,"previous":null,"next":{"cursor":"1","limit":1,"page_size":1}}));
+    assert_eq!(second["paging"],json!({"origin":"1","limit":1,"page_size":1,"previous":{"cursor":"0","limit":1,"page_size":1},"next":null}));
     app.live_cache.lock().await.get_mut(connection).unwrap().expires=Instant::now()+Duration::from_secs(301);
     let (_,changed)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?offset=1&limit=1",Value::Null).await;
     assert_ne!(second["snapshot_id"],changed["snapshot_id"]);

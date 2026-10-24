@@ -474,5 +474,60 @@
       "next_cursor": null,
       "complete": true
     }
+  },
+  "live_reverse_paging": {
+    "catalog_size": 7,
+    "request": {
+      "offset": 5,
+      "limit": 3
+    },
+    "paging": {
+      "origin": "5",
+      "limit": 3,
+      "previous": {
+        "cursor": "2",
+        "limit": 3,
+        "page_size": 3
+      },
+      "next": null,
+      "page_size": 3
+    },
+    "previous_response_paging": {
+      "origin": "2",
+      "limit": 3,
+      "previous": {
+        "cursor": "0",
+        "limit": 2,
+        "page_size": 3
+      },
+      "next": {
+        "cursor": "5",
+        "limit": 3,
+        "page_size": 3
+      },
+      "page_size": 3
+    },
+    "first_response_paging": {
+      "origin": "0",
+      "limit": 2,
+      "previous": null,
+      "next": {
+        "cursor": "2",
+        "limit": 3,
+        "page_size": 3
+      },
+      "page_size": 3
+    },
+    "past_end_paging": {
+      "origin": "4294967295",
+      "limit": 3,
+      "previous": {
+        "cursor": "4",
+        "limit": 3,
+        "page_size": 3
+      },
+      "next": null,
+      "page_size": 3
+    }
   }
 }

@@ -245,3 +245,21 @@ clamp to their available rows before adding the page size, including on 32-bit
 hosts. `live_offset_boundary` is a test expectation fixture (not a wire response):
 10,041 stored channels, offset 10,000/limit 40 → cursor 10,040 → one final channel.
 The producer handler test exercises browsing, search and category filtering.
+
+Live pages also project `paging`: `origin` is the canonical requested cursor,
+`limit` is the applied page size, and `previous`/`next` are nullable request
+objects `{cursor, limit, page_size}`. Send their values unchanged as `offset`,
+`limit` and the optional `page_size` query parameter, preserving connection/group/search scope. The
+legacy `next_cursor` remains unchanged. Consumers need retain only their bounded
+payload window and these descriptors, not a growing history of earlier cursors.
+
+`previous` ends immediately before the current origin. Near the beginning its
+limit can be smaller than the requested limit (offset 2/limit 3 returns previous
+`{cursor:"0",limit:2,page_size:3}`); that prevents overlapping rows without consumer cursor
+arithmetic. The descriptor retains the navigation budget in `page_size`, so the
+next forward request restores size 3 instead of permanently shrinking to size 2.
+Both row limits and navigation budgets are bounded to 1–200. Past-end requests point back to the final available window. Empty
+or unconfigured directories have no previous/next request. Snapshot equality is
+still required when reusing or joining windows; paging metadata does not revive
+an incompatible configuration. This metadata is shared by Live and channel
+Search, and does not change media Search/discovery contracts.

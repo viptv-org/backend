@@ -101,6 +101,7 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
     )
     .await;
     assert_eq!(page["availability"], "NeedsConfiguration");
+    assert_eq!(page["paging"],json!({"origin":"0","limit":100,"page_size":100,"previous":null,"next":null}));
     assert_eq!(
         request(
             &app,
@@ -328,4 +329,29 @@ async fn live_browsing_and_search_follow_cursors_past_ten_thousand() {
     let(status,end)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?offset=4294967295&limit=200",Value::Null).await;
     assert_eq!(status,StatusCode::OK,"{end}");
     assert_eq!(end["channels"],json!([]));assert_eq!(end["complete"],true);assert!(end["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn live_reverse_requests_are_server_projected_bounded_and_non_overlapping() {
+    let app=fixture();
+    {
+        let db=app.db.lock().unwrap();
+        db.execute_batch("INSERT INTO providers(id,name,url,username,password,enabled,enable_live,enable_movies,enable_series)VALUES(10,'Paging fixture','https://provider.example','fixture-user','fixture-password',1,1,0,0);INSERT INTO provider_ownership VALUES(10,1);WITH RECURSIVE rows(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM rows WHERE n<6) INSERT INTO provider_live(id,provider_id,stream_id,name,ordinal) SELECT 'page-'||n,10,CAST(n AS TEXT),'Page channel '||n,n FROM rows;").unwrap();
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    let (_,middle)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?offset=5&limit=3",Value::Null).await;
+    assert_eq!(middle["paging"],json!({"origin":"5","limit":3,"page_size":3,"previous":{"cursor":"2","limit":3,"page_size":3},"next":null}));
+    let previous=&middle["paging"]["previous"];
+    let (_,prior)=request(&app,"member-token-1","GET",&format!("/api/profiles/1/live/channels?offset={}&limit={}",previous["cursor"].as_str().unwrap(),previous["limit"]),Value::Null).await;
+    assert_eq!(prior["channels"][0]["id"],"page-2");assert_eq!(prior["channels"][2]["id"],"page-4");
+    assert_eq!(prior["snapshot_id"],middle["snapshot_id"]);
+    assert_eq!(prior["paging"]["previous"],json!({"cursor":"0","limit":2,"page_size":3}));
+    let (_,first)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?offset=0&limit=2&page_size=3",Value::Null).await;
+    assert_eq!(first["channels"].as_array().unwrap().len(),2);
+    assert!(first["paging"]["previous"].is_null());
+    assert_eq!(first["paging"]["next"],json!({"cursor":"2","limit":3,"page_size":3}));
+    assert_eq!(first["snapshot_id"],prior["snapshot_id"]);
+    let (_,past)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?offset=4294967295&limit=3",Value::Null).await;
+    assert_eq!(past["paging"]["previous"],json!({"cursor":"4","limit":3,"page_size":3}));
+    assert!(past["paging"]["next"].is_null());
 }

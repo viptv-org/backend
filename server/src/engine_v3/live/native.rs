@@ -174,7 +174,7 @@ pub(crate) async fn page(
     // This monotonic cache-instance timestamp is stable across clones/pages and
     // changes on every directory replacement; guide refreshes leave it intact.
     let catalog_generation = format!("{}:{:?}", connection.id, cache.expires);
-    snapshot::project(&app, profile, revision, &query, &catalog_generation, LivePage {
+    snapshot::project(&app, profile, revision, &query, &catalog_generation, filtered.len() as u64, LivePage {
         channels: filtered
             .iter()
             .skip(start)
