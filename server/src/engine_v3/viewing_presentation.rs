@@ -5,7 +5,7 @@ use viptv_engine::{library::LibraryMembershipSnapshot, presentation::Card};
 
 /// Ordered display facts shared by all remote renderers. Raw metadata remains
 /// intact for older consumers; no client needs to normalize chips or truncate genres.
-pub(crate) fn card_view(card: &Card, saved: bool) -> Value {
+pub(crate) fn card_view(card: &Card, saved: bool, show_ratings: bool) -> Value {
     let mut metadata = vec![match card.identity.kind.as_str() {
         "movie" => "Movie".to_owned(),
         "series" => "Series".to_owned(),
@@ -38,8 +38,10 @@ pub(crate) fn card_view(card: &Card, saved: bool) -> Value {
             metadata.push(label.clone());
             compact.push(label);
         }
-        if let Some(rating) = meta.rating.filter(|r| r.is_finite() && *r > 0.0) {
-            compact.push(format!("★ {rating}"));
+        if show_ratings {
+            if let Some(rating) = meta.rating.filter(|r| r.is_finite() && *r > 0.0) {
+                compact.push(format!("★ {rating}"));
+            }
         }
     }
     let mut badges = Vec::<Value>::new();
@@ -116,14 +118,18 @@ fn saved(snapshot: &LibraryMembershipSnapshot, card: &Card) -> bool {
                 .iter()
                 .any(|entry| entry.kind == identity.kind && entry.id == identity.id))
 }
-pub(crate) fn decorate(value: &mut Value, membership: &Value) -> Result<(), ApiError> {
+pub(crate) fn decorate(
+    value: &mut Value,
+    membership: &Value,
+    show_ratings: bool,
+) -> Result<(), ApiError> {
     let snapshot: LibraryMembershipSnapshot = serde_json::from_value(membership.clone())
         .map_err(|_| ApiError::from("Library membership unavailable"))?;
-    fn visit(value: &mut Value, snapshot: &LibraryMembershipSnapshot) {
+    fn visit(value: &mut Value, snapshot: &LibraryMembershipSnapshot, show_ratings: bool) {
         match value {
             Value::Array(items) => {
                 for item in items {
-                    visit(item, snapshot);
+                    visit(item, snapshot, show_ratings);
                 }
             }
             Value::Object(object) => {
@@ -141,18 +147,21 @@ pub(crate) fn decorate(value: &mut Value, membership: &Value) -> Result<(), ApiE
                 {
                     if let Ok(card) = serde_json::from_value::<Card>(Value::Object(object.clone()))
                     {
-                        object.insert("view".into(), card_view(&card, saved(snapshot, &card)));
+                        object.insert(
+                            "view".into(),
+                            card_view(&card, saved(snapshot, &card), show_ratings),
+                        );
                     }
                 } else {
                     for child in object.values_mut() {
-                        visit(child, snapshot);
+                        visit(child, snapshot, show_ratings);
                     }
                 }
             }
             _ => {}
         }
     }
-    visit(value, &snapshot);
+    visit(value, &snapshot, show_ratings);
     Ok(())
 }
 pub(crate) fn for_profile(
@@ -161,9 +170,16 @@ pub(crate) fn for_profile(
     profile: i64,
     value: &mut Value,
 ) -> Result<(), ApiError> {
+    let show_ratings = {
+        let db = app
+            .db
+            .lock()
+            .map_err(|_| ApiError::from("Database unavailable"))?;
+        super::preferences::read_display(&db, lease.principal.account_id().ok_or_else(auth::forbidden)?, profile)?.show_ratings
+    };
     let snapshot =
         library::membership::snapshot(&app.clone().with_lease(lease.clone()), lease, profile)?;
-    decorate(value, &snapshot)
+    decorate(value, &snapshot, show_ratings)
 }
 #[cfg(test)]
 mod tests {
@@ -173,7 +189,7 @@ mod tests {
         let fixture: Value =
             serde_json::from_str(include_str!("../../../fixtures/remote-viewing-v3.json")).unwrap();
         let card: Card = serde_json::from_value(fixture["card"].clone()).unwrap();
-        let view = card_view(&card, false);
+        let view = card_view(&card, false, true);
         assert_eq!(view, fixture["card_view"]);
         assert_eq!(
             view["metadata_parts"],
@@ -191,10 +207,10 @@ mod tests {
         let identity = json!({"kind":"movie","id":"simkl:movie:1","ids":[]});
         let membership = json!({"identities":[identity],"revision":0,"complete":true});
         let mut card = json!({"identity":identity,"provider_id":"stremio","title":"Title","badges":[],"view":{"saved":true}});
-        decorate(&mut card, &membership).unwrap();
+        decorate(&mut card, &membership, true).unwrap();
         assert_eq!(card["view"]["saved"], false);
         card["provider_id"] = json!("simkl");
-        decorate(&mut card, &membership).unwrap();
+        decorate(&mut card, &membership, true).unwrap();
         assert_eq!(card["view"]["saved"], true);
     }
 }
@@ -237,6 +253,12 @@ pub(crate) fn preference_controls(value: &mut Value) {
         {"id":"preferred_subtitle_language","group":"subtitles","label":"Subtitle language","choices":languages()},
         {"id":"subtitle_font_scale","group":"subtitles","label":"Subtitle size","choices":choices(vec![("Small",json!(0.8)),("Medium",json!(1.0)),("Large",json!(1.25)),("Extra large",json!(1.5))])},
         {"id":"subtitle_background_color","group":"subtitles","label":"Subtitle background","choices":choices(vec![("None",json!("#00000000")),("Dark",json!("#000000CC")),("Black",json!("#000000"))])},
-        {"id":"subtitle_text_color","group":"subtitles","label":"Subtitle colour","choices":choices(vec![("White",json!("#FFFFFF")),("Yellow",json!("#F5C542"))])}
+        {"id":"subtitle_text_color","group":"subtitles","label":"Subtitle colour","choices":choices(vec![("White",json!("#FFFFFF")),("Yellow",json!("#F5C542"))])},
+        {"id":"accent_color","group":"display","label":"Accent colour","description":"Progress bars, marks and toggles","kind":"swatches","choices":choices(vec![("Amber",json!("#F5C542")),("Coral",json!("#FF8B5C")),("Mint",json!("#62D9BC")),("Sky",json!("#A3BCFF"))])},
+        {"id":"show_ratings","group":"display","label":"Show ratings on cards","description":"★ 7.8 under focused titles","choices":choices(vec![("On",json!(true)),("Off",json!(false))])},
+        {"id":"text_size","group":"display","label":"Text size","choices":choices(vec![("Small",json!("small")),("Default",json!("default")),("Large",json!("large"))])},
+        {"id":"reduce_motion","group":"display","label":"Reduce motion","description":"Slides become cuts. Follows the TV’s setting unless you change it","choices":choices(vec![("Follow TV",json!("follow")),("On",json!("on")),("Off",json!("off"))])},
+        {"id":"screen_saver_minutes","group":"display","label":"Screen saver","description":"Dims to slow-moving art when nothing is playing","choices":choices(vec![("Off",json!(0)),("After 2 minutes",json!(2)),("After 5 minutes",json!(5)),("After 10 minutes",json!(10))])},
+        {"id":"screen_inset","group":"display","label":"Fit to screen","description":"Use if the edges of the picture are cut off","kind":"calibration","min":0,"max":20,"step":1}
     ]);
 }

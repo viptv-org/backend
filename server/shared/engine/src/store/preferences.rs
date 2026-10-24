@@ -1,5 +1,5 @@
 use super::*;
-use crate::preferences::{PreferencesSnapshot, ProfilePreferences};
+use crate::preferences::{DisplayPreferences, PreferencesSnapshot, ProfilePreferences};
 impl Store {
     pub fn preferences(&self, scope: &Scope) -> Result<PreferencesSnapshot, Error> {
         self.profile(scope)?.ok_or(Error::Forbidden)?;
@@ -9,10 +9,12 @@ impl Store {
             Some((revision, value)) => Ok(PreferencesSnapshot {
                 revision,
                 preferences: serde_json::from_str(&value).map_err(|_| Error::Storage)?,
+                display: DisplayPreferences::default(),
             }),
             None => Ok(PreferencesSnapshot {
                 revision: 0,
                 preferences: ProfilePreferences::default(),
+                display: DisplayPreferences::default(),
             }),
         }
     }
@@ -35,6 +37,7 @@ impl Store {
         Ok(PreferencesSnapshot {
             revision,
             preferences,
+            display: snapshot.display,
         })
     }
 }

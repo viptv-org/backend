@@ -149,7 +149,15 @@ pub(crate) async fn list(
     // inventory of sort/filter defaults.
     value["default_query"] = serde_json::to_value(Page::default())
         .map_err(|_| ApiError::from("Library defaults unavailable"))?;
-    if let Some(cards)=value["cards"].as_array_mut(){for card in cards{if let Ok(typed)=serde_json::from_value::<viptv_engine::presentation::Card>(card.clone()){card["view"]=super::viewing_presentation::card_view(&typed,true);}}}
+    let show_ratings = {
+        let db = app.db.lock().map_err(|_| ApiError::from("Database unavailable"))?;
+        super::super::preferences::read_display(
+            &db,
+            lease.principal.account_id().ok_or_else(auth::forbidden)?,
+            profile,
+        )?.show_ratings
+    };
+    if let Some(cards)=value["cards"].as_array_mut(){for card in cards{if let Ok(typed)=serde_json::from_value::<viptv_engine::presentation::Card>(card.clone()){card["view"]=super::viewing_presentation::card_view(&typed,true,show_ratings);}}}
     Ok(axum::Json(value))
 }
 

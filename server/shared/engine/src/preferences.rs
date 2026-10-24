@@ -23,6 +23,76 @@ pub enum HdrPreference {
     Prefer,
     Avoid,
 }
+/// UI text scale. `default` is the designed size; small/large are fixed steps.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TextSize {
+    Small,
+    #[default]
+    Default,
+    Large,
+}
+/// `follow` defers to the device's own reduced-motion setting.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReduceMotion {
+    #[default]
+    Follow,
+    On,
+    Off,
+}
+/// Profile-scoped display settings: accent, ratings, type scale, motion,
+/// screen saver and overscan inset. These are presentation facts only;
+/// playback admission never reads them.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DisplayPreferences {
+    /// One of the four palette hexes projected in the controls inventory.
+    pub accent_color: String,
+    pub show_ratings: bool,
+    pub text_size: TextSize,
+    pub reduce_motion: ReduceMotion,
+    /// 0 disables the screen saver; otherwise idle minutes before it starts.
+    pub screen_saver_minutes: u32,
+    /// Overscan compensation, percent of the viewport inset on each edge.
+    pub screen_inset: u8,
+}
+impl Default for DisplayPreferences {
+    fn default() -> Self {
+        Self {
+            accent_color: "#F5C542".into(),
+            show_ratings: true,
+            text_size: TextSize::Default,
+            reduce_motion: ReduceMotion::Follow,
+            screen_saver_minutes: 5,
+            screen_inset: 0,
+        }
+    }
+}
+/// The designed accent palette; the controls inventory projects the same set.
+pub const ACCENT_COLORS: [&str; 4] = ["#F5C542", "#FF8B5C", "#62D9BC", "#A3BCFF"];
+/// Screen-saver choices projected in the controls inventory, in minutes.
+pub const SCREEN_SAVER_MINUTES: [u32; 4] = [0, 2, 5, 10];
+pub const MAX_SCREEN_INSET: u8 = 20;
+impl DisplayPreferences {
+    pub fn validate(&self) -> Result<(), Error> {
+        let accent = self.accent_color.to_ascii_uppercase();
+        if !ACCENT_COLORS.contains(&accent.as_str()) {
+            return Err(Error::InvalidQuery);
+        }
+        if !SCREEN_SAVER_MINUTES.contains(&self.screen_saver_minutes)
+            || self.screen_inset > MAX_SCREEN_INSET
+        {
+            return Err(Error::InvalidQuery);
+        }
+        Ok(())
+    }
+    /// Stored form keeps the palette's canonical casing.
+    pub fn normalized(mut self) -> Self {
+        self.accent_color = self.accent_color.to_ascii_uppercase();
+        self
+    }
+}
 /// `subtitles_enabled == (subtitle_mode != never)` always holds after reading.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(from = "StoredPreferences")]
@@ -100,6 +170,8 @@ impl Default for ProfilePreferences {
 pub struct PreferencesSnapshot {
     pub revision: u64,
     pub preferences: ProfilePreferences,
+    #[serde(default)]
+    pub display: DisplayPreferences,
 }
 pub fn language_tag(value: &str) -> bool {
     value.len() <= 32

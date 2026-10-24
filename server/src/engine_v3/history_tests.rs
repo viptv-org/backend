@@ -59,7 +59,7 @@ async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
     assert!(entry["completed_at_millis"].is_null());
     assert!(entry["updated_at_millis"].as_u64().unwrap() > 1000);
     let home = get(&app, "/api/bootstrap").await;
-    let mut expected=entry["card"].clone();expected["view"]=super::viewing_presentation::card_view(&serde_json::from_value(expected.clone()).unwrap(),false);
+    let mut expected=entry["card"].clone();expected["view"]=super::viewing_presentation::card_view(&serde_json::from_value(expected.clone()).unwrap(),false,true);
     expected["view"]["preview"]=json!({"background":"https://images.example/frame.jpg","caption":"Resume S2 E4 · 2m left","progress":0.3,"action":"play"});
     assert_eq!(home["home"]["rows"][0]["cards"][0], expected);
     let explicit=get(&app,"/api/profiles/1/home").await;

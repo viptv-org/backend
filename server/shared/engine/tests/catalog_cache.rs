@@ -75,7 +75,9 @@ fn cache_expires_is_bounded_and_cannot_cross_profile_or_revision() {
         Err(Error::Conflict)
     );
     store.delete_profile(&alice.scope, "").unwrap();
-    alice.scope.revision = 0;
+    // The deletion tombstone fences recreation past the deleted revision so a
+    // recreated profile can never re-associate the deleted one's scoped data.
+    alice.scope.revision = 2;
     store.save_profile(&alice, None).unwrap();
     assert!(
         store

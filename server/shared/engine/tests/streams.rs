@@ -18,14 +18,20 @@ fn malformed_or_private_header_lines_cannot_enter_the_player() {
 }
 
 #[test]
-fn structured_source_presentation_is_additive_and_never_inferred_from_a_release_name() {
+fn source_presentation_hints_are_bounded_display_facts_never_provider_identity() {
     let raw=serde_json::json!({"streams":[
         {"name":"Movie 2160p HEVC AAC 5GB","url":"https://media.example/a.mkv"},
         {"name":"Actual release","url":"https://media.example/b","presentation":{"provider_name":"Declared provider","source_id":"declared","delivery_format":"progressive","container":"mkv","video_codec":"HEVC","audio_codecs":["AAC"],"size_bytes":5000}},
         {"url":"https://media.example/c","presentation":{"provider_name":"https://private.invalid/token","video_codec":"AVC\r\nprivate","audio_codecs":["AAC","https://private.invalid"],"delivery_format":"guessed","size_bytes":0}}
     ]});
     let streams=read_streams(&raw.to_string()).unwrap();
-    assert!(streams[0].presentation.is_none());
+    // Release text yields bounded, sanitized display hints only.
+    let first=streams[0].presentation.as_ref().unwrap();
+    assert_eq!(first.quality.as_deref(),Some("4K"));
+    assert_eq!(first.video_codec.as_deref(),Some("HEVC"));
+    assert_eq!(first.audio_codecs,vec!["AAC"]);
+    // Identity and delivery authority are never inferred from release text.
+    assert!(first.provider_name.is_none() && first.source_id.is_none() && first.delivery_format.is_none());
     assert_eq!(streams[1].presentation.as_ref().unwrap().size_bytes,Some(5000));
     assert_eq!(streams[1].presentation.as_ref().unwrap().container.as_deref(),Some("mkv"));
     let third=streams[2].presentation.as_ref().unwrap();

@@ -24,6 +24,7 @@ fn card() -> Card {
         added_at_millis:None,
         category:None,
         metadata:None,
+        metadata_origin:None,
     }
 }
 

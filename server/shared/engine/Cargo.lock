@@ -2195,6 +2195,7 @@ dependencies = [
  "url",
  "viptv-provider",
  "vsources",
+ "vsources-cloudflare",
 ]
 
 [[package]]

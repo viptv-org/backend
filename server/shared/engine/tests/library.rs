@@ -96,8 +96,16 @@ fn favorites_reopen_page_and_preserve_provider_identity_with_revision_and_profil
         "Bob title"
     );
     store.delete_profile(&a.scope, "").unwrap();
-    store.save_profile(&a, None).unwrap();
-    assert!(store.favorites(&a.scope, 0, 40).unwrap().cards.is_empty());
+    // The deletion tombstone fences recreation past the deleted revision.
+    let mut recreated = a.clone();
+    recreated.scope.revision = 1;
+    store.save_profile(&recreated, None).unwrap();
+    assert!(store
+        .favorites(&recreated.scope, 0, 40)
+        .unwrap()
+        .cards
+        .is_empty());
+    let a = recreated;
     assert_eq!(store.library_revision(&a.scope).unwrap(), 0);
     drop(store);
     std::fs::remove_file(path).unwrap();

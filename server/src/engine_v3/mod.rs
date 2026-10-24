@@ -162,7 +162,15 @@ pub(crate) async fn bootstrap(
     let axum::Json(management) = profiles::list(State(app), Extension(lease)).await?;
     let mut value=json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial.as_ref().map(|home| &home.snapshot),"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions});
     value["navigation"] = navigation;
-    if let Some(membership)=membership.as_ref(){viewing_presentation::decorate(&mut value,membership)?;}
+    if let Some(membership)=membership.as_ref(){
+        // The bootstrap already loaded the profile's preferences snapshot;
+        // its display section carries the ratings visibility decision.
+        let show_ratings = bootstrap_preferences
+            .as_ref()
+            .and_then(|snapshot| snapshot["display"]["show_ratings"].as_bool())
+            .unwrap_or(true);
+        viewing_presentation::decorate(&mut value,membership,show_ratings)?;
+    }
     if let Some(home)=&initial { home.attach(&mut value["home"]); }
     Ok(axum::Json(value))
 }
