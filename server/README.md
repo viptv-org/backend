@@ -17,8 +17,7 @@ See ../tests/README.md for disposable network-none gateway acceptance.
 | VIPTV_BIND | 0.0.0.0:8080 |
 | VIPTV_AUTH_ORIGIN | One exact public HTTPS origin, required for normal public browser deployment |
 | VIPTV_DATABASE | data/viptv.sqlite |
-| VIPTV_DASHBOARD_DIST | Optional account/admin assets at / |
-| VIPTV_TV_DIST | Optional viewing assets at /tv |
+| VIPTV_TV_DIST | The KMP viewing app dist (owns / and every UI route, including /device) |
 | VIPTV_SECRETS_KEYRING | Operator-managed encrypted source/gateway storage; no insecure default |
 
 The Compose template passes a configured keyring through and leaves an absent
