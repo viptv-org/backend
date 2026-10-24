@@ -446,5 +446,33 @@
       "reason": null
     },
     "consumer_action_on_mismatch": "Discard the old window and cursor, cancel dependent guide requests, and request offset zero."
+  },
+  "live_offset_boundary": {
+    "catalog_size": 10041,
+    "first_request": {
+      "offset": 10000,
+      "limit": 40
+    },
+    "first_expected": {
+      "channel_count": 40,
+      "first_id": "large-10000",
+      "next_cursor": "10040",
+      "complete": false
+    },
+    "next_expected": {
+      "channel_count": 1,
+      "first_id": "large-10040",
+      "next_cursor": null,
+      "complete": true
+    },
+    "past_end_request": {
+      "offset": 4294967295,
+      "limit": 200
+    },
+    "past_end_expected": {
+      "channel_count": 0,
+      "next_cursor": null,
+      "complete": true
+    }
   }
 }

@@ -168,7 +168,8 @@ pub(crate) async fn page(
         })
         .collect::<Vec<_>>();
     let limit = query.limit.unwrap_or(100) as usize;
-    let end = (query.offset as usize + limit).min(filtered.len());
+    let start = (query.offset as usize).min(filtered.len());
+    let end = start.saturating_add(limit).min(filtered.len());
     super::super::configuration::validate_revision(&app, profile, revision)?;
     // This monotonic cache-instance timestamp is stable across clones/pages and
     // changes on every directory replacement; guide refreshes leave it intact.
@@ -176,7 +177,7 @@ pub(crate) async fn page(
     snapshot::project(&app, profile, revision, &query, &catalog_generation, LivePage {
         channels: filtered
             .iter()
-            .skip(query.offset as usize)
+            .skip(start)
             .take(limit)
             .map(|c| c.channel.clone())
             .collect(),

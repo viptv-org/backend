@@ -235,3 +235,13 @@ group scope, configuration changes between pages, catalog/category generations,
 private directory cache replacement, and foreign-profile rejection. The shared
 fixture's `live_pagination_snapshot` illustrates matching and mismatched pages;
 its tokens are synthetic opaque examples, not values clients should construct.
+
+Live directory offsets accept the full existing unsigned 32-bit query range;
+they are not capped at 10,000. The per-page maximum remains 200, and query-string
+size/character limits and provider ingestion budgets are unchanged. A cursor
+returned after offset 10,000 can therefore be followed unchanged. Requests past
+the end return an empty complete page with no cursor. Native directory readers
+clamp to their available rows before adding the page size, including on 32-bit
+hosts. `live_offset_boundary` is a test expectation fixture (not a wire response):
+10,041 stored channels, offset 10,000/limit 40 → cursor 10,040 → one final channel.
+The producer handler test exercises browsing, search and category filtering.

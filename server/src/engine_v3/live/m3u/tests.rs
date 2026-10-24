@@ -61,6 +61,9 @@ async fn cached_m3u_multi_membership_and_xmltv_are_projected_without_new_egress(
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["channels"].as_array().unwrap().len(), 2);
+    let (status,end)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?offset=4294967295&limit=200",Value::Null).await;
+    assert_eq!(status,StatusCode::OK,"{end}");
+    assert_eq!(end["channels"],json!([]));assert_eq!(end["complete"],true);assert!(end["next_cursor"].is_null());
     assert_eq!(page["channels"][0]["group_name"], "Animation");
     assert_eq!(
         page["channels"][0]["group_ids"].as_array().unwrap().len(),

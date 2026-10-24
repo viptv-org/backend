@@ -71,8 +71,9 @@ pub struct LiveQuery {
 }
 impl LiveQuery {
     pub fn validate(&self) -> Result<(), Error> {
-        if self.offset > 10000
-            || self.limit.is_some_and(|v| v == 0 || v > 200)
+        // The offset addresses the server's directory; it is not a page-size
+        // budget. In particular, emitted cursors must remain valid after 10k.
+        if self.limit.is_some_and(|v| v == 0 || v > 200)
             || self
                 .search
                 .as_ref()

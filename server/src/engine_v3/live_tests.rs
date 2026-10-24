@@ -300,3 +300,32 @@ async fn live_page_snapshot_changes_for_configuration_catalog_and_query_scope() 
     assert!(!configured.to_string().contains("private-password"));
     assert_eq!(request(&app,"member-token-2","GET","/api/profiles/1/live/channels?offset=1",Value::Null).await.0,StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn live_browsing_and_search_follow_cursors_past_ten_thousand() {
+    let app=fixture();
+    {
+        let db=app.db.lock().unwrap();
+        db.execute_batch("INSERT INTO providers(id,name,url,username,password,enabled,enable_live,enable_movies,enable_series)VALUES(10,'Large catalog','https://provider.example','fixture-user','fixture-password',1,1,0,0);INSERT INTO provider_ownership VALUES(10,1);WITH RECURSIVE rows(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM rows WHERE n<10040) INSERT INTO provider_live(id,provider_id,stream_id,name,category_id,category,ordinal) SELECT 'large-'||n,10,CAST(n AS TEXT),'Large channel '||n,'news','News',n FROM rows;").unwrap();
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    for filter in ["", "&search=Large", "&group_id=news"] {
+        let path=format!("/api/profiles/1/live/channels?offset=10000&limit=40{filter}");
+        let (status,first)=request(&app,"member-token-1","GET",&path,Value::Null).await;
+        assert_eq!(status,StatusCode::OK,"{first}");
+        assert_eq!(first["channels"].as_array().unwrap().len(),40);
+        assert_eq!(first["channels"][0]["id"],"large-10000");
+        assert_eq!(first["next_cursor"],"10040");
+        let path=format!("/api/profiles/1/live/channels?offset={}&limit=40{filter}",first["next_cursor"].as_str().unwrap());
+        let (status,last)=request(&app,"member-token-1","GET",&path,Value::Null).await;
+        assert_eq!(status,StatusCode::OK,"{last}");
+        assert_eq!(last["channels"].as_array().unwrap().len(),1);
+        assert_eq!(last["channels"][0]["id"],"large-10040");
+        assert_eq!(last["snapshot_id"],first["snapshot_id"]);
+        assert_eq!(last["complete"],true);
+        assert!(last["next_cursor"].is_null());
+    }
+    let(status,end)=request(&app,"member-token-1","GET","/api/profiles/1/live/channels?offset=4294967295&limit=200",Value::Null).await;
+    assert_eq!(status,StatusCode::OK,"{end}");
+    assert_eq!(end["channels"],json!([]));assert_eq!(end["complete"],true);assert!(end["next_cursor"].is_null());
+}
