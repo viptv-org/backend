@@ -198,7 +198,7 @@ async fn library_and_home_reuse_exact_current_family_metadata_without_changing_p
  super::source_integrations::cache_card(&app,&lease,99,serde_json::from_value(full.clone()).unwrap());assert!(get(&app,"/api/profiles/1/library").await["cards"][0]["logo"].is_null());
  super::source_integrations::cache_card(&app,&lease,0,serde_json::from_value(full).unwrap());
  let page=get(&app,"/api/profiles/1/library").await;assert_eq!(page["cards"][0]["logo"],"https://images.example/transparent.png");assert_eq!(page["cards"][0]["description"],"Host full metadata");assert_eq!(page["cards"][0]["added_at_millis"],added);assert!(page["cards"][0]["progress"].is_null());
- let bootstrap=get(&app,"/api/bootstrap").await;assert_eq!(bootstrap["library"]["cards"][0],bootstrap["home"]["rows"][1]["cards"][0]);assert_eq!(bootstrap["library"]["cards"][0]["logo"],"https://images.example/transparent.png");
+ let bootstrap=get(&app,"/api/bootstrap").await;let mut home_card=bootstrap["home"]["rows"][1]["cards"][0].clone();let preview=home_card["view"].as_object_mut().unwrap().remove("preview").unwrap();assert_eq!(preview,json!({"background":"https://images.example/background.jpg","caption":null,"progress":null,"action":"details"}));assert_eq!(bootstrap["library"]["cards"][0],home_card);assert_eq!(bootstrap["library"]["cards"][0]["logo"],"https://images.example/transparent.png");
 }
 #[tokio::test]
 async fn real_completion_counts_remain_unknown_for_legacy_rows_and_increment_only_on_transitions(){

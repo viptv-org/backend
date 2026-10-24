@@ -46,7 +46,25 @@ async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
     assert!(entry["updated_at_millis"].as_u64().unwrap() > 1000);
     let home = get(&app, "/api/bootstrap").await;
     let mut expected=entry["card"].clone();expected["view"]=super::viewing_presentation::card_view(&serde_json::from_value(expected.clone()).unwrap(),false);
+    expected["view"]["preview"]=json!({"background":"https://images.example/frame.jpg","caption":"Resume S2 E4 · 2m left","progress":0.3,"action":"play"});
     assert_eq!(home["home"]["rows"][0]["cards"][0], expected);
+    let explicit=get(&app,"/api/profiles/1/home").await;
+    assert_eq!(explicit["rows"][0]["cards"][0]["view"]["preview"],expected["view"]["preview"]);
+    let mut parent=entry["card"].clone();
+    parent["identity"]=identity("opaque-parent",false);parent["parent_identity"]=Value::Null;
+    parent["landscape"]=json!("https://images.example/series-background.jpg");
+    let mut lease=ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,profile_id:Some(1),role:"member".into(),session_id:Some("other-family".into())},session_id:Some("other-family".into())};
+    super::source_integrations::cache_card(&app,&lease,0,serde_json::from_value(parent.clone()).unwrap());
+    assert_eq!(get(&app,"/api/profiles/1/home").await["rows"][0]["cards"][0]["view"]["preview"]["background"],"https://images.example/frame.jpg");
+    let auth::Principal::Account{session_id,..}=&mut lease.principal;*session_id=Some("s1".into());lease.session_id=Some("s1".into());
+    super::source_integrations::cache_card(&app,&lease,0,serde_json::from_value(parent.clone()).unwrap());
+    let rich=get(&app,"/api/profiles/1/home").await;
+    assert_eq!(rich["rows"][0]["cards"][0]["landscape"],"https://images.example/frame.jpg");
+    assert_eq!(rich["rows"][0]["cards"][0]["view"]["preview"],json!({"background":"https://images.example/series-background.jpg","caption":"Resume S2 E4 · 2m left","progress":0.3,"action":"play"}));
+    assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/library",json!({"card":parent})).await.0,StatusCode::OK);
+    let saved_home=get(&app,"/api/profiles/1/home").await;
+    assert_eq!(saved_home["rows"][1]["cards"][0]["view"]["preview"]["action"],"details");
+    assert_eq!(saved_home["rows"][1]["cards"][0]["view"]["preview"]["caption"],"Resume S2 E4 · 2m left");
     assert!(
         home["home"]["revision"].as_u64().unwrap() > before["home"]["revision"].as_u64().unwrap()
     );

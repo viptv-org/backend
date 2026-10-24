@@ -4,11 +4,33 @@ use viptv_engine::{
     presentation::HomeSnapshot,
 };
 
+pub(super) struct PresentedHome {
+    pub snapshot: HomeSnapshot,
+    previews: Vec<Vec<Value>>,
+}
+impl PresentedHome {
+    /// Applied after the shared card decorator, without trusting provider or
+    /// client-supplied view fields. Both arrays come from this same snapshot.
+    pub fn attach(&self, value: &mut Value) {
+        for (row, previews) in self.previews.iter().enumerate() {
+            for (column, preview) in previews.iter().enumerate() {
+                value["rows"][row]["cards"][column]["view"]["preview"] = preview.clone();
+            }
+        }
+    }
+}
+fn preview_key(card: &viptv_engine::presentation::Card) -> String {
+    let identity = card.parent_identity.as_ref().unwrap_or(&card.identity);
+    serde_json::to_string(&(&identity.kind, &identity.id, &card.metadata_origin,
+        card.metadata_origin.is_none().then_some(&card.provider_id)))
+        .expect("presentation identity contains only serializable scalar fields")
+}
+
 pub(super) async fn load(
     app: App,
     lease: ResourceLease,
     profile: i64,
-) -> Result<HomeSnapshot, ApiError> {
+) -> Result<PresentedHome, ApiError> {
     let app = app.with_lease(lease.clone());
     let (app, configuration_revision) = configuration::apply(
         app,
@@ -24,8 +46,8 @@ pub(super) async fn load(
     let continuation = super::continuation::snapshot(&app, &lease, profile, 0, 12)?;
     let queue = continuation
         .entries
-        .into_iter()
-        .map(|entry| entry.card)
+        .iter()
+        .map(|entry| entry.card.clone())
         .collect();
     let (favorites, revision) = {
         let db = app
@@ -198,7 +220,29 @@ pub(super) async fn load(
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?,
     )?;
-    Ok(snapshot)
+    // Reuse the already-verified parent metadata in one bounded cache read.
+    // Episode artwork stays on the tile; the preview can use its series art.
+    let parents = snapshot.rows.iter().flat_map(|row| &row.cards).filter_map(|card| {
+        let parent = card.parent_identity.as_ref()?;
+        let mut preview = card.clone();
+        preview.identity = parent.clone(); preview.parent_identity = None;
+        Some((preview_key(card), preview))
+    }).collect::<Vec<_>>();
+    let (keys, mut parents): (Vec<_>, Vec<_>) = parents.into_iter().unzip();
+    super::source_integrations::merge_cached(&app, &lease, configuration_revision, &mut parents);
+    let backgrounds = keys.into_iter().zip(parents.into_iter().map(|card| card.landscape)).collect::<HashMap<_,_>>();
+    let previews = snapshot.rows.iter().map(|row| row.cards.iter().map(|card| {
+        let background = backgrounds.get(&preview_key(card)).and_then(|image| image.clone()).or_else(|| card.landscape.clone());
+        let entry = continuation.entries.iter().find(|entry| super::viewing_action::entry_matches(entry, card));
+        let (caption, progress) = if let Some(entry) = entry {
+            let (progress, remaining) = super::viewing_action::continuation_display(entry);
+            let label = super::viewing_action::action_label(&entry.card, entry.status == viptv_engine::continuation::ContinuationStatus::Resume);
+            (Some(remaining.map(|remaining| format!("{label} · {remaining}")).unwrap_or(label)), progress)
+        } else { (None, None) };
+        let action = if row.id == "continue" && entry.is_some() { "play" } else { "details" };
+        json!({"background":background,"caption":caption,"progress":progress,"action":action})
+    }).collect()).collect();
+    Ok(PresentedHome { snapshot, previews })
 }
 
 async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {

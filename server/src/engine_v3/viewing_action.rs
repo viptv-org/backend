@@ -2,9 +2,37 @@
 //! or derive resume policy from a locally cached episode/history list.
 use super::*;
 use viptv_engine::{
-    continuation::ContinuationStatus,
+    continuation::{ContinuationEntry, ContinuationStatus},
     presentation::{Card, DetailSnapshot},
 };
+
+pub(super) fn entry_matches(entry: &ContinuationEntry, selected: &Card) -> bool {
+    entry.card.metadata_origin == selected.metadata_origin
+        && (entry.card.identity == selected.identity
+            || (selected.identity.episode.is_none()
+                && entry.card.parent_identity.as_ref() == Some(&selected.identity)))
+        && matches!(entry.status, ContinuationStatus::Resume | ContinuationStatus::Next)
+}
+
+pub(super) fn continuation_display(entry: &ContinuationEntry) -> (Option<f64>, Option<String>) {
+    if entry.status != ContinuationStatus::Resume || entry.record.duration_millis == 0 {
+        return (None, None);
+    }
+    let progress = (entry.record.position_millis as f64 / entry.record.duration_millis as f64).clamp(0.0, 1.0);
+    let remaining = entry.record.duration_millis.saturating_sub(entry.record.position_millis).div_ceil(60_000);
+    (Some(progress), Some(format!("{remaining}m left")))
+}
+
+pub(super) fn action_label(card: &Card, resume: bool) -> String {
+    let verb = if resume { "Resume" } else { "Play" };
+    match &card.identity.episode {
+        Some(episode) => match episode.season {
+            Some(season) => format!("{verb} S{season} E{}", episode.episode),
+            None => format!("{verb} E{}", episode.episode),
+        },
+        None => verb.to_owned(),
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -119,30 +147,10 @@ pub(crate) async fn resolve(
         let mut offset = 0;
         loop {
             let page = continuation::snapshot(&scoped, &lease, profile, offset, 100)?;
-            if let Some(entry) = page.entries.iter().find(|entry| {
-                entry.card.metadata_origin == selected.metadata_origin
-                    && (entry.card.identity == selected.identity
-                        || (selected.identity.episode.is_none()
-                            && entry.card.parent_identity.as_ref() == Some(&selected.identity)))
-                    && matches!(
-                        entry.status,
-                        ContinuationStatus::Resume | ContinuationStatus::Next
-                    )
-            }) {
+            if let Some(entry) = page.entries.iter().find(|entry| entry_matches(entry, selected)) {
                 target = entry.card.clone();
                 resume = entry.status == ContinuationStatus::Resume;
-                if resume && entry.record.duration_millis > 0 {
-                    progress = Some(
-                        (entry.record.position_millis as f64 / entry.record.duration_millis as f64)
-                            .clamp(0.0, 1.0),
-                    );
-                    let remaining = entry
-                        .record
-                        .duration_millis
-                        .saturating_sub(entry.record.position_millis)
-                        .div_ceil(60_000);
-                    remaining_label = Some(format!("{remaining}m left"));
-                }
+                (progress, remaining_label) = continuation_display(entry);
                 break;
             }
             if page.complete {
@@ -164,14 +172,7 @@ pub(crate) async fn resolve(
     let preferences = preferences::get(State(app.clone()), Extension(lease.clone()), Path(profile))
         .await?
         .0;
-    let verb = if resume { "Resume" } else { "Play" };
-    let label = match &target.identity.episode {
-        Some(episode) => match episode.season {
-            Some(season) => format!("{verb} S{season} E{}", episode.episode),
-            None => format!("{verb} E{}", episode.episode),
-        },
-        None => verb.to_owned(),
-    };
+    let label = action_label(&target, resume);
     let mut value = json!({"card":target,"label":label,"resume":resume,"progress":progress,"remaining_label":remaining_label,"source_selection":preferences["preferences"]["source_selection"]});
     viewing_presentation::for_profile(&app, &lease, profile, &mut value)?;
     Ok(axum::Json(value))

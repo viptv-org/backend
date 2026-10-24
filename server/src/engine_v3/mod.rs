@@ -160,9 +160,10 @@ pub(crate) async fn bootstrap(
         })
         .map(|s| s.json());
     let axum::Json(management) = profiles::list(State(app), Extension(lease)).await?;
-    let mut value=json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial,"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions});
+    let mut value=json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial.as_ref().map(|home| &home.snapshot),"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions});
     value["navigation"] = navigation;
     if let Some(membership)=membership.as_ref(){viewing_presentation::decorate(&mut value,membership)?;}
+    if let Some(home)=&initial { home.attach(&mut value["home"]); }
     Ok(axum::Json(value))
 }
 
@@ -171,8 +172,10 @@ pub(crate) async fn home(
     Extension(lease): Extension<ResourceLease>,
     Path(profile): Path<i64>,
 ) -> ApiResult {
-    let mut value=serde_json::to_value(home::load(app.clone(),lease.clone(),profile).await?).map_err(|_|ApiError::from("Home unavailable"))?;
+    let home=home::load(app.clone(),lease.clone(),profile).await?;
+    let mut value=serde_json::to_value(&home.snapshot).map_err(|_|ApiError::from("Home unavailable"))?;
     viewing_presentation::for_profile(&app,&lease,profile,&mut value)?;
+    home.attach(&mut value);
     Ok(axum::Json(value))
 }
 

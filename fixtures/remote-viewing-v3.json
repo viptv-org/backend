@@ -529,5 +529,26 @@
       "next": null,
       "page_size": 3
     }
+  },
+  "home_preview": {
+    "episode_tile_landscape": "https://images.example/episode.jpg",
+    "continue": {
+      "background": "https://images.example/series.jpg",
+      "caption": "Resume S1 E2 \u00b7 38m left",
+      "progress": 0.3,
+      "action": "play"
+    },
+    "saved_same_title": {
+      "background": "https://images.example/series.jpg",
+      "caption": "Resume S1 E2 \u00b7 38m left",
+      "progress": 0.3,
+      "action": "details"
+    },
+    "unavailable_hint": {
+      "background": null,
+      "caption": null,
+      "progress": null,
+      "action": "details"
+    }
   }
 }

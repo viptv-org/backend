@@ -263,3 +263,21 @@ or unconfigured directories have no previous/next request. Snapshot equality is
 still required when reusing or joining windows; paging metadata does not revive
 an incompatible configuration. This metadata is shared by Live and channel
 Search, and does not change media Search/discovery contracts.
+
+## Home focused-title presentation
+
+Home/bootstrap row cards now include `view.preview` with `background`, `caption`,
+`progress` and `action` (`play` or `details`). These are display facts and an
+activation intent, not playback grants. The client renders them without deriving
+resume/episode state from timestamps, subtitles or percentages. A `play` intent
+still calls the existing viewing-action/source APIs for a fresh server decision.
+
+The Home loader reuses its existing continuation snapshot and verified metadata
+cache. Episode tiles retain their own landscape image while the preview may use
+verified parent-series artwork. Missing parent artwork falls back on the producer
+to the existing card landscape. No per-card metadata request is added. Preview
+captions/progress share the viewing-action formatter and matching rules. Only
+eligible Continue Watching entries project `play`; other rows retain `details`,
+even when they have a resume hint. Absent hint values are null, not client defaults.
+Library/history responses keep their existing shape; this additive projection
+is attached to the same scoped Home snapshot after card presentation decoration.
