@@ -362,6 +362,18 @@ pub fn router_with_viewers(
             "/device",
             get(move || dashboard_entry(device_index.clone())),
         );
+        // The dashboard bundle references its hashed assets with absolute
+        // /assets/... URLs. The KMP viewing app at / does not use that prefix,
+        // so serving the dashboard's asset directory there is collision-free;
+        // without this mount, those requests fell into the viewing app's SPA
+        // fallback and returned text/html, leaving /device a white page.
+        let dashboard_assets = path.join("assets");
+        if dashboard_assets.is_dir() {
+            r = r.nest_service(
+                "/assets",
+                tower_http::services::ServeDir::new(dashboard_assets),
+            );
+        }
     } else {
         // A server-only image still answers / with its identity so health
         // checks pass without a mounted dashboard.
@@ -461,8 +473,9 @@ mod tv_web_mount_tests {
         std::fs::write(tv.path().join("index.html"),"TV web").unwrap();
         std::fs::create_dir(tv.path().join("assets")).unwrap();std::fs::write(tv.path().join("assets/test.js"),"TV asset").unwrap();
         std::fs::write(dashboard.path().join("index.html"),"Account dashboard").unwrap();
+        std::fs::create_dir(dashboard.path().join("assets")).unwrap();std::fs::write(dashboard.path().join("assets/account.js"),"Account asset").unwrap();
         let app=router_with_viewers(crate::auth_integration_tests::fixture(),Some(dashboard.path().into()),Some(root.path().into()),Some(tv.path().into()));
-        for (path,expected) in [("/","KMP root"),("/device","Account dashboard"),("/tv?platform=vizio","TV web"),("/tv/?platform=tizen","TV web"),("/tv/detail/title?layout=tv","TV web"),("/tv/assets/test.js","TV asset")] {
+        for (path,expected) in [("/","KMP root"),("/device","Account dashboard"),("/assets/account.js","Account asset"),("/tv?platform=vizio","TV web"),("/tv/?platform=tizen","TV web"),("/tv/detail/title?layout=tv","TV web"),("/tv/assets/test.js","TV asset")] {
             let response=app.clone().oneshot(axum::http::Request::builder().uri(path).body(axum::body::Body::empty()).unwrap()).await.unwrap();
             assert_eq!(response.status(),StatusCode::OK,"{path}");
             let bytes=axum::body::to_bytes(response.into_body(),1024).await.unwrap();assert_eq!(&bytes[..],expected.as_bytes(),"{path}");
