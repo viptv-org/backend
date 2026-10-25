@@ -87,7 +87,7 @@ pub(super) fn actions(entry: &Entry, state: &StateData) -> Value {
         "restart":ready && !entry.live,
         "change_source":ready && bound(&entry.proof),
         "episodes":ready && !entry.live && episode,
-        "next_episode":ready && !entry.live && episode,
+        "next_episode":ready && !entry.live && episode && entry.next_episode_button,
         "tracks":ready && bound(&entry.proof) && (selectable("audio_tracks") || selectable("subtitle_tracks") || subtitles),
         "subtitle_style":ready && bound(&entry.proof) && subtitles && entry.caption_style,
         "report_progress":!entry.live && matches!(entry.proof.kind.as_str(),"movie"|"series")

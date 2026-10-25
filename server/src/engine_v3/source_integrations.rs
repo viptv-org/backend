@@ -455,3 +455,34 @@ fn merge_cached_revision(
         }
     }
 }
+
+#[cfg(test)]
+mod vsources_runtime_gate_tests {
+    use crate::{auth_integration_tests::fixture, test_support::request};
+    use axum::http::StatusCode;
+    #[tokio::test]
+    async fn vsources_reports_runtime_enabled_when_the_feature_is_built() {
+        let app = fixture();
+        let (status, value) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/profiles/1/source-integrations",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        let integrations = value["schemas"].as_array().cloned().unwrap_or_default();
+        let vsources = integrations
+            .iter()
+            .find(|row| row["plugin_id"] == "vsources")
+            .cloned()
+            .unwrap_or_default();
+        if cfg!(feature = "vsources-runtime") {
+            assert_eq!(vsources["runtime_enabled"], true, "{value}");
+            assert_ne!(vsources["state"], "Unavailable", "{value}");
+        } else {
+            assert_eq!(vsources["runtime_enabled"], false, "{value}");
+        }
+    }
+}

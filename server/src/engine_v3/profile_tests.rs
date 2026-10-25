@@ -471,3 +471,64 @@ async fn display_preferences_reject_invalid_values_and_empty_updates() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(saved["display"]["accent_color"], "#FF8B5C");
 }
+
+#[tokio::test]
+async fn playback_controls_match_the_board_order_and_toggle_copy() {
+    let app = fixture();
+    let (status, snapshot) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/preferences",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let controls = snapshot["controls"].as_array().unwrap();
+    let playback: Vec<_> = controls
+        .iter()
+        .filter(|control| control["group"] == "playback")
+        .map(|control| control["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        playback,
+        [
+            "next_episode_button",
+            "skip_intros",
+            "source_selection",
+            "max_quality_height",
+            "hdr_preference",
+            "match_frame_rate",
+            "subtitle_mode"
+        ]
+    );
+    let next = controls
+        .iter()
+        .find(|control| control["id"] == "next_episode_button")
+        .unwrap();
+    assert_eq!(next["label"], "Next episode button");
+    assert_eq!(
+        next["description"],
+        "Shows during the credits. Nothing ever plays on its own."
+    );
+    assert_eq!(next["choices"][0]["value"], true);
+    let start_subtitles = controls
+        .iter()
+        .find(|control| control["id"] == "subtitle_mode")
+        .unwrap();
+    assert_eq!(start_subtitles["label"], "Start with subtitles");
+    assert_eq!(start_subtitles["choices"][0]["value"], "always");
+    assert_eq!(start_subtitles["choices"][1]["value"], "never");
+    // Subtitle mode lives with playback on the boards; the subtitles section
+    // keeps language and style controls only.
+    assert!(
+        !controls
+            .iter()
+            .any(|control| control["group"] == "subtitles" && control["id"] == "subtitle_mode")
+    );
+    // The persisted defaults match the board's toggle states.
+    let prefs = &snapshot["preferences"];
+    assert_eq!(prefs["next_episode_button"], true);
+    assert_eq!(prefs["skip_intros"], false);
+    assert_eq!(prefs["match_frame_rate"], true);
+}

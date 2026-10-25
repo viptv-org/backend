@@ -25,6 +25,7 @@ pub(super) async fn cached() -> (App, String, String, u64) {
     app.live_cache.lock().await.insert(
         connection.clone(),
         super::Cache {
+            snapshot_id: "fixture-catalog".into(),
             revision: 1,
             expires: Instant::now() + Duration::from_secs(60),
             channels,

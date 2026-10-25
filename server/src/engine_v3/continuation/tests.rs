@@ -249,3 +249,62 @@ async fn queue_visibility_rejects_unknown_and_restricted_identities_without_writ
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn continue_collapses_duplicate_episode_progress_to_the_most_recent() {
+    let app = fixture();
+    // Two progress rows for the same series+episode (different positions and
+    // update times) must collapse to one card keeping the most recent record.
+    for (position, updated) in [(30000, 100), (50000, 200)] {
+        let (status, value) = request(
+            &app,
+            "member-token-1",
+            "PUT",
+            "/api/profiles/1/progress",
+            json!({"record":{"identity":identity("opaque-child-1238",true),"parent_identity":identity("opaque-parent",false),"provider_id":"stremio","title":"Owned series","poster":null,"landscape":null,"position_millis":position,"duration_millis":100000,"updated_at_millis":updated,"completed_at_millis":null}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+    }
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/continue",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let entries = page["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{page}");
+    assert_eq!(entries[0]["record"]["position_millis"], 50000);
+}
+
+#[tokio::test]
+async fn continue_collapses_duplicate_movie_progress_to_one_card() {
+    let app = fixture();
+    let movie = json!({"id":"movie-1","kind":"movie","ids":[],"episode":null,"edition":null});
+    for (position, updated) in [(10000, 50), (40000, 90)] {
+        let (status, value) = request(
+            &app,
+            "member-token-1",
+            "PUT",
+            "/api/profiles/1/progress",
+            json!({"record":{"identity":movie,"parent_identity":null,"provider_id":"stremio","title":"Owned movie","poster":null,"landscape":null,"position_millis":position,"duration_millis":120000,"updated_at_millis":updated,"completed_at_millis":null}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+    }
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/continue",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let entries = page["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{page}");
+    assert_eq!(entries[0]["record"]["position_millis"], 40000);
+}

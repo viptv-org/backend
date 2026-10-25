@@ -11,15 +11,23 @@ pub(super) fn entry_matches(entry: &ContinuationEntry, selected: &Card) -> bool 
         && (entry.card.identity == selected.identity
             || (selected.identity.episode.is_none()
                 && entry.card.parent_identity.as_ref() == Some(&selected.identity)))
-        && matches!(entry.status, ContinuationStatus::Resume | ContinuationStatus::Next)
+        && matches!(
+            entry.status,
+            ContinuationStatus::Resume | ContinuationStatus::Next
+        )
 }
 
 pub(super) fn continuation_display(entry: &ContinuationEntry) -> (Option<f64>, Option<String>) {
     if entry.status != ContinuationStatus::Resume || entry.record.duration_millis == 0 {
         return (None, None);
     }
-    let progress = (entry.record.position_millis as f64 / entry.record.duration_millis as f64).clamp(0.0, 1.0);
-    let remaining = entry.record.duration_millis.saturating_sub(entry.record.position_millis).div_ceil(60_000);
+    let progress =
+        (entry.record.position_millis as f64 / entry.record.duration_millis as f64).clamp(0.0, 1.0);
+    let remaining = entry
+        .record
+        .duration_millis
+        .saturating_sub(entry.record.position_millis)
+        .div_ceil(60_000);
     (Some(progress), Some(format!("{remaining}m left")))
 }
 
@@ -147,7 +155,11 @@ pub(crate) async fn resolve(
         let mut offset = 0;
         loop {
             let page = continuation::snapshot(&scoped, &lease, profile, offset, 100)?;
-            if let Some(entry) = page.entries.iter().find(|entry| entry_matches(entry, selected)) {
+            if let Some(entry) = page
+                .entries
+                .iter()
+                .find(|entry| entry_matches(entry, selected))
+            {
                 target = entry.card.clone();
                 resume = entry.status == ContinuationStatus::Resume;
                 (progress, remaining_label) = continuation_display(entry);

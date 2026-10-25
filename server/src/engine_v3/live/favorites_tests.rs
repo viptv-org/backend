@@ -232,6 +232,7 @@ async fn native_live_favorites_require_current_host_registry_and_connection_revi
     app.live_cache.lock().await.insert(
         connection.clone(),
         Cache {
+            snapshot_id: "fixture-catalog".into(),
             revision: 1,
             expires: Instant::now() - Duration::from_secs(1),
             channels,

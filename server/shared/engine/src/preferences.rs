@@ -107,6 +107,12 @@ pub struct ProfilePreferences {
     pub subtitle_text_color: String,
     pub subtitle_background_color: String,
     pub hdr_preference: HdrPreference,
+    /// Show the Next episode action during credits; never auto-plays.
+    pub next_episode_button: bool,
+    /// Skip marked intros/recaps when the content provides markers.
+    pub skip_intros: bool,
+    /// Switch the display to the video frame rate where the platform allows it.
+    pub match_frame_rate: bool,
 }
 /// Wire/stored form: rows saved before `subtitle_mode` derive it from
 /// `subtitles_enabled`; a sent `subtitle_mode` decides `subtitles_enabled`.
@@ -128,6 +134,12 @@ struct StoredPreferences {
     subtitle_background_color: String,
     #[serde(default)]
     hdr_preference: HdrPreference,
+    #[serde(default = "default_next_episode_button")]
+    next_episode_button: bool,
+    #[serde(default)]
+    skip_intros: bool,
+    #[serde(default = "default_match_frame_rate")]
+    match_frame_rate: bool,
 }
 impl From<StoredPreferences> for ProfilePreferences {
     fn from(value: StoredPreferences) -> Self {
@@ -147,6 +159,9 @@ impl From<StoredPreferences> for ProfilePreferences {
             subtitle_text_color: value.subtitle_text_color,
             subtitle_background_color: value.subtitle_background_color,
             hdr_preference: value.hdr_preference,
+            next_episode_button: value.next_episode_button,
+            skip_intros: value.skip_intros,
+            match_frame_rate: value.match_frame_rate,
         }
     }
 }
@@ -163,6 +178,9 @@ impl Default for ProfilePreferences {
             subtitle_text_color: default_text(),
             subtitle_background_color: default_background(),
             hdr_preference: HdrPreference::Any,
+            next_episode_button: true,
+            skip_intros: false,
+            match_frame_rate: true,
         }
     }
 }
@@ -191,6 +209,12 @@ pub fn language_tag(value: &str) -> bool {
 }
 fn default_scale() -> f64 {
     1.0
+}
+fn default_next_episode_button() -> bool {
+    true
+}
+fn default_match_frame_rate() -> bool {
+    true
 }
 fn default_text() -> String {
     "#FFFFFF".into()

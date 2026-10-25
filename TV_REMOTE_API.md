@@ -292,3 +292,17 @@ eligible Continue Watching entries project `play`; other rows retain `details`,
 even when they have a resume hint. Absent hint values are null, not client defaults.
 Library/history responses keep their existing shape; this additive projection
 is attached to the same scoped Home snapshot after card presentation decoration.
+
+Shared synthetic fixtures: [`fixtures/remote-viewing-v3.json`](fixtures/remote-viewing-v3.json).
+The ordered card projection is asserted against this file by producer tests;
+Roku can consume it alongside its transport/lifecycle fixtures.
+
+Live directory offsets accept the full existing unsigned 32-bit query range;
+they are not capped at 10,000. The per-page maximum remains 200, and query-string
+size/character limits and provider ingestion budgets are unchanged. A cursor
+returned after offset 10,000 can therefore be followed unchanged. Requests past
+the end return an empty complete page with no cursor. Native directory readers
+clamp to their available rows before adding the page size, including on 32-bit
+hosts. `live_offset_boundary` is a test expectation fixture (not a wire response):
+10,041 stored channels, offset 10,000/limit 40 → cursor 10,040 → one final channel.
+The producer handler test exercises browsing, search and category filtering.

@@ -7,7 +7,7 @@ license = "GPL-2.0-only"
 rust-version = "1.90"
 
 [features]
-default = []
+default = ["vsources-runtime"]
 live-runtime = ["viptv-engine/source-runtime"]
 vsources-runtime = ["viptv-engine/vsources-runtime"]
 

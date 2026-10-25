@@ -254,6 +254,8 @@ impl StateData {
 struct Entry {
     live: bool,
     caption_style: bool,
+    /// The profile's Next episode button preference at admission.
+    next_episode_button: bool,
     id: String,
     scope: String,
     request_id: String,
@@ -1510,9 +1512,18 @@ async fn start_mode(
             return Err(Error::Code("playback_capacity"));
         }
         db.execute("INSERT INTO playback_request_authority(session_id,request_id,scope,request_hash,playback_id) VALUES(?1,?2,?3,?4,?5)", params![session, request.request_id, scope, hash.as_slice(), id]).map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        let next_episode_button = match lease.principal {
+            crate::auth::Principal::Account { account_id, profile_id: Some(profile), .. } => {
+                crate::engine_v3::preferences::read(&db, account_id, profile)
+                    .map(|snapshot| snapshot.preferences.next_episode_button)
+                    .unwrap_or(true)
+            }
+            _ => true,
+        };
         let entry = Arc::new(Entry {
             live: input.live,
             caption_style: matches!(request.client.platform, Platform::Web | Platform::Vizio | Platform::Webos),
+            next_episode_button,
             id: id.clone(),
             scope,
             request_id: request.request_id.clone(),

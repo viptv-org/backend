@@ -245,11 +245,14 @@ pub(crate) fn preference_controls(value: &mut Value) {
         ])
     };
     value["controls"] = json!([
+        {"id":"next_episode_button","group":"playback","label":"Next episode button","description":"Shows during the credits. Nothing ever plays on its own.","choices":choices(vec![("On",json!(true)),("Off",json!(false))])},
+        {"id":"skip_intros","group":"playback","label":"Skip intros and recaps","description":"Skips them when the show marks where they are","choices":choices(vec![("On",json!(true)),("Off",json!(false))])},
         {"id":"source_selection","group":"playback","label":"Default source","description":"How Play chooses between sources","choices":choices(vec![("Best match",json!("best")),("Ask every time",json!("ask"))])},
         {"id":"max_quality_height","group":"playback","label":"Preferred quality","description":"Best match aims for this, then falls back","choices":choices(vec![("Auto",Value::Null),("4K",json!(2160)),("1080p",json!(1080)),("720p",json!(720)),("480p",json!(480))])},
-        {"id":"hdr_preference","group":"playback","label":"HDR preference","choices":choices(vec![("Any",json!("any")),("Prefer HDR",json!("prefer")),("Avoid HDR",json!("avoid"))])},
+        {"id":"hdr_preference","group":"playback","label":"HDR and Dolby Vision","choices":choices(vec![("No preference",json!("any")),("Prefer HDR",json!("prefer")),("Avoid HDR",json!("avoid"))])},
+        {"id":"match_frame_rate","group":"playback","label":"Match frame rate","description":"Switches the TV to the video’s frame rate for smoother motion","choices":choices(vec![("On",json!(true)),("Off",json!(false))])},
+        {"id":"subtitle_mode","group":"playback","label":"Start with subtitles","choices":choices(vec![("On",json!("always")),("Off",json!("never"))])},
         {"id":"preferred_audio_language","group":"subtitles","label":"Audio language","choices":languages()},
-        {"id":"subtitle_mode","group":"subtitles","label":"Subtitles","choices":choices(vec![("Always",json!("always")),("Never",json!("never"))])},
         {"id":"preferred_subtitle_language","group":"subtitles","label":"Subtitle language","choices":languages()},
         {"id":"subtitle_font_scale","group":"subtitles","label":"Subtitle size","choices":choices(vec![("Small",json!(0.8)),("Medium",json!(1.0)),("Large",json!(1.25)),("Extra large",json!(1.5))])},
         {"id":"subtitle_background_color","group":"subtitles","label":"Subtitle background","choices":choices(vec![("None",json!("#00000000")),("Dark",json!("#000000CC")),("Black",json!("#000000"))])},

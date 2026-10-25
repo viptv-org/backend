@@ -43,6 +43,7 @@ async fn cached_m3u_multi_membership_and_xmltv_are_projected_without_new_egress(
     app.live_cache.lock().await.insert(
         connection.into(),
         crate::engine_v3::live::Cache {
+            snapshot_id: "fixture-catalog".into(),
             revision: 1,
             expires: Instant::now() + Duration::from_secs(300),
             channels,

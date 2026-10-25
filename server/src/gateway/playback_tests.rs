@@ -1766,3 +1766,68 @@ mod caption_tests;
 
 #[path = "playback_required_audio_tests.rs"]
 mod required_audio_tests;
+
+#[tokio::test]
+async fn next_episode_action_follows_the_profile_preference() {
+    let (app, _peer) = setup().await;
+    gateway(&app, "first", 0);
+    let source = source(&app);
+    {
+        let mut streams = app.streams.lock().unwrap();
+        let entry = streams.get_mut(&source).unwrap();
+        entry.media_id = Some("fixture-series-episode".into());
+        entry.kind = "series".into();
+        entry.exact_vod = Some(crate::app_state::ExactVod {
+            title: "Fixture show".into(),
+            series: Some("Fixture show".into()),
+            season: Some(1),
+            episode: Some(2),
+        });
+    }
+    let (_, admission) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&source, "next-episode-pref-default", "roku"),
+    )
+    .await;
+    let ready = settled(&app, admission["id"].as_str().unwrap_or_else(|| panic!("admission: {admission}"))).await;
+    // The default profile preference shows the Next episode action.
+    assert_eq!(ready["actions"]["next_episode"], true, "{ready}");
+
+    let (_, mut prefs) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/preferences",
+        Value::Null,
+    )
+    .await;
+    let revision = prefs["revision"].as_u64().unwrap();
+    prefs["preferences"]["next_episode_button"] = json!(false);
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "PUT",
+            "/api/profiles/1/preferences",
+            json!({"revision": revision, "preferences": prefs["preferences"]})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (_, admission) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&source, "next-episode-pref-off", "roku"),
+    )
+    .await;
+    let ready = settled(&app, admission["id"].as_str().unwrap()).await;
+    assert_eq!(ready["actions"]["next_episode"], false, "{ready}");
+    // Episodes browsing stays available; only the credits action is gated.
+    assert_eq!(ready["actions"]["episodes"], true, "{ready}");
+}

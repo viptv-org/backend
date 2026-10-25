@@ -112,6 +112,35 @@ pub(crate) fn snapshot(
             },
         ));
     }
+    // Progress can hold several rows for one title+episode from one provider
+    // (different positions or source ids). Emit one card per provider's
+    // series+episode, and one per provider's movie, keeping the most recently
+    // updated record (and its order). Scoped-library entries merge below and
+    // stay separate by scope.
+    let mut best: std::collections::HashMap<String, (u64, ContinuationEntry)> =
+        std::collections::HashMap::new();
+    for (order, entry) in std::mem::take(&mut entries) {
+        let key = match &entry.card.parent_identity {
+            Some(series) => {
+                let episode = entry.card.identity.episode.as_ref();
+                format!(
+                    "series:{}:{}:{}:{}",
+                    entry.card.provider_id,
+                    series.id,
+                    episode.and_then(|e| e.season).map(|s| s.to_string()).unwrap_or_default(),
+                    episode.map(|e| e.episode).unwrap_or(0)
+                )
+            }
+            None => format!("title:{}:{}", entry.card.provider_id, entry.card.identity.id),
+        };
+        match best.get(&key) {
+            Some((_, old)) if old.record.updated_at_millis > entry.record.updated_at_millis => {}
+            _ => {
+                best.insert(key, (order, entry));
+            }
+        }
+    }
+    entries = best.into_values().collect();
     if queue["next_offset"].is_number() {
         return Err("History exceeds its bounded item limit".into());
     }
