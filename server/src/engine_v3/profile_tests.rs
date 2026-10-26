@@ -21,6 +21,9 @@ async fn typed_profile_crud_preserves_ownership_avatar_and_primary_protection() 
     assert_eq!(status, StatusCode::OK, "{profile}");
     let id = profile["id"].as_str().unwrap();
     assert_eq!(profile["avatar_id"], "zayne");
+    assert_eq!(profile["avatar_style"], "critters");
+    assert_eq!(profile["avatar_choice"], Value::Null);
+    assert!(profile["avatar_url"].as_str().is_some_and(|url| !url.is_empty()));
     assert_eq!(profile["can_delete"], true);
     let path = format!("/api/profiles/{id}");
     let (status, renamed) = request(
@@ -531,4 +534,202 @@ async fn playback_controls_match_the_board_order_and_toggle_copy() {
     assert_eq!(prefs["next_episode_button"], true);
     assert_eq!(prefs["skip_intros"], false);
     assert_eq!(prefs["match_frame_rate"], true);
+}
+
+fn listed(list: &Value, id: &str) -> Value {
+    list["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == id)
+        .cloned()
+        .unwrap_or_else(|| panic!("profile {id} missing from {list}"))
+}
+
+#[tokio::test]
+async fn engine_catalog_choice_round_trips_to_the_account_api() {
+    let app = fixture();
+    let (status, created) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/profiles",
+        json!({"name":"Catalog","avatar_style":"disney","avatar_choice":3}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+    let disney = auth::character_avatars()["disney"][2]["url"].clone();
+    assert_eq!(created["avatar_style"], "disney");
+    assert_eq!(created["avatar_choice"], 3);
+    assert_eq!(created["avatar_url"], disney);
+    assert_eq!(created["avatar_id"], Value::Null);
+    let (_, me) = request(&app, "member-token-1", "GET", "/api/auth/me", Value::Null).await;
+    let account = me["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == id.as_str())
+        .unwrap();
+    assert_eq!(account["avatar_style"], "disney");
+    assert_eq!(account["avatar_choice"], 3);
+    assert_eq!(account["avatar_url"], disney);
+
+    let (status, updated) = request(
+        &app,
+        "member-token-1",
+        "PATCH",
+        &format!("/api/profiles/{id}"),
+        json!({"avatar_style":"moods","avatar_choice":48}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["name"], "Catalog");
+    assert_eq!(updated["avatar_style"], "moods");
+    assert_eq!(updated["avatar_choice"], 48);
+    let moods = "https://api.dicebear.com/10.x/moods/png?seed=viptv-moods-48&size=256";
+    assert_eq!(updated["avatar_url"], moods);
+    // Choice alone keeps the current world.
+    let (status, updated) = request(
+        &app,
+        "member-token-1",
+        "PATCH",
+        &format!("/api/profiles/{id}"),
+        json!({"avatar_choice":7}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["avatar_style"], "moods");
+    assert_eq!(updated["avatar_choice"], 7);
+    let (_, list) = request(&app, "member-token-1", "GET", "/api/profiles", Value::Null).await;
+    assert_eq!(listed(&list, &id), updated);
+    let (_, bootstrap) =
+        request(&app, "member-token-1", "GET", "/api/bootstrap", Value::Null).await;
+    assert_eq!(listed(&bootstrap["profile_management"], &id), updated);
+    let account = bootstrap["identity"]["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == id.as_str())
+        .unwrap();
+    assert_eq!(account["avatar_choice"], 7);
+}
+
+#[tokio::test]
+async fn account_catalog_choice_projects_on_the_engine_route_and_outranks_legacy_ids() {
+    let app = fixture();
+    let (status, legacy) = request(
+        &app,
+        "member-token-1",
+        "PATCH",
+        "/api/profiles/1",
+        json!({"avatar_id":"vynxc"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert_eq!(legacy["avatar_id"], "vynxc");
+    assert_eq!(legacy["avatar_style"], "critters");
+    assert_eq!(legacy["avatar_choice"], Value::Null);
+    assert!(legacy["avatar_url"].as_str().is_some_and(|u| !u.is_empty()));
+
+    auth::update_profile(
+        &app.db.lock().unwrap(),
+        1,
+        1,
+        &json!({"avatar_style":"princesses","avatar_choice":2}),
+    )
+    .unwrap();
+    let princess = auth::character_avatars()["princesses"][1]["url"].clone();
+    let (_, list) = request(&app, "member-token-1", "GET", "/api/profiles", Value::Null).await;
+    let card = listed(&list, "1");
+    assert_eq!(card["avatar_style"], "princesses");
+    assert_eq!(card["avatar_choice"], 2);
+    assert_eq!(card["avatar_url"], princess);
+    assert_eq!(card["avatar_id"], Value::Null, "catalog choice wins");
+    let (_, config) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/integrations",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(config["configuration"]["avatar_id"], Value::Null);
+
+    // A legacy pick from an older app build is the newest choice again.
+    let (status, legacy) = request(
+        &app,
+        "member-token-1",
+        "PATCH",
+        "/api/profiles/1",
+        json!({"avatar_id":"zayne"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert_eq!(legacy["avatar_id"], "zayne");
+    assert_eq!(legacy["avatar_style"], "princesses");
+    assert_eq!(legacy["avatar_choice"], Value::Null);
+    let (_, config) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/integrations",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(config["configuration"]["avatar_id"], "zayne");
+
+    // An engine catalog pick then retires the legacy id.
+    let (status, catalog) = request(
+        &app,
+        "member-token-1",
+        "PATCH",
+        "/api/profiles/1",
+        json!({"avatar_style":"villains","avatar_choice":12}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    assert_eq!(catalog["avatar_id"], Value::Null);
+    assert_eq!(catalog["avatar_choice"], 12);
+    let stored: Option<String> = app
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT avatar_id FROM engine_profile_presentation WHERE profile_id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, None);
+}
+
+#[tokio::test]
+async fn engine_profile_route_rejects_invalid_catalog_choices() {
+    let app = fixture();
+    let (_, before) = request(&app, "member-token-1", "GET", "/api/profiles", Value::Null).await;
+    for body in [
+        json!({"avatar_style":"unknown-world","avatar_choice":1}),
+        json!({"avatar_style":42}),
+        json!({"avatar_style":null}),
+        json!({"avatar_choice":0}),
+        json!({"avatar_choice":49}),
+        json!({"avatar_choice":"3"}),
+        json!({"avatar_choice":null}),
+        // Princesses has ten characters.
+        json!({"avatar_style":"princesses","avatar_choice":11}),
+        json!({"avatar_id":"vynxc","avatar_style":"moods","avatar_choice":1}),
+        json!({"name":"Extra","avatar_style":"moods","avatar_choice":1,"setup_complete":true}),
+    ] {
+        let (status, error) =
+            request(&app, "member-token-1", "PATCH", "/api/profiles/1", body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {error}");
+        let mut create = body.clone();
+        create["name"] = json!("Rejected");
+        let (status, error) =
+            request(&app, "member-token-1", "POST", "/api/profiles", create.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{create}: {error}");
+    }
+    let (_, after) = request(&app, "member-token-1", "GET", "/api/profiles", Value::Null).await;
+    assert_eq!(before, after);
 }

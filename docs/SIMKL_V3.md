@@ -137,8 +137,15 @@ Bootstrap includes the same object as `profile_management`. Restricted sessions
 mark other targets `locked: true`, `lock_kind: "parent"`, and
 `selection_requires_parent: true`; unlocking the existing account parent PIN
 permits the selection without claiming a local per-profile PIN. POST/PATCH use
-`name` and optional `avatar_id` from the published preset IDs; DELETE protects the
-primary profile and preserves exact account ownership. The v3 parent aliases
+`name` plus an optional catalog avatar: `avatar_style` (one of the account
+`AVATAR_STYLES` worlds) and a 1-based `avatar_choice` bounded by that world's
+size, validated by the account profile rules. Cards project the account
+record's `avatar_style`, `avatar_choice` (null without a catalog choice) and
+`avatar_url`, so a choice made through either API shows on every client. The
+legacy `avatar_id` (published preset IDs in `avatar_ids`) stays accepted and is
+projected only while no catalog choice exists: a catalog write clears it, a
+later legacy write drops the catalog choice, and one request cannot set both.
+DELETE protects the primary profile and preserves exact account ownership. The v3 parent aliases
 retain existing PIN hashing, rate limits, short session-bound grants and rotation
 invalidation. Kids bootstrap remains a scoped, policy-filtered read.
 

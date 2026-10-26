@@ -56,12 +56,19 @@ pub(crate) fn selected_avatar_seed(
         .and_then(Value::as_u64)
         .map_or(fallback, |choice| format!("viptv-{style}-{choice}")))
 }
+/// The 1-based catalog position encoded in a `viptv-{style}-{choice}` seed;
+/// `None` for a random seed, which means no catalog choice was made.
+pub(crate) fn avatar_choice(style: &str, seed: &str) -> Option<u64> {
+    seed.strip_prefix(&format!("viptv-{style}-"))
+        .and_then(|id| id.parse::<u64>().ok())
+        .filter(|id| (1..=48).contains(id))
+}
 pub(crate) fn profile_json(id: i64, name: &str, style: &str, seed: &str, complete: bool) -> Value {
     json!({
         "id":id.to_string(),
         "name":name,
         "avatar_style":style,
-        "avatar_choice":seed.strip_prefix(&format!("viptv-{style}-")).and_then(|id| id.parse::<u64>().ok()).filter(|id| (1..=48).contains(id)),
+        "avatar_choice":avatar_choice(style,seed),
         "avatar_url":avatar_url(style,seed),
         "setup_complete":complete
     })

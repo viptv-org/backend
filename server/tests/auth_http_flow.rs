@@ -162,6 +162,34 @@ async fn registration_profile_avatar_and_history_are_account_isolated() {
     assert_eq!(updated["avatar_id"], "zayne");
     // Renaming with an avatar completes setup on a fresh profile.
     assert_eq!(updated["setup_complete"], true);
+    let (status, catalog) = browser_request(
+        &app,
+        &mut first,
+        "POST",
+        "/api/profiles",
+        json!({"name":"Catalog Kid","avatar_style":"pixel-art","avatar_choice":5}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    assert_eq!(catalog["avatar_style"], "pixel-art");
+    assert_eq!(catalog["avatar_choice"], 5);
+    assert_eq!(
+        catalog["avatar_url"],
+        "https://api.dicebear.com/10.x/pixel-art/png?seed=viptv-pixel-art-5&size=256"
+    );
+    assert_eq!(catalog["avatar_id"], Value::Null);
+    assert_eq!(
+        browser_request(
+            &app,
+            &mut first,
+            "PATCH",
+            &format!("/api/profiles/{id}"),
+            json!({"avatar_style":"princesses","avatar_choice":11})
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
     assert_eq!(
         browser_request(
             &app,
