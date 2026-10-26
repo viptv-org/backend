@@ -536,7 +536,8 @@ async fn playback_controls_match_the_board_order_and_toggle_copy() {
     assert_eq!(prefs["match_frame_rate"], true);
 }
 
-fn listed(list: &Value, id: &str) -> Value {
+/// The card for `id` in any value carrying a `profiles` array.
+fn profile_card(list: &Value, id: &str) -> Value {
     list["profiles"]
         .as_array()
         .unwrap()
@@ -565,12 +566,7 @@ async fn engine_catalog_choice_round_trips_to_the_account_api() {
     assert_eq!(created["avatar_url"], disney);
     assert_eq!(created["avatar_id"], Value::Null);
     let (_, me) = request(&app, "member-token-1", "GET", "/api/auth/me", Value::Null).await;
-    let account = me["profiles"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["id"] == id.as_str())
-        .unwrap();
+    let account = profile_card(&me, &id);
     assert_eq!(account["avatar_style"], "disney");
     assert_eq!(account["avatar_choice"], 3);
     assert_eq!(account["avatar_url"], disney);
@@ -602,17 +598,14 @@ async fn engine_catalog_choice_round_trips_to_the_account_api() {
     assert_eq!(updated["avatar_style"], "moods");
     assert_eq!(updated["avatar_choice"], 7);
     let (_, list) = request(&app, "member-token-1", "GET", "/api/profiles", Value::Null).await;
-    assert_eq!(listed(&list, &id), updated);
+    assert_eq!(profile_card(&list, &id), updated);
     let (_, bootstrap) =
         request(&app, "member-token-1", "GET", "/api/bootstrap", Value::Null).await;
-    assert_eq!(listed(&bootstrap["profile_management"], &id), updated);
-    let account = bootstrap["identity"]["profiles"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["id"] == id.as_str())
-        .unwrap();
-    assert_eq!(account["avatar_choice"], 7);
+    assert_eq!(profile_card(&bootstrap["profile_management"], &id), updated);
+    assert_eq!(
+        profile_card(&bootstrap["identity"], &id)["avatar_choice"],
+        7
+    );
 }
 
 #[tokio::test]
@@ -641,7 +634,7 @@ async fn account_catalog_choice_projects_on_the_engine_route_and_outranks_legacy
     .unwrap();
     let princess = auth::character_avatars()["princesses"][1]["url"].clone();
     let (_, list) = request(&app, "member-token-1", "GET", "/api/profiles", Value::Null).await;
-    let card = listed(&list, "1");
+    let card = profile_card(&list, "1");
     assert_eq!(card["avatar_style"], "princesses");
     assert_eq!(card["avatar_choice"], 2);
     assert_eq!(card["avatar_url"], princess);
@@ -656,28 +649,29 @@ async fn account_catalog_choice_projects_on_the_engine_route_and_outranks_legacy
     .await;
     assert_eq!(config["configuration"]["avatar_id"], Value::Null);
 
-    // A legacy pick from an older app build is the newest choice again.
-    let (status, legacy) = request(
-        &app,
-        "member-token-1",
-        "PATCH",
-        "/api/profiles/1",
-        json!({"avatar_id":"zayne"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{legacy}");
-    assert_eq!(legacy["avatar_id"], "zayne");
-    assert_eq!(legacy["avatar_style"], "princesses");
-    assert_eq!(legacy["avatar_choice"], Value::Null);
-    let (_, config) = request(
-        &app,
-        "member-token-1",
-        "GET",
-        "/api/profiles/1/integrations",
-        Value::Null,
-    )
-    .await;
-    assert_eq!(config["configuration"]["avatar_id"], "zayne");
+    // An older app build can still store a legacy id, but the catalog choice
+    // keeps precedence, also after a rename.
+    for body in [json!({"avatar_id":"zayne"}), json!({"name":"Renamed"})] {
+        let (status, card) =
+            request(&app, "member-token-1", "PATCH", "/api/profiles/1", body.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{body}: {card}");
+        assert_eq!(card["avatar_id"], Value::Null, "{body}");
+        assert_eq!(card["avatar_style"], "princesses", "{body}");
+        assert_eq!(card["avatar_choice"], 2, "{body}");
+    }
+
+    let stored = || -> Option<String> {
+        app.db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT avatar_id FROM engine_profile_presentation WHERE profile_id=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(stored().as_deref(), Some("zayne"));
 
     // An engine catalog pick then retires the legacy id.
     let (status, catalog) = request(
@@ -691,17 +685,7 @@ async fn account_catalog_choice_projects_on_the_engine_route_and_outranks_legacy
     assert_eq!(status, StatusCode::OK, "{catalog}");
     assert_eq!(catalog["avatar_id"], Value::Null);
     assert_eq!(catalog["avatar_choice"], 12);
-    let stored: Option<String> = app
-        .db
-        .lock()
-        .unwrap()
-        .query_row(
-            "SELECT avatar_id FROM engine_profile_presentation WHERE profile_id=1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(stored, None);
+    assert_eq!(stored(), None);
 }
 
 #[tokio::test]

@@ -49,11 +49,13 @@ fn project(db: &Connection, value: &Value) -> Result<Value, ApiError> {
         json!({"id":value["id"],"name":value["name"],"avatar_id":avatar(db,id)?,"avatar_style":value["avatar_style"],"avatar_choice":value["avatar_choice"],"avatar_url":value["avatar_url"],"locked":false,"selection_requires_parent":false,"lock_kind":null,"is_primary":value["is_primary"],"can_delete":value["is_primary"]!=true,"kids":value["kids"],"max_age":value["max_age"],"setup_complete":value["setup_complete"]}),
     )
 }
-/// A validated profile write: the legacy id change (`Some(None)` clears it) and
-/// the catalog fields forwarded verbatim to the account layer, which owns
-/// their validation (style in `AVATAR_STYLES`, choice within the world).
+/// A validated engine profile write.
 struct Payload {
+    /// Legacy id change: `None` leaves it, `Some(None)` clears it.
     legacy: Option<Option<String>>,
+    /// `avatar_style`/`avatar_choice`, forwarded verbatim to the account layer,
+    /// which owns their validation (style in `AVATAR_STYLES`, choice within the
+    /// world's size).
     catalog: serde_json::Map<String, Value>,
 }
 impl Payload {
@@ -99,25 +101,13 @@ fn payload(value: &Value, create: bool) -> Result<Payload, ApiError> {
     Ok(Payload { legacy, catalog })
 }
 /// Persists the legacy half of a write; a catalog write retires the legacy id.
-/// A legacy pick is the newest choice, so it drops the account's catalog seed
-/// (keeping the world) to let the id show instead of an older catalog choice.
 fn save_avatar(db: &Connection, id: i64, payload: &Payload) -> Result<(), ApiError> {
-    let legacy = if payload.catalog.is_empty() {
-        match &payload.legacy {
-            Some(legacy) => legacy.as_deref(),
-            None => return Ok(()),
-        }
-    } else {
-        None
+    let legacy = match (&payload.legacy, payload.catalog.is_empty()) {
+        (_, false) => None,
+        (Some(legacy), true) => legacy.as_deref(),
+        (None, true) => return Ok(()),
     };
     db.execute("INSERT INTO engine_profile_presentation(profile_id,avatar_id) VALUES(?1,?2) ON CONFLICT(profile_id) DO UPDATE SET avatar_id=excluded.avatar_id",params![id,legacy]).map_err(db_error)?;
-    if legacy.is_some() {
-        db.execute(
-            "UPDATE profiles SET avatar_seed=?1,updated_at=?2 WHERE id=?3 AND avatar_seed GLOB 'viptv-*'",
-            params![Uuid::new_v4().simple().to_string(), auth::now(), id],
-        )
-        .map_err(db_error)?;
-    }
     Ok(())
 }
 pub(crate) async fn list(
@@ -203,13 +193,8 @@ pub(crate) async fn update(
                 .or_insert_with(|| current["avatar_style"].clone());
             account_fields.insert("setup_complete".into(), json!(true));
         }
-        auth::update_profile(&tx, account, id, &Value::Object(account_fields))?;
+        let profile = auth::update_profile(&tx, account, id, &Value::Object(account_fields))?;
         save_avatar(&tx, id, &payload)?;
-        // Re-read: a legacy pick may have changed the account seed.
-        let profile = auth::list_profiles(&tx, account)?
-            .into_iter()
-            .find(|p| p["id"].as_str().and_then(|s| s.parse::<i64>().ok()) == Some(id))
-            .ok_or_else(auth::forbidden)?;
         let profile = project(&tx, &profile)?;
         tx.commit().map_err(db_error)?;
         Ok(axum::Json(profile))
