@@ -2838,6 +2838,26 @@ async fn device_profile_management_preserves_pairing_and_household_boundaries() 
     assert_eq!(edited["id"], created["id"]);
     assert_eq!(edited["name"], "Renamed");
     assert_eq!(edited["avatar_id"], "initial-pink");
+    let (status, catalog) = request(
+        &a,
+        "member-token-1",
+        "PATCH",
+        &format!("/api/profiles/{id}"),
+        json!({"avatar_style":"animal-friends","avatar_choice":12}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    assert_eq!(catalog["avatar_style"], "animal-friends");
+    assert_eq!(catalog["avatar_choice"], 12);
+    assert_eq!(catalog["avatar_id"], Value::Null);
+    let (_, me) = request(&a, "member-token-1", "GET", "/api/auth/me", Value::Null).await;
+    let account = me["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == created["id"])
+        .unwrap();
+    assert_eq!(account["avatar_url"], catalog["avatar_url"]);
     assert_eq!(
         request(
             &a,

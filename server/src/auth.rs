@@ -21,7 +21,7 @@ pub use tokens::create_owner_offline;
 
 pub(crate) use actions::{action, dispatch_prepared};
 pub(crate) use avatars::{
-    avatar_style, primary_profile, profile_json, require_household_manager, selected_avatar_seed,
+    avatar_choice, avatar_style, primary_profile, profile_json, require_household_manager, selected_avatar_seed,
     validate_profile_payload,
 };
 pub(crate) use device_actions::dispatch_devices;

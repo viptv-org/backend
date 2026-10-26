@@ -26,8 +26,8 @@ Browser authentication sets Secure, HttpOnly, SameSite=Strict access and refresh
 - `POST /auth/refresh {}` rotates browser cookies; replay revokes that credential family.
 - `POST /auth/logout {}` revokes the current browser session.
 - `GET /profiles` lists only profiles owned by the current account.
-- `POST /profiles {name,avatar_style}` creates an owned profile atomically. Styles are a closed kid-friendly DiceBear allowlist; the server owns the opaque seed and emits the HTTPS `avatar_url`.
-- `PATCH /profiles/:id {name,avatar_style,setup_complete:true}` completes or updates presentation without changing the stable profile ID or its history.
+- `POST /profiles {name,avatar_style,avatar_choice?}` creates an owned profile atomically. Styles are the closed kid-friendly catalog worlds in `AVATAR_STYLES`; `avatar_choice` is the 1-based position within the world (at most 48, or the character world's size). The server owns the seed (`viptv-{style}-{choice}`, random without a choice) and emits the HTTPS `avatar_url`; profiles project `avatar_choice: null` when no catalog choice was made.
+- `PATCH /profiles/:id {name,avatar_style,avatar_choice?,setup_complete:true}` completes or updates presentation without changing the stable profile ID or its history.
 - `POST /auth/profile {profile_id}` selects a completed profile owned by the authenticated account.
 
 Fresh accounts remain at zero profiles until an authenticated household browser or paired device creates one. Imported historical profiles retain their ID, favorites, and progress but require one presentation setup step. Catalog, discovery, favorites, progress, source, and playback access derive profile scope from the session; client profile headers cannot grant access.

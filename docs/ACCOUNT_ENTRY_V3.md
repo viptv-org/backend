@@ -39,7 +39,7 @@ Recovery retains profiles, saved titles and watch progress. The old password, us
 
 ## First profile and parent administration
 
-A new member has no profile. `GET /api/v3/profiles` and `POST /api/v3/profiles {name,avatar_id?}` work with an account-only session. Create/select a real profile before media requests. Profile selection is `POST /api/auth/profile {profile_id}`. Existing onboarding state is available through `/api/auth/setup`; its accepted fields are household_name, timezone, language, completed, step and profile_id.
+A new member has no profile. `GET /api/v3/profiles` and `POST /api/v3/profiles {name,avatar_style?,avatar_choice?}` (legacy `avatar_id?` still accepted) work with an account-only session. Create/select a real profile before media requests. Profile selection is `POST /api/auth/profile {profile_id}`. Existing onboarding state is available through `/api/auth/setup`; its accepted fields are household_name, timezone, language, completed, step and profile_id.
 
 Any browser member manages its own household; the household-manager check excludes paired-device roles rather than requiring an operator/owner role. Parent operations are:
 
