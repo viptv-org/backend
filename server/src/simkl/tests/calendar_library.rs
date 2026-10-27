@@ -1,6 +1,7 @@
 //! The Calendar merges the profile's library episodes with Simkl's public
 //! schedule; a profile without Simkl still has its own shows.
 use super::*;
+use axum::response::IntoResponse;
 
 const DAY: u64 = 86_400_000;
 
@@ -38,13 +39,18 @@ async fn addon(app: &mut App, episodes: Vec<(u32, u32, u64)>) -> Served {
         "/meta/series/:file",
         get(move |Path(file): Path<String>| {
             let id = file.trim_end_matches(".json").to_owned();
+            // `tt9…` series have no metadata.
+            let missing = id.starts_with("tt9");
             let videos = episodes
                 .iter()
                 .map(|(season, number, at)| json!({"id":format!("{id}:{season}:{number}"),"title":format!("Chapter {number}"),"season":season,"episode":number,"released":iso(*at)}))
                 .collect::<Vec<_>>();
             counted.fetch_add(1, Ordering::SeqCst);
             async move {
-                axum::Json(json!({"meta":{"id":id,"type":"series","name":"Fixture Show","poster":"https://img.invalid/poster.jpg","videos":videos}}))
+                if missing {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+                axum::Json(json!({"meta":{"id":id,"type":"series","name":"Fixture Show","poster":"https://img.invalid/poster.jpg","videos":videos}})).into_response()
             }
         }),
     );
@@ -148,6 +154,23 @@ async fn a_library_only_profile_gets_its_series_episodes_without_simkl() {
         .unwrap();
     assert!(!navigation(&app).await.contains(&"calendar".to_owned()));
     assert_eq!(calendar(&app, "").await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    let (_, controls) = request(&app, "member-token-1", "GET", "/api/discovery-controls", json!({})).await;
+    assert_eq!(controls["calendar"]["availability"], "Unsupported");
+}
+
+#[tokio::test]
+async fn a_series_without_metadata_leaves_the_others_and_no_refresh_hint() {
+    let mut app = fixture();
+    let t = now();
+    let _served = addon(&mut app, vec![(1, 1, t)]).await;
+    save_series(&app, "tt100");
+    save_series(&app, "tt900");
+    let (status, page) = calendar(&app, "").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(coordinates(&page), vec![(1, 1)]);
+    assert_eq!(page["entries"][0]["card"]["identity"]["id"], "tt100");
+    // A failed lookup is retried on a later read, not announced as pending.
+    assert!(page.get("refresh_after_millis").is_none());
 }
 
 #[tokio::test]
@@ -201,13 +224,25 @@ async fn a_simkl_profile_merges_library_and_public_entries_once() {
         "20":{"title":"Shared series","ids":{"simkl_id":20,"imdb":"tt1234567"}},
         "30":{"title":"Public only","ids":{"simkl_id":30}}
     }});
-    let router = Router::new().route(
-        "/calendar/v2/tv.json",
-        get(move || {
-            let doc = calendar_doc.clone();
-            async move { axum::Json(doc) }
-        }),
-    );
+    // Simkl lists the same episode as anime; the library shows it as a series.
+    let anime_doc = json!({"calendar":[
+        {"simkl_id":40,"date":iso(shared),"episode":{"season":2,"episode":3}}
+    ],"metadata":{"40":{"title":"Shared anime","ids":{"simkl_id":40,"imdb":"tt1234567"}}}});
+    let router = Router::new()
+        .route(
+            "/calendar/v2/tv.json",
+            get(move || {
+                let doc = calendar_doc.clone();
+                async move { axum::Json(doc) }
+            }),
+        )
+        .route(
+            "/calendar/v2/anime.json",
+            get(move || {
+                let doc = anime_doc.clone();
+                async move { axum::Json(doc) }
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -251,6 +286,9 @@ async fn a_simkl_profile_merges_library_and_public_entries_once() {
             ("library".into(), "tt1234567".into(), 4),
         ]
     );
+    let (status, anime) = calendar(&app, "?type=anime").await;
+    assert_eq!(status, StatusCode::OK, "{anime}");
+    assert!(anime["entries"].as_array().unwrap().is_empty(), "{anime}");
     // The public entry ids do not change.
     assert_eq!(
         entries[1]["id"],

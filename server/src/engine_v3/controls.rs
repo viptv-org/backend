@@ -184,6 +184,6 @@ pub(crate) async fn get(
         available(!search.is_empty())
     };
     Ok(axum::Json(
-        json!({"provider_id":configuration.browsing_plugin,"media_types":kinds,"controls":controls,"catalogs":catalogs,"discovery":available(!discovery.is_empty()),"search":search_state,"filters":filter_state,"calendar":if library_series || is_simkl && !discovery.is_empty(){available(true)}else if is_simkl{available(false)}else{state(Availability::Unsupported,Some("Calendar needs series in the library or Simkl"))}}),
+        json!({"provider_id":configuration.browsing_plugin,"media_types":kinds,"controls":controls,"catalogs":catalogs,"discovery":available(!discovery.is_empty()),"search":search_state,"filters":filter_state,"calendar":if library_series || (is_simkl && !discovery.is_empty()){available(true)}else if is_simkl{available(false)}else{state(Availability::Unsupported,Some("Calendar needs series in the library or Simkl"))}}),
     ))
 }

@@ -46,7 +46,7 @@ pub(crate) async fn get(
     Extension(lease): Extension<ResourceLease>,
     Query(q): Query<CalendarQuery>,
 ) -> ApiResult {
-    use crate::engine_v3::continuation::calendar as library;
+    use crate::engine_v3::continuation::calendar as your_shows;
     let auth::Principal::Account {
         profile_id: Some(profile),
         ..
@@ -65,7 +65,7 @@ pub(crate) async fn get(
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?;
         lease.validate(&db)?;
-        !crate::kids::restricted(&db, &lease.principal)? && library::has_series_db(&db, profile)?
+        !crate::kids::restricted(&db, &lease.principal)? && your_shows::has_series_db(&db, profile)?
     };
     if !public && !library_series {
         return Err(ApiError(
@@ -101,40 +101,51 @@ pub(crate) async fn get(
     }
     let mut entries = Vec::new();
     let mut sources = Vec::new();
-    let mut library_complete = true;
+    let mut pending = false;
+    // Library episodes of every tab: a public episode is dropped when the
+    // library shows it, also when the library shows it under another type
+    // (a `tt…` anime series is in the series calendar).
+    let mut own = Vec::new();
     if library_series && category != "movie" {
-        let found = library::episodes(&app, &lease, profile).await?;
-        library_complete = found.complete;
-        for episode in &found.episodes {
-            // Simkl anime series belong to the anime calendar; every other
-            // library series to the series calendar.
-            if episode.series.identity.id.starts_with("simkl:anime:") != (category == "anime") {
-                continue;
+        match your_shows::episodes(&app, &lease, profile, public).await {
+            Ok(found) => {
+                pending = found.pending;
+                for episode in &found.episodes {
+                    let Some(entry) = library_entry(episode, start, end)? else {
+                        continue;
+                    };
+                    // Simkl anime series belong to the anime calendar; every
+                    // other library series to the series calendar.
+                    if episode.series.identity.id.starts_with("simkl:anime:") == (category == "anime") {
+                        entries.push(entry);
+                    } else {
+                        own.push(entry);
+                    }
+                }
+                sources.push("library");
             }
-            if let Some(entry) = library_entry(episode, start, end)? {
-                entries.push(entry);
-            }
+            // The public schedule still answers when only the library failed.
+            Err(error) if public && !fatal(&error) => {}
+            Err(error) => return Err(error),
         }
-        sources.push("library");
     }
     if public {
         match public_entries(&app, profile, category, file, start, end).await {
             Ok(schedule) => {
-                let library = entries.len();
+                let shown = entries.len();
                 for entry in schedule {
-                    if !entries[..library].iter().any(|own| same_episode(own, &entry)) {
+                    let duplicate = entries[..shown]
+                        .iter()
+                        .chain(&own)
+                        .any(|library| same_episode(library, &entry));
+                    if !duplicate {
                         entries.push(entry);
                     }
                 }
                 sources.push("public");
             }
             // The library still answers when only the public schedule failed.
-            Err(error)
-                if !sources.is_empty()
-                    && !matches!(
-                        error.0,
-                        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::CONFLICT
-                    ) => {}
+            Err(error) if !sources.is_empty() && !fatal(&error) => {}
             Err(error) => return Err(error),
         }
     }
@@ -152,11 +163,21 @@ pub(crate) async fn get(
             .map_err(|_| ApiError::from("Database unavailable"))?,
     )?;
     let mut page = json!({"entries":entries,"next_cursor":(next<total).then(||next.to_string()),"complete":next>=total,"sources":sources});
-    if !library_complete {
-        // Some library series are still being looked up.
-        page["refresh_after_millis"] = json!(4000);
+    if pending {
+        // Some library series are still being looked up: the list can still
+        // grow, so clients read it again from the first page after this.
+        page["refresh_after_millis"] = json!(your_shows::PARTIAL_TTL.as_millis() as u64);
     }
     Ok(axum::Json(page))
+}
+
+/// Session, permission and configuration changes always fail the request;
+/// other failures of one source leave the other source's entries.
+fn fatal(error: &ApiError) -> bool {
+    matches!(
+        error.0,
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::CONFLICT
+    )
 }
 
 fn stable_id(value: impl Serialize) -> Result<String, ApiError> {
@@ -208,11 +229,11 @@ fn library_entry(
 
 /// The same series (any shared identity) and the same episode: matching
 /// coordinates, or the same air day when either side has none.
-fn same_episode(own: &Entry, public: &Entry) -> bool {
-    own.keys.iter().any(|key| public.keys.contains(key))
-        && match (own.season.zip(own.episode), public.season.zip(public.episode)) {
+fn same_episode(library: &Entry, public: &Entry) -> bool {
+    library.keys.iter().any(|key| public.keys.contains(key))
+        && match (library.season.zip(library.episode), public.season.zip(public.episode)) {
             (Some(a), Some(b)) => a == b,
-            _ => own.date.get(..10) == public.date.get(..10),
+            _ => library.date.get(..10) == public.date.get(..10),
         }
 }
 
@@ -304,13 +325,7 @@ async fn public_entries(
         if !seen.insert(stable.clone()) {
             continue;
         }
-        let mut keys = vec![card.identity.id.clone()];
-        keys.extend(
-            card.identity
-                .ids
-                .iter()
-                .map(|external| format!("{}:{}", external.namespace, external.value)),
-        );
+        let keys = crate::engine_v3::continuation::calendar::identity_keys([&card]);
         entries.push(Entry {
             id: stable,
             card,

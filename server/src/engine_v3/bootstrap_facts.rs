@@ -63,7 +63,7 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
     // Calendar merges the library's series ("your shows", any integration)
     // with Simkl's public schedule; either source offers it.
     let calendar = !restricted
-        && (library_series || configuration.browsing_plugin == "simkl" && enabled(Capability::Discovery)?);
+        && (library_series || (configuration.browsing_plugin == "simkl" && enabled(Capability::Discovery)?));
     configuration::validate_revision(&scoped, profile, configuration.scope.revision)?;
     let navigation = [
         ("search", "Search", search),

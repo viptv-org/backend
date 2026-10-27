@@ -1,13 +1,19 @@
 //! Calendar episodes of the profile's own library series ("your shows"),
 //! including series a Stremio import saved to the library.
 //!
-//! Air dates come from the episode documents Continue Watching already reads
-//! for its new-episode facts (`metadata::document`: add-on
-//! `videos[].released`, or the Simkl episode list), so the calendar and the
-//! release badges never disagree about a date. One profile's list is cached
-//! for `TTL`, keyed by account, configuration, add-on revision and the set of
-//! library series, and concurrent reads of the same profile share one fetch.
-//! At most `MAX_SERIES` series (most recently added first) are looked up.
+//! Air dates come from the episode documents Continue Watching reads for its
+//! new-episode facts (`metadata::document`), with the same provider choice:
+//! the Simkl episode list when Simkl is the browsing integration, otherwise
+//! the metadata add-ons' `videos[].released`. Only when that provider cannot
+//! serve a series at all (a `tt…` Stremio import Simkl has no mapping for, or
+//! a `simkl:` series in a Stremio profile) is the series' own provider read
+//! instead, so a date the release badges have is the date shown here.
+//!
+//! One profile's list is cached for `TTL`, keyed by account, configuration,
+//! add-on revision and the set of library series, and concurrent reads of the
+//! same profile share one fetch. At most `MAX_SERIES` series (most recently
+//! added first) are looked up; failed or unfinished lookups make the list
+//! partial, which is kept only for `PARTIAL_TTL`.
 use super::*;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -17,13 +23,16 @@ pub(crate) const MAX_SERIES: usize = 50;
 const CONCURRENCY: usize = 4;
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(8);
 /// A cold fetch returns what it has after this long; the rest follows on a
-/// later read (`PARTIAL_TTL`).
+/// read after `PARTIAL_TTL`.
 const DEADLINE: Duration = Duration::from_secs(12);
 const TTL: Duration = Duration::from_secs(30 * 60);
-const PARTIAL_TTL: Duration = Duration::from_secs(60);
+/// How long a partial list (a lookup failed or missed the deadline) is kept;
+/// also the client's refresh hint while lookups are pending.
+pub(crate) const PARTIAL_TTL: Duration = Duration::from_secs(15);
 /// Episodes kept around now; calendar windows outside it have no library rows.
 pub(crate) const HORIZON_MILLIS: u64 = 180 * 24 * 3_600_000;
-const PROFILES: usize = 1024;
+/// Cached profiles; beyond this, reads fetch without caching.
+const CACHED_PROFILES: usize = 1024;
 
 #[derive(Clone)]
 pub(crate) struct Episode {
@@ -32,25 +41,28 @@ pub(crate) struct Episode {
     /// The typed episode card, with the series as its parent.
     pub(crate) episode: Card,
     pub(crate) released_at_millis: u64,
-    /// Identities the series is known by (`tt…`, `imdb:tt…`, `simkl:20`, …),
-    /// to recognise the same episode in the public schedule.
+    /// Identities the series is known by (see `identity_keys`), to recognise
+    /// the same episode in the public schedule.
     pub(crate) keys: Vec<String>,
 }
 
 pub(crate) struct Episodes {
     pub(crate) episodes: Vec<Episode>,
-    /// Every looked-up series answered before the deadline.
-    pub(crate) complete: bool,
+    /// Some series were not looked up before the deadline: read again after
+    /// `PARTIAL_TTL`.
+    pub(crate) pending: bool,
+    /// Some lookups failed; retried after `PARTIAL_TTL`.
+    failed: bool,
 }
 
 #[derive(Clone, PartialEq)]
-struct Key {
+struct CacheKey {
     account: i64,
     configuration: u64,
     addon_revision: String,
     series: Vec<String>,
 }
-type Slot = tokio::sync::Mutex<Option<(Instant, Key, Arc<Episodes>)>>;
+type Slot = tokio::sync::Mutex<Option<(Instant, CacheKey, Arc<Episodes>)>>;
 /// Per database and profile. The `Weak` keeps the database's allocation, so
 /// its address cannot name another database while the slot exists.
 type Slots = HashMap<(usize, i64), (std::sync::Weak<std::sync::Mutex<Connection>>, Arc<Slot>)>;
@@ -60,15 +72,10 @@ fn cache() -> &'static std::sync::Mutex<Slots> {
     CACHE.get_or_init(Default::default)
 }
 
-/// Whether the profile has any series in its library (the Calendar
-/// destination's "your shows" source).
+/// Whether the profile has library series the calendar can look up (the
+/// Calendar destination's "your shows" source).
 pub(crate) fn has_series_db(db: &Connection, profile: i64) -> Result<bool, ApiError> {
-    db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM favorites WHERE profile_id=?1 AND type='series')",
-        [profile],
-        |r| r.get(0),
-    )
-    .map_err(db_error)
+    Ok(!series_db(db, profile)?.is_empty())
 }
 
 fn series_db(db: &Connection, profile: i64) -> Result<Vec<Card>, ApiError> {
@@ -94,11 +101,13 @@ fn series_db(db: &Connection, profile: i64) -> Result<Vec<Card>, ApiError> {
 }
 
 /// The released and upcoming episodes of the profile's library series within
-/// `HORIZON_MILLIS` of now. Restricted (kids) sessions are not served here.
+/// `HORIZON_MILLIS` of now. `simkl` is whether Simkl is the profile's
+/// browsing integration. Restricted (kids) sessions are not served here.
 pub(crate) async fn episodes(
     app: &App,
     lease: &ResourceLease,
     profile: i64,
+    simkl: bool,
 ) -> Result<Arc<Episodes>, ApiError> {
     let (key, series) = {
         let db = app
@@ -111,7 +120,7 @@ pub(crate) async fn episodes(
             return Err(auth::forbidden());
         }
         let series = series_db(&db, profile)?;
-        let key = Key {
+        let key = CacheKey {
             account: lease.principal.account_id().ok_or_else(auth::forbidden)?,
             configuration: configuration_revision(&db, profile)?,
             addon_revision: app.addons.revision_db(&db)?,
@@ -122,7 +131,8 @@ pub(crate) async fn episodes(
     if series.is_empty() {
         return Ok(Arc::new(Episodes {
             episodes: vec![],
-            complete: true,
+            pending: false,
+            failed: false,
         }));
     }
     let slot = {
@@ -130,29 +140,36 @@ pub(crate) async fn episodes(
             .lock()
             .map_err(|_| ApiError::from("Calendar unavailable"))?;
         let id = (Arc::as_ptr(&app.db) as usize, profile);
-        if slots.len() >= PROFILES && !slots.contains_key(&id) {
+        if slots.len() >= CACHED_PROFILES && !slots.contains_key(&id) {
             // Keep fetches in flight coalesced; idle profiles can fetch again.
             slots.retain(|_, (db, slot)| db.strong_count() > 0 && Arc::strong_count(slot) > 1);
         }
-        slots
-            .entry(id)
-            .or_insert_with(|| (Arc::downgrade(&app.db), Default::default()))
-            .1
-            .clone()
+        if slots.len() >= CACHED_PROFILES && !slots.contains_key(&id) {
+            Arc::default()
+        } else {
+            slots
+                .entry(id)
+                .or_insert_with(|| (Arc::downgrade(&app.db), Default::default()))
+                .1
+                .clone()
+        }
     };
     let mut cached = slot.lock().await;
     if let Some((_, _, value)) = cached.as_ref().filter(|(at, cached_key, value)| {
-        *cached_key == key && at.elapsed() < if value.complete { TTL } else { PARTIAL_TTL }
+        let partial = value.pending || value.failed;
+        *cached_key == key && at.elapsed() < if partial { PARTIAL_TTL } else { TTL }
     }) {
         return Ok(value.clone());
     }
-    let value = Arc::new(fetch(app, lease, profile, series).await);
+    let value = Arc::new(fetch(app, lease, profile, simkl, series).await);
     configuration::validate_revision(app, profile, key.configuration)?;
     *cached = Some((Instant::now(), key, value.clone()));
     Ok(value)
 }
 
-fn keys(cards: [&Card; 2]) -> Vec<String> {
+/// The identities a title is known by, comparable across providers: its id,
+/// `imdb:tt…` for a `tt…` id, and every `namespace:value` external id.
+pub(crate) fn identity_keys<'a>(cards: impl IntoIterator<Item = &'a Card>) -> Vec<String> {
     let mut keys = Vec::new();
     for card in cards {
         let id = &card.identity.id;
@@ -169,53 +186,77 @@ fn keys(cards: [&Card; 2]) -> Vec<String> {
     keys
 }
 
-async fn fetch(app: &App, lease: &ResourceLease, profile: i64, series: Vec<Card>) -> Episodes {
+/// One series' episode document from Continue Watching's provider, or from
+/// the series' own provider when that one cannot serve it.
+async fn document(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    simkl: bool,
+    series: &Card,
+) -> Result<(Card, Vec<EpisodeAvailability>), ApiError> {
+    let request = NextEpisodeRequest {
+        identity: series.identity.clone(),
+        parent_identity: Some(series.identity.clone()),
+    };
+    let stremio = ("stremio".to_owned(), None, String::new());
+    let read = |simkl: bool| {
+        let explicit = (!simkl).then_some(&stremio);
+        let request = &request;
+        async move {
+            tokio::time::timeout(
+                LOOKUP_TIMEOUT,
+                super::metadata::document(app, lease, profile, request, simkl, explicit, None, false),
+            )
+            .await
+            .map_err(|_| ApiError::from("Metadata unavailable"))?
+        }
+    };
+    let own = series.identity.id.starts_with("simkl:");
+    match read(simkl).await {
+        Err(error) if own != simkl && !matches!(error.0, StatusCode::UNAUTHORIZED | StatusCode::CONFLICT) => {
+            read(own).await
+        }
+        result => result,
+    }
+}
+
+async fn fetch(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    simkl: bool,
+    series: Vec<Card>,
+) -> Episodes {
     use futures::StreamExt;
     let deadline = tokio::time::Instant::now() + DEADLINE;
     let total = series.len();
     let now = util::now_millis().max(0) as u64;
     let mut lookups = futures::stream::iter(series)
         .map(|series| async move {
-            let request = NextEpisodeRequest {
-                identity: series.identity.clone(),
-                parent_identity: Some(series.identity.clone()),
-            };
-            // The series' own provider: Simkl identities use the Simkl episode
-            // list, everything else (Stremio imports too, also in a Simkl
-            // profile) the profile's metadata add-ons.
-            let simkl = series.identity.id.starts_with("simkl:");
-            let stremio = ("stremio".to_owned(), None, String::new());
-            let found = tokio::time::timeout(
-                LOOKUP_TIMEOUT,
-                super::metadata::document(
-                    app,
-                    lease,
-                    profile,
-                    &request,
-                    simkl,
-                    (!simkl).then_some(&stremio),
-                    None,
-                    false,
-                ),
-            )
-            .await;
+            let found = document(app, lease, profile, simkl, &series).await;
             (series, found)
         })
         .buffer_unordered(CONCURRENCY);
-    let (mut answered, mut episodes) = (0, Vec::new());
+    let (mut answered, mut failed, mut episodes) = (0, false, Vec::new());
     while let Ok(Some((mut series, found))) = tokio::time::timeout_at(deadline, lookups.next()).await {
         answered += 1;
-        let Ok(Ok((parent, entries))) = found else {
-            continue;
+        let (parent, entries) = match found {
+            Ok((parent, entries))
+                if parent.identity.id == series.identity.id
+                    && parent.identity.kind == series.identity.kind =>
+            {
+                (parent, entries)
+            }
+            _ => {
+                failed = true;
+                continue;
+            }
         };
-        if parent.identity.id != series.identity.id || parent.identity.kind != series.identity.kind
-        {
-            continue;
-        }
         series.poster = series.poster.or(parent.poster.clone());
         series.landscape = series.landscape.or(parent.landscape.clone());
         series.logo = series.logo.or(parent.logo.clone());
-        let keys = keys([&series, &parent]);
+        let keys = identity_keys([&series, &parent]);
         for entry in entries {
             let Some(at) = entry.released_at_millis else {
                 continue;
@@ -237,6 +278,7 @@ async fn fetch(app: &App, lease: &ResourceLease, profile: i64, series: Vec<Card>
     }
     Episodes {
         episodes,
-        complete: answered == total,
+        pending: answered < total,
+        failed,
     }
 }
