@@ -29,6 +29,8 @@ Compare values only for equality; never parse them or compare them by order. A m
 
 Bootstrap includes the same object as top-level `revisions` (null when no profile is selected). The server reads it **before** building Home, so a write that commits during the build is observed as a change on the next check, not lost. A client stores the bootstrap tokens and refreshes only the areas whose token changed.
 
+`HomeRow.title` is display-ready; clients render it as is. An add-on catalog row says its type ("Popular Movies", "Popular Series") unless the catalog name already does ("Top Movies"), and when two add-on rows would still share a title each gets ` · <add-on>` with the add-on's manifest name ("Popular Movies · Cinemeta"). The host decides this over all add-on rows before they load, so titles don't change with load order or failed rows. Continue Watching, My List and the Simkl rows keep their fixed titles.
+
 Every `HomeRow` has optional `browse: HomeBrowseAction`, default null for old snapshots. Its exact shape is:
 
 ```json
