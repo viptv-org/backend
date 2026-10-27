@@ -115,16 +115,31 @@ pub(super) async fn load(
             });
         }
     }
-    for c in catalogs.as_array().into_iter().flatten().take(10) {
-        let Some(catalog) = c["id"].as_str().map(str::to_owned) else {
-            continue;
-        };
-        let Some(kind) = c["type"].as_str().map(str::to_owned) else {
-            continue;
-        };
-        let Some(addon) = c["addon_id"].as_i64() else {
-            continue;
-        };
+    let catalogs = catalogs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(10)
+        .filter_map(|c| Some((c, c["id"].as_str()?, c["type"].as_str()?, c["addon_id"].as_i64()?)))
+        .collect::<Vec<_>>();
+    // Decided over every add-on row at once, before any row loads, so a title
+    // never depends on load order or on which rows fail.
+    let titles = super::home_titles::catalog_row_titles(
+        &catalogs
+            .iter()
+            .map(|(c, catalog, kind, _)| super::home_titles::CatalogRow {
+                name: c["name"].as_str().unwrap_or(catalog),
+                kind,
+                addon: c["addon_name"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("Stremio addon"),
+            })
+            .collect::<Vec<_>>(),
+    );
+    for ((_, catalog, kind, addon), title) in catalogs.into_iter().zip(titles) {
+        let (catalog, kind) = (catalog.to_owned(), kind.to_owned());
         let provider = format!("addon:{addon}");
         let task_app = app.clone();
         let row_id = format!("{provider}:{kind}:{catalog}");
@@ -138,7 +153,7 @@ pub(super) async fn load(
         );
         requests.push(RowRequest {
             id: row_id,
-            title: c["name"].as_str().unwrap_or(&catalog).to_owned(),
+            title,
             provider_id: provider.clone(),
             load: Box::pin(async move {
                 let result = task_app
