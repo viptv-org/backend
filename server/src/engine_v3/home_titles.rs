@@ -9,7 +9,7 @@ pub(super) struct CatalogRow<'a> {
     pub name: &'a str,
     /// The catalog's content type (`movie`, `series`, ...).
     pub kind: &'a str,
-    /// The add-on's display name from its manifest.
+    /// The add-on's display name from its manifest, as stored (may be blank).
     pub addon: &'a str,
 }
 
@@ -26,32 +26,48 @@ pub(super) fn catalog_row_titles(rows: &[CatalogRow]) -> Vec<String> {
         .zip(rows)
         .map(|(title, row)| match counts[&title.to_lowercase()] {
             1 => title,
-            _ => format!("{title} · {}", row.addon),
+            _ => format!("{title} · {}", addon_name(row.addon)),
         })
         .collect()
+}
+
+/// The manifest name as a title part: one line, bounded like Search's add-on
+/// rows, with the same fallback for a nameless add-on.
+fn addon_name(name: &str) -> String {
+    let name = name
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(128)
+        .collect::<String>();
+    match name.trim() {
+        "" => "Stremio addon".to_owned(),
+        name => name.to_owned(),
+    }
 }
 
 /// The single place for each type's title copy: the label added to a row
 /// title, and the words that mean a catalog name already says the type.
 fn type_copy(kind: &str) -> (String, &'static [&'static str]) {
-    let (label, words): (&str, &'static [&'static str]) = match kind {
+    let (label, words): (&str, &'static [&'static str]) = match kind.to_lowercase().as_str() {
         "movie" => ("Movies", &["movie", "movies", "film", "films"]),
         "series" => ("Series", &["series", "show", "shows"]),
         "anime" => ("Anime", &["anime"]),
         "channel" => ("Channels", &["channel", "channels"]),
         "tv" => ("TV", &["tv"]),
         // Add-ons may declare any type: title-case its words.
-        other => return (title_case(other), &[]),
+        _ => return (title_case(kind), &[]),
     };
     (label.to_owned(), words)
 }
 
+/// "Popular" + Movies → "Popular Movies"; a name that already says the type
+/// (any of its words, or every word of the label) stays as it is.
 fn typed_title(row: &CatalogRow) -> String {
     let (label, words) = type_copy(row.kind);
-    let label_words = words_of(&label).collect::<Vec<_>>();
-    let says_type = words_of(row.name)
-        .any(|word| words.contains(&word.as_str()) || label_words.contains(&word));
-    if says_type || label.is_empty() {
+    let name_words = words_of(row.name).collect::<Vec<_>>();
+    let says_type = name_words.iter().any(|word| words.contains(&word.as_str()))
+        || words_of(&label).all(|word| name_words.contains(&word));
+    if says_type {
         row.name.to_owned()
     } else {
         format!("{} {label}", row.name)
@@ -154,6 +170,32 @@ mod tests {
                 "Popular Live Sports",
             ]
         );
+    }
+
+    #[test]
+    fn type_copy_ignores_the_declared_types_letter_case() {
+        assert_eq!(titles(&[("Popular", "Movie", "A")]), ["Popular Movies"]);
+    }
+
+    #[test]
+    fn a_multi_word_type_is_said_only_by_all_its_words() {
+        assert_eq!(
+            titles(&[("Live Events", "live_sports", "A"), ("Live Sports Now", "live_sports", "A")]),
+            ["Live Events Live Sports", "Live Sports Now"]
+        );
+    }
+
+    #[test]
+    fn the_add_on_name_is_one_bounded_line_with_a_fallback() {
+        let long = "N".repeat(300);
+        let titles = titles(&[
+            ("Popular", "movie", "  Bad\nName\u{7}  "),
+            ("Popular", "movie", " "),
+            ("Popular", "movie", &long),
+        ]);
+        assert_eq!(titles[0], "Popular Movies · BadName");
+        assert_eq!(titles[1], "Popular Movies · Stremio addon");
+        assert_eq!(titles[2], format!("Popular Movies · {}", "N".repeat(128)));
     }
 
     #[test]

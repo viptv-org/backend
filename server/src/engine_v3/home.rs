@@ -122,19 +122,14 @@ pub(super) async fn load(
         .take(10)
         .filter_map(|c| Some((c, c["id"].as_str()?, c["type"].as_str()?, c["addon_id"].as_i64()?)))
         .collect::<Vec<_>>();
-    // Decided over every add-on row at once, before any row loads, so a title
-    // never depends on load order or on which rows fail.
+    // Titles are decided before any row loads (see `catalog_row_titles`).
     let titles = super::home_titles::catalog_row_titles(
         &catalogs
             .iter()
             .map(|(c, catalog, kind, _)| super::home_titles::CatalogRow {
                 name: c["name"].as_str().unwrap_or(catalog),
                 kind,
-                addon: c["addon_name"]
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or("Stremio addon"),
+                addon: c["addon_name"].as_str().unwrap_or_default(),
             })
             .collect::<Vec<_>>(),
     );
