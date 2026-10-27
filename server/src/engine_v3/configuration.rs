@@ -124,6 +124,8 @@ fn read_inner(
                 })
                 .map_err(db_error)?,
             avatar_id: None,
+            avatar_style: None,
+            avatar_choice: None,
             browsing_plugin: if connections.iter().any(|c| c.plugin_id == "simkl") {
                 "simkl"
             } else {
@@ -144,7 +146,8 @@ fn read_inner(
             r.get(0)
         })
         .map_err(db_error)?;
-    configuration.avatar_id = super::profiles::avatar(&db, profile)?;
+    let avatar = super::profiles::avatar_record(&db, profile)?.ok_or_else(auth::forbidden)?;
+    avatar.project_into(&mut configuration);
     Ok((configuration, connections))
 }
 

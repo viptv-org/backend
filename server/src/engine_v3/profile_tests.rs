@@ -717,3 +717,130 @@ async fn engine_profile_route_rejects_invalid_catalog_choices() {
     let (_, after) = request(&app, "member-token-1", "GET", "/api/profiles", Value::Null).await;
     assert_eq!(before, after);
 }
+
+#[tokio::test]
+async fn profile_configuration_projects_the_account_catalog_avatar() {
+    let app = fixture();
+    let configuration = || async {
+        let (status, body) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/profiles/1/integrations",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["configuration"].clone()
+    };
+    let avatar = |config: &Value| {
+        (
+            config["avatar_id"].clone(),
+            config["avatar_style"].clone(),
+            config["avatar_choice"].clone(),
+        )
+    };
+    // No catalog choice yet: the account default world, no choice.
+    assert_eq!(
+        avatar(&configuration().await),
+        (Value::Null, json!("critters"), Value::Null)
+    );
+
+    // A legacy id shows only while there is no catalog choice.
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "PATCH",
+        "/api/profiles/1",
+        json!({"avatar_id":"vynxc"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        avatar(&configuration().await),
+        (json!("vynxc"), json!("critters"), Value::Null)
+    );
+
+    // The unsaved default configuration follows the account record.
+    auth::update_profile(
+        &app.db.lock().unwrap(),
+        1,
+        1,
+        &json!({"avatar_style":"princesses","avatar_choice":2}),
+    )
+    .unwrap();
+    assert_eq!(
+        avatar(&configuration().await),
+        (Value::Null, json!("princesses"), json!(2))
+    );
+
+    // A saved configuration still projects the account's current avatar, not
+    // the one it was saved with.
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/integrations",
+        json!({"revision":0,"browsing_plugin":"stremio","assignments":[]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        avatar(&body["configuration"]),
+        (Value::Null, json!("princesses"), json!(2))
+    );
+    auth::update_profile(
+        &app.db.lock().unwrap(),
+        1,
+        1,
+        &json!({"avatar_style":"moods","avatar_choice":48}),
+    )
+    .unwrap();
+    assert_eq!(
+        avatar(&configuration().await),
+        (Value::Null, json!("moods"), json!(48))
+    );
+}
+
+#[tokio::test]
+async fn configurations_stored_before_the_avatar_catalog_keep_loading() {
+    let app = fixture();
+    auth::update_profile(
+        &app.db.lock().unwrap(),
+        1,
+        1,
+        &json!({"avatar_style":"villains","avatar_choice":12}),
+    )
+    .unwrap();
+    // The shape saved by builds whose engine had no avatar_style/avatar_choice.
+    let legacy = json!({
+        "scope":{"connection_id":"server","account_id":"1","profile_id":"1","revision":1},
+        "mode":"Server",
+        "name":"Stale name",
+        "avatar_id":null,
+        "browsing_plugin":"stremio",
+        "assignments":[]
+    });
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO engine_profile_configuration VALUES(1,1,1,?1)",
+            [legacy.to_string()],
+        )
+        .unwrap();
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/integrations",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let configuration = &body["configuration"];
+    assert_eq!(configuration["scope"]["revision"], 1);
+    assert_eq!(configuration["avatar_style"], "villains");
+    assert_eq!(configuration["avatar_choice"], 12);
+    assert_ne!(configuration["name"], "Stale name");
+}
