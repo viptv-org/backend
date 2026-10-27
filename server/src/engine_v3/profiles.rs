@@ -1,16 +1,35 @@
 //! Typed server profiles. Parent account PINs never become per-profile locks.
 use super::*;
-use viptv_engine::capabilities::Availability;
-/// Legacy ids from KMP builds before the avatar catalog. They stay accepted and
-/// projected as `avatar_id` while the account record holds no catalog choice;
-/// the catalog (`avatar_style` + 1-based `avatar_choice`) lives on the account.
-const AVATARS: [&str; 4] = ["vynxc", "zayne", "initial-pink", "initial-blue"];
+use viptv_engine::{
+    capabilities::Availability,
+    profile::{ProfileConfiguration, LEGACY_AVATAR_IDS},
+};
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_profile_presentation(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,avatar_id TEXT);")
 }
-/// The legacy `avatar_id`, hidden once the account record holds a catalog
-/// choice so the catalog takes precedence on every client.
-pub(super) fn avatar(db: &Connection, profile: i64) -> Result<Option<String>, ApiError> {
+/// A profile's avatar as the account record holds it.
+/// Legacy ids (the engine's `LEGACY_AVATAR_IDS`, from KMP builds before the
+/// catalog) stay accepted and projected as `avatar_id` while the account record
+/// holds no catalog choice.
+pub(super) struct Avatar {
+    /// The legacy id, hidden once the account record holds a catalog choice
+    /// so the catalog takes precedence on every client.
+    pub(super) id: Option<String>,
+    /// The account's catalog world (`critters` until one is chosen).
+    pub(super) style: String,
+    /// The 1-based catalog position, `None` while no catalog avatar is chosen.
+    pub(super) choice: Option<u16>,
+}
+impl Avatar {
+    /// Overwrites the configuration's avatar with the account's; the account
+    /// record owns it, so a stored copy is never trusted.
+    pub(super) fn project_into(self, configuration: &mut ProfileConfiguration) {
+        configuration.avatar_id = self.id;
+        configuration.avatar_style = Some(self.style);
+        configuration.avatar_choice = self.choice;
+    }
+}
+pub(super) fn avatar_record(db: &Connection, profile: i64) -> Result<Option<Avatar>, ApiError> {
     db.query_row(
         "SELECT e.avatar_id,p.avatar_style,p.avatar_seed FROM profiles p LEFT JOIN engine_profile_presentation e ON e.profile_id=p.id WHERE p.id=?1",
         [profile],
@@ -19,8 +38,15 @@ pub(super) fn avatar(db: &Connection, profile: i64) -> Result<Option<String>, Ap
     .optional()
     .map_err(db_error)
     .map(|row| {
-        row.and_then(|(id, style, seed)| id.filter(|_| auth::avatar_choice(&style, &seed).is_none()))
+        row.map(|(id, style, seed)| {
+            let choice = auth::avatar_choice(&style, &seed).and_then(|c| u16::try_from(c).ok());
+            Avatar { id: id.filter(|_| choice.is_none()), style, choice }
+        })
     })
+}
+/// The legacy `avatar_id` the engine profile card shows.
+pub(super) fn avatar(db: &Connection, profile: i64) -> Result<Option<String>, ApiError> {
+    Ok(avatar_record(db, profile)?.and_then(|avatar| avatar.id))
 }
 fn state(availability: Availability, message: Option<&str>) -> Value {
     json!({"availability":availability,"message":message})
@@ -92,7 +118,9 @@ fn payload(value: &Value, create: bool) -> Result<Payload, ApiError> {
         None => None,
         Some(Value::Null) => Some(None),
         Some(Value::String(id)) if id.is_empty() => Some(None),
-        Some(Value::String(id)) if AVATARS.contains(&id.as_str()) => Some(Some(id.clone())),
+        Some(Value::String(id)) if LEGACY_AVATAR_IDS.contains(&id.as_str()) => {
+            Some(Some(id.clone()))
+        }
         _ => return Err("Unsupported profile avatar".into()),
     };
     if !catalog.is_empty() && matches!(legacy, Some(Some(_))) {
@@ -124,7 +152,7 @@ pub(crate) async fn list(
         let mut cards=auth::list_profiles(&db,account)?.iter().map(|p|project(&db,p)).collect::<Result<Vec<_>,_>>()?;
         let auth::Principal::Account {profile_id,..}=principal;
         if restricted&&!unlocked {for card in &mut cards {if card["id"].as_str().and_then(|s|s.parse::<i64>().ok())!=profile_id {card["locked"]=json!(true);card["selection_requires_parent"]=json!(true);card["lock_kind"]=json!("parent");}}}
-        Ok(axum::Json(json!({"profiles":cards,"avatar_ids":AVATARS,"capabilities":{"create":available,"rename":available,"delete":available,"avatar":available,"profile_pin":state(Availability::Unsupported,Some("This server uses account parent PINs; per-profile PINs are unavailable")),"parent_unlock":state(if configured{Availability::Available}else{Availability::NeedsConfiguration},None)},"parent":{"pin_configured":configured,"unlocked":unlocked,"restricted":restricted}})))
+        Ok(axum::Json(json!({"profiles":cards,"avatar_ids":LEGACY_AVATAR_IDS,"capabilities":{"create":available,"rename":available,"delete":available,"avatar":available,"profile_pin":state(Availability::Unsupported,Some("This server uses account parent PINs; per-profile PINs are unavailable")),"parent_unlock":state(if configured{Availability::Available}else{Availability::NeedsConfiguration},None)},"parent":{"pin_configured":configured,"unlocked":unlocked,"restricted":restricted}})))
     }).await
 }
 pub(crate) async fn create(
