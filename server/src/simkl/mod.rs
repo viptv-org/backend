@@ -19,7 +19,7 @@ mod continuation;
 mod discovery;
 mod metadata;
 mod parent;
-pub(crate) use continuation::episodes as continuation_document;
+pub(crate) use continuation::{episodes as continuation_document, identifies as continuation_identifies};
 pub(crate) use parent::{metadata as parent_metadata, search as parent_search};
 mod artwork;
 pub(crate) use artwork::enrich as enrich_artwork;

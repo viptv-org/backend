@@ -250,7 +250,7 @@ impl Service {
     }
 
     #[cfg(test)]
-    pub(super) fn fixture(base: &str) -> Self {
+    pub(crate) fn fixture(base: &str) -> Self {
         let mut service = Self::new(
             Some(Config {
                 client_id: "fixture-client".into(),
