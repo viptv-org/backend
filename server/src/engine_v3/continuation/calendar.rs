@@ -2,12 +2,10 @@
 //! including series a Stremio import saved to the library.
 //!
 //! Air dates come from the episode documents Continue Watching reads for its
-//! new-episode facts (`metadata::document`), with the same provider choice:
-//! the Simkl episode list when Simkl is the browsing integration, otherwise
-//! the metadata add-ons' `videos[].released`. Only when that provider cannot
-//! serve a series at all (a `tt…` Stremio import Simkl has no mapping for, or
-//! a `simkl:` series in a Stremio profile) is the series' own provider read
-//! instead, so a date the release badges have is the date shown here.
+//! new-episode facts, through the same `metadata::series_document`: the Simkl
+//! episode list when Simkl is the browsing integration, otherwise the metadata
+//! add-ons' `videos[].released`, and the series' own provider when that one
+//! cannot serve it. A date the release badges have is the date shown here.
 //!
 //! One profile's list is cached for `TTL`, keyed by account, configuration,
 //! add-on revision and the set of library series, and concurrent reads of the
@@ -186,8 +184,6 @@ pub(crate) fn identity_keys<'a>(cards: impl IntoIterator<Item = &'a Card>) -> Ve
     keys
 }
 
-/// One series' episode document from Continue Watching's provider, or from
-/// the series' own provider when that one cannot serve it.
 async fn document(
     app: &App,
     lease: &ResourceLease,

@@ -1,6 +1,14 @@
 //! One scoped authoritative metadata document for generic next-episode resolution.
 use super::*;
 use viptv_engine::{continuation::EpisodeAvailability, presentation::Card};
+
+/// Whether `episodes` can identify this series: a `simkl:` id, or an id one
+/// Simkl import mapped (a Stremio import's `tt…` series usually has none).
+pub(crate) fn identifies(app: &App, profile: i64, kind: &str, parent_id: &str) -> bool {
+    parent_id.starts_with("simkl:")
+        || matches!(imports::remote_identity(app, profile, kind, parent_id), Ok(Some(_)))
+}
+
 pub(crate) async fn episodes(
     app: &App,
     profile: i64,

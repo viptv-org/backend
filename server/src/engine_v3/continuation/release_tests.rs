@@ -650,3 +650,24 @@ async fn an_imported_series_simkl_cannot_map_still_gets_release_facts_on_a_simkl
     assert_eq!(failures, 0);
     assert_eq!(show_entry(&queue(app).await)["card"]["badges"], json!(["+1"]));
 }
+
+/// A series Simkl does map stays on Simkl: while Simkl fails it backs off
+/// rather than switching to add-on facts, so its badge never alternates
+/// between providers.
+#[tokio::test]
+async fn a_series_simkl_maps_backs_off_while_simkl_fails_instead_of_using_the_add_ons() {
+    let start = now();
+    let mut show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
+    // Nothing listens here: every Simkl read fails.
+    show.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:9"));
+    let app = &show.app;
+    import(app, "tt100", start - 10 * DAY);
+    app.db.lock().unwrap().execute("INSERT INTO simkl_import_entries(profile_id,remote_id,remote_kind,local_id,local_kind,card,statistics,link_revision) VALUES(1,'simkl:tv:20','series','tt100','series','{}','{}',0)", []).unwrap();
+    request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    let row = || -> Option<(Option<String>, i64)> {
+        app.db.lock().unwrap().query_row("SELECT document,failures FROM continuation_releases WHERE series_id='tt100'", [], |r| Ok((r.get(0)?, r.get(1)?))).ok()
+    };
+    until(|| row().is_some_and(|(_, failures)| failures > 0)).await;
+    assert_eq!(row(), Some((None, 1)));
+    assert_eq!(verdict(app, "tt100"), None);
+}
