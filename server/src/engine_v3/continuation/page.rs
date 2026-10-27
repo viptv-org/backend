@@ -16,6 +16,7 @@ pub(crate) fn snapshot(
     app.require_profile(&db, profile)?;
     lease.validate(&db)?;
     let configuration_revision = configuration_revision(&db, profile)?;
+    let restricted = kids::restricted(&db, &lease.principal)?;
     let queue = crate::continuation::queue_items(&db, profile, 0, 50000, true)?;
     let now = util::now_millis().max(0) as u64;
     let items = kids::filter_items(
@@ -94,6 +95,7 @@ pub(crate) fn snapshot(
             previous_identity = Some(record.identity.clone());
             status = ContinuationStatus::Next;
         }
+        super::art::fill(&db, lease, profile, restricted, &mut card)?;
         crate::simkl::imports::enrich(&db, profile, &mut card)?;
         super::super::source_integrations::merge_cached_with_db(
             app,

@@ -6,10 +6,11 @@
 //! The rule itself is `viptv_engine::continuation::new_episodes`; this module
 //! keeps the metadata it needs. Per profile and series it stores the episodes
 //! after the finished one (identity, release time, aired flag, and the first
-//! few cards) in `continuation_releases`, so Home stays synchronous: ordering,
-//! badges and the next-episode verdict (`verdicts_db`, read by the Watched
-//! badge) come from stored release times and the clock. Rows are never
-//! evicted.
+//! few cards) and the series backdrop in `continuation_releases`, so Home
+//! stays synchronous: ordering, badges and the next-episode verdict
+//! (`verdicts_db`, read by the Watched badge) come from stored release times
+//! and the clock, card art (`landscape_db`) from the stored cards. Rows are
+//! never evicted.
 //!
 //! Each row carries `next_check_at`. Home loads and Stremio imports start a
 //! background run for the profile's own session that refreshes every due
@@ -66,6 +67,9 @@ struct Document {
     configuration_revision: u64,
     addon_revision: String,
     episodes: Vec<Stored>,
+    /// The series backdrop (absent from documents stored before it was kept).
+    #[serde(default)]
+    landscape: Option<String>,
 }
 
 /// Record the metadata a next-episode resolution or refresh fetched for
@@ -80,6 +84,7 @@ pub(crate) fn store_db(
     episodes: &[EpisodeAvailability],
     configuration_revision: u64,
     addon_revision: &str,
+    landscape: Option<&str>,
 ) -> Result<(), ApiError> {
     let account_id = lease.principal.account_id().ok_or_else(auth::forbidden)?;
     let at = episodes
@@ -126,6 +131,7 @@ pub(crate) fn store_db(
                 card: (index <= STORED_CARDS).then(|| entry.card.clone()),
             })
             .collect(),
+        landscape: landscape.map(str::to_owned),
     };
     let document = serde_json::to_string(&document)
         .map_err(|_| ApiError::from("Release facts unavailable"))?;
@@ -294,6 +300,39 @@ pub(crate) fn state_db(
         |card| watched.contains(card),
         now_millis,
     ))
+}
+
+/// Stored 16:9 art for a Continue Watching card of `series`: the still of
+/// `episode`, else the series backdrop, from this account's metadata document
+/// (whichever finished episode it was read for; art does not go stale the
+/// way release facts do).
+pub(crate) fn landscape_db(
+    db: &Connection,
+    lease: &ResourceLease,
+    profile: i64,
+    series: &str,
+    episode: &str,
+) -> Result<Option<String>, ApiError> {
+    let raw: Option<String> = db
+        .query_row(
+            "SELECT document FROM continuation_releases WHERE profile_id=?1 AND series_id=?2 AND document IS NOT NULL",
+            params![profile, series],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some(document) = raw.and_then(|raw| serde_json::from_str::<Document>(&raw).ok()) else {
+        return Ok(None);
+    };
+    if lease.principal.account_id() != Some(document.account_id) {
+        return Ok(None);
+    }
+    Ok(document
+        .episodes
+        .iter()
+        .find(|stored| stored.identity.id == episode)
+        .and_then(|stored| stored.card.as_ref()?.landscape.clone())
+        .or(document.landscape))
 }
 
 fn current(
@@ -683,6 +722,7 @@ async fn refresh_one(
         &episodes,
         configuration,
         &addon_revision,
+        parent.landscape.as_deref(),
     )?;
     if visible(&db)? != before {
         db.execute("INSERT INTO engine_library_revisions VALUES(?1,1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",[profile]).map_err(db_error)?;
