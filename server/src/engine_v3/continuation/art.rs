@@ -46,7 +46,6 @@ fn my_list(
         .optional()
         .map_err(db_error)?;
     Ok(raw
-        .and_then(|raw| serde_json::from_str::<Card>(&raw).ok())
-        .filter(|card| card.identity.kind == kind && card.identity.id == id)
+        .and_then(|raw| super::super::library::hydration::stored(&raw, kind, id))
         .and_then(|card| card.landscape))
 }

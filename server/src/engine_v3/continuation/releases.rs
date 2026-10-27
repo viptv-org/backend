@@ -265,23 +265,12 @@ pub(crate) fn state_db(
     anchor: &PlaybackRecord,
     now_millis: u64,
 ) -> Result<Option<NewEpisodes>, ApiError> {
-    let row: Option<(String, Option<String>)> = db
-        .query_row(
-            "SELECT from_id,document FROM continuation_releases WHERE profile_id=?1 AND series_id=?2",
-            params![profile, series],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()
-        .map_err(db_error)?;
-    let Some((from, Some(raw))) = row else {
+    let Some((from, document)) = document_db(db, profile, series)? else {
         return Ok(None);
     };
     if from != anchor.identity.id {
         return Ok(None);
     }
-    let Ok(document) = serde_json::from_str::<Document>(&raw) else {
-        return Ok(None);
-    };
     if !current(db, app, lease, profile, &document)? {
         return Ok(None);
     }
@@ -302,6 +291,23 @@ pub(crate) fn state_db(
     ))
 }
 
+/// The stored document of `series` and the finished episode it was read for.
+fn document_db(
+    db: &Connection,
+    profile: i64,
+    series: &str,
+) -> Result<Option<(String, Document)>, ApiError> {
+    let row: Option<(String, Option<String>)> = db
+        .query_row(
+            "SELECT from_id,document FROM continuation_releases WHERE profile_id=?1 AND series_id=?2",
+            params![profile, series],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    Ok(row.and_then(|(from, raw)| Some((from, serde_json::from_str::<Document>(&raw?).ok()?))))
+}
+
 /// Stored 16:9 art for a Continue Watching card of `series`: the still of
 /// `episode`, else the series backdrop, from this account's metadata document
 /// (whichever finished episode it was read for; art does not go stale the
@@ -313,15 +319,7 @@ pub(crate) fn landscape_db(
     series: &str,
     episode: &str,
 ) -> Result<Option<String>, ApiError> {
-    let raw: Option<String> = db
-        .query_row(
-            "SELECT document FROM continuation_releases WHERE profile_id=?1 AND series_id=?2 AND document IS NOT NULL",
-            params![profile, series],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(db_error)?;
-    let Some(document) = raw.and_then(|raw| serde_json::from_str::<Document>(&raw).ok()) else {
+    let Some((_, document)) = document_db(db, profile, series)? else {
         return Ok(None);
     };
     if lease.principal.account_id() != Some(document.account_id) {

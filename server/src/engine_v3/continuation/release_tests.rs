@@ -572,13 +572,14 @@ async fn one_run_refreshes_every_finished_series_and_never_evicts_their_verdicts
     assert_eq!(show.calls.load(Ordering::SeqCst), calls);
 }
 
-/// Stremio-imported (library) Continue Watching cards carry 16:9 art from
-/// stored metadata, not only from Home's in-memory enrichment, which a
-/// restart empties and which stops at its deadline (backend#31).
+/// Empties Home's in-memory card enrichment, as a server restart does.
 fn restart(app: &App) {
     app.verified_cards.lock().unwrap().clear();
 }
 
+/// Stremio-imported (library) Continue Watching cards carry 16:9 art from
+/// stored metadata, not only from Home's in-memory enrichment, which a
+/// restart empties and which stops at its deadline (backend#31).
 #[tokio::test]
 async fn an_imported_finished_series_card_keeps_the_episode_still_after_a_restart() {
     let start = now();
