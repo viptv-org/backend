@@ -146,11 +146,8 @@ fn read_inner(
             r.get(0)
         })
         .map_err(db_error)?;
-    // The account record owns the avatar; a stored copy is never trusted.
-    let avatar = super::profiles::avatar_record(&db, profile)?;
-    configuration.avatar_style = avatar.as_ref().map(|a| a.style.clone());
-    configuration.avatar_choice = avatar.as_ref().and_then(|a| a.choice);
-    configuration.avatar_id = avatar.and_then(|a| a.id);
+    let avatar = super::profiles::avatar_record(&db, profile)?.ok_or_else(auth::forbidden)?;
+    avatar.project_into(&mut configuration);
     Ok((configuration, connections))
 }
 
