@@ -8,9 +8,17 @@ const AVATARS: [&str; 4] = ["vynxc", "zayne", "initial-pink", "initial-blue"];
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_profile_presentation(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,avatar_id TEXT);")
 }
-/// The legacy `avatar_id`, hidden once the account record holds a catalog
-/// choice so the catalog takes precedence on every client.
-pub(super) fn avatar(db: &Connection, profile: i64) -> Result<Option<String>, ApiError> {
+/// A profile's avatar as the account record holds it.
+pub(super) struct Avatar {
+    /// The legacy id, hidden once the account record holds a catalog choice
+    /// so the catalog takes precedence on every client.
+    pub(super) id: Option<String>,
+    /// The account's catalog world (`critters` until one is chosen).
+    pub(super) style: String,
+    /// The 1-based catalog position, `None` while no catalog avatar is chosen.
+    pub(super) choice: Option<u16>,
+}
+pub(super) fn avatar_record(db: &Connection, profile: i64) -> Result<Option<Avatar>, ApiError> {
     db.query_row(
         "SELECT e.avatar_id,p.avatar_style,p.avatar_seed FROM profiles p LEFT JOIN engine_profile_presentation e ON e.profile_id=p.id WHERE p.id=?1",
         [profile],
@@ -19,8 +27,15 @@ pub(super) fn avatar(db: &Connection, profile: i64) -> Result<Option<String>, Ap
     .optional()
     .map_err(db_error)
     .map(|row| {
-        row.and_then(|(id, style, seed)| id.filter(|_| auth::avatar_choice(&style, &seed).is_none()))
+        row.map(|(id, style, seed)| {
+            let choice = auth::avatar_choice(&style, &seed).and_then(|c| u16::try_from(c).ok());
+            Avatar { id: id.filter(|_| choice.is_none()), style, choice }
+        })
     })
+}
+/// The legacy `avatar_id` the engine profile card shows.
+pub(super) fn avatar(db: &Connection, profile: i64) -> Result<Option<String>, ApiError> {
+    Ok(avatar_record(db, profile)?.and_then(|avatar| avatar.id))
 }
 fn state(availability: Availability, message: Option<&str>) -> Value {
     json!({"availability":availability,"message":message})

@@ -22,23 +22,47 @@ impl Store {
         avatar_id: &str,
         pin: &str,
     ) -> Result<(), Error> {
-        if !matches!(
-            avatar_id,
-            "" | "vynxc" | "zayne" | "initial-pink" | "initial-blue"
-        ) {
+        if !avatar_id.is_empty() && !LEGACY_AVATAR_IDS.contains(&avatar_id) {
             return Err(Error::InvalidQuery);
         }
+        self.update_avatar(scope, pin, |profile| {
+            profile.avatar_id = (!avatar_id.is_empty()).then(|| avatar_id.into());
+        })
+    }
+
+    /// Store a catalog avatar (`avatar_style` + 1-based `avatar_choice`) and
+    /// retire any legacy bundled id. A later legacy write leaves the catalog
+    /// choice in place, which keeps taking precedence (as on the backend).
+    pub fn set_profile_avatar_choice(
+        &mut self,
+        scope: &Scope,
+        avatar_style: &str,
+        avatar_choice: u16,
+        pin: &str,
+    ) -> Result<(), Error> {
+        if !is_catalog_avatar(avatar_style, avatar_choice) {
+            return Err(Error::InvalidQuery);
+        }
+        self.update_avatar(scope, pin, |profile| {
+            profile.avatar_id = None;
+            profile.avatar_style = Some(avatar_style.into());
+            profile.avatar_choice = Some(avatar_choice);
+        })
+    }
+
+    fn update_avatar(
+        &mut self,
+        scope: &Scope,
+        pin: &str,
+        apply: impl FnOnce(&mut ProfileConfiguration),
+    ) -> Result<(), Error> {
         if self.has_profile_pin(scope)? && !self.verify_profile_pin(scope, pin)? {
             return Err(Error::Forbidden);
         }
         let mut profile = self.profile(scope)?.ok_or(Error::Forbidden)?;
         let old = profile.scope.revision;
         profile.scope.revision = old.checked_add(1).ok_or(Error::Conflict)?;
-        profile.avatar_id = if avatar_id.is_empty() {
-            None
-        } else {
-            Some(avatar_id.into())
-        };
+        apply(&mut profile);
         self.save_profile(&profile, Some(old))
     }
 

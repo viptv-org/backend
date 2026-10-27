@@ -124,6 +124,8 @@ fn read_inner(
                 })
                 .map_err(db_error)?,
             avatar_id: None,
+            avatar_style: None,
+            avatar_choice: None,
             browsing_plugin: if connections.iter().any(|c| c.plugin_id == "simkl") {
                 "simkl"
             } else {
@@ -144,7 +146,11 @@ fn read_inner(
             r.get(0)
         })
         .map_err(db_error)?;
-    configuration.avatar_id = super::profiles::avatar(&db, profile)?;
+    // The account record owns the avatar; a stored copy is never trusted.
+    let avatar = super::profiles::avatar_record(&db, profile)?;
+    configuration.avatar_style = avatar.as_ref().map(|a| a.style.clone());
+    configuration.avatar_choice = avatar.as_ref().and_then(|a| a.choice);
+    configuration.avatar_id = avatar.and_then(|a| a.id);
     Ok((configuration, connections))
 }
 
