@@ -94,6 +94,55 @@ v2 CDN document is coalesced/cached per type, without user authorization.
 Session, selected provider, profile assignments and kids policy are rechecked.
 An unsupported provider returns an explicit availability error.
 
+The Calendar merges two sources. `library` entries are the released and
+upcoming episodes of the profile's library series (`favorites` rows of type
+`series`, so series a Stremio import saved are included), for any browsing
+integration. Their air dates come from the episode documents Continue Watching
+reads for new-episode facts: the metadata add-on's `videos[].released` (also
+for `tt…` series in a Simkl profile), or the Simkl episode list for `simkl:`
+series. `public` entries are Simkl's public schedule above, only when Simkl is
+the browsing integration. A public episode of a library series (any shared
+identity such as `imdb:tt…`, plus the same season/episode, or the same UTC day
+when coordinates are missing) appears once, as `library`. Library series feed
+`type=series` (Simkl `simkl:anime:` series feed `type=anime`); `type=movie` has
+public entries only. Per profile, at most 50 library series (most recently
+added first) are looked up, four at a time with an 8-second limit each and a
+12-second total deadline. The episode list (episodes within 180 days of now)
+is cached for 30 minutes, keyed by account, configuration, add-on revision and
+the set of library series, and concurrent reads share one fetch. Kids
+(restricted) sessions get no library entries and start no lookups. The route
+is available when the profile has library series or Simkl is the browsing
+integration, matching bootstrap navigation's `calendar` destination; otherwise
+it returns 422. If only the public schedule fails, library entries are still
+returned without `public` in `sources`.
+
+Wire shape. All additions are optional for older clients; existing fields and
+public entry ids are unchanged:
+
+```json
+{
+  "entries": [{
+    "id": "stable calendar row id",
+    "card": { "...": "typed series Card (library card, or Simkl title card)" },
+    "date": "2026-10-28T04:00:00Z",
+    "episode_title": "Chapter 2",
+    "season": 1,
+    "episode": 2,
+    "source": "library | public",
+    "episode_card": { "...": "library only: typed episode Card, parent_identity = the series" }
+  }],
+  "next_cursor": "100",
+  "complete": false,
+  "sources": ["library", "public"],
+  "refresh_after_millis": 4000
+}
+```
+
+`sources` lists the sources that answered. `refresh_after_millis` is present
+only while some library series are still being looked up (a cold fetch hit its
+deadline); read the page again after that delay. `episode_card` is omitted on
+public entries.
+
 `GET /api/v3/discovery-controls?type=movie|series|anime` publishes shared
 `QueryControl` values and capability availability for the selected provider.
 Stremio catalogs expose their actual genres and custom options. Simkl genres come

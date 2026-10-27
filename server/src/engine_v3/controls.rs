@@ -89,13 +89,16 @@ pub(crate) async fn get(
     if !search.is_empty() {
         controls.push(text("search", "Search", false));
     }
-    let restricted = {
+    let (restricted, library_series) = {
         let db = app
             .db
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?;
         app.require_profile(&db, profile)?;
-        kids::restricted(&db, &app.identity())?
+        (
+            kids::restricted(&db, &app.identity())?,
+            super::continuation::calendar::has_series_db(&db, profile)?,
+        )
     };
     let mut catalogs = Vec::new();
     let mut filter_state = state(
@@ -181,6 +184,6 @@ pub(crate) async fn get(
         available(!search.is_empty())
     };
     Ok(axum::Json(
-        json!({"provider_id":configuration.browsing_plugin,"media_types":kinds,"controls":controls,"catalogs":catalogs,"discovery":available(!discovery.is_empty()),"search":search_state,"filters":filter_state,"calendar":if is_simkl{available(!discovery.is_empty())}else{state(Availability::Unsupported,Some("Calendar is not available for Stremio addons"))}}),
+        json!({"provider_id":configuration.browsing_plugin,"media_types":kinds,"controls":controls,"catalogs":catalogs,"discovery":available(!discovery.is_empty()),"search":search_state,"filters":filter_state,"calendar":if library_series || is_simkl && !discovery.is_empty(){available(true)}else if is_simkl{available(false)}else{state(Availability::Unsupported,Some("Calendar needs series in the library or Simkl"))}}),
     ))
 }

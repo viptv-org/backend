@@ -181,11 +181,22 @@ async fn fetch(app: &App, lease: &ResourceLease, profile: i64, series: Vec<Card>
                 parent_identity: Some(series.identity.clone()),
             };
             // The series' own provider: Simkl identities use the Simkl episode
-            // list, everything else the profile's metadata add-ons.
+            // list, everything else (Stremio imports too, also in a Simkl
+            // profile) the profile's metadata add-ons.
             let simkl = series.identity.id.starts_with("simkl:");
+            let stremio = ("stremio".to_owned(), None, String::new());
             let found = tokio::time::timeout(
                 LOOKUP_TIMEOUT,
-                super::metadata::document(app, lease, profile, &request, simkl, None, None, false),
+                super::metadata::document(
+                    app,
+                    lease,
+                    profile,
+                    &request,
+                    simkl,
+                    (!simkl).then_some(&stremio),
+                    None,
+                    false,
+                ),
             )
             .await;
             (series, found)

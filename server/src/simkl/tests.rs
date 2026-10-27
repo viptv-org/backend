@@ -125,6 +125,7 @@ mod oauth;
 mod revocation;
 
 mod calendar_browse;
+mod calendar_library;
 mod discovery;
 mod unified_search;
 
