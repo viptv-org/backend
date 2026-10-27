@@ -211,6 +211,7 @@ impl App {
                     headers,
                     required_audio_index,
                     created: Instant::now(),
+                    upstream_deadline: None,
                 },
             );
             self.own_resource("stream", &id);

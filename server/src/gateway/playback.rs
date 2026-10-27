@@ -263,6 +263,8 @@ struct Entry {
     request_identity: viptv_core::native_torrent_policy::NativeTorrentRequestIdentity,
     lease: ResourceLease,
     proof: Proof,
+    /// The discovery grant this playback was admitted from.
+    stream_id: String,
     identity: [u8; 32],
     cancelled: AtomicBool,
     cancel_signal: tokio::sync::Notify,
@@ -282,6 +284,13 @@ impl Registry {
         let state = entries[id].state.lock().unwrap();
         let remote = state.remote.as_ref().unwrap();
         (state.touched, remote.expires_at, remote.client_frame_ack)
+    }
+    /// Lapses a playback lease as a long network drop would.
+    #[cfg(test)]
+    pub(super) fn lapse_lease(&self, id: &str) {
+        let entries = self.entries.lock().unwrap();
+        entries[id].state.lock().unwrap().touched =
+            Instant::now().checked_sub(LEASE + Duration::from_secs(1)).unwrap();
     }
     pub(crate) fn new(db: Arc<Mutex<Connection>>) -> Arc<Self> {
         let registry = Arc::new(Self {
@@ -499,7 +508,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
             let streams = app.streams.lock().unwrap();
             let entry = streams
                 .get(&id)
-                .filter(|entry| entry.created.elapsed() < Duration::from_secs(1800))
+                .filter(|entry| entry.created.elapsed() < crate::app_state::STREAM_GRANT_WINDOW)
                 .ok_or(Error::Code("source_not_found"))?;
             (
                 Proof {
@@ -1531,6 +1540,7 @@ async fn start_mode(
             request_identity,
             lease: lease.clone(),
             proof: input.proof.clone(),
+            stream_id: request.stream_id.clone(),
             identity: input.identity,
             cancelled: AtomicBool::new(false),
             cancel_signal: tokio::sync::Notify::new(),
@@ -1934,7 +1944,8 @@ pub(crate) async fn progress(
     validate_entry(&app, &entry).await?;
     Ok(Json(json!({"stage":stage})))
 }
-/// Decoder acknowledgement never renews backend or gateway authority.
+/// Decoder acknowledgement never renews backend or gateway authority. Like a
+/// heartbeat, it keeps the source grant reopenable (backend#18).
 pub(crate) async fn first_frame(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -1974,7 +1985,13 @@ pub(crate) async fn first_frame(
         }
     }
     validate_entry(&app, &entry).await?;
+    refresh_grant(&app, &entry);
     Ok(Json(json!({"ok":true})))
+}
+/// Playback just used the entry's source, so its grant stays reopenable for
+/// another 30 minutes after a lease lapse (backend#18).
+fn refresh_grant(app: &App, entry: &Entry) {
+    app.refresh_stream(&entry.scope, entry.lease.session_id.as_deref(), &entry.stream_id);
 }
 
 pub(crate) async fn renew(
@@ -2033,6 +2050,7 @@ pub(crate) async fn renew(
             terminate(&entry, "expired", Some(failure_code_ref(&error)));
             return Err(error);
         }
+        refresh_grant(&app, &entry);
         return Ok(Json(response(&entry)));
     }
     entry.state.lock().unwrap().touch();
@@ -2076,6 +2094,7 @@ pub(crate) async fn renew(
     entry.state.lock().unwrap().touch();
     let retained = entry.state.lock().unwrap().retained_subtitles.clone();
     app.subtitle_selections.keep_alive(&retained, &lease)?;
+    refresh_grant(&app, &entry);
     Ok(Json(response(&entry)))
 }
 pub(crate) async fn stop(

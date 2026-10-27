@@ -345,9 +345,7 @@ pub(crate) async fn sources(
         if let Some(entry) = card["id"].as_str().and_then(|id| entries.get_mut(id)) {
             entry.media_id = Some(channel.clone());
             entry.profile_revision = Some((profile, revision));
-            entry.created = Instant::now()
-                .checked_sub(Duration::from_secs(1500))
-                .unwrap_or_else(Instant::now);
+            entry.expire_upstream_after(Duration::from_secs(300));
         }
     }
     drop(entries);
