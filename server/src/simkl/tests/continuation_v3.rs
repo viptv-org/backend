@@ -111,3 +111,50 @@ async fn profile_switch_during_next_metadata_read_never_publishes_a_transition()
     );
     task.abort();
 }
+
+/// backend#31: with Simkl as the browsing integration (the default once Simkl
+/// is configured), a Stremio-imported series Simkl can identify keeps the
+/// episode still from Simkl's document on its Continue Watching card.
+#[tokio::test]
+async fn imported_continue_watching_series_gets_the_simkl_episode_still() {
+    let (mut app, initial, _) = server().await;
+    initial.abort();
+    let routes = Router::new()
+        .route("/tv/20", get(|| async { axum::Json(json!({"title":"Actual series","fanart":"fan/20","ids":{"simkl":20,"imdb":"tt1234567"}})) }))
+        .route("/tv/episodes/20", get(|| async { axum::Json(json!([
+            {"title":"Current","season":1,"episode":2,"aired":true,"img":"ep/30","ids":{"simkl":30}},
+            {"title":"Next","season":1,"episode":3,"aired":false,"date":"2100-01-01","img":"ep/31","ids":{"simkl":31}}
+        ])) }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
+    let (status, integrations) = request(&app, "member-token-1", "GET", "/api/profiles/1/integrations", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{integrations}");
+    assert_eq!(integrations["configuration"]["browsing_plugin"], "simkl");
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,'tt1234567:1:2','series','Actual series',NULL,5,100,1000,?1,'tt1234567')", [json!({"season":1,"episode":2,"series_id":"tt1234567","stremio_import_watched":true}).to_string()]).unwrap();
+        // The title is one Simkl knows (a Simkl import mapped it).
+        db.execute("INSERT INTO simkl_import_entries(profile_id,remote_id,remote_kind,local_id,local_kind,card,statistics,link_revision) VALUES(1,'simkl:tv:20','series','tt1234567','series','{}','{}',0)", []).unwrap();
+    }
+    request(&app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    let stored = || -> i64 {
+        app.db.lock().unwrap().query_row("SELECT COUNT(*) FROM continuation_releases WHERE document IS NOT NULL", [], |r| r.get(0)).unwrap()
+    };
+    for _ in 0..200 {
+        if stored() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(stored(), 1, "the release refresh read Simkl's document");
+    // A restart empties Home's in-memory card enrichment.
+    app.verified_cards.lock().unwrap().clear();
+    let (status, page) = request(&app, "member-token-1", "GET", "/api/profiles/1/continue", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let card = &page["entries"][0]["card"];
+    assert_eq!(card["provider_id"], "library", "{page}");
+    assert_eq!(card["landscape"], "https://wsrv.nl/?url=https://simkl.in/episodes/ep/30_w.webp", "{page}");
+    task.abort();
+}

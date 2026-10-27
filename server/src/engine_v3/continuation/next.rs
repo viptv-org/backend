@@ -223,6 +223,7 @@ pub(crate) async fn resolve(
         &episodes,
         config.scope.revision,
         &addon_revision,
+        parent.landscape.as_deref(),
     );
     drop(db);
     if let Some(card) = output.item.as_ref() {

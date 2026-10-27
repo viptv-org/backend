@@ -57,7 +57,7 @@ async fn show(releases: Vec<(u32, u64)>) -> Show {
                 .collect::<Vec<_>>();
             counted.fetch_add(1, Ordering::SeqCst);
             async move {
-                axum::Json(json!({"meta":{"id":id,"type":"series","name":"Fixture Show","videos":videos}}))
+                axum::Json(json!({"meta":{"id":id,"type":"series","name":"Fixture Show","background":format!("https://img.invalid/{id}/backdrop.jpg"),"videos":videos}}))
             }
         }),
     );
@@ -570,4 +570,59 @@ async fn one_run_refreshes_every_finished_series_and_never_evicts_their_verdicts
     request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(show.calls.load(Ordering::SeqCst), calls);
+}
+
+/// Empties Home's in-memory card enrichment, as a server restart does.
+fn restart(app: &App) {
+    app.verified_cards.lock().unwrap().clear();
+}
+
+/// Stremio-imported (library) Continue Watching cards carry 16:9 art from
+/// stored metadata, not only from Home's in-memory enrichment, which a
+/// restart empties and which stops at its deadline (backend#31).
+#[tokio::test]
+async fn an_imported_finished_series_card_keeps_the_episode_still_after_a_restart() {
+    let start = now();
+    let show = show(vec![(1, start - 30 * DAY), (2, start + 7 * DAY)]).await;
+    let app = &show.app;
+    import(app, "tt100", start - 10 * DAY);
+    request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    until(|| verdict(app, "tt100").is_some()).await;
+    restart(app);
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["card"]["provider_id"], "library", "{entry}");
+    assert_eq!(entry["card"]["landscape"], "https://img.invalid/1.jpg", "{entry}");
+    // Without a still for that episode, the series backdrop.
+    {
+        let db = app.db.lock().unwrap();
+        let raw: String = db.query_row("SELECT document FROM continuation_releases WHERE series_id='tt100'", [], |r| r.get(0)).unwrap();
+        let mut document: Value = serde_json::from_str(&raw).unwrap();
+        document["episodes"][0]["card"]["landscape"] = Value::Null;
+        db.execute("UPDATE continuation_releases SET document=?1 WHERE series_id='tt100'", [document.to_string()]).unwrap();
+    }
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["card"]["landscape"], "https://img.invalid/tt100/backdrop.jpg", "{entry}");
+}
+
+/// An imported title Continue Watching has no metadata document for (an
+/// episode in progress, a movie) uses the backdrop its My List card gained
+/// from the import's Details fill.
+#[tokio::test]
+async fn imported_titles_without_release_facts_use_their_my_list_backdrop() {
+    let app = fixture();
+    let start = now();
+    let card = |kind: &str, id: &str| json!({"identity":{"id":id,"kind":kind,"ids":[],"episode":null,"edition":null},"provider_id":"library","title":"Saved","subtitle":null,"description":"Filled by the import","poster":null,"landscape":format!("https://img.invalid/{id}/backdrop.jpg"),"logo":null,"progress":null,"badges":[]});
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,'tt100:1:2','series','Fixture Show',NULL,30,100,?1,?2,'tt100')",params![(start / 1000) as i64 - 60,json!({"season":1,"episode":2,"series_id":"tt100"}).to_string()]).unwrap();
+        db.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,'tt200','movie','Fixture Film',NULL,30,100,?1,'{}','tt200')",params![(start / 1000) as i64 - 120]).unwrap();
+        for (kind, id) in [("series", "tt100"), ("movie", "tt200")] {
+            db.execute("INSERT INTO favorites(profile_id,id,type,name,poster,context) VALUES(1,?1,?2,'Saved',NULL,?3)", params![id, kind, card(kind, id).to_string()]).unwrap();
+        }
+    }
+    let entries = queue(&app).await;
+    assert_eq!(ids(&entries), ["tt100:1:2", "tt200"]);
+    assert_eq!(entries[0]["status"], "Resume");
+    assert_eq!(entries[0]["card"]["landscape"], "https://img.invalid/tt100/backdrop.jpg");
+    assert_eq!(entries[1]["card"]["landscape"], "https://img.invalid/tt200/backdrop.jpg");
 }

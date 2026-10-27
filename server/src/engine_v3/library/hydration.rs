@@ -66,7 +66,8 @@ fn thin(card: Option<&Card>) -> bool {
     card.is_none_or(|card| card.description.is_none() && card.metadata.is_none())
 }
 
-fn stored(raw: &str, kind: &str, id: &str) -> Option<Card> {
+/// A stored favorite context as the card it saved, if it is this title's.
+pub(crate) fn stored(raw: &str, kind: &str, id: &str) -> Option<Card> {
     serde_json::from_str::<Card>(raw)
         .ok()
         .filter(|card| card.identity.kind == kind && card.identity.id == id)
