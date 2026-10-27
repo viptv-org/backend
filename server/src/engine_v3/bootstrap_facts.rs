@@ -33,7 +33,7 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
     let enabled = |capability| registry.connections_for(&configuration, &connections, capability)
         .map(|connections| !connections.is_empty())
         .map_err(|_| ApiError::from("Viewing configuration unavailable"));
-    let (restricted, live_allowed, simkl_linked) = {
+    let (restricted, live_allowed, simkl_linked, library_series) = {
         let db = scoped.db.lock().map_err(|_| ApiError::from("Database unavailable"))?;
         lease.validate(&db)?;
         let restricted = kids::restricted(&db, &lease.principal)?;
@@ -42,7 +42,7 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
             "SELECT EXISTS(SELECT 1 FROM simkl_links WHERE profile_id=?1 AND account_id=?2 AND credential IS NOT NULL)",
             params![profile, lease.principal.account_id()], |row| row.get(0),
         ).map_err(db_error)?;
-        (restricted, live_allowed, linked)
+        (restricted, live_allowed, linked, continuation::calendar::has_series_db(&db, profile)?)
     };
     let (movies, series) = if restricted {
         // Restricted discovery is the scoped approved Library projection.
@@ -60,7 +60,10 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
         && (configuration.browsing_plugin != "simkl" || simkl_linked));
     let live = live_allowed && enabled(Capability::LiveTv)?;
     let search = media_search || live;
-    let calendar = !restricted && configuration.browsing_plugin == "simkl" && enabled(Capability::Discovery)?;
+    // Calendar merges the library's series ("your shows", any integration)
+    // with Simkl's public schedule; either source offers it.
+    let calendar = !restricted
+        && (library_series || (configuration.browsing_plugin == "simkl" && enabled(Capability::Discovery)?));
     configuration::validate_revision(&scoped, profile, configuration.scope.revision)?;
     let navigation = [
         ("search", "Search", search),

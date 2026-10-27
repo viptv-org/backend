@@ -94,6 +94,64 @@ v2 CDN document is coalesced/cached per type, without user authorization.
 Session, selected provider, profile assignments and kids policy are rechecked.
 An unsupported provider returns an explicit availability error.
 
+The Calendar merges two sources. `library` entries are the released and
+upcoming episodes of the profile's library series (`favorites` rows of type
+`series`, so series a Stremio import saved are included), for any browsing
+integration. Their air dates come from the episode documents Continue Watching
+reads for new-episode facts, with its provider choice: the Simkl episode list
+when Simkl is the browsing integration, otherwise the metadata add-on's
+`videos[].released`. Only when that provider cannot serve a series (a `tt…`
+Stremio import without a Simkl mapping in a Simkl profile, or a `simkl:`
+series in a Stremio profile) is the series' own provider read instead.
+`public` entries are Simkl's public schedule above, only when Simkl is the
+browsing integration. A public episode of a library series (any shared
+identity such as `imdb:tt…`, plus the same season/episode, or the same UTC day
+when coordinates are missing) appears once, as `library`, also when the
+library shows it under another `type` (a `tt…` anime series is in the series
+calendar, so its public anime copy is dropped). Library series feed
+`type=series` (Simkl `simkl:anime:` series feed `type=anime`); `type=movie` has
+public entries only. Per profile, at most 50 library series (most recently
+added first) are looked up, four at a time with an 8-second limit each and a
+12-second total deadline. The episode list (episodes within 180 days of now)
+is cached for 30 minutes, keyed by account, configuration, add-on revision and
+the set of library series, and concurrent reads share one fetch; a list with a
+failed or unfinished lookup is kept for 15 seconds only. Kids (restricted)
+sessions get no library entries and start no lookups. The route is available
+when the profile has library series or Simkl is the browsing integration,
+matching bootstrap navigation's `calendar` destination and the
+discovery-controls `calendar` availability; otherwise it returns 422. When one
+source fails (other than session, permission or configuration changes), the
+other source's entries are returned and `sources` omits the failed one.
+
+Wire shape. All additions are optional for older clients; existing fields and
+public entry ids are unchanged:
+
+```json
+{
+  "entries": [{
+    "id": "stable calendar row id",
+    "card": { "...": "typed series Card (library card, or Simkl title card)" },
+    "date": "2026-10-28T04:00:00Z",
+    "episode_title": "Chapter 2",
+    "season": 1,
+    "episode": 2,
+    "source": "library | public",
+    "episode_card": { "...": "library only: typed episode Card, parent_identity = the series" }
+  }],
+  "next_cursor": "100",
+  "complete": false,
+  "sources": ["library", "public"],
+  "refresh_after_millis": 15000
+}
+```
+
+`sources` lists the sources that answered. `refresh_after_millis` is present
+only while some library series are still being looked up (a cold fetch hit its
+deadline). The list can still grow then, so `skip` cursors are not stable:
+after that delay, read the window again from the first page. Without it, pages
+of one window are stable for the cache lifetime. `episode_card` is omitted on
+public entries.
+
 `GET /api/v3/discovery-controls?type=movie|series|anime` publishes shared
 `QueryControl` values and capability availability for the selected provider.
 Stremio catalogs expose their actual genres and custom options. Simkl genres come
