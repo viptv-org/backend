@@ -199,26 +199,8 @@ async fn document(
         identity: series.identity.clone(),
         parent_identity: Some(series.identity.clone()),
     };
-    let stremio = ("stremio".to_owned(), None, String::new());
-    let read = |simkl: bool| {
-        let explicit = (!simkl).then_some(&stremio);
-        let request = &request;
-        async move {
-            tokio::time::timeout(
-                LOOKUP_TIMEOUT,
-                super::metadata::document(app, lease, profile, request, simkl, explicit, None, false),
-            )
-            .await
-            .map_err(|_| ApiError::from("Metadata unavailable"))?
-        }
-    };
-    let own = series.identity.id.starts_with("simkl:");
-    match read(simkl).await {
-        Err(error) if own != simkl && !matches!(error.0, StatusCode::UNAUTHORIZED | StatusCode::CONFLICT) => {
-            read(own).await
-        }
-        result => result,
-    }
+    super::metadata::series_document(app, lease, profile, &request, simkl, false, LOOKUP_TIMEOUT)
+        .await
 }
 
 async fn fetch(

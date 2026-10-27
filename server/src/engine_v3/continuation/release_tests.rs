@@ -626,3 +626,27 @@ async fn imported_titles_without_release_facts_use_their_my_list_backdrop() {
     assert_eq!(entries[0]["card"]["landscape"], "https://img.invalid/tt100/backdrop.jpg");
     assert_eq!(entries[1]["card"]["landscape"], "https://img.invalid/tt200/backdrop.jpg");
 }
+
+/// Simkl is the browsing integration (the default once the server has Simkl
+/// configured), but a Stremio-imported series Simkl has no mapping for still
+/// gets its release facts from the metadata add-ons, so its verdict and "+N"
+/// badge keep updating (backend#36).
+#[tokio::test]
+async fn an_imported_series_simkl_cannot_map_still_gets_release_facts_on_a_simkl_profile() {
+    let start = now();
+    let mut show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
+    // No Simkl request is needed: the series has no Simkl mapping.
+    show.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:9"));
+    let app = &show.app;
+    let (status, integrations) =
+        request(app, "member-token-1", "GET", "/api/profiles/1/integrations", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{integrations}");
+    assert_eq!(integrations["configuration"]["browsing_plugin"], "simkl");
+    import(app, "tt100", start - 10 * DAY);
+    request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    until(|| verdict(app, "tt100").is_some()).await;
+    assert_eq!(verdict(app, "tt100"), Some(("tt100:1:1".to_owned(), "next")));
+    let failures: i64 = app.db.lock().unwrap().query_row("SELECT failures FROM continuation_releases WHERE series_id='tt100'", [], |r| r.get(0)).unwrap();
+    assert_eq!(failures, 0);
+    assert_eq!(show_entry(&queue(app).await)["card"]["badges"], json!(["+1"]));
+}

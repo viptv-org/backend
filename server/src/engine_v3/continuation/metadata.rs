@@ -1,4 +1,50 @@
 use super::*;
+
+/// One series' episode document from the profile's provider (Simkl when it is
+/// the browsing integration, otherwise the metadata add-ons) or, when that
+/// provider cannot serve the series, from the series' own provider: a `tt…`
+/// Stremio import Simkl has no mapping for is read from the add-ons, a
+/// `simkl:` series in a Stremio profile from Simkl. Continue Watching's release
+/// facts and the Calendar's library episodes both read through here, so they
+/// agree. `fresh` skips the add-on response cache; `timeout` bounds each read.
+pub(super) async fn series_document(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    request: &NextEpisodeRequest,
+    simkl: bool,
+    fresh: bool,
+    timeout: Duration,
+) -> Result<(Card, Vec<EpisodeAvailability>), ApiError> {
+    let own = request
+        .parent_identity
+        .as_ref()
+        .ok_or_else(|| ApiError::from("An explicit parent identity is required"))?
+        .id
+        .starts_with("simkl:");
+    let stremio = ("stremio".to_owned(), None, String::new());
+    let read = |simkl: bool| {
+        let explicit = (!simkl).then_some(&stremio);
+        async move {
+            tokio::time::timeout(
+                timeout,
+                document(app, lease, profile, request, simkl, explicit, None, fresh),
+            )
+            .await
+            .map_err(|_| ApiError::from("Metadata unavailable"))?
+        }
+    };
+    match read(simkl).await {
+        Err(error)
+            if own != simkl
+                && !matches!(error.0, StatusCode::UNAUTHORIZED | StatusCode::CONFLICT) =>
+        {
+            read(own).await
+        }
+        result => result,
+    }
+}
+
 pub(super) async fn document(
     app: &App,
     lease: &ResourceLease,
