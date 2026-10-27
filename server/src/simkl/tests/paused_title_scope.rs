@@ -60,7 +60,8 @@ async fn paused_import_scopes_equal_numeric_ids_to_the_explicit_title_category()
             .route("/anime/30",get(||async{axum::Json(json!({"title":"Different anime","runtime":24,"ids":{"simkl":30}}))}))
             .route("/tv/episodes/30",get(||async{axum::Json(json!([{"episode":2,"season":1,"aired":true,"ids":{"simkl":302}}]))}))
             .route("/anime/episodes/30",get(move||{let episodes=episodes.clone();async move{axum::Json(episodes)}}))
-            .fallback(move|method:axum::http::Method|{let count=count.clone();async move{if method!=axum::http::Method::GET{count.fetch_add(1,Ordering::SeqCst);}StatusCode::NOT_FOUND}});
+            // Count Simkl writes only: host port probes send safe HEAD requests to new listeners.
+            .fallback(move|method:axum::http::Method|{let count=count.clone();async move{if !method.is_safe(){count.fetch_add(1,Ordering::SeqCst);}StatusCode::NOT_FOUND}});
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
