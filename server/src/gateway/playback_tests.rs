@@ -1767,6 +1767,9 @@ mod caption_tests;
 #[path = "playback_required_audio_tests.rs"]
 mod required_audio_tests;
 
+#[path = "playback_grant_refresh_tests.rs"]
+mod grant_refresh_tests;
+
 #[tokio::test]
 async fn next_episode_action_follows_the_profile_preference() {
     let (app, _peer) = setup().await;

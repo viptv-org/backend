@@ -348,6 +348,7 @@ pub(crate) async fn sources(
             entry.created = Instant::now()
                 .checked_sub(Duration::from_secs(1500))
                 .unwrap_or_else(Instant::now);
+            entry.fixed_lifetime = true;
         }
     }
     drop(entries);

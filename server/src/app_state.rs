@@ -269,7 +269,12 @@ pub(crate) struct StreamEntry {
     pub(crate) requires_torrent_gateway: bool,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) required_audio_index: Option<u32>,
+    /// Start of the grant's 30-minute window: discovery, or the last playback
+    /// heartbeat or first frame that used it (see `App::refresh_stream`).
     pub(crate) created: Instant,
+    /// The window is bound to an upstream URL lifetime shorter than 30
+    /// minutes, so playback must not extend it.
+    pub(crate) fixed_lifetime: bool,
 }
 impl App {
     pub fn new(db: Connection, client: reqwest::Client) -> Result<Self, String> {
@@ -426,6 +431,30 @@ impl App {
             owner.lease.validate(&self.db.lock().unwrap())
         } else {
             Err(ApiError(StatusCode::NOT_FOUND, "Resource not found".into()))
+        }
+    }
+    /// Restarts a stream grant's 30-minute window because playback just used
+    /// it, so a lapsed lease can reopen the same source without discovery
+    /// (backend#18). Only the owner that admitted the playback refreshes it;
+    /// grants with a fixed upstream lifetime keep their window.
+    pub(crate) fn refresh_stream(&self, owner: &str, session_id: Option<&str>, id: &str) {
+        let key = format!("stream:{id}");
+        let owned = |record: &ResourceOwner| {
+            record.key == owner && record.lease.session_id.as_deref() == session_id
+        };
+        if !self.resource_owners.lock().unwrap().get(&key).is_some_and(owned) {
+            return;
+        }
+        let now = Instant::now();
+        // Registration holds the stream lock while it records ownership, so
+        // never hold the ownership lock while taking the stream lock.
+        match self.streams.lock().unwrap().get_mut(id) {
+            Some(stream) if !stream.fixed_lifetime => stream.created = now,
+            _ => return,
+        }
+        let mut owners = self.resource_owners.lock().unwrap();
+        if let Some(record) = owners.get_mut(&key).filter(|record| owned(record)) {
+            record.created = now;
         }
     }
     #[cfg(test)]
