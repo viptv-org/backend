@@ -15,11 +15,11 @@ pub(crate) fn dispatch_devices(
             let code = pairing_code(v)?;
             // Deny only a live pairing: pending codes are deniable by the
             // signed-in browser user, approved codes only by their owning
-            // account. Expired, consumed, or unknown codes are refused with
-            // the same wording lookup and approve already use.
+            // account. Expired, consumed, denied or unknown codes are refused
+            // with the same wording lookup and approve already use.
             let owner_account = db
                 .query_row(
-                    "SELECT account_id FROM auth_pairings WHERE code_hash=?1 AND expires>?2",
+                    "SELECT account_id FROM auth_pairings WHERE code_hash=?1 AND expires>?2 AND denied=0",
                     params![hash(&code), now()],
                     |row| row.get::<_, Option<i64>>(0),
                 )
@@ -36,9 +36,16 @@ pub(crate) fn dispatch_devices(
                     return Err(forbidden());
                 }
             }
+            // Keep a tombstone so the polling device reads `access_denied`
+            // rather than `authorization_pending`; the sweep removes it later.
             db.execute(
-                "DELETE FROM auth_pairings WHERE code_hash=?1 AND expires>?2",
+                "UPDATE auth_pairings SET denied=1,account_id=NULL,profile_id=NULL WHERE code_hash=?1 AND expires>?2 AND denied=0",
                 params![hash(&code), now()],
+            )
+            .map_err(crate::db_error)?;
+            db.execute(
+                "DELETE FROM auth_pairing_profiles WHERE code_hash=?1",
+                [hash(&code)],
             )
             .map_err(crate::db_error)?;
             event(db, "device_denied", principal.account_id())?;
@@ -49,19 +56,18 @@ pub(crate) fn dispatch_devices(
             dispatch_prepared(db, "/auth/device/revoke-admin", p, h, v, prepared)
         }
         "/auth/device/code" => {
-            db.execute("DELETE FROM auth_pairings WHERE expires<=?1", [now()])
-                .map_err(crate::db_error)?;
+            sweep_pairings(db)?;
             let pending: i64 = db
                 .query_row(
-                    "SELECT count(*) FROM auth_pairings WHERE account_id IS NULL",
-                    [],
+                    "SELECT count(*) FROM auth_pairings WHERE account_id IS NULL AND denied=0 AND expires>?1",
+                    [now()],
                     |row| row.get(0),
                 )
                 .map_err(crate::db_error)?;
             if pending >= MAX_PENDING_PAIRINGS {
                 db.execute(
-                    "DELETE FROM auth_pairings WHERE code_hash IN(SELECT code_hash FROM auth_pairings WHERE account_id IS NULL ORDER BY expires,code_hash LIMIT ?1)",
-                    [pending - MAX_PENDING_PAIRINGS + 1],
+                    "DELETE FROM auth_pairings WHERE code_hash IN(SELECT code_hash FROM auth_pairings WHERE account_id IS NULL AND denied=0 AND expires>?1 ORDER BY expires,code_hash LIMIT ?2)",
+                    params![now(), pending - MAX_PENDING_PAIRINGS + 1],
                 )
                 .map_err(crate::db_error)?;
             }
@@ -69,9 +75,10 @@ pub(crate) fn dispatch_devices(
                 .query_row("SELECT count(*) FROM auth_pairings", [], |row| row.get(0))
                 .map_err(crate::db_error)?;
             if total >= MAX_PAIRINGS {
+                // Tombstones (denied or expired) go first, then pending, then approved.
                 db.execute(
-                    "DELETE FROM auth_pairings WHERE code_hash IN(SELECT code_hash FROM auth_pairings ORDER BY account_id IS NOT NULL,expires,code_hash LIMIT ?1)",
-                    [total - MAX_PAIRINGS + 1],
+                    "DELETE FROM auth_pairings WHERE code_hash IN(SELECT code_hash FROM auth_pairings ORDER BY denied=0 AND expires>?1,account_id IS NOT NULL,expires,code_hash LIMIT ?2)",
+                    params![now(), total - MAX_PAIRINGS + 1],
                 )
                 .map_err(crate::db_error)?;
             }
@@ -108,7 +115,7 @@ pub(crate) fn dispatch_devices(
             let _principal = p.as_ref().ok_or_else(unauthorized)?;
             let code = pairing_code(v)?;
             let row = db.query_row(
-                "SELECT device_name,expires,account_id IS NOT NULL FROM auth_pairings WHERE code_hash=?1 AND expires>?2",
+                "SELECT device_name,expires,account_id IS NOT NULL FROM auth_pairings WHERE code_hash=?1 AND expires>?2 AND denied=0",
                 params![hash(&code), now()],
                 |item| Ok((item.get::<_, String>(0)?, item.get::<_, i64>(1)?, item.get::<_, bool>(2)?)),
             ).optional().map_err(crate::db_error)?.ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "Invalid or expired pairing code".into()))?;
@@ -125,12 +132,11 @@ pub(crate) fn dispatch_devices(
             let id = principal.account_id().ok_or_else(unauthorized)?;
             let code = pairing_code(v)?;
             let code_hash = hash(&code);
-            db.execute("DELETE FROM auth_pairings WHERE expires<=?1", [now()])
-                .map_err(crate::db_error)?;
+            sweep_pairings(db)?;
             let approved_count: i64 = db
                 .query_row(
-                    "SELECT count(*) FROM auth_pairings WHERE account_id=?1",
-                    [id],
+                    "SELECT count(*) FROM auth_pairings WHERE account_id=?1 AND expires>?2",
+                    params![id, now()],
                     |row| row.get(0),
                 )
                 .map_err(crate::db_error)?;
@@ -140,7 +146,7 @@ pub(crate) fn dispatch_devices(
                     "Too many approved devices awaiting connection".into(),
                 ));
             }
-            let changed=db.execute("UPDATE auth_pairings SET account_id=?1,profile_id=NULL WHERE code_hash=?2 AND expires>?3 AND account_id IS NULL",params![id,code_hash,now()]).map_err(crate::db_error)?;
+            let changed=db.execute("UPDATE auth_pairings SET account_id=?1,profile_id=NULL WHERE code_hash=?2 AND expires>?3 AND account_id IS NULL AND denied=0",params![id,code_hash,now()]).map_err(crate::db_error)?;
             if changed != 1 {
                 return Err(ApiError(
                     StatusCode::BAD_REQUEST,
@@ -157,14 +163,14 @@ pub(crate) fn dispatch_devices(
                 .and_then(Value::as_str)
                 .ok_or("Missing device_code")?;
             let device_hash = hash(device_code);
-            let row=db.query_row("SELECT p.account_id,p.device_name FROM auth_pairings p JOIN auth_accounts a ON a.id=p.account_id WHERE p.device_hash=?1 AND p.expires>?2 AND a.disabled=0",params![device_hash,now()],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?))).optional().map_err(crate::db_error)?.ok_or_else(||ApiError(StatusCode::BAD_REQUEST,"authorization_pending".into()))?;
-            let (output, cookies) = session(db, row.0, None, "device", &row.1)?;
+            let (account_id, device_name) = redeemable_pairing(db, &device_hash)?;
+            let (output, cookies) = session(db, account_id, None, "device", &device_name)?;
             db.execute(
                 "DELETE FROM auth_pairings WHERE device_hash=?1",
                 [device_hash],
             )
             .map_err(crate::db_error)?;
-            event(db, "device_paired", Some(row.0))?;
+            event(db, "device_paired", Some(account_id))?;
             Ok((output, cookies))
         }
         "/auth/device/revoke" | "/auth/device/revoke-own" | "/auth/device/revoke-admin" => {
@@ -196,5 +202,47 @@ pub(crate) fn dispatch_devices(
             StatusCode::NOT_FOUND,
             "Unknown authentication endpoint".into(),
         )),
+    }
+}
+
+/// Drop pairings whose tombstone window has passed. Rows between their expiry
+/// and the end of the window stay so a late poll still reads `expired_token`
+/// or `access_denied`; every live-row query filters on `expires` and `denied`.
+fn sweep_pairings(db: &Connection) -> Result<(), ApiError> {
+    db.execute(
+        "DELETE FROM auth_pairings WHERE expires<=?1",
+        [now() - PAIRING_TOMBSTONE_SECS],
+    )
+    .map_err(crate::db_error)?;
+    Ok(())
+}
+
+/// The approved pairing a polling device may redeem, or its RFC 8628
+/// section 3.5 error. Unknown codes (never issued, consumed or swept) stay
+/// `authorization_pending` so a typo can never read as a denial.
+fn redeemable_pairing(db: &Connection, device_hash: &str) -> Result<(i64, String), ApiError> {
+    let row = db
+        .query_row(
+            "SELECT p.denied<>0,p.expires<=?2,p.account_id,p.device_name,coalesce(a.disabled<>0,1) FROM auth_pairings p LEFT JOIN auth_accounts a ON a.id=p.account_id WHERE p.device_hash=?1",
+            params![device_hash, now()],
+            |r| {
+                Ok((
+                    r.get::<_, bool>(0)?,
+                    r.get::<_, bool>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, bool>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(crate::db_error)?;
+    let error = |code: &str| ApiError(StatusCode::BAD_REQUEST, code.into());
+    match row {
+        Some((true, _, _, _, _)) => Err(error("access_denied")),
+        Some((false, true, _, _, _)) => Err(error("expired_token")),
+        Some((false, false, Some(account_id), device_name, false)) => Ok((account_id, device_name)),
+        // Pending, approved by a disabled account, or unknown.
+        _ => Err(error("authorization_pending")),
     }
 }

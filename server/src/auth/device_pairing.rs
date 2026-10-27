@@ -80,7 +80,7 @@ pub(crate) async fn device_qr(
         rate(&db, "auth:global:/auth/device/qr", 600)?;
         let exists: bool = db
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM auth_pairings WHERE code_hash=?1 AND expires>?2)",
+                "SELECT EXISTS(SELECT 1 FROM auth_pairings WHERE code_hash=?1 AND expires>?2 AND denied=0)",
                 params![hash(&code), now()],
                 |row| row.get(0),
             )
