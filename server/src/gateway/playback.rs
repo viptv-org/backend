@@ -508,7 +508,7 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
             let streams = app.streams.lock().unwrap();
             let entry = streams
                 .get(&id)
-                .filter(|entry| entry.created.elapsed() < Duration::from_secs(1800))
+                .filter(|entry| entry.created.elapsed() < crate::app_state::STREAM_GRANT_WINDOW)
                 .ok_or(Error::Code("source_not_found"))?;
             (
                 Proof {
@@ -1944,7 +1944,8 @@ pub(crate) async fn progress(
     validate_entry(&app, &entry).await?;
     Ok(Json(json!({"stage":stage})))
 }
-/// Decoder acknowledgement never renews backend or gateway authority.
+/// Decoder acknowledgement never renews backend or gateway authority. Like a
+/// heartbeat, it keeps the source grant reopenable (backend#18).
 pub(crate) async fn first_frame(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,

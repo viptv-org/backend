@@ -73,7 +73,7 @@ pub(crate) async fn rank(
             continue;
         }
         let grant = grants.get(&id).ok_or_else(auth::forbidden)?;
-        if grant.created.elapsed() >= Duration::from_secs(1800)
+        if grant.created.elapsed() >= crate::app_state::STREAM_GRANT_WINDOW
             || crate::sources::source_configuration(&db, &grant.producer)? != grant.configuration
         {
             return Err(auth::forbidden());

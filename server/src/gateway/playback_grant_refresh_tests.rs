@@ -17,19 +17,12 @@ fn age_grant(app: &App, stream: &str) {
         .created = discovered;
 }
 
-/// Lapses the playback lease the way a long network drop would.
-async fn lapse(app: &App, id: &str) {
-    app.gateway_playbacks.lapse_lease(id);
-    let (status, response) = request(
-        app,
-        "member-token-1",
-        "POST",
-        &format!("/api/playback/{id}/heartbeat"),
-        Value::Null,
+/// When the grant's window and its ownership record's window started.
+fn windows(app: &App, stream: &str) -> (Instant, Instant) {
+    (
+        app.streams.lock().unwrap()[stream].created,
+        app.resource_owners.lock().unwrap()[&format!("stream:{stream}")].created,
     )
-    .await;
-    assert_eq!(status, StatusCode::GONE, "{response}");
-    assert_eq!(response["error_code"], "playback_expired");
 }
 
 async fn admit(app: &App, stream: &str, request_id: &str, platform: &str) -> (StatusCode, Value) {
@@ -43,48 +36,65 @@ async fn admit(app: &App, stream: &str, request_id: &str, platform: &str) -> (St
     .await
 }
 
+/// Discovers a source and starts a ready playback of it.
+async fn watching(app: &App, platform: &str) -> (String, String) {
+    gateway(app, "first", 1);
+    let stream = source(app);
+    let (status, start) = admit(app, &stream, "watching", platform).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{start}");
+    let id = start["id"].as_str().unwrap().to_owned();
+    assert_eq!(settled(app, &id).await["status"], "ready");
+    (stream, id)
+}
+
+async fn heartbeat(app: &App, id: &str) -> (StatusCode, Value) {
+    request(
+        app,
+        "member-token-1",
+        "POST",
+        &format!("/api/playback/{id}/heartbeat"),
+        Value::Null,
+    )
+    .await
+}
+
+/// Lapses the playback lease the way a long network drop would.
+async fn lapse(app: &App, id: &str) {
+    app.gateway_playbacks.lapse_lease(id);
+    let (status, response) = heartbeat(app, id).await;
+    assert_eq!(status, StatusCode::GONE, "{response}");
+    assert_eq!(response["error_code"], "playback_expired");
+}
+
+/// After the lease lapsed and retention ran, the same source reopens.
+async fn reopens(app: &App, stream: &str, platform: &str) {
+    app.prune();
+    let (status, reopened) = admit(app, stream, "reopen", platform).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{platform}: {reopened}");
+    let id = reopened["id"].as_str().unwrap();
+    assert_eq!(settled(app, id).await["status"], "ready");
+}
+
 #[tokio::test]
 async fn heartbeat_keeps_an_old_grant_reopenable_after_the_lease_lapses() {
     for platform in ["android", "roku"] {
         let (app, _peer) = setup().await;
-        gateway(&app, "first", 1);
-        let stream = source(&app);
-        let (status, start) = admit(&app, &stream, "watching", platform).await;
-        assert_eq!(status, StatusCode::ACCEPTED, "{start}");
-        let id = start["id"].as_str().unwrap().to_owned();
-        assert_eq!(settled(&app, &id).await["status"], "ready");
+        let (stream, id) = watching(&app, platform).await;
 
         // 31 minutes into the episode the heartbeat is still alive.
         age_grant(&app, &stream);
-        let (status, response) = request(
-            &app,
-            "member-token-1",
-            "POST",
-            &format!("/api/playback/{id}/heartbeat"),
-            Value::Null,
-        )
-        .await;
+        let (status, response) = heartbeat(&app, &id).await;
         assert_eq!(status, StatusCode::OK, "{response}");
 
         lapse(&app, &id).await;
-        app.prune();
-        let (status, reopened) = admit(&app, &stream, "reopen", platform).await;
-        assert_eq!(status, StatusCode::ACCEPTED, "{platform}: {reopened}");
-        assert_eq!(
-            settled(&app, reopened["id"].as_str().unwrap()).await["status"],
-            "ready"
-        );
+        reopens(&app, &stream, platform).await;
     }
 }
 
 #[tokio::test]
 async fn first_frame_keeps_an_old_grant_reopenable_after_the_lease_lapses() {
     let (app, _peer) = setup().await;
-    gateway(&app, "first", 1);
-    let stream = source(&app);
-    let (_, start) = admit(&app, &stream, "watching", "roku").await;
-    let id = start["id"].as_str().unwrap().to_owned();
-    assert_eq!(settled(&app, &id).await["status"], "ready");
+    let (stream, id) = watching(&app, "roku").await;
 
     age_grant(&app, &stream);
     let (status, response) = request(
@@ -98,38 +108,45 @@ async fn first_frame_keeps_an_old_grant_reopenable_after_the_lease_lapses() {
     assert_eq!(status, StatusCode::OK, "{response}");
 
     lapse(&app, &id).await;
-    app.prune();
-    let (status, reopened) = admit(&app, &stream, "reopen", "roku").await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{reopened}");
+    reopens(&app, &stream, "roku").await;
 }
 
 #[tokio::test]
-async fn heartbeat_never_extends_a_grant_bound_to_an_upstream_lifetime() {
+async fn heartbeat_never_extends_a_grant_past_its_upstream_deadline() {
     let (app, _peer) = setup().await;
-    gateway(&app, "first", 1);
-    let stream = source(&app);
-    let (_, start) = admit(&app, &stream, "watching", "android").await;
-    let id = start["id"].as_str().unwrap().to_owned();
-    assert_eq!(settled(&app, &id).await["status"], "ready");
-    let resolved = Instant::now()
-        .checked_sub(Duration::from_secs(25 * 60))
-        .unwrap();
-    {
-        let mut streams = app.streams.lock().unwrap();
-        let grant = streams.get_mut(&stream).unwrap();
-        grant.fixed_lifetime = true;
-        grant.created = resolved;
-    }
-    let (status, response) = request(
-        &app,
-        "member-token-1",
-        "POST",
-        &format!("/api/playback/{id}/heartbeat"),
-        Value::Null,
-    )
-    .await;
+    let (stream, id) = watching(&app, "android").await;
+    // The upstream URL works for 10 more minutes, so the grant's window
+    // started 20 minutes ago.
+    app.streams
+        .lock()
+        .unwrap()
+        .get_mut(&stream)
+        .unwrap()
+        .expire_upstream_after(Duration::from_secs(10 * 60));
+    let before = windows(&app, &stream);
+
+    let (status, response) = heartbeat(&app, &id).await;
     assert_eq!(status, StatusCode::OK, "{response}");
-    assert_eq!(app.streams.lock().unwrap()[&stream].created, resolved);
+    assert_eq!(windows(&app, &stream), before);
+}
+
+#[tokio::test]
+async fn heartbeat_refreshes_a_grant_whose_upstream_outlives_the_window() {
+    let (app, _peer) = setup().await;
+    let (stream, id) = watching(&app, "android").await;
+    app.streams
+        .lock()
+        .unwrap()
+        .get_mut(&stream)
+        .unwrap()
+        .expire_upstream_after(Duration::from_secs(2 * 60 * 60));
+
+    age_grant(&app, &stream);
+    let (status, response) = heartbeat(&app, &id).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+
+    lapse(&app, &id).await;
+    reopens(&app, &stream, "android").await;
 }
 
 #[tokio::test]
