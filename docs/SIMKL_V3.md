@@ -203,6 +203,10 @@ record's `avatar_style`, `avatar_choice` (null without a catalog choice) and
 legacy `avatar_id` (published preset IDs in `avatar_ids`) stays accepted and is
 projected only while no catalog choice exists, so a catalog choice always takes
 precedence; a catalog write clears it and one request cannot set both.
+The profile integrations configuration (`GET`/`PUT /api/profiles/:id/integrations`)
+projects the same account avatar as `avatar_style`, `avatar_choice` and
+`avatar_id`, read from the account record on every load; configurations saved
+before these fields existed keep loading.
 DELETE protects the primary profile and preserves exact account ownership. The v3 parent aliases
 retain existing PIN hashing, rate limits, short session-bound grants and rotation
 invalidation. Kids bootstrap remains a scoped, policy-filtered read.
