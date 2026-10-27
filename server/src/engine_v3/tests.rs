@@ -77,6 +77,46 @@ async fn bootstrap_has_prepared_home_without_per_card_requests() {
     assert!(body["identity"]["profiles"].is_array());
 }
 
+/// backend#23: catalog names repeat across types and add-ons, so add-on row
+/// titles say their type and name the add-on only on a clash. Failed rows
+/// (nothing answers here) keep the same titles; ids and fixed rows are unchanged.
+#[tokio::test]
+async fn home_add_on_rows_say_their_type_and_name_the_add_on_only_on_a_clash() {
+    let mut app = fixture();
+    app.addons.allow_test_loopback = true;
+    let cinemeta = json!({"id":"cinemeta","name":"Cinemeta","resources":["catalog"],"types":["movie","series"],
+        "catalogs":[{"id":"top","name":"Popular","type":"movie"},{"id":"top","name":"Popular","type":"series"}]});
+    let other = json!({"id":"other","name":"Torrentio","resources":["catalog"],"types":["movie"],
+        "catalogs":[{"id":"popular","name":"Popular","type":"movie"},{"id":"new","name":"New Movies","type":"movie"}]});
+    {
+        let db = app.db.lock().unwrap();
+        for (id, manifest) in [(1, &cinemeta), (2, &other)] {
+            db.execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(?1,?2,?3,?4,1)",
+                params![id, manifest["name"].as_str().unwrap(), format!("http://127.0.0.1:9/{id}/manifest.json"), manifest.to_string()]).unwrap();
+        }
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    let (status, body) = request(&app, "member-token-1", "PUT", "/api/profiles/1/integrations",
+        json!({"revision":0,"browsing_plugin":"stremio","assignments":[
+            {"connection_id":"addon:1","enabled":["Discovery"]},
+            {"connection_id":"addon:2","enabled":["Discovery"]}]})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, home) = request(&app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{home}");
+    let titles = home["rows"].as_array().unwrap().iter()
+        .map(|row| (row["id"].as_str().unwrap().to_owned(), row["title"].as_str().unwrap().to_owned()))
+        .collect::<Vec<_>>();
+    let expected = [
+        ("continue", "Continue Watching"),
+        ("favorites", "My List"),
+        ("addon:1:movie:top", "Popular Movies · Cinemeta"),
+        ("addon:1:series:top", "Popular Series"),
+        ("addon:2:movie:popular", "Popular Movies · Torrentio"),
+        ("addon:2:movie:new", "New Movies"),
+    ].map(|(id, title)| (id.to_owned(), title.to_owned()));
+    assert_eq!(titles, expected);
+}
+
 #[tokio::test]
 async fn home_rejects_cross_profile_access() {
     let app = fixture();
