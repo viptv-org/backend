@@ -3196,3 +3196,85 @@ async fn parent_pin_cpu_budget_is_scoped_to_each_app() {
     assert_eq!(status, StatusCode::OK, "second app must save its PIN: {body}");
     drop(held);
 }
+
+/// A profile row written outside these handlers (an import, older data or a
+/// direct edit) can hold a catalog position its world never had. Every read
+/// path then projects no choice, and a write that picks no avatar keeps
+/// working instead of rejecting the row forever (#45).
+#[tokio::test]
+async fn profile_rows_outside_the_world_size_project_no_choice() {
+    let a = fixture();
+    a.db.lock()
+        .unwrap()
+        .execute(
+            "UPDATE profiles SET avatar_style='princesses',avatar_seed='viptv-princesses-12' WHERE id=1",
+            [],
+        )
+        .unwrap();
+    let first = auth::character_avatars()["princesses"][0]["url"].clone();
+    let (status, list) = request(&a, "member-token-1", "GET", "/api/profiles", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let card = list["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "1")
+        .cloned()
+        .unwrap();
+    assert_eq!(card["avatar_style"], "princesses", "{card}");
+    assert_eq!(card["avatar_choice"], Value::Null, "{card}");
+    assert_eq!(card["avatar_url"], first, "{card}");
+
+    let (status, me) = request(&a, "member-token-1", "GET", "/api/auth/me", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let account = me["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "1")
+        .cloned()
+        .unwrap();
+    assert_eq!(account["avatar_choice"], Value::Null, "{account}");
+    assert_eq!(account["avatar_url"], first, "{account}");
+
+    let (status, bootstrap) =
+        request(&a, "member-token-1", "GET", "/api/bootstrap", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let managed = bootstrap["profile_management"]["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "1")
+        .cloned()
+        .unwrap();
+    assert_eq!(managed["avatar_choice"], Value::Null, "{managed}");
+
+    let (status, configuration) = request(
+        &a,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/integrations",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{configuration}");
+    assert_eq!(
+        configuration["configuration"]["avatar_choice"],
+        Value::Null,
+        "{configuration}"
+    );
+
+    // A rename picks no avatar, so it must leave the row usable.
+    let (status, renamed) = request(
+        &a,
+        "member-token-1",
+        "PATCH",
+        "/api/profiles/1",
+        json!({"name":"Renamed"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["name"], "Renamed");
+    assert_eq!(renamed["avatar_choice"], Value::Null, "{renamed}");
+    assert_eq!(renamed["avatar_url"], first, "{renamed}");
+}
