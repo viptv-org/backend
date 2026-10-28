@@ -137,6 +137,16 @@ pub(crate) fn rate(db: &Connection, bucket: &str, limit: i64) -> Result<(), ApiE
     }
     Ok(())
 }
+/// Seconds until this bucket's fixed window expires; the client retry hint.
+pub(crate) fn retry_after(db: &Connection, bucket: &str) -> i64 {
+    db.query_row(
+        "SELECT expires FROM auth_limits WHERE bucket=?1",
+        [bucket],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|expires| (expires - now()).max(1))
+    .unwrap_or(300)
+}
 pub(crate) fn session(
     db: &Connection,
     id: i64,

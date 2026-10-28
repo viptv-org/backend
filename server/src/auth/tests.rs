@@ -1216,6 +1216,7 @@ fn bounded_limits_events_and_expiry() {
     assert!(dispatch(&db, "/auth/refresh", None, &h, &json!({}), SESSION_TOKEN).is_err());
 }
 
+mod device_code_invalidates;
 mod device_deny;
 mod device_token_errors;
 mod stale_authority;

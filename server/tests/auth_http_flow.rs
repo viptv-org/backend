@@ -18,6 +18,64 @@ struct Browser {
     cookies: BTreeMap<String, String>,
     csrf: String,
 }
+struct RawPost {
+    status: StatusCode,
+    body: Value,
+    retry_after: Option<String>,
+}
+/// POST with a browser Origin/Host plus the JSON body, capturing `Retry-After`.
+async fn post_with_headers(app: &Router, path: &str, value: Value) -> RawPost {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(header::HOST, "tv.example")
+                .header(header::ORIGIN, "https://tv.example")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(value.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let retry_after = response
+        .headers()
+        .get(header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+    RawPost {
+        status,
+        body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        retry_after,
+    }
+}
+/// Force an already-seeded per-subject bucket to be exhausted so the next
+/// request trips the limit. Only touches test fixtures, never production.
+fn exhaust_subject_bucket(app: &App, path: &str) {
+    let db = app.db.lock().unwrap();
+    let pattern = format!("auth:subject:{path}:%");
+    db.execute(
+        "UPDATE auth_limits SET count=900 WHERE bucket LIKE ?1",
+        rusqlite::params![pattern],
+    )
+    .unwrap();
+}
+/// In-memory app with an owner account plus access to `App` for seeding limits.
+fn owner_with_db() -> (Router, App, tempfile::TempDir) {
+    let root = tempfile::tempdir().unwrap();
+    let mut db = rusqlite::Connection::open_in_memory().unwrap();
+    db.execute_batch(
+        "PRAGMA foreign_keys=ON;CREATE TABLE profiles(id INTEGER PRIMARY KEY,name TEXT NOT NULL);",
+    )
+    .unwrap();
+    auth::init(&db).unwrap();
+    auth::create_owner_offline(&mut db, "owner", "Owner", "secure-owner-password").unwrap();
+    let app = App::new(db, reqwest::Client::new()).unwrap();
+    (router(app.clone()), app, root)
+}
 impl Browser {
     fn cookie_header(&self) -> String {
         self.cookies
@@ -488,4 +546,115 @@ async fn native_password_login_issues_revocable_device_tokens_without_browser_co
     assert_eq!(status, StatusCode::OK);
     assert_ne!(grant["access_token"], next["access_token"]);
     assert!(browser.cookies.is_empty());
+}
+
+#[tokio::test]
+async fn rate_limited_login_is_distinct_from_wrong_password() {
+    let (router, app, _root) = owner_with_db();
+
+    // A wrong password is an ordinary 401 with no retry hint.
+    let wrong = post_with_headers(
+        &router,
+        "/api/auth/login",
+        json!({"username":"owner","password":"wrong-password"}),
+    )
+    .await;
+    assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong.body["error_code"], "unauthorized");
+    assert!(wrong.retry_after.is_none());
+
+    // Seed the per-subject bucket, then exhaust it.
+    let seed = post_with_headers(
+        &router,
+        "/api/auth/login",
+        json!({"username":"owner","password":"secure-owner-password"}),
+    )
+    .await;
+    assert_eq!(seed.status, StatusCode::OK);
+    exhaust_subject_bucket(&app, "/auth/login");
+
+    // The correct password now tripping the rate limit is a 429 with a retry hint.
+    let limited = post_with_headers(
+        &router,
+        "/api/auth/login",
+        json!({"username":"owner","password":"secure-owner-password"}),
+    )
+    .await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.body["error_code"], "rate_limited");
+    assert!(limited.retry_after.is_some());
+}
+
+#[tokio::test]
+async fn rate_limited_device_login_is_distinct_from_wrong_password() {
+    let (router, app, _root) = owner_with_db();
+
+    let wrong = post_with_headers(
+        &router,
+        "/api/auth/device/login",
+        json!({"username":"owner","password":"wrong-password","device_name":"Phone"}),
+    )
+    .await;
+    assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong.body["error_code"], "unauthorized");
+
+    let seed = post_with_headers(
+        &router,
+        "/api/auth/device/login",
+        json!({"username":"owner","password":"secure-owner-password","device_name":"Phone"}),
+    )
+    .await;
+    assert_eq!(seed.status, StatusCode::OK);
+    exhaust_subject_bucket(&app, "/auth/device/login");
+
+    let limited = post_with_headers(
+        &router,
+        "/api/auth/device/login",
+        json!({"username":"owner","password":"secure-owner-password","device_name":"Phone"}),
+    )
+    .await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.body["error_code"], "rate_limited");
+    assert!(limited.retry_after.is_some());
+}
+
+#[tokio::test]
+async fn rate_limited_device_poll_endpoints_return_429() {
+    let (router, app, _root) = owner_with_db();
+
+    let seed = post_with_headers(
+        &router,
+        "/api/device/token",
+        json!({"device_code":"some-device-code"}),
+    )
+    .await;
+    assert_ne!(seed.status, StatusCode::TOO_MANY_REQUESTS);
+    exhaust_subject_bucket(&app, "/auth/device/token");
+    let limited = post_with_headers(
+        &router,
+        "/api/device/token",
+        json!({"device_code":"some-device-code"}),
+    )
+    .await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.body["error_code"], "rate_limited");
+    assert!(limited.retry_after.is_some());
+
+    let seed = post_with_headers(
+        &router,
+        "/api/device/refresh",
+        json!({"refresh_token":"some-refresh-token"}),
+    )
+    .await;
+    assert_ne!(seed.status, StatusCode::TOO_MANY_REQUESTS);
+    exhaust_subject_bucket(&app, "/auth/device/refresh");
+    let limited = post_with_headers(
+        &router,
+        "/api/device/refresh",
+        json!({"refresh_token":"some-refresh-token"}),
+    )
+    .await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.body["error_code"], "rate_limited");
+    assert!(limited.retry_after.is_some());
 }
