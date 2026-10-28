@@ -3929,15 +3929,7 @@ async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link
         .await
         .unwrap();
     });
-    // The dev host's engine probes every new loopback listener with `HEAD /`
-    // (backend#48). Send the same probe so the fixture is checked against it.
-    reqwest::Client::new()
-        .head(format!("http://{address}/"))
-        .send()
-        .await
-        .expect("HEAD / probe")
-        .error_for_status()
-        .expect("fixture answers the port probe");
+    crate::test_support::send_port_probe(address).await;
     let manifest = json!({"id":"cinemeta","name":"Cinemeta","resources":["meta"],"types":["movie","series"]});
     f.app.db.lock().unwrap().execute(
         "INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(101,'Cinemeta',?1,?2,1)",
