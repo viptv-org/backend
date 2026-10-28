@@ -4,9 +4,19 @@ use crate::{auth_integration_tests::fixture, test_support::request, *};
 /// an id that merely contains colons is the add-on's own business.
 #[test]
 fn an_imdb_episode_lookup_names_its_parent_title() {
-    assert_eq!(super::catalog::episode_parent("tt13293588:3:4"), Some("tt13293588"));
+    assert_eq!(
+        super::catalog::episode_parent("tt13293588:3:4"),
+        Some("tt13293588")
+    );
     assert_eq!(super::catalog::episode_parent("tt13293588"), None);
-    for id in ["kitsu:123:4", "simkl:anime:40:2", "tt13293588:3", "tt13293588:3:4:5", "ttabc:3:4", "tt:3:4"] {
+    for id in [
+        "kitsu:123:4",
+        "simkl:anime:40:2",
+        "tt13293588:3",
+        "tt13293588:3:4:5",
+        "ttabc:3:4",
+        "tt:3:4",
+    ] {
         assert_eq!(super::catalog::episode_parent(id), None, "{id}");
     }
 }

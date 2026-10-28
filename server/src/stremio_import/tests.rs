@@ -3952,6 +3952,9 @@ async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link
     assert_eq!(f.app.db.lock().unwrap().query_row(
         "SELECT COUNT(*) FROM simkl_links WHERE profile_id=1 AND credential IS NOT NULL", [], |r| r.get::<_, i64>(0)).unwrap(), 0,
         "the fixture profile has no Simkl link");
+    assert_eq!(f.app.db.lock().unwrap().query_row(
+        "SELECT COUNT(*) FROM engine_verified_lookup_bindings WHERE profile_id=1", [], |r| r.get::<_, i64>(0)).unwrap(), 0,
+        "nothing has bound this profile's lookups to a metadata origin yet");
 
     let preview = get_preview(&f.app).await;
     let (status, applied) = apply_preview(&f.app, &preview).await;
