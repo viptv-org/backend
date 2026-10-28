@@ -90,7 +90,7 @@ pub(crate) fn snapshot(
             // Only a release that came out after the finish is new: it earns the
             // badge and the move up. A backlog episode the profile has not
             // reached yet is up next at the finish's own place in the queue.
-            if let Some(at) = found.new_at_millis {
+            if let Some(at) = found.new_release_at_millis {
                 order = order.max(at);
             }
         }

@@ -484,15 +484,15 @@ async fn imported_watched_history_is_a_finished_episode_for_the_refresh() {
     assert_eq!(badge, json!(["+1"]));
 }
 
-/// A Stremio-imported finished episode as the import writes it: the series'
-/// current video opened at ~0 % (`position 0.001`), watched by Stremio's flag,
-/// dated by the import's `lastWatched`.
-fn imported(app: &App, series: &str, number: u32, at: u64) {
-    app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,?1,'series','Fixture Show',NULL,0.001,1420.01,?2,?3,?4)",params![format!("{series}:1:{number}"),(at / 1000) as i64,json!({"season":1,"episode":number,"series_id":series,"stremio_import_watched":true}).to_string(),series]).unwrap();
+/// A Stremio-imported episode as the import writes it: watched by Stremio's
+/// flag and dated by the import's `lastWatched`, not by the watch itself.
+fn imported(app: &App, series: &str, number: u32, position: f64, duration: f64, at: u64) {
+    app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,?1,'series','Fixture Show',NULL,?2,?3,?4,?5,?6)",params![format!("{series}:1:{number}"),position,duration,(at / 1000) as i64,json!({"season":1,"episode":number,"series_id":series,"stremio_import_watched":true}).to_string(),series]).unwrap();
 }
 
+/// An imported finished episode 1 with a partial position.
 fn import(app: &App, series: &str, at: u64) {
-    app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,?1,'series','Fixture Show',NULL,5,100,?2,?3,?4)",params![format!("{series}:1:1"),(at / 1000) as i64,json!({"season":1,"episode":1,"series_id":series,"stremio_import_watched":true}).to_string(),series]).unwrap();
+    imported(app, series, 1, 5.0, 100.0, at);
 }
 fn verdict(app: &App, series: &str) -> Option<(String, &'static str)> {
     super::releases::verdicts_db(&app.db.lock().unwrap(), 1)
@@ -780,8 +780,9 @@ async fn an_imported_finish_advances_to_the_next_released_episode() {
     ])
     .await;
     let app = &show.app;
-    // Episode 2 was already out when the import dated episode 1 as finished.
-    imported(app, "tt100", 1, start - 10 * DAY);
+    // Stremio leaves the finished episode as the series' current video with its
+    // offset reset to ~0 %; episode 2 was already out when the import dated it.
+    imported(app, "tt100", 1, 0.001, 1420.01, start - 10 * DAY);
     let film = json!({"id":"tt200","kind":"movie","ids":[],"episode":null,"edition":null});
     watch(app, film, None, false, start - 12 * DAY).await;
     // Before the release facts are known the finished episode is caught up.
@@ -827,7 +828,7 @@ async fn an_imported_finish_with_no_released_next_episode_stays_caught_up() {
     let start = now();
     let show = show(vec![(1, start - 30 * DAY), (2, start + 7 * DAY)]).await;
     let app = &show.app;
-    imported(app, "tt100", 1, start - 10 * DAY);
+    imported(app, "tt100", 1, 0.001, 1420.01, start - 10 * DAY);
     request(
         app,
         "member-token-1",

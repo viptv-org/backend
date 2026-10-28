@@ -273,7 +273,21 @@ pub(crate) struct UpNext {
     /// finished: a new release, which alone earns the `+N` badge and the
     /// queue's order bump. An episode that was already out when the profile
     /// finished the anchor is still up next (a backlog resumes at it).
-    pub new_at_millis: Option<u64>,
+    pub new_release_at_millis: Option<u64>,
+}
+
+/// Every released episode of `series` the profile has not finished, from the
+/// anchor, whatever the anchor's finish time: a backlog still has to resume
+/// somewhere. The start of the range is the epoch because
+/// `viptv_engine::continuation::new_episodes` drops a release that predates
+/// `finished_at`, and that is the separate question [`up_next_db`] answers.
+fn pending(
+    anchor: &MediaIdentity,
+    episodes: &[EpisodeAvailability],
+    watched: impl Fn(&Card) -> bool,
+    now_millis: u64,
+) -> Option<NewEpisodes> {
+    viptv_engine::continuation::new_episodes(anchor, 0, episodes, watched, now_millis)
 }
 
 /// The released next episode after `anchor` in `series`, from the stored
@@ -305,25 +319,15 @@ pub(crate) fn up_next_db(
     }
     let episodes = availability(document.episodes);
     let watched = Watched::read(db, profile, series)?;
-    // Every released episode the profile has not finished, from the anchor.
-    // `finished_at` 0 keeps a backlog the queue must still resume at, because
-    // an imported episode is dated by the import, after episodes it precedes;
-    // the finish time only decides whether the episode is a new release
-    // (backend#61).
-    let Some(pending) = viptv_engine::continuation::new_episodes(
-        &stored_anchor,
-        0,
-        &episodes,
-        |card| watched.contains(card),
-        now_millis,
-    ) else {
+    let Some(pending) = pending(&stored_anchor, &episodes, |card| watched.contains(card), now_millis)
+    else {
         return Ok(None);
     };
     Ok(Some(UpNext {
         card: pending.next,
         count: pending.count,
         released_at_millis: pending.released_at_millis,
-        new_at_millis: (pending.first_released_at_millis > anchor.updated_at_millis)
+        new_release_at_millis: (pending.first_released_at_millis > anchor.updated_at_millis)
             .then_some(pending.first_released_at_millis),
     }))
 }
@@ -413,7 +417,7 @@ pub(crate) fn present(found: &UpNext, anchor: &PlaybackRecord, verified: Option<
     card.progress = None;
     card.badges
         .retain(|badge| !viptv_engine::continuation::is_new_episodes_badge(badge));
-    if found.new_at_millis.is_some() {
+    if found.new_release_at_millis.is_some() {
         card.badges.insert(
             0,
             viptv_engine::continuation::new_episodes_badge(found.count),
@@ -747,7 +751,14 @@ async fn refresh_one(
         let found = up_next_db(db, app, lease, profile, &candidate.series, &candidate.anchor, now)?;
         let verdict = verdicts_db(db, profile)?.remove(&candidate.series);
         Ok((
-            found.map(|f| (f.count, f.card.identity.id, f.new_at_millis, f.released_at_millis)),
+            found.map(|f| {
+                (
+                    f.count,
+                    f.card.identity.id,
+                    f.new_release_at_millis,
+                    f.released_at_millis,
+                )
+            }),
             verdict,
         ))
     };
