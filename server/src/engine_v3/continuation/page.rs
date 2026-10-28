@@ -99,6 +99,20 @@ pub(crate) fn snapshot(
             card = super::releases::present(found, &record, verified);
             previous_identity = Some(record.identity.clone());
             status = ContinuationStatus::Next;
+        } else if status == ContinuationStatus::Next {
+            // The stored document cannot project this prepared target; the card
+            // `continue/next` stored still names the episode it opened, so the
+            // entry keeps its caption (backend#63).
+            if let Ok(prepared) =
+                serde_json::from_value::<Card>(item["engine_presentation"].clone())
+            {
+                if prepared.identity.id == card.identity.id
+                    && prepared.identity.episode == card.identity.episode
+                {
+                    card.subtitle =
+                        super::releases::caption(&card.identity, &prepared.title, &record.title);
+                }
+            }
         }
         super::art::fill(&db, lease, profile, restricted, &mut card)?;
         crate::simkl::imports::enrich(&db, profile, &mut card)?;
@@ -173,14 +187,27 @@ pub(crate) fn snapshot(
     let total = entries.len();
     let next_cursor =
         (offset as usize + (limit as usize) < total).then(|| (offset + limit).to_string());
-    let entries = entries
+    let revision =
+        configuration_revision.saturating_add(super::super::history::revision(&db, profile)?);
+    let mut entries = entries
         .into_iter()
         .skip(offset as usize)
         .take(limit as usize)
         .map(|(_, entry)| entry)
-        .collect();
-    let revision =
-        configuration_revision.saturating_add(super::super::history::revision(&db, profile)?);
+        .collect::<Vec<_>>();
+    // Attribution reads the add-on store, which decrypts manifests through the
+    // vault and the database, so release the queue read first.
+    drop(db);
+    let serving = super::super::origins::Serving::read(app, lease, profile)?;
+    {
+        let db = app
+            .db
+            .lock()
+            .map_err(|_| ApiError::from("Database unavailable"))?;
+        for entry in &mut entries {
+            attribute(&db, &serving, &mut entry.card)?;
+        }
+    }
     Ok(ContinuationPage {
         scope: super::super::scope(lease, profile, configuration_revision),
         revision,
@@ -189,6 +216,30 @@ pub(crate) fn snapshot(
         next_cursor,
     })
 }
+/// A row the Stremio import wrote carries no provider provenance, so the app
+/// had to load Details before it could start finding sources. Name the scope
+/// that serves the row, so the tap starts discovery at once (backend#72). A row
+/// nothing serves keeps its shape and the app falls back as before.
+fn attribute(
+    db: &Connection,
+    serving: &super::super::origins::Serving,
+    card: &mut Card,
+) -> Result<(), ApiError> {
+    if card.metadata_origin.is_some() {
+        return Ok(());
+    }
+    let lookup = card.parent_identity.as_ref().unwrap_or(&card.identity);
+    let Some(origin) = serving.origin(db, lookup)? else {
+        return Ok(());
+    };
+    card.provider_id = origin
+        .connection_id
+        .clone()
+        .unwrap_or_else(|| origin.provider_id.clone());
+    card.metadata_origin = Some(origin);
+    Ok(())
+}
+
 /// A series whose newest finished episode has no released next one (caught
 /// up, upcoming, or not resolved yet) keeps that episode on its card. Without
 /// a progress bar it would read as an episode still to watch, so it carries

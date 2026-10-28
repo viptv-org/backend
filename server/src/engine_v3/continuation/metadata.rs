@@ -69,11 +69,15 @@ pub(super) async fn document(
     if simkl {
         let (mut parent, mut entries) =
             crate::simkl::continuation_document(app, profile, &parent.kind, &parent.id).await?;
-        if let Some(origin) = metadata_origin {
-            parent.metadata_origin = Some(origin.clone());
-            for entry in &mut entries {
-                entry.card.metadata_origin = Some(origin.clone());
-            }
+        // Simkl served this document, so its episodes are Simkl's (backend#72).
+        let origin = metadata_origin.cloned().unwrap_or(viptv_engine::origin::MetadataOrigin {
+            provider_id: "simkl".into(),
+            connection_id: None,
+            incarnation: None,
+        });
+        parent.metadata_origin = Some(origin.clone());
+        for entry in &mut entries {
+            entry.card.metadata_origin = Some(origin.clone());
         }
         return Ok((parent, entries));
     }
@@ -91,8 +95,16 @@ pub(super) async fn document(
     if fresh {
         let _ = host.addons.forget_meta("series", &parent.id).await;
     }
-    let raw = host.addons.meta("series", &parent.id).await?;
+    let (raw, issuer) = host.addons.meta_with_origin("series", &parent.id).await?;
     configuration::validate_revision(app, profile, revision)?;
+    // The add-on that answered names the document's scope: a plain `stremio`
+    // scope spans every assigned add-on, so keep the exact one the app can ask
+    // again (backend#72).
+    let origin = if origin == "stremio" {
+        format!("addon:{issuer}")
+    } else {
+        origin
+    };
     let meta = if raw["meta"].is_object() {
         &raw["meta"]
     } else {
@@ -106,11 +118,29 @@ pub(super) async fn document(
             .map_err(|_| ApiError::from("Parent metadata unavailable"))?;
     let mut cards = viptv_engine::stremio::episode_cards(meta, &origin, &detail.item)
         .map_err(|_| ApiError::from("Episode metadata unavailable"))?;
-    if let Some(origin) = metadata_origin {
-        detail.item.metadata_origin = Some(origin.clone());
-        for card in &mut cards {
-            card.metadata_origin = Some(origin.clone());
+    let scope = match metadata_origin {
+        Some(origin) => Some(origin.clone()),
+        None => {
+            let db = app
+                .db
+                .lock()
+                .map_err(|_| ApiError::from("Database unavailable"))?;
+            let served = super::super::origins::for_provider_db(
+                &db,
+                lease.principal.account_id().ok_or_else(auth::forbidden)?,
+                &origin,
+            )?;
+            drop(db);
+            served
         }
+    };
+    if let Some(scope) = &scope {
+        detail.item.metadata_origin = Some(scope.clone());
+        for card in &mut cards {
+            card.metadata_origin = Some(scope.clone());
+        }
+    }
+    if metadata_origin.is_some() {
         let mut db = app
             .db
             .lock()

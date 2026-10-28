@@ -29,6 +29,7 @@
 //! import Simkl has no mapping for keeps its add-on facts on a Simkl profile.
 use super::*;
 use serde::Serialize;
+use viptv_engine::origin::MetadataOrigin;
 use std::collections::{HashMap, HashSet};
 use viptv_engine::playback::PlaybackRecord;
 
@@ -77,6 +78,10 @@ struct Document {
     /// The series backdrop (absent from documents stored before it was kept).
     #[serde(default)]
     landscape: Option<String>,
+    /// The scope that published these episodes (absent from documents stored
+    /// before it was kept): the entry names it as its origin (backend#72).
+    #[serde(default)]
+    origin: Option<MetadataOrigin>,
 }
 
 /// Record the metadata a next-episode resolution or refresh fetched for
@@ -92,6 +97,7 @@ pub(crate) fn store_db(
     configuration_revision: u64,
     addon_revision: &str,
     landscape: Option<&str>,
+    origin: Option<&MetadataOrigin>,
 ) -> Result<(), ApiError> {
     let account_id = lease.principal.account_id().ok_or_else(auth::forbidden)?;
     let at = episodes
@@ -139,6 +145,7 @@ pub(crate) fn store_db(
             })
             .collect(),
         landscape: landscape.map(str::to_owned),
+        origin: origin.cloned(),
     };
     let document = serde_json::to_string(&document)
         .map_err(|_| ApiError::from("Release facts unavailable"))?;
@@ -274,19 +281,8 @@ pub(crate) struct UpNext {
     /// queue's order bump. An episode that was already out when the profile
     /// finished the anchor is still up next (a backlog resumes at it).
     pub new_release_at_millis: Option<u64>,
-}
-
-/// Whether stored episode facts describe the provider the entry was played
-/// from. Two different explicit add-ons may mean different titles by the same
-/// opaque episode id (the queue cache refuses that too); a row without provider
-/// provenance (a Stremio import) or the profile's own configured metadata is
-/// compatible.
-fn same_origin(played_from: &str, document: Option<&str>) -> bool {
-    document.is_none_or(|document| {
-        document == played_from
-            || !document.starts_with("addon:")
-            || !played_from.starts_with("addon:")
-    })
+    /// The scope that published the document this card came from.
+    pub origin: Option<MetadataOrigin>,
 }
 
 /// Every released episode of `series` the profile has not finished, from the
@@ -332,9 +328,10 @@ pub(crate) fn up_next_db(
     }
     let stored_anchor = stored.identity.clone();
     let origin = stored.card.as_ref().map(|card| card.provider_id.as_str());
-    if !same_origin(&anchor.provider_id, origin) {
+    if !crate::continuation::same_origin(&anchor.provider_id, origin) {
         return Ok(None);
     }
+    let origin = document.origin.clone();
     let episodes = availability(document.episodes);
     let watched = Watched::read(db, profile, series)?;
     let Some(pending) =
@@ -348,6 +345,7 @@ pub(crate) fn up_next_db(
         released_at_millis: pending.released_at_millis,
         new_release_at_millis: (pending.first_released_at_millis > anchor.updated_at_millis)
             .then_some(pending.first_released_at_millis),
+        origin,
     }))
 }
 
@@ -405,6 +403,29 @@ fn current(
         && app.addons.revision_db(db)? == document.addon_revision)
 }
 
+/// The up-next caption: the episode's coordinates, and its own title when the
+/// document names one (`"S2 E1 · Episode title"`).
+pub(crate) fn caption(
+    identity: &MediaIdentity,
+    episode_title: &str,
+    series_title: &str,
+) -> Option<String> {
+    let coordinates = identity.episode.as_ref().map(|c| {
+        let episode = format!("E{}", c.episode);
+        c.season
+            .map_or(episode.clone(), |season| format!("S{season} {episode}"))
+    });
+    let named = (!episode_title.is_empty()
+        && episode_title != identity.id
+        && episode_title != series_title)
+        .then(|| episode_title.to_owned());
+    match (coordinates, named) {
+        (Some(at), Some(name)) => Some(format!("{at} · {name}")),
+        (Some(at), None) => Some(at),
+        (None, name) => name,
+    }
+}
+
 /// The queue card for a series with an episode to play: the series title and
 /// art with that episode as its identity and caption, and the count badge when
 /// it is a new release.
@@ -412,21 +433,13 @@ pub(crate) fn present(found: &UpNext, anchor: &PlaybackRecord, verified: Option<
     let mut card = verified
         .filter(|card| card.identity == found.card.identity)
         .unwrap_or_else(|| found.card.clone());
+    // The document's own scope is the entry's origin, so the app can start
+    // finding sources on the tap (backend#72).
+    if card.metadata_origin.is_none() {
+        card.metadata_origin = found.origin.clone();
+    }
     let episode_title = std::mem::replace(&mut card.title, anchor.title.clone());
-    let coordinates = card.identity.episode.as_ref().map(|c| {
-        let episode = format!("E{}", c.episode);
-        c.season
-            .map_or(episode.clone(), |season| format!("S{season} {episode}"))
-    });
-    let named = (!episode_title.is_empty()
-        && episode_title != card.identity.id
-        && episode_title != anchor.title)
-        .then_some(episode_title);
-    card.subtitle = match (coordinates, named) {
-        (Some(at), Some(name)) => Some(format!("{at} · {name}")),
-        (Some(at), None) => Some(at),
-        (None, name) => name,
-    };
+    card.subtitle = caption(&card.identity, &episode_title, &anchor.title);
     if anchor.poster.is_some() {
         card.poster = anchor.poster.clone();
     }
@@ -792,6 +805,7 @@ async fn refresh_one(
         configuration,
         &addon_revision,
         parent.landscape.as_deref(),
+        parent.metadata_origin.as_ref(),
     )?;
     if visible(&db)? != before {
         db.execute("INSERT INTO engine_library_revisions VALUES(?1,1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",[profile]).map_err(db_error)?;
