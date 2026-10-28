@@ -115,9 +115,10 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
     // server, which a preview can then load with a real `GET /` (backend#48,
     // backend#58). Neither is provider egress, so the fake counts add-on paths
     // only and this checks the host's requests do not register.
+    let probe_host = format!("localhost:{}", address.port());
     for method in ["HEAD", "GET"] {
         assert_eq!(
-            probe(address, method, "/", &format!("localhost:{}", address.port())).await,
+            probe(address, method, "/", &probe_host).await,
             StatusCode::BAD_GATEWAY
         );
     }
