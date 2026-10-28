@@ -39,6 +39,18 @@ fn deny(db: &Connection, code: &Value) {
     .unwrap();
 }
 
+fn approve(db: &Connection, code: &Value) {
+    dispatch(
+        db,
+        "/auth/device/approve",
+        Some(owner()),
+        &headers(),
+        &json!({"user_code":code["user_code"]}),
+        SESSION_TOKEN,
+    )
+    .unwrap();
+}
+
 fn expire(db: &Connection, code: &Value, at: i64) {
     db.execute(
         "UPDATE auth_pairings SET expires=?1 WHERE code_hash=?2",
@@ -108,15 +120,7 @@ fn denying_an_approved_code_stops_the_grant() {
     let db = db();
     claim(&db);
     let code = new_code(&db);
-    dispatch(
-        &db,
-        "/auth/device/approve",
-        Some(owner()),
-        &headers(),
-        &json!({"user_code":code["user_code"]}),
-        SESSION_TOKEN,
-    )
-    .unwrap();
+    approve(&db, &code);
     deny(&db, &code);
     assert_poll_error(&db, &code, "access_denied");
 }
@@ -139,15 +143,7 @@ fn expired_approved_code_answers_expired_token_not_a_session() {
     let db = db();
     claim(&db);
     let code = new_code(&db);
-    dispatch(
-        &db,
-        "/auth/device/approve",
-        Some(owner()),
-        &headers(),
-        &json!({"user_code":code["user_code"]}),
-        SESSION_TOKEN,
-    )
-    .unwrap();
+    approve(&db, &code);
     expire(&db, &code, now() - 1);
     assert_poll_error(&db, &code, "expired_token");
 }
@@ -220,15 +216,7 @@ fn approve_still_issues_a_device_session() {
     claim(&db);
     let code = new_code(&db);
     assert_poll_error(&db, &code, "authorization_pending");
-    dispatch(
-        &db,
-        "/auth/device/approve",
-        Some(owner()),
-        &headers(),
-        &json!({"user_code":code["user_code"]}),
-        SESSION_TOKEN,
-    )
-    .unwrap();
+    approve(&db, &code);
     let grant = poll(&db, &code).unwrap();
     assert_eq!(identifier(&grant, "account_id").unwrap(), 1);
     // Consumed: the row is gone, so a replay reads as an unknown code.

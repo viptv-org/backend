@@ -15,9 +15,8 @@ pub(crate) fn auth_error(error: ApiError) -> Response {
         "parent_required"
     } else if error.1 == "Refresh token reuse detected" {
         "refresh_reuse"
-    } else if let Some(code) = ["authorization_pending", "access_denied", "expired_token"]
-        .into_iter()
-        .find(|code| *code == error.1)
+    } else if let Some(code @ (MSG_AUTHORIZATION_PENDING | MSG_ACCESS_DENIED | MSG_EXPIRED_TOKEN)) =
+        error.api_error_code()
     {
         // RFC 8628 section 3.5 device token errors keep their own code.
         code

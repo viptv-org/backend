@@ -75,7 +75,11 @@ pub(crate) fn dispatch_devices(
                 .query_row("SELECT count(*) FROM auth_pairings", [], |row| row.get(0))
                 .map_err(crate::db_error)?;
             if total >= MAX_PAIRINGS {
-                // Tombstones (denied or expired) go first, then pending, then approved.
+                // Tombstones (denied or expired) go first, then pending, then
+                // approved. Under a flood of new codes a denied or expired
+                // device can therefore lose its tombstone before the window
+                // ends and read `authorization_pending` again until its own
+                // client-side expiry.
                 db.execute(
                     "DELETE FROM auth_pairings WHERE code_hash IN(SELECT code_hash FROM auth_pairings ORDER BY denied=0 AND expires>?1,account_id IS NOT NULL,expires,code_hash LIMIT ?2)",
                     params![now(), total - MAX_PAIRINGS + 1],
@@ -221,9 +225,10 @@ fn sweep_pairings(db: &Connection) -> Result<(), ApiError> {
 /// section 3.5 error. Unknown codes (never issued, consumed or swept) stay
 /// `authorization_pending` so a typo can never read as a denial.
 fn redeemable_pairing(db: &Connection, device_hash: &str) -> Result<(i64, String), ApiError> {
-    let row = db
+    let pairing = db
         .query_row(
-            "SELECT p.denied<>0,p.expires<=?2,p.account_id,p.device_name,coalesce(a.disabled<>0,1) FROM auth_pairings p LEFT JOIN auth_accounts a ON a.id=p.account_id WHERE p.device_hash=?1",
+            // Third column: the approving account, only while it is enabled.
+            "SELECT p.denied<>0,p.expires<=?2,CASE WHEN a.disabled=0 THEN p.account_id END,p.device_name FROM auth_pairings p LEFT JOIN auth_accounts a ON a.id=p.account_id WHERE p.device_hash=?1",
             params![device_hash, now()],
             |r| {
                 Ok((
@@ -231,18 +236,22 @@ fn redeemable_pairing(db: &Connection, device_hash: &str) -> Result<(i64, String
                     r.get::<_, bool>(1)?,
                     r.get::<_, Option<i64>>(2)?,
                     r.get::<_, String>(3)?,
-                    r.get::<_, bool>(4)?,
                 ))
             },
         )
         .optional()
         .map_err(crate::db_error)?;
-    let error = |code: &str| ApiError(StatusCode::BAD_REQUEST, code.into());
-    match row {
-        Some((true, _, _, _, _)) => Err(error("access_denied")),
-        Some((false, true, _, _, _)) => Err(error("expired_token")),
-        Some((false, false, Some(account_id), device_name, false)) => Ok((account_id, device_name)),
-        // Pending, approved by a disabled account, or unknown.
-        _ => Err(error("authorization_pending")),
+    let error = |message: &str| ApiError(StatusCode::BAD_REQUEST, message.into());
+    let Some((denied, expired, approver, device_name)) = pairing else {
+        return Err(error(MSG_AUTHORIZATION_PENDING));
+    };
+    if denied {
+        return Err(error(MSG_ACCESS_DENIED));
     }
+    if expired {
+        return Err(error(MSG_EXPIRED_TOKEN));
+    }
+    // Still pending, or approved by an account that has since been disabled.
+    let account_id = approver.ok_or_else(|| error(MSG_AUTHORIZATION_PENDING))?;
+    Ok((account_id, device_name))
 }

@@ -3098,3 +3098,54 @@ async fn device_profile_mutations_require_live_parent_grant_and_lease() {
     .is_err());
 }
 
+
+#[tokio::test]
+async fn device_token_poll_reports_denied_and_expired_codes_on_the_wire() {
+    let a = fixture();
+    for (user_code, secret, expires) in [
+        ("00000011", "denied-device-secret", util::now() + 600),
+        ("00000012", "expired-device-secret", util::now() - 1),
+    ] {
+        a.db.lock().unwrap().execute(
+            "INSERT INTO auth_pairings(code_hash,device_hash,device_name,expires) VALUES(?1,?2,'Wire TV',?3)",
+            params![auth::hash(user_code), auth::hash(secret), expires],
+        ).unwrap();
+    }
+    let poll = |secret: &'static str| {
+        let a = a.clone();
+        async move {
+            request(
+                &a,
+                "",
+                "POST",
+                "/api/auth/device/token",
+                json!({"device_code":secret}),
+            )
+            .await
+        }
+    };
+    let (status, body) = poll("denied-device-secret").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "authorization_pending");
+    assert_eq!(body["error_code"], "authorization_pending");
+    assert_eq!(
+        request(
+            &a,
+            "member-token-2",
+            "POST",
+            "/api/auth/device/deny",
+            json!({"user_code":"00000011"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (status, body) = poll("denied-device-secret").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "access_denied");
+    assert_eq!(body["error_code"], "access_denied");
+    let (status, body) = poll("expired-device-secret").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "expired_token");
+    assert_eq!(body["error_code"], "expired_token");
+}
