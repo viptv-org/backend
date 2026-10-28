@@ -276,6 +276,19 @@ pub(crate) struct UpNext {
     pub new_release_at_millis: Option<u64>,
 }
 
+/// Whether stored episode facts describe the provider the entry was played
+/// from. Two different explicit add-ons may mean different titles by the same
+/// opaque episode id (the queue cache refuses that too); a row without provider
+/// provenance (a Stremio import) or the profile's own configured metadata is
+/// compatible.
+fn same_origin(played_from: &str, document: Option<&str>) -> bool {
+    document.is_none_or(|document| {
+        document == played_from
+            || !document.starts_with("addon:")
+            || !played_from.starts_with("addon:")
+    })
+}
+
 /// Every released episode of `series` the profile has not finished, from the
 /// anchor, whatever the anchor's finish time: a backlog still has to resume
 /// somewhere. The start of the range is the epoch because
@@ -315,6 +328,14 @@ pub(crate) fn up_next_db(
         return Ok(None);
     };
     if stored_anchor.id != anchor.identity.id {
+        return Ok(None);
+    }
+    let origin = document
+        .episodes
+        .first()
+        .and_then(|stored| stored.card.as_ref())
+        .map(|card| card.provider_id.as_str());
+    if !same_origin(&anchor.provider_id, origin) {
         return Ok(None);
     }
     let episodes = availability(document.episodes);
