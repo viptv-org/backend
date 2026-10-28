@@ -187,6 +187,8 @@ pub(crate) fn snapshot(
     let total = entries.len();
     let next_cursor =
         (offset as usize + (limit as usize) < total).then(|| (offset + limit).to_string());
+    let revision =
+        configuration_revision.saturating_add(super::super::history::revision(&db, profile)?);
     let mut entries = entries
         .into_iter()
         .skip(offset as usize)
@@ -206,12 +208,6 @@ pub(crate) fn snapshot(
             attribute(&db, &serving, &mut entry.card)?;
         }
     }
-    let db = app
-        .db
-        .lock()
-        .map_err(|_| ApiError::from("Database unavailable"))?;
-    let revision =
-        configuration_revision.saturating_add(super::super::history::revision(&db, profile)?);
     Ok(ContinuationPage {
         scope: super::super::scope(lease, profile, configuration_revision),
         revision,

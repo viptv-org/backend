@@ -118,29 +118,29 @@ pub(super) async fn document(
             .map_err(|_| ApiError::from("Parent metadata unavailable"))?;
     let mut cards = viptv_engine::stremio::episode_cards(meta, &origin, &detail.item)
         .map_err(|_| ApiError::from("Episode metadata unavailable"))?;
-    if metadata_origin.is_none() {
-        let db = app
-            .db
-            .lock()
-            .map_err(|_| ApiError::from("Database unavailable"))?;
-        let served = super::super::origins::for_provider_db(
-            &db,
-            lease.principal.account_id().ok_or_else(auth::forbidden)?,
-            &origin,
-        )?;
-        drop(db);
-        if let Some(served) = served {
-            detail.item.metadata_origin = Some(served.clone());
-            for card in &mut cards {
-                card.metadata_origin = Some(served.clone());
-            }
+    let scope = match metadata_origin {
+        Some(origin) => Some(origin.clone()),
+        None => {
+            let db = app
+                .db
+                .lock()
+                .map_err(|_| ApiError::from("Database unavailable"))?;
+            let served = super::super::origins::for_provider_db(
+                &db,
+                lease.principal.account_id().ok_or_else(auth::forbidden)?,
+                &origin,
+            )?;
+            drop(db);
+            served
+        }
+    };
+    if let Some(scope) = &scope {
+        detail.item.metadata_origin = Some(scope.clone());
+        for card in &mut cards {
+            card.metadata_origin = Some(scope.clone());
         }
     }
-    if let Some(origin) = metadata_origin {
-        detail.item.metadata_origin = Some(origin.clone());
-        for card in &mut cards {
-            card.metadata_origin = Some(origin.clone());
-        }
+    if metadata_origin.is_some() {
         let mut db = app
             .db
             .lock()
