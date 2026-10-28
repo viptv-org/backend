@@ -12,13 +12,19 @@ async fn discovery_multi_choices_preserve_controls_owner_and_validate_before_pro
     let reads=Arc::new(AtomicUsize::new(0));
     let seen=Arc::new(Mutex::new(Vec::new()));
     let (count,paths)=(reads.clone(),seen.clone());
-    let mock=Router::new().fallback(move |url:axum::http::Uri| {
+    let mock=Router::new().fallback(move |method:axum::http::Method,url:axum::http::Uri| {
         let (count,paths)=(count.clone(),paths.clone());
-        async move {count.fetch_add(1,Ordering::SeqCst);paths.lock().unwrap().push(url.path().to_owned());axum::Json(json!({"metas":[{"id":"tt1234567","type":"movie","name":"Film"}]}))}
+        async move {
+            // Count discovery reads only: the host probes every new loopback
+            // listener with a safe `HEAD /` (backend#48).
+            if method!=axum::http::Method::HEAD {count.fetch_add(1,Ordering::SeqCst);paths.lock().unwrap().push(url.path().to_owned());}
+            axum::Json(json!({"metas":[{"id":"tt1234567","type":"movie","name":"Film"}]}))
+        }
     });
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address=listener.local_addr().unwrap();
     let server=tokio::spawn(async move {axum::serve(listener,mock).await.unwrap()});
+    crate::test_support::send_port_probe(address).await;
     let mut app=fixture();app.addons.allow_test_loopback=true;
     let manifest=json!({"id":"fixture","name":"Friendly provider","resources":["catalog","meta"],"types":["movie"],"catalogs":[{"id":"top","name":"Popular","type":"movie","extra":[{"name":"genre","isRequired":true,"optionsLimit":2,"options":["A&B","C,D","Comedy"]},{"name":"sort","isRequired":true,"options":["rating","year"]},{"name":"skip"}]}]});
     {
