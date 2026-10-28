@@ -282,6 +282,12 @@ async fn resolve(
         .as_deref()
         .unwrap_or(&configuration.browsing_plugin)
         == "simkl";
+    // A profile keeps its Simkl plugin connection without a link, so the
+    // browsing plugin alone cannot pick the metadata provider: an imported card
+    // with no origin would look for a Simkl identity it never had (backend#60).
+    let simkl_fallback = simkl
+        && page.provider_id.is_none()
+        && !crate::simkl::linked(&app, profile)?;
     let scoped_policy = if let Some(origin) = &requested_origin {
         kids::scoped::require(&app, origin, &kind, &id, expected.as_ref())?
     } else {
@@ -295,7 +301,7 @@ async fn resolve(
         None
     };
     let expected = expected.or(scoped_policy);
-    if simkl {
+    if simkl && !simkl_fallback {
         let mut result = super::simkl_catalog::detail(
             app.clone(),
             lease.clone(),
@@ -328,6 +334,9 @@ async fn resolve(
     }
     let (app, origin, revision) = if let Some(explicit) = explicit {
         explicit
+    } else if simkl_fallback {
+        // The imported card keeps the Stremio metadata it came from (backend#60).
+        super::search::metadata_scope(app, &lease, profile, "stremio", None)?
     } else {
         let (app, revision) = configuration::apply(
             app,
@@ -337,6 +346,9 @@ async fn resolve(
         )?;
         (app, "stremio".to_owned(), revision)
     };
+    // A series lookup may name one episode; add-on metadata documents index the
+    // episodes under their parent title.
+    let lookup = episode_parent(&id).unwrap_or(&id).to_owned();
     {
         let db = app
             .db
@@ -347,7 +359,7 @@ async fn resolve(
             kids::require_item(&db, &app.identity(), &kind, &id)?;
         }
     }
-    let (value, issuer) = app.addons.meta_with_origin(&kind, &id).await?;
+    let (value, issuer) = app.addons.meta_with_origin(&kind, &lookup).await?;
     if app.addons.revision()? != addon_revision {
         return Err(ApiError(
             StatusCode::CONFLICT,
@@ -365,7 +377,7 @@ async fn resolve(
     } else {
         value
     };
-    if meta["id"].as_str() != Some(id.as_str())
+    if meta["id"].as_str() != Some(lookup.as_str())
         || meta["type"].as_str().is_some_and(|actual| actual != kind)
     {
         return Err(ApiError(
@@ -375,7 +387,7 @@ async fn resolve(
     }
     let mut parent = meta.clone();
     parent["type"] = json!(kind);
-    parent["id"] = json!(id);
+    parent["id"] = json!(lookup);
     if requested_origin.is_none() {
         projection::cards(&app, vec![parent.clone()], &origin)?
             .into_iter()
@@ -409,7 +421,7 @@ async fn resolve(
         &json!({"meta":parent.clone()}).to_string(),
         &origin,
         &kind,
-        &id,
+        &lookup,
         page.offset,
         page.limit.unwrap_or(24),
     )
@@ -512,4 +524,14 @@ async fn resolve(
     // Private watch state is added after the shared verified-card cache.
     super::episode_progress::mark(&app, profile, &mut value);
     Ok(axum::Json(value))
+}
+
+/// The title a `<title>:<season>:<episode>` lookup names. Episode coordinates
+/// are numeric and always follow the title, whose own id may contain colons
+/// (`simkl:anime:40:2:5` names episode 5 of `simkl:anime:40`).
+fn episode_parent(id: &str) -> Option<&str> {
+    let numeric = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    let (prefix, episode) = id.rsplit_once(':')?;
+    let (parent, season) = prefix.rsplit_once(':')?;
+    (numeric(season) && numeric(episode) && !parent.is_empty()).then_some(parent)
 }

@@ -3900,6 +3900,7 @@ async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link
     series["name"] = json!("Mushoku Tensei");
     series["state"]["video_id"] = json!("tt13293588:3:4");
     let mut f = fixture(vec![series], login()).await;
+    f.app.addons.allow_test_loopback = true;
     // The server has Simkl configured; the fixture base never answers, so any
     // lookup that falls through to Simkl fails loudly instead of silently.
     f.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:1"));
@@ -3972,7 +3973,10 @@ async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link
         assert_eq!(detail["item"]["metadata_origin"]["connection_id"], "addon:101", "{path}: {detail}");
         assert_eq!(detail["episodes"][0]["identity"]["id"], "tt13293588:3:4", "{path}: {detail}");
     }
-    // Both lookups read the parent title; the episode coordinates never reach the add-on.
-    assert_eq!(requested.lock().unwrap().as_slice(), ["tt13293588.json", "tt13293588.json"]);
+    // Both lookups read the parent title - the second from the add-on cache;
+    // the episode coordinates never reach the add-on.
+    let requested = requested.lock().unwrap();
+    assert!(!requested.is_empty(), "the metadata add-on was never asked");
+    assert!(requested.iter().all(|id| id == "tt13293588.json"), "{requested:?}");
     addon.abort();
 }

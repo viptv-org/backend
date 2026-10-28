@@ -34,6 +34,23 @@ pub(crate) fn connections(
     }])
 }
 
+/// Whether the profile holds a Simkl credential. The plugin connection exists
+/// even when it does not, so metadata must not follow the browsing plugin alone.
+pub(crate) fn linked(app: &App, profile: i64) -> Result<bool, ApiError> {
+    let account = app.identity().account_id().ok_or_else(auth::forbidden)?;
+    let db = app
+        .db
+        .lock()
+        .map_err(|_| ApiError::from("Database unavailable"))?;
+    app.require_profile(&db, profile)?;
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM simkl_links WHERE profile_id=?1 AND account_id=?2 AND credential IS NOT NULL)",
+        params![profile, account],
+        |row| row.get(0),
+    )
+    .map_err(db_error)
+}
+
 pub(super) fn save_token(
     app: &App,
     lease: &ResourceLease,
