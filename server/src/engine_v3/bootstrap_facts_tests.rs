@@ -19,10 +19,14 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            Router::new().fallback(move || {
+            Router::new().fallback(move |method: axum::http::Method| {
                 let count = count.clone();
                 async move {
-                    count.fetch_add(1, Ordering::SeqCst);
+                    // Count every request the backend could make; ignore the host's
+                    // HEAD port probe to new loopback listeners (backend#48).
+                    if method != axum::http::Method::HEAD {
+                        count.fetch_add(1, Ordering::SeqCst);
+                    }
                     StatusCode::BAD_GATEWAY
                 }
             }),
