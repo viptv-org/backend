@@ -31,10 +31,15 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
     let log = seen.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    // The fake add-ons below are mounted at `http://{address}/{id}/manifest.json`,
-    // and every endpoint the backend derives from them stays under that id, so a
-    // request outside those roots cannot be this code path reading a provider.
-    let addon_roots = ["/1/", "/2/"];
+    let addons = [
+        (1, json!(["meta"])),
+        (2, json!([{"name":"subtitles","types":["movie"]}])),
+    ];
+    // The fake add-ons are mounted at `http://{address}/{id}/manifest.json` and
+    // every endpoint the backend derives from one stays under its id, so a request
+    // outside those roots cannot be this code path reading a provider.
+    let addon_roots: Vec<String> = addons.iter().map(|(id, _)| format!("/{id}/")).collect();
+    let roots = addon_roots.clone();
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
@@ -44,9 +49,10 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
                       headers: axum::http::HeaderMap| {
                     let count = count.clone();
                     let log = log.clone();
+                    let roots = roots.clone();
                     async move {
                         let path = uri.path();
-                        if addon_roots.iter().any(|root| path.starts_with(root)) {
+                        if roots.iter().any(|root| path.starts_with(root.as_str())) {
                             count.fetch_add(1, Ordering::SeqCst);
                             log.lock().unwrap().push(format!(
                                 "{method} {path} host={:?}",
@@ -63,10 +69,7 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
     });
     {
         let db = app.db.lock().unwrap();
-        for (id, resources) in [
-            (1, json!(["meta"])),
-            (2, json!([{"name":"subtitles","types":["movie"]}])),
-        ] {
+        for (id, resources) in addons {
             db.execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(?1,'Cached fixture',?2,?3,1)",params![id,format!("http://{address}/{id}/manifest.json"),json!({"id":format!("fixture-{id}"),"name":"Cached fixture","version":"1","resources":resources,"types":["movie"]}).to_string()]).unwrap();
         }
         db.execute("INSERT INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Foreign','foreign',1)",[]).unwrap();
@@ -130,11 +133,19 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
     );
     // A read of a fixture add-on is still counted, so the assertion above is
     // not vacuous.
-    assert_eq!(
-        probe(address, "GET", "/2/manifest.json", &address.to_string()).await,
-        StatusCode::BAD_GATEWAY
-    );
-    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    for root in &addon_roots {
+        assert_eq!(
+            probe(
+                address,
+                "GET",
+                &format!("{root}manifest.json"),
+                &address.to_string()
+            )
+            .await,
+            StatusCode::BAD_GATEWAY
+        );
+    }
+    assert_eq!(reads.load(Ordering::SeqCst), addon_roots.len());
     server.abort();
 }
 
