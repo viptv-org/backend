@@ -67,9 +67,9 @@ pub(crate) fn snapshot(
         let mut order = record.updated_at_millis;
         let found = match (&record.parent_identity, &status) {
             (Some(series), status) if *status != ContinuationStatus::Resume => {
-                super::releases::state_db(&db, app, lease, profile, &series.id, &record, now)?
+                super::releases::up_next_db(&db, app, lease, profile, &series.id, &record, now)?
                     .filter(|found| {
-                        kids::require_item(&db, &lease.principal, &found.next.identity.kind, &found.next.identity.id)
+                        kids::require_item(&db, &lease.principal, &found.card.identity.kind, &found.card.identity.id)
                             .is_ok()
                     })
             }
@@ -87,7 +87,12 @@ pub(crate) fn snapshot(
                 None => continue,
             }
         } else if let Some(found) = &found {
-            order = order.max(found.first_released_at_millis);
+            // Only a release that came out after the finish is new: it earns the
+            // badge and the move up. A backlog episode the profile has not
+            // reached yet is up next at the finish's own place in the queue.
+            if let Some(at) = found.new_at_millis {
+                order = order.max(at);
+            }
         }
         if let Some(found) = &found {
             let verified = (status == ContinuationStatus::Next).then(|| card.clone());
