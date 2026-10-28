@@ -31,6 +31,10 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
     let log = seen.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    // The fake add-ons below are mounted at `http://{address}/{id}/manifest.json`,
+    // and every endpoint the backend derives from them stays under that id, so a
+    // request outside those roots cannot be this code path reading a provider.
+    let addon_roots = ["/1/", "/2/"];
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
@@ -41,11 +45,11 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
                     let count = count.clone();
                     let log = log.clone();
                     async move {
-                        if method != axum::http::Method::HEAD {
+                        let path = uri.path();
+                        if addon_roots.iter().any(|root| path.starts_with(root)) {
                             count.fetch_add(1, Ordering::SeqCst);
                             log.lock().unwrap().push(format!(
-                                "{method} {} host={:?}",
-                                uri.path(),
+                                "{method} {path} host={:?}",
                                 headers.get(axum::http::header::HOST)
                             ));
                         }
@@ -109,8 +113,8 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
     // The host reaches this listener too: `zeron headless` probes every new
     // loopback listener with `HEAD /` and catalogues an HTTP answer as a dev
     // server, which a preview can then load with a real `GET /` (backend#48,
-    // backend#58). Neither is provider egress, so only the host probe and the
-    // backend are compared here.
+    // backend#58). Neither is provider egress, so the fake counts add-on paths
+    // only and this checks the host's requests do not register.
     for method in ["HEAD", "GET"] {
         assert_eq!(
             probe(address, method, "/", &format!("localhost:{}", address.port())).await,
