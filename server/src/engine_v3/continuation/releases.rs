@@ -276,19 +276,6 @@ pub(crate) struct UpNext {
     pub new_release_at_millis: Option<u64>,
 }
 
-/// Whether stored episode facts describe the provider the entry was played
-/// from. Two different explicit add-ons may mean different titles by the same
-/// opaque episode id (the queue cache refuses that too); a row without provider
-/// provenance (a Stremio import) or the profile's own configured metadata is
-/// compatible.
-fn same_origin(played_from: &str, document: Option<&str>) -> bool {
-    document.is_none_or(|document| {
-        document == played_from
-            || !document.starts_with("addon:")
-            || !played_from.starts_with("addon:")
-    })
-}
-
 /// Every released episode of `series` the profile has not finished, from the
 /// anchor, whatever the anchor's finish time: a backlog still has to resume
 /// somewhere. The start of the range is the epoch because
@@ -332,7 +319,7 @@ pub(crate) fn up_next_db(
     }
     let stored_anchor = stored.identity.clone();
     let origin = stored.card.as_ref().map(|card| card.provider_id.as_str());
-    if !same_origin(&anchor.provider_id, origin) {
+    if !crate::continuation::same_origin(&anchor.provider_id, origin) {
         return Ok(None);
     }
     let episodes = availability(document.episodes);
@@ -405,6 +392,29 @@ fn current(
         && app.addons.revision_db(db)? == document.addon_revision)
 }
 
+/// The up-next caption: the episode's coordinates, and its own title when the
+/// document names one (`"S2 E1 · Episode title"`).
+pub(crate) fn caption(
+    identity: &MediaIdentity,
+    episode_title: &str,
+    series_title: &str,
+) -> Option<String> {
+    let coordinates = identity.episode.as_ref().map(|c| {
+        let episode = format!("E{}", c.episode);
+        c.season
+            .map_or(episode.clone(), |season| format!("S{season} {episode}"))
+    });
+    let named = (!episode_title.is_empty()
+        && episode_title != identity.id
+        && episode_title != series_title)
+        .then(|| episode_title.to_owned());
+    match (coordinates, named) {
+        (Some(at), Some(name)) => Some(format!("{at} · {name}")),
+        (Some(at), None) => Some(at),
+        (None, name) => name,
+    }
+}
+
 /// The queue card for a series with an episode to play: the series title and
 /// art with that episode as its identity and caption, and the count badge when
 /// it is a new release.
@@ -413,20 +423,7 @@ pub(crate) fn present(found: &UpNext, anchor: &PlaybackRecord, verified: Option<
         .filter(|card| card.identity == found.card.identity)
         .unwrap_or_else(|| found.card.clone());
     let episode_title = std::mem::replace(&mut card.title, anchor.title.clone());
-    let coordinates = card.identity.episode.as_ref().map(|c| {
-        let episode = format!("E{}", c.episode);
-        c.season
-            .map_or(episode.clone(), |season| format!("S{season} {episode}"))
-    });
-    let named = (!episode_title.is_empty()
-        && episode_title != card.identity.id
-        && episode_title != anchor.title)
-        .then_some(episode_title);
-    card.subtitle = match (coordinates, named) {
-        (Some(at), Some(name)) => Some(format!("{at} · {name}")),
-        (Some(at), None) => Some(at),
-        (None, name) => name,
-    };
+    card.subtitle = caption(&card.identity, &episode_title, &anchor.title);
     if anchor.poster.is_some() {
         card.poster = anchor.poster.clone();
     }

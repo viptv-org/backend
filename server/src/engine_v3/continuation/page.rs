@@ -99,6 +99,19 @@ pub(crate) fn snapshot(
             card = super::releases::present(found, &record, verified);
             previous_identity = Some(record.identity.clone());
             status = ContinuationStatus::Next;
+        } else if status == ContinuationStatus::Next {
+            // The stored document cannot project this prepared target; the card
+            // `continue/next` stored still names the episode it opened, so the
+            // entry keeps its caption (backend#63).
+            if let Ok(prepared) = serde_json::from_value::<Card>(item["engine_presentation"].clone())
+            {
+                if prepared.identity.id == card.identity.id
+                    && prepared.identity.episode == card.identity.episode
+                {
+                    card.subtitle =
+                        super::releases::caption(&card.identity, &prepared.title, &record.title);
+                }
+            }
         }
         super::art::fill(&db, lease, profile, restricted, &mut card)?;
         crate::simkl::imports::enrich(&db, profile, &mut card)?;

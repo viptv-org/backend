@@ -848,3 +848,56 @@ async fn an_imported_finish_with_no_released_next_episode_stays_caught_up() {
     assert_eq!(entry["status"], "Pending", "{entry}");
     assert!(entry["card"]["subtitle"].is_null(), "{entry}");
 }
+
+/// `/continue/next` prepares the profile's own next episode in the queue
+/// cache, with the provider that answered as its provenance. A Stremio import
+/// leaves the row it was prepared for without provider provenance, and the
+/// prepared target must still project when the stored release document cannot
+/// (backend#63).
+#[tokio::test]
+async fn a_prepared_target_projects_an_imported_row_the_release_document_cannot() {
+    let start = now();
+    let show = show(vec![
+        (1, start - 30 * DAY),
+        (2, start - 20 * DAY),
+        (3, start + 7 * DAY),
+    ])
+    .await;
+    let app = &show.app;
+    imported(app, "tt100", 1, 0.001, 1420.01, start - 10 * DAY);
+    // Playback ends and the player prepares episode 2 from the profile's own
+    // metadata add-on.
+    app.addons.forget_responses();
+    let (status, prepared) = request(
+        app,
+        "member-token-1",
+        "POST",
+        "/api/profiles/1/continue/next",
+        json!({"identity":episode(1),"parent_identity":series(),"metadata_provider_id":"stremio","metadata_addon_id":1}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{prepared}");
+    assert_eq!(prepared["status"], "Next", "{prepared}");
+    let cached: String = app
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT result FROM continuation_cache", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&cached).unwrap()["metadata_origin"],
+        "addon:1"
+    );
+    // The stored release document cannot project it (its list no longer holds
+    // the anchor), so the prepared target is the only record of episode 2.
+    app.db
+        .lock()
+        .unwrap()
+        .execute("DELETE FROM continuation_releases WHERE series_id='tt100'", [])
+        .unwrap();
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["status"], "Next", "{entry}");
+    assert_eq!(entry["card"]["identity"]["id"], "tt100:1:2", "{entry}");
+    assert_eq!(entry["card"]["subtitle"], "S1 E2 · Chapter 2", "{entry}");
+    assert_eq!(entry["record"]["identity"]["id"], "tt100:1:1", "{entry}");
+}

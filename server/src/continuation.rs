@@ -376,6 +376,20 @@ fn furthest_watched(
     }
     Ok(furthest.map(|(_, item)| item))
 }
+/// Whether stored episode facts describe the provider a queue row was played
+/// from. Two different explicit add-ons may mean different titles by the same
+/// opaque episode id, so those never pair; a row without provider provenance
+/// (a Stremio import) and the profile's own configured metadata stay
+/// compatible. The release facts (`engine_v3::continuation::releases`) read the
+/// same rule.
+pub(crate) fn same_origin(played_from: &str, document: Option<&str>) -> bool {
+    document.is_none_or(|document| {
+        document == played_from
+            || !document.starts_with("addon:")
+            || !played_from.starts_with("addon:")
+    })
+}
+
 // New typed results carry provenance. Retain legacy cache compatibility while
 // refusing another add-on's identically named opaque episode or stale settings.
 fn cached_origin_current(
@@ -387,7 +401,11 @@ fn cached_origin_current(
     let Some(origin) = result["metadata_origin"].as_str() else {
         return Ok(true);
     };
-    if item["engine_provider_id"].as_str() != Some(origin) {
+    // A Stremio import writes no provider provenance, and the prepared target
+    // is the series' canonical next episode, read by `continue/next` from the
+    // profile's own metadata (a different explicit add-on still refuses).
+    let played_from = item["engine_provider_id"].as_str().unwrap_or("library");
+    if !same_origin(played_from, Some(origin)) {
         return Ok(false);
     }
     let current: u64 = db
