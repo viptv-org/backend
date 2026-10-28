@@ -36,8 +36,8 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
         (2, json!([{"name":"subtitles","types":["movie"]}])),
     ];
     // The fake add-ons are mounted at `http://{address}/{id}/manifest.json` and
-    // every endpoint the backend derives from one stays under its id, so a request
-    // outside those roots cannot be this code path reading a provider.
+    // every endpoint the backend derives from one stays under its id. No other
+    // provider is configured here, so only those paths can be provider egress.
     let addon_roots: Vec<String> = addons.iter().map(|(id, _)| format!("/{id}/")).collect();
     let roots = addon_roots.clone();
     let server = tokio::spawn(async move {
