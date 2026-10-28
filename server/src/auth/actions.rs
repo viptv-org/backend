@@ -1,6 +1,31 @@
 use super::*;
 use axum::{extract::OriginalUri, http::HeaderMap, Json};
 
+/// Enforces one rate bucket, mapping a tripped limit to the `(error, retry-after)`
+/// pair that `auth_error_with_retry` turns into a 429 with a `Retry-After` header.
+async fn enforce_rate_limit(
+    app: App,
+    bucket: String,
+    limit: i64,
+) -> Result<(), (ApiError, Option<i64>)> {
+    match tokio::task::spawn_blocking(move || {
+        let db = app.db.lock().map_err(|_| (unauthorized(), None))?;
+        rate(&db, &bucket, limit).map_err(|error| (error, Some(retry_after(&db, &bucket))))
+    })
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(pair)) => Err(pair),
+        Err(_) => Err((
+            ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Authentication admission worker failed".into(),
+            ),
+            None,
+        )),
+    }
+}
+
 pub(crate) async fn action(
     State(app): State<App>,
     OriginalUri(uri): OriginalUri,
@@ -28,24 +53,12 @@ pub(crate) async fn action(
     if let Err(error) = origin(&h) {
         return auth_error(error);
     }
-    let global_app = app.clone();
     let global_bucket = format!("auth:global:{path}");
     let global_limit = endpoint_global_limit(&path);
-    let global_result = tokio::task::spawn_blocking(move || {
-        let db = global_app.db.lock().map_err(|_| (unauthorized(), None))?;
-        rate(&db, &global_bucket, global_limit)
-            .map_err(|error| (error, Some(retry_after(&db, &global_bucket))))
-    })
-    .await;
-    match global_result {
-        Ok(Ok(())) => {}
-        Ok(Err((error, retry_after))) => return auth_error_with_retry(error, retry_after),
-        Err(_) => {
-            return auth_error(ApiError(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Authentication admission worker failed".into(),
-            ))
-        }
+    if let Err((error, retry_seconds)) =
+        enforce_rate_limit(app.clone(), global_bucket, global_limit).await
+    {
+        return auth_error_with_retry(error, retry_seconds);
     }
     // Per-subject limits are keyed on the canonical path plus a bounded,
     // hashed credential/device identifier, computed before entering the
@@ -84,22 +97,8 @@ pub(crate) async fn action(
     } else {
         30
     };
-    let subject_app = app.clone();
-    let subject_result = tokio::task::spawn_blocking(move || {
-        let db = subject_app.db.lock().map_err(|_| (unauthorized(), None))?;
-        rate(&db, &bucket, subject_limit)
-            .map_err(|error| (error, Some(retry_after(&db, &bucket))))
-    })
-    .await;
-    match subject_result {
-        Ok(Ok(())) => {}
-        Ok(Err((error, retry_after))) => return auth_error_with_retry(error, retry_after),
-        Err(_) => {
-            return auth_error(ApiError(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Authentication admission worker failed".into(),
-            ))
-        }
+    if let Err((error, retry_seconds)) = enforce_rate_limit(app.clone(), bucket, subject_limit).await {
+        return auth_error_with_retry(error, retry_seconds);
     }
     let expensive = matches!(
         path.as_str(),
