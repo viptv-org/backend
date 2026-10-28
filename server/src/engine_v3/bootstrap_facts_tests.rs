@@ -4,6 +4,19 @@ async fn fact(app: &App, token: &str) -> Value {
     assert_eq!(status, StatusCode::OK, "{body}");
     body["subtitle_availability"].clone()
 }
+/// One request over a raw loopback socket, so a test can play traffic the host
+/// sends to any new listener without involving the app's own HTTP client.
+async fn probe(address: std::net::SocketAddr, method: &str, path: &str, host: &str) -> StatusCode {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+    let request = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    socket.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    socket.read_to_end(&mut response).await.unwrap();
+    let text = String::from_utf8_lossy(&response);
+    let status = text.split_whitespace().nth(1).and_then(|v| v.parse().ok());
+    StatusCode::from_u16(status.unwrap()).unwrap()
+}
 #[tokio::test]
 async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs_no_provider_io() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,22 +27,32 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
     );
     let reads = Arc::new(AtomicUsize::new(0));
     let count = reads.clone();
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = seen.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            Router::new().fallback(move |method: axum::http::Method| {
-                let count = count.clone();
-                async move {
-                    // Count every request the backend could make; ignore the host's
-                    // HEAD port probe to new loopback listeners (backend#48).
-                    if method != axum::http::Method::HEAD {
-                        count.fetch_add(1, Ordering::SeqCst);
+            Router::new().fallback(
+                move |method: axum::http::Method,
+                      uri: axum::http::Uri,
+                      headers: axum::http::HeaderMap| {
+                    let count = count.clone();
+                    let log = log.clone();
+                    async move {
+                        if method != axum::http::Method::HEAD {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            log.lock().unwrap().push(format!(
+                                "{method} {} host={:?}",
+                                uri.path(),
+                                headers.get(axum::http::header::HOST)
+                            ));
+                        }
+                        StatusCode::BAD_GATEWAY
                     }
-                    StatusCode::BAD_GATEWAY
-                }
-            }),
+                },
+            ),
         )
         .await
         .unwrap()
@@ -83,7 +106,30 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
         .execute("UPDATE auth_sessions SET profile_id=NULL WHERE id='s1'", [])
         .unwrap();
     assert!(fact(&app, "member-token-1").await.is_null());
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    // The host reaches this listener too: `zeron headless` probes every new
+    // loopback listener with `HEAD /` and catalogues an HTTP answer as a dev
+    // server, which a preview can then load with a real `GET /` (backend#48,
+    // backend#58). Neither is provider egress, so only the host probe and the
+    // backend are compared here.
+    for method in ["HEAD", "GET"] {
+        assert_eq!(
+            probe(address, method, "/", &format!("localhost:{}", address.port())).await,
+            StatusCode::BAD_GATEWAY
+        );
+    }
+    let provider_requests = seen.lock().unwrap().clone();
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        0,
+        "provider requests: {provider_requests:?}"
+    );
+    // A read of a fixture add-on is still counted, so the assertion above is
+    // not vacuous.
+    assert_eq!(
+        probe(address, "GET", "/2/manifest.json", &address.to_string()).await,
+        StatusCode::BAD_GATEWAY
+    );
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
     server.abort();
 }
 
