@@ -7,7 +7,11 @@ async fn mapping_fixture() -> (App, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<S
         let observed = observed.clone();
         async move {
             let path = request.uri().path().to_owned();
-            observed.lock().unwrap().push(path.clone());
+            // Record backend traffic only: the host probes every new loopback
+            // listener with a safe `HEAD /` (backend#48).
+            if request.method() != axum::http::Method::HEAD {
+                observed.lock().unwrap().push(path.clone());
+            }
             axum::Json(match path.as_str() {
                 "/movies/10" => json!({"title":"Movie","ids":{"simkl":10,"imdb":"tt1234567"}}),
                 "/movies/11" => json!({"title":"Unmapped","ids":{"simkl":11}}),
@@ -22,6 +26,15 @@ async fn mapping_fixture() -> (App, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<S
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    // The dev host's engine probes every new loopback listener with `HEAD /`
+    // (backend#48). Send the same probe so the fixture is checked against it.
+    reqwest::Client::new()
+        .head(format!("http://{address}/"))
+        .send()
+        .await
+        .expect("HEAD / probe")
+        .error_for_status()
+        .expect("fixture answers the port probe");
     let mut app = fixture();
     app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
     app.addons.allow_test_loopback = true;
@@ -108,6 +121,10 @@ async fn sources_and_subtitles_use_cached_authoritative_ids_and_preserve_canonic
         assert_eq!(status, StatusCode::OK, "{subs}");
         assert_eq!(subs["candidates"].as_array().unwrap().len(), 1, "{subs}");
         let observed = paths.lock().unwrap();
+        assert!(
+            !observed.iter().any(|path| path == "/"),
+            "the fixture logs backend requests, not the host's port probe: {observed:?}"
+        );
         assert!(observed.contains(&format!("/addon/stream/{kind}/{expected}.json")));
         assert!(observed.contains(&format!("/addon/subtitles/{kind}/{expected}.json")));
         assert!(!observed.iter().any(|p| p.contains("simkl:")));

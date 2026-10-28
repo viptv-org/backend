@@ -44,14 +44,27 @@ async fn private_xtream_server_egress_rejects_loopback_before_sending_credential
     let count = requests.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let router = Router::new().fallback(move || {
+    let router = Router::new().fallback(move |method: axum::http::Method| {
         let count = count.clone();
         async move {
-            count.fetch_add(1, Ordering::SeqCst);
+            // Count backend egress only: the host probes every new loopback
+            // listener with a safe `HEAD /` (backend#48).
+            if method != axum::http::Method::HEAD {
+                count.fetch_add(1, Ordering::SeqCst);
+            }
             StatusCode::OK
         }
     });
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    // The dev host's engine probes every new loopback listener with `HEAD /`
+    // (backend#48). Send the same probe so the fixture is checked against it.
+    reqwest::Client::new()
+        .head(format!("http://{address}/"))
+        .send()
+        .await
+        .expect("HEAD / probe")
+        .error_for_status()
+        .expect("fixture answers the port probe");
     let app = crate::auth_integration_tests::fixture();
     let(status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":format!("http://{address}"),"username":"private-user","password":"private-secret"}})).await;
     assert_eq!(
