@@ -56,15 +56,7 @@ async fn private_xtream_server_egress_rejects_loopback_before_sending_credential
         }
     });
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    // The dev host's engine probes every new loopback listener with `HEAD /`
-    // (backend#48). Send the same probe so the fixture is checked against it.
-    reqwest::Client::new()
-        .head(format!("http://{address}/"))
-        .send()
-        .await
-        .expect("HEAD / probe")
-        .error_for_status()
-        .expect("fixture answers the port probe");
+    crate::test_support::send_port_probe(address).await;
     let app = crate::auth_integration_tests::fixture();
     let(status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":format!("http://{address}"),"username":"private-user","password":"private-secret"}})).await;
     assert_eq!(

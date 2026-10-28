@@ -146,3 +146,17 @@ pub(crate) async fn request(
         .unwrap();
     (status, serde_json::from_slice(&bytes).unwrap())
 }
+
+/// Sends the dev host engine's `HEAD /` probe to a fake server bound on a
+/// loopback port. The engine probes every new listener (backend#48), so a
+/// fixture that records or counts requests must ignore it; tests send one
+/// explicitly instead of waiting for the host to flake them.
+pub(crate) async fn send_port_probe(address: std::net::SocketAddr) {
+    reqwest::Client::new()
+        .head(format!("http://{address}/"))
+        .send()
+        .await
+        .expect("HEAD / port probe")
+        .error_for_status()
+        .expect("fake server answers the host port probe");
+}

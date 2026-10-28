@@ -416,15 +416,7 @@ async fn ordered_catalogs_raw_pagination_search_constraints_and_meta() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
-    // The dev host's engine probes every new loopback listener with `HEAD /`
-    // (backend#48). Send the same probe so the fixture is checked against it.
-    reqwest::Client::new()
-        .head(format!("http://{address}/"))
-        .send()
-        .await
-        .expect("HEAD / probe")
-        .error_for_status()
-        .expect("fixture answers the port probe");
+    crate::test_support::send_port_probe(address).await;
     let addons = test_addons();
     let manifest = json!({"resources":["catalog","meta"],"types":["movie"],"catalogs":[{"id":"custom","type":"movie","extra":[{"name":"skip"},{"name":"search"}]},{"id":"other","type":"movie","extraSupported":["search"]}]});
     let fast = insert(

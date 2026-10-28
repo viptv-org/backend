@@ -26,15 +26,7 @@ async fn mapping_fixture() -> (App, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<S
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
-    // The dev host's engine probes every new loopback listener with `HEAD /`
-    // (backend#48). Send the same probe so the fixture is checked against it.
-    reqwest::Client::new()
-        .head(format!("http://{address}/"))
-        .send()
-        .await
-        .expect("HEAD / probe")
-        .error_for_status()
-        .expect("fixture answers the port probe");
+    crate::test_support::send_port_probe(address).await;
     let mut app = fixture();
     app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
     app.addons.allow_test_loopback = true;

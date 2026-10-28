@@ -24,9 +24,7 @@ async fn discovery_multi_choices_preserve_controls_owner_and_validate_before_pro
     let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address=listener.local_addr().unwrap();
     let server=tokio::spawn(async move {axum::serve(listener,mock).await.unwrap()});
-    // The dev host's engine probes every new loopback listener with `HEAD /`
-    // (backend#48). Send the same probe so the fixture is checked against it.
-    reqwest::Client::new().head(format!("http://{address}/")).send().await.expect("HEAD / probe").error_for_status().expect("fixture answers the port probe");
+    crate::test_support::send_port_probe(address).await;
     let mut app=fixture();app.addons.allow_test_loopback=true;
     let manifest=json!({"id":"fixture","name":"Friendly provider","resources":["catalog","meta"],"types":["movie"],"catalogs":[{"id":"top","name":"Popular","type":"movie","extra":[{"name":"genre","isRequired":true,"optionsLimit":2,"options":["A&B","C,D","Comedy"]},{"name":"sort","isRequired":true,"options":["rating","year"]},{"name":"skip"}]}]});
     {
