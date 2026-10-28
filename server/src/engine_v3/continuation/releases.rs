@@ -324,17 +324,14 @@ pub(crate) fn up_next_db(
     if !current(db, app, lease, profile, &document)? {
         return Ok(None);
     }
-    let Some(stored_anchor) = document.episodes.first().map(|e| e.identity.clone()) else {
+    let Some(stored) = document.episodes.first() else {
         return Ok(None);
     };
-    if stored_anchor.id != anchor.identity.id {
+    if stored.identity.id != anchor.identity.id {
         return Ok(None);
     }
-    let origin = document
-        .episodes
-        .first()
-        .and_then(|stored| stored.card.as_ref())
-        .map(|card| card.provider_id.as_str());
+    let stored_anchor = stored.identity.clone();
+    let origin = stored.card.as_ref().map(|card| card.provider_id.as_str());
     if !same_origin(&anchor.provider_id, origin) {
         return Ok(None);
     }
