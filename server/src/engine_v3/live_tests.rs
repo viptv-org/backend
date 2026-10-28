@@ -142,7 +142,6 @@ async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_
     app.live_cache.lock().await.insert(
         connection.into(),
         engine_v3::live::Cache {
-            snapshot_id: "fixture-catalog".into(),
             revision: 1,
             expires: Instant::now() + Duration::from_secs(300),
             channels,
