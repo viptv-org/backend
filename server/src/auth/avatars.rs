@@ -1,7 +1,8 @@
 use super::*;
+use viptv_engine::profile::{is_catalog_avatar, DEFAULT_AVATAR_STYLE};
 
 pub(crate) fn avatar_style(value: Option<&str>) -> Result<&str, ApiError> {
-    let style = value.unwrap_or("critters");
+    let style = value.unwrap_or(DEFAULT_AVATAR_STYLE);
     if AVATAR_STYLES.contains(&style) {
         Ok(style)
     } else {
@@ -20,48 +21,61 @@ pub(crate) fn character_avatars() -> &'static Value {
 }
 fn avatar_url(style: &str, seed: &str) -> String {
     if let Some(items) = character_avatars().get(style).and_then(Value::as_array) {
-        let choice = seed
-            .strip_prefix(&format!("viptv-{style}-"))
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1);
-        return items.get(choice.saturating_sub(1)).unwrap_or(&items[0])["url"]
+        let choice = avatar_choice(style, seed).unwrap_or(1);
+        return items.get(choice as usize - 1).unwrap_or(&items[0])["url"]
             .as_str()
             .unwrap_or_default()
             .to_string();
     }
     format!("https://api.dicebear.com/10.x/{style}/png?seed={seed}&size=256")
 }
+/// Whether `choice` is a position of the catalog world `style`. The bound is
+/// the engine's per-world size (`viptv_engine::profile::AVATAR_WORLDS`), not
+/// one span for every style.
+fn is_catalog_choice(style: &str, choice: u64) -> bool {
+    u16::try_from(choice).is_ok_and(|choice| is_catalog_avatar(style, choice))
+}
+/// The position a `viptv-{style}-{choice}` seed names, before checking it
+/// against the world's size.
+fn seed_choice(style: &str, seed: &str) -> Option<u64> {
+    seed.strip_prefix(&format!("viptv-{style}-"))
+        .and_then(|id| id.parse::<u64>().ok())
+}
+/// The seed a write stores for `style`. A choice the payload sends must be a
+/// position of that world; without one the stored seed keeps its choice, and a
+/// bundled character world with no usable choice shows its first character.
 pub(crate) fn selected_avatar_seed(
     value: &Value,
     style: &str,
     fallback: String,
 ) -> Result<String, ApiError> {
-    if let Some(items) = character_avatars().get(style).and_then(Value::as_array) {
-        let choice = value
-            .get("avatar_choice")
-            .and_then(Value::as_u64)
-            .or_else(|| {
-                fallback
-                    .strip_prefix(&format!("viptv-{style}-"))
-                    .and_then(|v| v.parse().ok())
-            })
-            .unwrap_or(1);
-        if choice == 0 || choice as usize > items.len() {
+    if let Some(choice) = value.get("avatar_choice").and_then(Value::as_u64) {
+        if !is_catalog_choice(style, choice) {
             return Err("Invalid avatar_choice".into());
         }
         return Ok(format!("viptv-{style}-{choice}"));
     }
-    Ok(value
-        .get("avatar_choice")
-        .and_then(Value::as_u64)
-        .map_or(fallback, |choice| format!("viptv-{style}-{choice}")))
+    let bundled = character_avatars()
+        .get(style)
+        .and_then(Value::as_array)
+        .is_some();
+    match seed_choice(style, &fallback) {
+        Some(choice) if is_catalog_choice(style, choice) => Ok(format!("viptv-{style}-{choice}")),
+        // A stored choice outside the world is no catalog choice (direct DB
+        // edits, imports or older data): the read side projects it as none, so
+        // a write that picks no avatar leaves it alone instead of failing.
+        Some(_) => Ok(fallback),
+        // No catalog choice at all: a bundled world shows its first character,
+        // a generated world keeps the random seed that makes its avatar.
+        None if bundled => Ok(format!("viptv-{style}-1")),
+        None => Ok(fallback),
+    }
 }
 /// The 1-based catalog position encoded in a `viptv-{style}-{choice}` seed;
-/// `None` for a random seed, which means no catalog choice was made.
+/// `None` for a random seed, or for a position the world never had, which the
+/// engine's `is_catalog_avatar` rejects.
 pub(crate) fn avatar_choice(style: &str, seed: &str) -> Option<u64> {
-    seed.strip_prefix(&format!("viptv-{style}-"))
-        .and_then(|id| id.parse::<u64>().ok())
-        .filter(|id| (1..=48).contains(id))
+    seed_choice(style, seed).filter(|id| is_catalog_choice(style, *id))
 }
 pub(crate) fn profile_json(id: i64, name: &str, style: &str, seed: &str, complete: bool) -> Value {
     json!({
@@ -73,7 +87,14 @@ pub(crate) fn profile_json(id: i64, name: &str, style: &str, seed: &str, complet
         "setup_complete":complete
     })
 }
-pub(crate) fn validate_profile_payload(value: &Value, update: bool) -> Result<(), ApiError> {
+/// Validates a profile write. `current_style` is the world a choice without a
+/// payload `avatar_style` is measured in: the profile's stored world, or `None`
+/// when the profile is being created (the payload's world or the default one).
+pub(crate) fn validate_profile_payload(
+    value: &Value,
+    update: bool,
+    current_style: Option<&str>,
+) -> Result<(), ApiError> {
     let object = value.as_object().ok_or("Invalid profile")?;
     if object.keys().any(|key| {
         !matches!(
@@ -98,11 +119,13 @@ pub(crate) fn validate_profile_payload(value: &Value, update: bool) -> Result<()
             return Err("Invalid name".into());
         }
     }
-    if let Some(style) = object.get("avatar_style") {
-        avatar_style(Some(style.as_str().ok_or("Invalid avatar_style")?))?;
-    }
+    let style = match object.get("avatar_style") {
+        Some(style) => avatar_style(Some(style.as_str().ok_or("Invalid avatar_style")?)),
+        None => Ok(current_style.unwrap_or(DEFAULT_AVATAR_STYLE)),
+    }?;
     if let Some(choice) = object.get("avatar_choice") {
-        if !choice.as_u64().is_some_and(|id| (1..=48).contains(&id)) {
+        let choice = choice.as_u64().ok_or("Invalid avatar_choice")?;
+        if !is_catalog_choice(style, choice) {
             return Err("Invalid avatar_choice".into());
         }
     }

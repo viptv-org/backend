@@ -1216,6 +1216,129 @@ fn bounded_limits_events_and_expiry() {
     assert!(dispatch(&db, "/auth/refresh", None, &h, &json!({}), SESSION_TOKEN).is_err());
 }
 
+#[test]
+fn avatar_styles_and_character_catalog_match_the_engine_worlds() {
+    use viptv_engine::profile::AVATAR_WORLDS;
+    let mut styles = AVATAR_STYLES.to_vec();
+    styles.sort_unstable();
+    let mut worlds: Vec<&str> = AVATAR_WORLDS.iter().map(|(style, _)| *style).collect();
+    worlds.sort_unstable();
+    assert_eq!(styles, worlds, "account worlds are the engine's catalog");
+    // The bundled character catalog carries each world's real size, so the
+    // engine and the server agree on what a valid choice is.
+    for (style, size) in AVATAR_WORLDS {
+        if let Some(items) = character_avatars().get(style).and_then(Value::as_array) {
+            assert_eq!(items.len(), *size as usize, "{style} catalog size");
+        }
+    }
+}
+
+#[test]
+fn avatar_choices_respect_each_world_size() {
+    for (style, size) in [
+        ("disney", 14),
+        ("princesses", 10),
+        ("animal-friends", 12),
+        ("villains", 12),
+    ] {
+        assert_eq!(
+            avatar_choice(style, &format!("viptv-{style}-{size}")),
+            Some(size),
+            "{style} last character"
+        );
+        assert_eq!(
+            avatar_choice(style, &format!("viptv-{style}-{}", size + 1)),
+            None,
+            "{style} first choice past its catalog"
+        );
+        assert_eq!(
+            avatar_choice(style, &format!("viptv-{style}-0")),
+            None,
+            "{style} choice 0"
+        );
+    }
+    // Generated (dicebear) worlds keep the engine's 48.
+    assert_eq!(avatar_choice("critters", "viptv-critters-48"), Some(48));
+    assert_eq!(avatar_choice("critters", "viptv-critters-49"), None);
+    // A random seed and a style outside the catalog are no catalog choice.
+    assert_eq!(avatar_choice("critters", "random-seed"), None);
+    assert_eq!(avatar_choice("not-a-world", "viptv-not-a-world-1"), None);
+}
+
+#[test]
+fn profile_payloads_validate_choices_in_the_world_they_name() {
+    for (style, size) in [
+        ("disney", 14),
+        ("princesses", 10),
+        ("animal-friends", 12),
+        ("villains", 12),
+        ("critters", 48),
+    ] {
+        let valid = json!({"name":"Kid","avatar_style":style,"avatar_choice":size});
+        assert!(validate_profile_payload(&valid, false, None).is_ok(), "{valid}");
+        let beyond = json!({"name":"Kid","avatar_style":style,"avatar_choice":size + 1});
+        assert!(
+            validate_profile_payload(&beyond, false, None).is_err(),
+            "{beyond}"
+        );
+    }
+    // A choice without a style is measured in the profile's current world.
+    assert!(
+        validate_profile_payload(&json!({"avatar_choice":12}), true, Some("princesses")).is_err()
+    );
+    assert!(
+        validate_profile_payload(
+            &json!({"avatar_choice":12}),
+            true,
+            Some("animal-friends")
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn profile_rows_outside_the_world_size_project_no_choice_and_still_rename() {
+    let db = db();
+    claim(&db);
+    let created = create_profile(
+        &db,
+        1,
+        &json!({"name":"Kid","avatar_style":"princesses","avatar_choice":2}),
+    )
+    .unwrap();
+    let id = created["id"].as_str().unwrap().parse::<i64>().unwrap();
+    // Older data or an import can hold a position its world never had.
+    db.execute(
+        "UPDATE profiles SET avatar_seed='viptv-princesses-12' WHERE id=?1",
+        [id],
+    )
+    .unwrap();
+    let card = list_profiles(&db, 1)
+        .unwrap()
+        .into_iter()
+        .find(|profile| profile["id"] == created["id"])
+        .unwrap();
+    assert_eq!(card["avatar_style"], "princesses");
+    assert_eq!(card["avatar_choice"], Value::Null, "{card}");
+    assert_eq!(
+        card["avatar_url"],
+        character_avatars()["princesses"][0]["url"],
+        "{card}"
+    );
+    // A write that picks no avatar must not choke on that row.
+    let renamed = update_profile(&db, 1, id, &json!({"name":"Renamed"})).unwrap();
+    assert_eq!(renamed["name"], "Renamed");
+    assert_eq!(renamed["avatar_choice"], Value::Null, "{renamed}");
+    let picked = update_profile(
+        &db,
+        1,
+        id,
+        &json!({"avatar_style":"princesses","avatar_choice":10}),
+    )
+    .unwrap();
+    assert_eq!(picked["avatar_choice"], 10, "{picked}");
+}
+
 mod device_code_invalidates;
 mod device_deny;
 mod device_token_errors;
