@@ -241,6 +241,16 @@ async fn private_origin_approval_detail_next_caption_source_and_revocation_are_i
             .0,
         StatusCode::FORBIDDEN
     );
+    // The stale-session sweep observes the revocation on its own one-second
+    // cadence and terminates the session as expired (backend#66). Drive the
+    // same observation through the playback status endpoint so the ordering
+    // is deterministic instead of racing that tick.
+    assert_eq!(
+        request(&app, "member-token-1", "GET", &playback_path, Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
     assert_eq!(
         request(
             &app,

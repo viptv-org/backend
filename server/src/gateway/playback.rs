@@ -1622,10 +1622,16 @@ async fn start_mode(
     }));
     Ok((StatusCode::ACCEPTED, Json(response(&entry))))
 }
+/// Rejects a playback whose current authority no longer allows it.
+///
+/// A session whose authority failed may already have been terminated by the
+/// stale-session sweep, which marks it expired. The authority failure still
+/// answers first: a revoked approval or a changed profile policy is the reason
+/// the client must see, and answering `playback_expired` there would tell it to
+/// reconnect and pick a source it is no longer allowed to play (backend#66).
 async fn validate_entry(app: &App, entry: &Entry) -> Result<(), Error> {
-    if entry.cancelled.load(Ordering::Acquire) || expired(&entry.state.lock().unwrap()) {
-        return Err(Error::Code("playback_expired"));
-    }
+    let terminated =
+        entry.cancelled.load(Ordering::Acquire) || expired(&entry.state.lock().unwrap());
     let database = app.db.clone();
     let lease = entry.lease.clone();
     let proof = entry.proof.clone();
@@ -1641,6 +1647,9 @@ async fn validate_entry(app: &App, entry: &Entry) -> Result<(), Error> {
         validate_source(&db, &proof)?;
         if target.is_some_and(|(id, revision)| !gateway_current(&db, &lease, &id, revision)) {
             return Err(Error::Code("gateway_not_found"));
+        }
+        if terminated {
+            return Err(Error::Code("playback_expired"));
         }
         Ok(())
     })
