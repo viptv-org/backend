@@ -285,8 +285,10 @@ async fn resolve(
     // A profile keeps its Simkl plugin connection without a link, so the
     // browsing plugin alone cannot pick the metadata provider: an imported card
     // with no origin would look for a Simkl identity it never had (backend#60).
+    // A `simkl:` id can only be served by Simkl itself.
     let simkl_fallback = simkl
         && page.provider_id.is_none()
+        && !id.starts_with("simkl:")
         && !crate::simkl::linked(&app, profile)?;
     let scoped_policy = if let Some(origin) = &requested_origin {
         kids::scoped::require(&app, origin, &kind, &id, expected.as_ref())?
