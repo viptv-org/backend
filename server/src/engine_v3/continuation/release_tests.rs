@@ -243,13 +243,17 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
         Value::Null,
     )
     .await;
-    let hidden: i64 = app
-        .db
-        .lock()
-        .unwrap()
-        .query_row("SELECT COUNT(*) FROM queue_hidden", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(hidden, 0);
+    // The un-hide is the background refresh Home schedules; wait for it to
+    // land rather than asserting immediately and racing it (backend#53).
+    let hidden = || {
+        app.db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM queue_hidden", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    };
+    until(|| hidden() == 0).await;
+    assert_eq!(hidden(), 0);
 
     // Watching episode 2 leaves a backlog that was already out: no badge.
     watch(app, episode(2), Some(series()), true, now()).await;
