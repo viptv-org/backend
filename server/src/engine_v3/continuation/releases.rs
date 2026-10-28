@@ -6,7 +6,7 @@
 //! episode the profile is behind on is still what plays next (an imported
 //! finish is dated by the import, after episodes it precedes). Only a release
 //! that did come after the finish is new, and only that one earns the compact
-//! "+N" badge and the single move up (`new_at_millis`).
+//! "+N" badge and the single move up (`new_release_at_millis`).
 //! The rule itself is `viptv_engine::continuation::new_episodes`; this module
 //! keeps the metadata it needs. Per profile and series it stores the episodes
 //! after the finished one (identity, release time, aired flag, and the first
@@ -281,7 +281,7 @@ pub(crate) struct UpNext {
 /// somewhere. The start of the range is the epoch because
 /// `viptv_engine::continuation::new_episodes` drops a release that predates
 /// `finished_at`, and that is the separate question [`up_next_db`] answers.
-fn pending(
+fn pending_episodes(
     anchor: &MediaIdentity,
     episodes: &[EpisodeAvailability],
     watched: impl Fn(&Card) -> bool,
@@ -319,7 +319,8 @@ pub(crate) fn up_next_db(
     }
     let episodes = availability(document.episodes);
     let watched = Watched::read(db, profile, series)?;
-    let Some(pending) = pending(&stored_anchor, &episodes, |card| watched.contains(card), now_millis)
+    let Some(pending) =
+        pending_episodes(&stored_anchor, &episodes, |card| watched.contains(card), now_millis)
     else {
         return Ok(None);
     };
