@@ -1,6 +1,6 @@
 //! Stable metadata lookup provenance. Revisions fence access; incarnations identify installs.
 use super::*;
-use viptv_engine::origin::MetadataOrigin;
+use viptv_engine::{identity::MediaIdentity, origin::MetadataOrigin};
 
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_addon_incarnations(addon_id INTEGER PRIMARY KEY REFERENCES addons(id) ON DELETE CASCADE,incarnation TEXT NOT NULL UNIQUE);
@@ -38,6 +38,97 @@ pub(crate) fn for_provider_db(
         connection_id: Some(provider.to_owned()),
         incarnation: Some(incarnation),
     }))
+}
+
+/// The profile's metadata integrations, read once so every Continue Watching
+/// row can be attributed without asking the provider. Add-on manifests may be
+/// sealed in the vault, so they come from the add-on store rather than the
+/// database the queue holds.
+pub(crate) struct Serving {
+    account: i64,
+    profile: i64,
+    simkl_browsing: bool,
+    linked: bool,
+    addons: Vec<(i64, Value)>,
+}
+impl Serving {
+    pub(crate) fn read(
+        app: &App,
+        lease: &ResourceLease,
+        profile: i64,
+    ) -> Result<Self, ApiError> {
+        let account = lease.principal.account_id().ok_or_else(auth::forbidden)?;
+        let linked = crate::simkl::linked(app, profile)?;
+        let (configuration, _) = super::configuration::read(app, lease, profile)?;
+        // The queue serves an imported title from the add-ons even when the
+        // profile browses Simkl (backend#60), so read that scope's add-ons.
+        let addons = match super::search::metadata_scope(
+            app.clone(),
+            lease,
+            profile,
+            "stremio",
+            None,
+        ) {
+            Ok((app, _, _)) => app
+                .addons
+                .entries()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(id, _, manifest)| (id, manifest))
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        Ok(Self {
+            account,
+            profile,
+            simkl_browsing: configuration.browsing_plugin == "simkl",
+            linked,
+            addons,
+        })
+    }
+
+    /// The metadata scope that serves `identity`: a `simkl:` title, and one the
+    /// profile's own Simkl link identifies, stay on Simkl; a shared title comes
+    /// from the first assigned add-on that publishes it (the fallback of
+    /// backend#60). A Stremio import writes no provider provenance, so the queue
+    /// attributes its rows from here (backend#72).
+    pub(crate) fn origin(
+        &self,
+        db: &Connection,
+        identity: &MediaIdentity,
+    ) -> Result<Option<MetadataOrigin>, ApiError> {
+        let (kind, id) = (identity.kind.as_str(), identity.id.as_str());
+        // Only a Simkl link can carry a mapping, and only Simkl browsing reads it.
+        if id.starts_with("simkl:")
+            || self.simkl_browsing && self.linked && self.identifies(db, identity)?
+        {
+            return Ok(Some(MetadataOrigin {
+                provider_id: "simkl".into(),
+                connection_id: None,
+                incarnation: None,
+            }));
+        }
+        // An add-on id that only one connector knows cannot be attributed from
+        // its shape: two add-ons may publish different titles under it.
+        if !viptv_engine::origin::shared_identity(identity) {
+            return Ok(None);
+        }
+        for (addon, manifest) in &self.addons {
+            if crate::addon::supports(manifest, "meta", kind, id) {
+                return for_provider_db(db, self.account, &format!("addon:{addon}"));
+            }
+        }
+        Ok(None)
+    }
+
+    fn identifies(&self, db: &Connection, identity: &MediaIdentity) -> Result<bool, ApiError> {
+        db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM simkl_import_entries WHERE profile_id=?1 AND local_kind=?2 AND local_id=?3)",
+            params![self.profile, identity.kind, identity.id],
+            |r| r.get(0),
+        )
+        .map_err(db_error)
+    }
 }
 
 /// Capability selection remains with each producer; this proves current ownership and install.

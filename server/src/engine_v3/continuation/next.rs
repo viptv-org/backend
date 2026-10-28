@@ -245,6 +245,7 @@ pub(crate) async fn resolve(
         config.scope.revision,
         &addon_revision,
         parent.landscape.as_deref(),
+        parent.metadata_origin.as_ref(),
     );
     drop(db);
     if let Some(card) = output.item.as_ref() {

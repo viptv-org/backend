@@ -601,7 +601,7 @@ async fn an_imported_finished_series_card_keeps_the_episode_still_after_a_restar
     until(|| verdict(app, "tt100").is_some()).await;
     restart(app);
     let entry = show_entry(&queue(app).await);
-    assert_eq!(entry["card"]["provider_id"], "library", "{entry}");
+    assert_eq!(entry["card"]["provider_id"], "addon:1", "{entry}");
     assert_eq!(entry["card"]["landscape"], "https://img.invalid/1.jpg", "{entry}");
     // Without a still for that episode, the series backdrop.
     {
@@ -900,4 +900,53 @@ async fn a_prepared_target_projects_an_imported_row_the_release_document_cannot(
     assert_eq!(entry["card"]["identity"]["id"], "tt100:1:2", "{entry}");
     assert_eq!(entry["card"]["subtitle"], "S1 E2 · Chapter 2", "{entry}");
     assert_eq!(entry["record"]["identity"]["id"], "tt100:1:1", "{entry}");
+}
+
+/// backend#72: the up-next episode is projected from the stored release
+/// document, so the entry names that document's scope as its origin and the app
+/// starts finding sources on the tap.
+#[tokio::test]
+async fn the_up_next_entry_carries_the_documents_origin() {
+    let start = now();
+    let show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
+    let app = &show.app;
+    watch(app, episode(1), Some(series()), true, start - 10 * DAY).await;
+    resolve(app, 1).await;
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["status"], "Next", "{entry}");
+    assert_eq!(entry["card"]["identity"]["id"], "tt100:1:2", "{entry}");
+    assert_eq!(entry["card"]["metadata_origin"]["provider_id"], "stremio", "{entry}");
+    assert_eq!(entry["card"]["metadata_origin"]["connection_id"], "addon:1", "{entry}");
+    assert_eq!(entry["card"]["provider_id"], "addon:1", "{entry}");
+}
+
+/// backend#72: a title the profile's own Simkl link identifies keeps its Simkl
+/// origin, so the app opens the scope the host serves it from.
+#[tokio::test]
+async fn an_entry_simkl_identifies_carries_the_simkl_origin() {
+    let start = now();
+    let mut show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
+    // Nothing listens here: a resumed episode needs no metadata read.
+    show.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:9"));
+    let app = &show.app;
+    {
+        let db = app.db.lock().unwrap();
+        db.execute_batch(
+            "INSERT INTO simkl_links(profile_id,account_id,revision,credential) VALUES(1,1,1,'{}');
+             INSERT INTO simkl_import_entries(profile_id,remote_id,remote_kind,local_id,local_kind,card,statistics,link_revision) VALUES(1,'simkl:tv:20','series','tt100','series','{}','{}',1);",
+        ).unwrap();
+        db.execute(
+            "INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,'tt100:1:2','series','Fixture Show',NULL,30,100,?1,'{\"season\":1,\"episode\":2,\"series_id\":\"tt100\"}','tt100')",
+            params![(start / 1000) as i64],
+        ).unwrap();
+    }
+    let entries = queue(app).await;
+    let entry = entries
+        .iter()
+        .find(|entry| entry["card"]["identity"]["id"] == "tt100:1:2")
+        .unwrap_or_else(|| panic!("no resumed entry: {entries:?}"));
+    assert_eq!(entry["status"], "Resume", "{entry}");
+    assert_eq!(entry["card"]["metadata_origin"]["provider_id"], "simkl", "{entry}");
+    assert!(entry["card"]["metadata_origin"]["connection_id"].is_null(), "{entry}");
+    assert_eq!(entry["card"]["provider_id"], "simkl", "{entry}");
 }
