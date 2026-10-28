@@ -11,6 +11,9 @@ pub(crate) fn forbidden() -> ApiError {
     ApiError(StatusCode::FORBIDDEN, "Forbidden".into())
 }
 pub(crate) fn auth_error(error: ApiError) -> Response {
+    auth_error_with_retry(error, None)
+}
+pub(crate) fn auth_error_with_retry(error: ApiError, retry_after: Option<i64>) -> Response {
     let code = if error.1 == MSG_PARENT_REQUIRED {
         "parent_required"
     } else if error.1 == "Refresh token reuse detected" {
@@ -33,6 +36,12 @@ pub(crate) fn auth_error(error: ApiError) -> Response {
     let mut r = (error.0, Json(json!({"error":error.1,"error_code":code}))).into_response();
     r.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if let Some(seconds) = retry_after {
+        r.headers_mut().insert(
+            header::RETRY_AFTER,
+            HeaderValue::from_str(&seconds.to_string()).unwrap(),
+        );
+    }
     r
 }
 pub(crate) fn constant_eq(a: &str, b: &str) -> bool {
