@@ -1,8 +1,12 @@
 //! New-episode facts for Continue Watching, and the durable next-episode
 //! verdict per finished series.
 //!
-//! A series whose latest finished episode was the newest released one gets a
-//! compact "+N" badge and moves up once, when the next episode is released.
+//! A finished episode with a released next one is projected as that episode
+//! (`up_next_db`), whether or not the release came after the finish: an
+//! episode the profile is behind on is still what plays next (an imported
+//! finish is dated by the import, after episodes it precedes). Only a release
+//! that did come after the finish is new, and only that one earns the compact
+//! "+N" badge and the single move up (`new_release_at_millis`).
 //! The rule itself is `viptv_engine::continuation::new_episodes`; this module
 //! keeps the metadata it needs. Per profile and series it stores the episodes
 //! after the finished one (identity, release time, aired flag, and the first
@@ -256,10 +260,53 @@ fn bare(identity: MediaIdentity, parent_identity: Option<MediaIdentity>) -> Card
     }
 }
 
-/// New episodes of `series` since the profile finished `anchor`, from the
-/// stored document, or `None` when there are none or the facts are stale,
-/// foreign or for another finished episode.
-pub(crate) fn state_db(
+/// Where a finished episode of `series` stands in Continue Watching: the
+/// released next episode to play, and the release facts when it is a new one.
+pub(crate) struct UpNext {
+    /// The first released episode the profile has not finished: the one to play.
+    pub card: Card,
+    /// Released, unfinished episodes after the anchor, `card` included.
+    pub count: u32,
+    /// Ascending release times of the counted episodes that carry one.
+    pub released_at_millis: Vec<u64>,
+    /// When `card` was released, and only when that is after the anchor was
+    /// finished: a new release, which alone earns the `+N` badge and the
+    /// queue's order bump. An episode that was already out when the profile
+    /// finished the anchor is still up next (a backlog resumes at it).
+    pub new_release_at_millis: Option<u64>,
+}
+
+/// Whether stored episode facts describe the provider the entry was played
+/// from. Two different explicit add-ons may mean different titles by the same
+/// opaque episode id (the queue cache refuses that too); a row without provider
+/// provenance (a Stremio import) or the profile's own configured metadata is
+/// compatible.
+fn same_origin(played_from: &str, document: Option<&str>) -> bool {
+    document.is_none_or(|document| {
+        document == played_from
+            || !document.starts_with("addon:")
+            || !played_from.starts_with("addon:")
+    })
+}
+
+/// Every released episode of `series` the profile has not finished, from the
+/// anchor, whatever the anchor's finish time: a backlog still has to resume
+/// somewhere. The start of the range is the epoch because
+/// `viptv_engine::continuation::new_episodes` drops a release that predates
+/// `finished_at`, and that is the separate question [`up_next_db`] answers.
+fn pending_episodes(
+    anchor: &MediaIdentity,
+    episodes: &[EpisodeAvailability],
+    watched: impl Fn(&Card) -> bool,
+    now_millis: u64,
+) -> Option<NewEpisodes> {
+    viptv_engine::continuation::new_episodes(anchor, 0, episodes, watched, now_millis)
+}
+
+/// The released next episode after `anchor` in `series`, from the stored
+/// document, or `None` when there is none (caught up, or the next one has not
+/// aired) or the facts are stale, foreign or for another finished episode.
+pub(crate) fn up_next_db(
     db: &Connection,
     app: &App,
     lease: &ResourceLease,
@@ -267,7 +314,7 @@ pub(crate) fn state_db(
     series: &str,
     anchor: &PlaybackRecord,
     now_millis: u64,
-) -> Result<Option<NewEpisodes>, ApiError> {
+) -> Result<Option<UpNext>, ApiError> {
     let Some((from, document)) = document_db(db, profile, series)? else {
         return Ok(None);
     };
@@ -277,21 +324,31 @@ pub(crate) fn state_db(
     if !current(db, app, lease, profile, &document)? {
         return Ok(None);
     }
-    let Some(stored_anchor) = document.episodes.first().map(|e| e.identity.clone()) else {
+    let Some(stored) = document.episodes.first() else {
         return Ok(None);
     };
-    if stored_anchor.id != anchor.identity.id {
+    if stored.identity.id != anchor.identity.id {
+        return Ok(None);
+    }
+    let stored_anchor = stored.identity.clone();
+    let origin = stored.card.as_ref().map(|card| card.provider_id.as_str());
+    if !same_origin(&anchor.provider_id, origin) {
         return Ok(None);
     }
     let episodes = availability(document.episodes);
     let watched = Watched::read(db, profile, series)?;
-    Ok(viptv_engine::continuation::new_episodes(
-        &stored_anchor,
-        anchor.updated_at_millis,
-        &episodes,
-        |card| watched.contains(card),
-        now_millis,
-    ))
+    let Some(pending) =
+        pending_episodes(&stored_anchor, &episodes, |card| watched.contains(card), now_millis)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(UpNext {
+        card: pending.next,
+        count: pending.count,
+        released_at_millis: pending.released_at_millis,
+        new_release_at_millis: (pending.first_released_at_millis > anchor.updated_at_millis)
+            .then_some(pending.first_released_at_millis),
+    }))
 }
 
 /// The stored document of `series` and the finished episode it was read for.
@@ -348,16 +405,13 @@ fn current(
         && app.addons.revision_db(db)? == document.addon_revision)
 }
 
-/// The queue card for a series with new episodes: the series title and art
-/// with the episode to play as its identity and caption, and the count badge.
-pub(crate) fn present(
-    found: &NewEpisodes,
-    anchor: &PlaybackRecord,
-    verified: Option<Card>,
-) -> Card {
+/// The queue card for a series with an episode to play: the series title and
+/// art with that episode as its identity and caption, and the count badge when
+/// it is a new release.
+pub(crate) fn present(found: &UpNext, anchor: &PlaybackRecord, verified: Option<Card>) -> Card {
     let mut card = verified
-        .filter(|card| card.identity == found.next.identity)
-        .unwrap_or_else(|| found.next.clone());
+        .filter(|card| card.identity == found.card.identity)
+        .unwrap_or_else(|| found.card.clone());
     let episode_title = std::mem::replace(&mut card.title, anchor.title.clone());
     let coordinates = card.identity.episode.as_ref().map(|c| {
         let episode = format!("E{}", c.episode);
@@ -382,10 +436,12 @@ pub(crate) fn present(
     card.progress = None;
     card.badges
         .retain(|badge| !viptv_engine::continuation::is_new_episodes_badge(badge));
-    card.badges.insert(
-        0,
-        viptv_engine::continuation::new_episodes_badge(found.count),
-    );
+    if found.new_release_at_millis.is_some() {
+        card.badges.insert(
+            0,
+            viptv_engine::continuation::new_episodes_badge(found.count),
+        );
+    }
     card
 }
 
@@ -552,7 +608,7 @@ fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate
         // A release after its removal brought this title back: un-hide it for
         // good, so playing the new episode does not remove it again.
         if let Some(hidden) = item["queue_hidden_at"].as_u64() {
-            let returned = state_db(
+            let returned = up_next_db(
                 &db,
                 app,
                 lease,
@@ -711,10 +767,17 @@ async fn refresh_one(
     }
     let now = util::now_millis().max(0) as u64;
     let visible = |db: &Connection| -> Result<_, ApiError> {
-        let found = state_db(db, app, lease, profile, &candidate.series, &candidate.anchor, now)?;
+        let found = up_next_db(db, app, lease, profile, &candidate.series, &candidate.anchor, now)?;
         let verdict = verdicts_db(db, profile)?.remove(&candidate.series);
         Ok((
-            found.map(|f| (f.count, f.next.identity.id, f.first_released_at_millis, f.released_at_millis)),
+            found.map(|f| {
+                (
+                    f.count,
+                    f.card.identity.id,
+                    f.new_release_at_millis,
+                    f.released_at_millis,
+                )
+            }),
             verdict,
         ))
     };
