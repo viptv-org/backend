@@ -2552,7 +2552,7 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
         assert_eq!(status, StatusCode::OK);
         parent_cards.insert(title.to_string(), details["item"].clone());
     }
-    request(
+    let (status, pin) = request(
         &a,
         "parent-token",
         "PUT",
@@ -2560,7 +2560,8 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
         json!({"pin":"7248"}),
     )
     .await;
-    let (_, child) = request(
+    assert_eq!(status, StatusCode::OK, "set parent PIN: {pin}");
+    let (status, child) = request(
         &a,
         "parent-token",
         "POST",
@@ -2568,8 +2569,9 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
         json!({"name":"Small"}),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "create child profile: {child}");
     let id = child["id"].as_str().unwrap();
-    request(
+    let (status, kids) = request(
         &a,
         "parent-token",
         "PUT",
@@ -2577,7 +2579,8 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
         json!({"enabled":true,"max_age":7}),
     )
     .await;
-    request(
+    assert_eq!(status, StatusCode::OK, "enable kids profile: {kids}");
+    let (status, selected) = request(
         &a,
         "member-token-1",
         "POST",
@@ -2585,6 +2588,7 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
         json!({"profile_id":id}),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "select child profile: {selected}");
     // The parent's own scoped lookups seed the per-origin observations the
     // restricted detail lookup requires.
     for title in ["series", "mixed"] {
@@ -3148,4 +3152,47 @@ async fn device_token_poll_reports_denied_and_expired_codes_on_the_wire() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "expired_token");
     assert_eq!(body["error_code"], "expired_token");
+}
+
+/// The parent-PIN hashing budget belongs to one app instance. A saturated
+/// budget in one app must not answer 429 for another app in the same process
+/// (#68: parallel fixtures used to queue on one process-wide gate and start
+/// failing setup calls, which left kids policy disabled).
+#[tokio::test]
+async fn parent_pin_cpu_budget_is_scoped_to_each_app() {
+    let busy = fixture();
+    let other = fixture();
+    // Hold every permit of the first app's budget: its own PIN work now waits.
+    let held = busy
+        .pin_cpu_gate
+        .clone()
+        .acquire_many_owned(kids::PIN_CPU_PERMITS as u32)
+        .await
+        .expect("PIN budget permits");
+    // An exhausted budget refuses further PIN work instead of queueing it.
+    let (status, body) = request(
+        &busy,
+        "member-token-1",
+        "PUT",
+        "/api/parent/pin",
+        json!({"pin":"7248"}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "exhausted PIN budget must refuse: {body}"
+    );
+    // That budget is the first app's own: an app never refuses another app's
+    // PIN work, however busy its fixtures are (#68).
+    let (status, body) = request(
+        &other,
+        "member-token-1",
+        "PUT",
+        "/api/parent/pin",
+        json!({"pin":"7248"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "second app must save its PIN: {body}");
+    drop(held);
 }

@@ -135,6 +135,8 @@ pub struct App {
     pub(crate) images: Arc<images::Service>,
     pub(crate) stremio_import: Arc<stremio_import::Service>,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
+    /// Parent-PIN hashing budget owned by this app instance (kids::pin).
+    pub(crate) pin_cpu_gate: Arc<tokio::sync::Semaphore>,
     pub(crate) live_fetch_gates: Arc<engine_v3::live::FetchGates>,
     pub(crate) live_cache: Arc<tokio::sync::Mutex<HashMap<String, engine_v3::live::Cache>>>,
     pub(crate) verified_cards: Arc<
@@ -373,6 +375,7 @@ impl App {
             images: Arc::new(images::Service::new()),
             stremio_import,
             jobs: Default::default(),
+            pin_cpu_gate: Arc::new(tokio::sync::Semaphore::new(kids::PIN_CPU_PERMITS)),
             verified_cards: Default::default(),
             library_hydration: Default::default(),
             live_cache: Default::default(),

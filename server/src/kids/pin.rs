@@ -3,7 +3,12 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
-use std::sync::OnceLock;
+/// Concurrent parent-PIN hashes one app instance may compute at a time.
+///
+/// The bound is per `App`, not process-wide: the router owns its own budget, so
+/// two apps in one process (as every test fixture is) never refuse each other's
+/// PIN work with a 429.
+pub(crate) const PIN_CPU_PERMITS: usize = 2;
 
 fn pin_text(value: &Value, key: &str) -> Result<String, ApiError> {
     let pin = value[key].as_str().ok_or("PIN required")?;
@@ -13,14 +18,12 @@ fn pin_text(value: &Value, key: &str) -> Result<String, ApiError> {
     Ok(pin.into())
 }
 async fn pin_cpu<T: Send + 'static>(
+    app: &App,
     work: impl FnOnce() -> Result<T, ApiError> + Send + 'static,
 ) -> Result<T, ApiError> {
-    static GATE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
     let permit = tokio::time::timeout(
         Duration::from_secs(2),
-        GATE.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(2)))
-            .clone()
-            .acquire_owned(),
+        app.pin_cpu_gate.clone().acquire_owned(),
     )
     .await
     .map_err(|_| {
@@ -70,7 +73,7 @@ async fn verify_pin(app: &App, pin: String) -> Result<String, ApiError> {
         hash
     };
     let hash = snapshot.clone();
-    let valid = pin_cpu(move || {
+    let valid = pin_cpu(app, move || {
         Ok(PasswordHash::new(&hash).ok().is_some_and(|h| {
             Argon2::default()
                 .verify_password(pin.as_bytes(), &h)
@@ -136,7 +139,7 @@ pub(crate) async fn set_pin(
     } else {
         let pin = pin_text(&value, "pin")?;
         Some(
-            pin_cpu(move || {
+            pin_cpu(&app, move || {
                 Argon2::default()
                     .hash_password(pin.as_bytes(), &SaltString::generate(&mut OsRng))
                     .map(|v| v.to_string())

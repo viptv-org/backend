@@ -15,7 +15,7 @@ pub(crate) fn adult(meta: &Value) -> bool {
 
 use metadata::{media, prune_observations};
 pub(crate) use metadata::observe;
-pub(crate) use pin::{set_pin, unlock};
+pub(crate) use pin::{set_pin, unlock, PIN_CPU_PERMITS};
 pub(crate) use policy::{after, before, filter_items, require_item, sql_allowed};
 pub(crate) use schema::{
     get_policy, init, profile_fields, require_parent, restricted, revision,
