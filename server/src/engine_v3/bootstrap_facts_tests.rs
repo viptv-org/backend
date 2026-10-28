@@ -4,19 +4,6 @@ async fn fact(app: &App, token: &str) -> Value {
     assert_eq!(status, StatusCode::OK, "{body}");
     body["subtitle_availability"].clone()
 }
-/// One request over a raw loopback socket, so a test can play traffic the host
-/// sends to any new listener without involving the app's own HTTP client.
-async fn probe(address: std::net::SocketAddr, method: &str, path: &str, host: &str) -> StatusCode {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
-    let request = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
-    socket.write_all(request.as_bytes()).await.unwrap();
-    let mut response = Vec::new();
-    socket.read_to_end(&mut response).await.unwrap();
-    let text = String::from_utf8_lossy(&response);
-    let status = text.split_whitespace().nth(1).and_then(|v| v.parse().ok());
-    StatusCode::from_u16(status.unwrap()).unwrap()
-}
 #[tokio::test]
 async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs_no_provider_io() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -58,8 +45,12 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
                                 "{method} {path} host={:?}",
                                 headers.get(axum::http::header::HOST)
                             ));
+                            // Nothing in the fixture serves a provider read.
+                            return StatusCode::BAD_GATEWAY;
                         }
-                        StatusCode::BAD_GATEWAY
+                        // The host's port probe and a preview page load answer
+                        // normally; they are not add-on traffic.
+                        StatusCode::OK
                     }
                 },
             ),
@@ -113,37 +104,33 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
         .execute("UPDATE auth_sessions SET profile_id=NULL WHERE id='s1'", [])
         .unwrap();
     assert!(fact(&app, "member-token-1").await.is_null());
-    // The host reaches this listener too: `zeron headless` probes every new
+    // The dev host reaches this listener too: its engine probes every new
     // loopback listener with `HEAD /` and catalogues an HTTP answer as a dev
-    // server, which a preview can then load with a real `GET /` (backend#48,
+    // server, so a preview of it can load the page later (backend#48,
     // backend#58). Neither is provider egress, so the fake counts add-on paths
-    // only and this checks the host's requests do not register.
-    let probe_host = format!("localhost:{}", address.port());
-    for method in ["HEAD", "GET"] {
-        assert_eq!(
-            probe(address, method, "/", &probe_host).await,
-            StatusCode::BAD_GATEWAY
-        );
-    }
+    // only and the test sends both host requests.
+    crate::test_support::send_port_probe(address).await;
+    let page = reqwest::Client::new()
+        .get(format!("http://{address}/"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
     let provider_requests = seen.lock().unwrap().clone();
     assert_eq!(
         reads.load(Ordering::SeqCst),
         0,
         "provider requests: {provider_requests:?}"
     );
-    // A read of a fixture add-on is still counted, so the assertion above is
+    // Reads of the fixture add-ons are still counted, so the assertion above is
     // not vacuous.
     for root in &addon_roots {
-        assert_eq!(
-            probe(
-                address,
-                "GET",
-                &format!("{root}manifest.json"),
-                &address.to_string()
-            )
-            .await,
-            StatusCode::BAD_GATEWAY
-        );
+        let read = reqwest::Client::new()
+            .get(format!("http://{address}{root}manifest.json"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::BAD_GATEWAY);
     }
     assert_eq!(reads.load(Ordering::SeqCst), addon_roots.len());
     server.abort();
