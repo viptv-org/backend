@@ -18,8 +18,11 @@ pub(crate) fn auth_error_with_retry(error: ApiError, retry_after: Option<i64>) -
         "parent_required"
     } else if error.1 == "Refresh token reuse detected" {
         "refresh_reuse"
-    } else if error.1 == "authorization_pending" {
-        "authorization_pending"
+    } else if let Some(code @ (MSG_AUTHORIZATION_PENDING | MSG_ACCESS_DENIED | MSG_EXPIRED_TOKEN)) =
+        error.api_error_code()
+    {
+        // RFC 8628 section 3.5 device token errors keep their own code.
+        code
     } else {
         match error.0 {
             StatusCode::UNAUTHORIZED => "unauthorized",

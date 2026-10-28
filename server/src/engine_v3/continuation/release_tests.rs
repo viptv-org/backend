@@ -671,3 +671,85 @@ async fn a_series_simkl_maps_backs_off_while_simkl_fails_instead_of_using_the_ad
     assert_eq!(row(), Some((None, 1)));
     assert_eq!(verdict(app, "tt100"), None);
 }
+
+/// Details and the player's Next resolve the next episode of `from` without
+/// an explicit metadata origin.
+async fn next(app: &App, from: u32) -> Value {
+    app.addons.forget_responses();
+    let (status, next) = request(
+        app,
+        "member-token-1",
+        "POST",
+        "/api/profiles/1/continue/next",
+        json!({"identity":episode(from),"parent_identity":series()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    next
+}
+
+/// The next-episode resolution reads the same provider as the release
+/// refresh: a Stremio-imported series Simkl cannot map is read from the
+/// metadata add-ons on a Simkl profile, so Details and the player's Next
+/// agree with the card's "+1" badge (backend#47).
+#[tokio::test]
+async fn next_episode_of_an_imported_series_simkl_cannot_map_comes_from_the_add_ons() {
+    let start = now();
+    let mut show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
+    // No Simkl request is needed: the series has no Simkl mapping.
+    show.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:9"));
+    let app = &show.app;
+    let (status, integrations) =
+        request(app, "member-token-1", "GET", "/api/profiles/1/integrations", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{integrations}");
+    assert_eq!(integrations["configuration"]["browsing_plugin"], "simkl");
+    watch(app, episode(1), Some(series()), true, start - 10 * DAY).await;
+    let resolved = next(app, 1).await;
+    assert_eq!(resolved["status"], "Next", "{resolved}");
+    assert_eq!(resolved["item"]["identity"]["id"], "tt100:1:2");
+    assert_eq!(resolved["item"]["parent_identity"]["id"], "tt100");
+    assert_eq!(show.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(show_entry(&queue(app).await)["card"]["badges"], json!(["+1"]));
+}
+
+/// A series Simkl maps keeps reading Simkl's document: Simkl announces
+/// episode 2 for later while the add-ons list it as released.
+#[tokio::test]
+async fn next_episode_of_a_series_simkl_maps_still_comes_from_simkl() {
+    let start = now();
+    let mut show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
+    let routes = Router::new()
+        .route("/tv/20", axum::routing::get(|| async { axum::Json(json!({"title":"Fixture Show","ids":{"simkl":20,"imdb":"tt100"}})) }))
+        .route("/tv/episodes/20", axum::routing::get(|| async { axum::Json(json!([
+            {"title":"Chapter 1","season":1,"episode":1,"aired":true,"ids":{"simkl":30}},
+            {"title":"Chapter 2","season":1,"episode":2,"aired":false,"date":"2100-01-01","ids":{"simkl":31}}
+        ])) }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let simkl = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    show.app.simkl = Arc::new(crate::simkl::Service::fixture(&format!("http://{address}")));
+    let app = &show.app;
+    app.db.lock().unwrap().execute("INSERT INTO simkl_import_entries(profile_id,remote_id,remote_kind,local_id,local_kind,card,statistics,link_revision) VALUES(1,'simkl:tv:20','series','tt100','series','{}','{}',0)", []).unwrap();
+    watch(app, episode(1), Some(series()), true, start - 10 * DAY).await;
+    let resolved = next(app, 1).await;
+    assert_eq!(resolved["status"], "Upcoming", "{resolved}");
+    assert_eq!(show.calls.load(Ordering::SeqCst), 0);
+    simkl.abort();
+}
+
+/// A Stremio profile resolves from its own metadata add-ons, as before.
+#[tokio::test]
+async fn next_episode_on_a_stremio_profile_comes_from_its_add_ons() {
+    let start = now();
+    let show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
+    let app = &show.app;
+    let (status, integrations) =
+        request(app, "member-token-1", "GET", "/api/profiles/1/integrations", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{integrations}");
+    assert_eq!(integrations["configuration"]["browsing_plugin"], "stremio");
+    watch(app, episode(1), Some(series()), true, start - 10 * DAY).await;
+    let resolved = next(app, 1).await;
+    assert_eq!(resolved["status"], "Next", "{resolved}");
+    assert_eq!(resolved["item"]["identity"]["id"], "tt100:1:2");
+    assert_eq!(show.calls.load(Ordering::SeqCst), 1);
+}
