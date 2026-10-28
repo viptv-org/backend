@@ -38,10 +38,8 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
         lease.validate(&db)?;
         let restricted = kids::restricted(&db, &lease.principal)?;
         let live_allowed = !restricted || kids::unlocked(&db, &lease.principal)?;
-        let linked: bool = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM simkl_links WHERE profile_id=?1 AND account_id=?2 AND credential IS NOT NULL)",
-            params![profile, lease.principal.account_id()], |row| row.get(0),
-        ).map_err(db_error)?;
+        let linked =
+            crate::simkl::linked_db(&db, lease.principal.account_id().ok_or_else(auth::forbidden)?, profile)?;
         (restricted, live_allowed, linked, continuation::calendar::has_series_db(&db, profile)?)
     };
     let (movies, series) = if restricted {

@@ -35,7 +35,7 @@ mod tracking;
 pub(crate) use client::Service;
 pub(crate) use metadata::{detail, search, Page, Search};
 pub(crate) use oauth::{authorize, callback, disconnect, status};
-pub(crate) use store::{connections, init, linked};
+pub(crate) use store::{connections, init, linked, linked_db};
 pub(crate) use tracking::watched;
 
 pub(crate) fn capabilities() -> Vec<Capability> {
