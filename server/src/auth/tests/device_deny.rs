@@ -9,9 +9,11 @@ fn member_principal(id: i64) -> Principal {
     }
 }
 
-fn pairing_exists(db: &Connection, user_code: &str) -> bool {
+// Denying leaves a tombstone for the polling device (backend#44), so "gone"
+// means no longer usable rather than deleted.
+fn pairing_usable(db: &Connection, user_code: &str) -> bool {
     db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM auth_pairings WHERE code_hash=?1)",
+        "SELECT EXISTS(SELECT 1 FROM auth_pairings WHERE code_hash=?1 AND denied=0)",
         [hash(user_code)],
         |row| row.get::<_, bool>(0),
     )
@@ -19,7 +21,7 @@ fn pairing_exists(db: &Connection, user_code: &str) -> bool {
 }
 
 #[test]
-fn deny_removes_live_pending_codes_for_any_authenticated_user() {
+fn deny_retires_live_pending_codes_for_any_authenticated_user() {
     let db = db();
     claim(&db);
     let code = dispatch(
@@ -43,7 +45,7 @@ fn deny_removes_live_pending_codes_for_any_authenticated_user() {
         SESSION_TOKEN,
     )
     .unwrap();
-    assert!(!pairing_exists(&db, code["user_code"].as_str().unwrap()));
+    assert!(!pairing_usable(&db, code["user_code"].as_str().unwrap()));
 }
 
 #[test]
@@ -91,7 +93,7 @@ fn deny_refuses_already_approved_pairings_from_foreign_accounts() {
     )
     .unwrap_err();
     assert_eq!(err.0, StatusCode::FORBIDDEN);
-    assert!(pairing_exists(&db, code["user_code"].as_str().unwrap()));
+    assert!(pairing_usable(&db, code["user_code"].as_str().unwrap()));
     // The owning account can deny its own approved pairing.
     dispatch(
         &db,
@@ -102,7 +104,7 @@ fn deny_refuses_already_approved_pairings_from_foreign_accounts() {
         SESSION_TOKEN,
     )
     .unwrap();
-    assert!(!pairing_exists(&db, code["user_code"].as_str().unwrap()));
+    assert!(!pairing_usable(&db, code["user_code"].as_str().unwrap()));
 }
 
 #[test]

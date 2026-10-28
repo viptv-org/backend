@@ -20,6 +20,10 @@ pub(crate) const MSG_PROFILE_REQUIRED: &str = "Profile selection required";
 pub(crate) const MSG_PARENT_REQUIRED: &str = "Parent PIN required";
 pub(crate) const MSG_PARENT_PIN_INVALID: &str = "Incorrect parent PIN";
 pub(crate) const MSG_PROFILE_POLICY_CHANGED: &str = "Profile policy changed";
+// RFC 8628 section 3.5 device token poll errors; message and code are equal.
+pub(crate) const MSG_AUTHORIZATION_PENDING: &str = "authorization_pending";
+pub(crate) const MSG_ACCESS_DENIED: &str = "access_denied";
+pub(crate) const MSG_EXPIRED_TOKEN: &str = "expired_token";
 impl ApiError {
     /// Stable recovery reasons shared by all platform clients.
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
@@ -32,6 +36,9 @@ impl ApiError {
             MSG_PARENT_REQUIRED => Some("parent_required"),
             MSG_PARENT_PIN_INVALID => Some("parent_pin_invalid"),
             MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
+            MSG_AUTHORIZATION_PENDING => Some(MSG_AUTHORIZATION_PENDING),
+            MSG_ACCESS_DENIED => Some(MSG_ACCESS_DENIED),
+            MSG_EXPIRED_TOKEN => Some(MSG_EXPIRED_TOKEN),
             "Provider connection limit reached" => Some("provider_connection_limit"),
             _ => None,
         }

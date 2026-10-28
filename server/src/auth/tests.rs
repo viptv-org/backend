@@ -1217,4 +1217,5 @@ fn bounded_limits_events_and_expiry() {
 }
 
 mod device_deny;
+mod device_token_errors;
 mod stale_authority;

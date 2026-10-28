@@ -13,6 +13,10 @@ pub(crate) const MAX_AUTH_BUCKETS: i64 = 10_000;
 pub(crate) const MAX_PENDING_PAIRINGS: i64 = 192;
 pub(crate) const MAX_PAIRINGS: i64 = 256;
 pub(crate) const MAX_APPROVED_PAIRINGS_PER_ACCOUNT: i64 = 8;
+// Denied and expired pairings stay as tombstones this long past their expiry,
+// so the polling device reads `access_denied`/`expired_token` instead of
+// `authorization_pending` (RFC 8628 section 3.5).
+pub(crate) const PAIRING_TOMBSTONE_SECS: i64 = 600;
 pub(crate) const MAX_REFRESH_TOMBSTONES_PER_FAMILY: i64 = 64;
 pub(crate) const MAX_REFRESH_TOMBSTONES_PER_ACCOUNT: i64 = 2_048;
 pub(crate) const MAX_REFRESH_TOMBSTONES: i64 = 20_000;
@@ -54,7 +58,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS auth_one_owner ON auth_accounts(role) WHERE ro
 CREATE TABLE IF NOT EXISTS auth_profiles(account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,PRIMARY KEY(account_id,profile_id));
 CREATE TABLE IF NOT EXISTS auth_sessions(id TEXT PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,access_hash TEXT NOT NULL UNIQUE,refresh_hash TEXT NOT NULL UNIQUE,csrf_hash TEXT NOT NULL,profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,kind TEXT NOT NULL,device_name TEXT NOT NULL,access_expires INTEGER NOT NULL,refresh_expires INTEGER NOT NULL,created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS auth_csrf_tokens(session_id TEXT NOT NULL REFERENCES auth_sessions(id) ON DELETE CASCADE,csrf_hash TEXT NOT NULL,expires INTEGER NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(session_id,csrf_hash));
-CREATE TABLE IF NOT EXISTS auth_pairings(code_hash TEXT PRIMARY KEY,device_hash TEXT NOT NULL UNIQUE,device_name TEXT NOT NULL,account_id INTEGER REFERENCES auth_accounts(id) ON DELETE CASCADE,profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,expires INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS auth_pairings(code_hash TEXT PRIMARY KEY,device_hash TEXT NOT NULL UNIQUE,device_name TEXT NOT NULL,account_id INTEGER REFERENCES auth_accounts(id) ON DELETE CASCADE,profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,expires INTEGER NOT NULL,denied INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS auth_pairing_profiles(code_hash TEXT NOT NULL REFERENCES auth_pairings(code_hash) ON DELETE CASCADE,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,PRIMARY KEY(code_hash,profile_id));
 CREATE TABLE IF NOT EXISTS auth_device_profiles(session_id TEXT NOT NULL REFERENCES auth_sessions(id) ON DELETE CASCADE,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,PRIMARY KEY(session_id,profile_id));
 CREATE TABLE IF NOT EXISTS auth_refresh_used(hash TEXT PRIMARY KEY,family TEXT NOT NULL,account_id INTEGER,csrf_hash TEXT NOT NULL,kind TEXT NOT NULL,expires INTEGER NOT NULL);
@@ -69,6 +73,15 @@ CREATE TABLE IF NOT EXISTS auth_events(id INTEGER PRIMARY KEY,kind TEXT NOT NULL
         db.execute_batch("ALTER TABLE auth_refresh_used ADD COLUMN account_id INTEGER;")?;
     }
     db.execute_batch("CREATE INDEX IF NOT EXISTS auth_refresh_used_family_expiry ON auth_refresh_used(family,expires);CREATE INDEX IF NOT EXISTS auth_refresh_used_account_expiry ON auth_refresh_used(account_id,expires);")?;
+    let pairing_columns = db
+        .prepare("PRAGMA table_info(auth_pairings)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !pairing_columns.iter().any(|column| column == "denied") {
+        db.execute_batch(
+            "ALTER TABLE auth_pairings ADD COLUMN denied INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
     let has_name = db
         .prepare("PRAGMA table_info(auth_accounts)")?
         .query_map([], |row| row.get::<_, String>(1))?
