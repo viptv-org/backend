@@ -882,7 +882,7 @@ async fn a_prepared_target_projects_an_imported_row_the_release_document_cannot(
         .db
         .lock()
         .unwrap()
-        .query_row("SELECT result FROM continuation_cache", [], |r| r.get(0))
+        .query_row("SELECT result FROM continuation_cache WHERE profile_id=1 AND series_id='tt100'", [], |r| r.get(0))
         .unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&cached).unwrap()["metadata_origin"],
