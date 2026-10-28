@@ -20,6 +20,9 @@
 //! response cache), daily without a known date, weekly once dormant, and with
 //! growing back-off while its metadata is unavailable. A refresh that changes
 //! what the queue shows bumps the library revision, so clients refresh quietly.
+//! The episode list comes from the profile's provider, or from the series' own
+//! one when that cannot serve it (`metadata::series_document`): a Stremio
+//! import Simkl has no mapping for keeps its add-on facts on a Simkl profile.
 use super::*;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -666,12 +669,17 @@ async fn refresh_one(
     validate(&input.identity, input.parent_identity.as_ref())?;
     // Background checks are spaced and rare, so they skip the add-on response
     // cache: a check right after an air time must see the provider's list.
-    let (parent, episodes) = tokio::time::timeout(
+    // A series Simkl cannot map is read from the add-ons (backend#36).
+    let (parent, episodes) = super::metadata::series_document(
+        app,
+        lease,
+        profile,
+        &input,
+        simkl,
+        true,
         LOOKUP_TIMEOUT,
-        super::metadata::document(app, lease, profile, &input, simkl, None, None, true),
     )
-    .await
-    .map_err(|_| ApiError::from("Metadata unavailable"))??;
+    .await?;
     if parent.identity.id != candidate.series {
         return Err("Metadata returned a different parent".into());
     }

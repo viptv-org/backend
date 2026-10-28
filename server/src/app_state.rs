@@ -165,6 +165,11 @@ pub(crate) struct ResourceOwner {
     pub(crate) lease: ResourceLease,
     pub(crate) created: Instant,
 }
+impl ResourceOwner {
+    fn belongs_to(&self, key: &str, session_id: Option<&str>) -> bool {
+        self.key == key && self.lease.session_id.as_deref() == session_id
+    }
+}
 impl ResourceLease {
     /// Full lease validation in one database round trip.
     ///
@@ -240,6 +245,9 @@ pub(crate) struct ExactVod {
     pub(crate) episode: Option<u32>,
 }
 pub(crate) const MAX_SOURCES_PER_JOB: usize = 4096;
+/// How long a stream grant stays usable after discovery or its last playback
+/// heartbeat or first frame.
+pub(crate) const STREAM_GRANT_WINDOW: Duration = Duration::from_secs(1800);
 pub(crate) struct Job {
     pub(crate) metadata_proof: Option<engine_v3::origins::MetadataProof>,
     pub(crate) source_slots: std::sync::atomic::AtomicUsize,
@@ -276,7 +284,33 @@ pub(crate) struct StreamEntry {
     pub(crate) requires_torrent_gateway: bool,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) required_audio_index: Option<u32>,
+    /// Start of the grant's `STREAM_GRANT_WINDOW`: discovery, or the last
+    /// playback heartbeat or first frame that used it (`App::refresh_stream`).
     pub(crate) created: Instant,
+    /// When the upstream URL itself stops working, if it does. Playback never
+    /// extends the grant past it.
+    pub(crate) upstream_deadline: Option<Instant>,
+}
+impl StreamEntry {
+    /// Binds the grant to an upstream URL that works for `ttl` from now.
+    pub(crate) fn expire_upstream_after(&mut self, ttl: Duration) {
+        let now = Instant::now();
+        self.created = now
+            .checked_sub(STREAM_GRANT_WINDOW.saturating_sub(ttl))
+            .unwrap_or(now);
+        self.upstream_deadline = now.checked_add(ttl);
+    }
+    /// Restarts the window at `now`, but never past the upstream deadline and
+    /// never backwards.
+    fn restart_window(&mut self, now: Instant) {
+        let start = match self.upstream_deadline {
+            None => now,
+            Some(deadline) => deadline
+                .checked_sub(STREAM_GRANT_WINDOW)
+                .map_or(self.created, |latest| latest.min(now)),
+        };
+        self.created = self.created.max(start);
+    }
 }
 impl App {
     pub fn new(db: Connection, client: reqwest::Client) -> Result<Self, String> {
@@ -427,13 +461,35 @@ impl App {
             .get(&format!("{kind}:{id}"))
             .cloned();
         if let Some(owner) = owner.filter(|owner| {
-            owner.key == Self::scoped_key(principal)
-                && owner.lease.session_id == self.request_lease().session_id
+            owner.belongs_to(
+                &Self::scoped_key(principal),
+                self.request_lease().session_id.as_deref(),
+            )
         }) {
             owner.lease.validate(&self.db.lock().unwrap())
         } else {
             Err(ApiError(StatusCode::NOT_FOUND, "Resource not found".into()))
         }
+    }
+    /// Restarts a stream grant's window because playback just used it, so a
+    /// lapsed lease can reopen the same source without discovery
+    /// (backend#18). Only the owner that admitted the playback refreshes it,
+    /// and never past the upstream URL's own deadline.
+    pub(crate) fn refresh_stream(&self, owner: &str, session_id: Option<&str>, id: &str) {
+        // Registration's lock order. Both records change in one critical
+        // section so a concurrent prune never keeps one without the other.
+        let mut streams = self.streams.lock().unwrap();
+        let mut owners = self.resource_owners.lock().unwrap();
+        let (Some(stream), Some(record)) =
+            (streams.get_mut(id), owners.get_mut(&format!("stream:{id}")))
+        else {
+            return;
+        };
+        if !record.belongs_to(owner, session_id) {
+            return;
+        }
+        stream.restart_window(Instant::now());
+        record.created = record.created.max(stream.created);
     }
     #[cfg(test)]
     pub(crate) fn retain_playback_owners(
@@ -457,12 +513,12 @@ impl App {
         self.streams
             .lock()
             .unwrap()
-            .retain(|_, s| s.created.elapsed() < Duration::from_secs(1800));
+            .retain(|_, s| s.created.elapsed() < STREAM_GRANT_WINDOW);
         self.resource_owners.lock().unwrap().retain(|key, owner| {
             if key.starts_with("job:") {
                 owner.created.elapsed() < Duration::from_secs(600)
             } else if key.starts_with("stream:") {
-                owner.created.elapsed() < Duration::from_secs(1800)
+                owner.created.elapsed() < STREAM_GRANT_WINDOW
             } else {
                 true
             }
