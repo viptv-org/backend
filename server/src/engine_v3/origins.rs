@@ -1,6 +1,6 @@
 //! Stable metadata lookup provenance. Revisions fence access; incarnations identify installs.
 use super::*;
-use viptv_engine::origin::MetadataOrigin;
+use viptv_engine::{identity::MediaIdentity, origin::MetadataOrigin};
 
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_addon_incarnations(addon_id INTEGER PRIMARY KEY REFERENCES addons(id) ON DELETE CASCADE,incarnation TEXT NOT NULL UNIQUE);
@@ -87,26 +87,31 @@ impl Serving {
         })
     }
 
-    /// The metadata scope that serves `kind`/`id`: a `simkl:` title, and one
-    /// the profile's own Simkl link identifies, stay on Simkl; everything else
-    /// comes from the first assigned add-on that publishes the title's metadata
-    /// (the fallback of backend#60). A Stremio import writes no provider
-    /// provenance, so the queue attributes its rows from here (backend#72).
+    /// The metadata scope that serves `identity`: a `simkl:` title, and one the
+    /// profile's own Simkl link identifies, stay on Simkl; a shared title comes
+    /// from the first assigned add-on that publishes it (the fallback of
+    /// backend#60). A Stremio import writes no provider provenance, so the queue
+    /// attributes its rows from here (backend#72).
     pub(crate) fn origin(
         &self,
         db: &Connection,
-        kind: &str,
-        id: &str,
+        identity: &MediaIdentity,
     ) -> Result<Option<MetadataOrigin>, ApiError> {
+        let (kind, id) = (identity.kind.as_str(), identity.id.as_str());
         // Only a Simkl link can carry a mapping, and only Simkl browsing reads it.
         if id.starts_with("simkl:")
-            || self.simkl_browsing && self.linked && self.identifies(db, kind, id)?
+            || self.simkl_browsing && self.linked && self.identifies(db, identity)?
         {
             return Ok(Some(MetadataOrigin {
                 provider_id: "simkl".into(),
                 connection_id: None,
                 incarnation: None,
             }));
+        }
+        // An add-on id that only one connector knows cannot be attributed from
+        // its shape: two add-ons may publish different titles under it.
+        if !viptv_engine::origin::shared_identity(identity) {
+            return Ok(None);
         }
         for (addon, manifest) in &self.addons {
             if crate::addon::supports(manifest, "meta", kind, id) {
@@ -116,10 +121,10 @@ impl Serving {
         Ok(None)
     }
 
-    fn identifies(&self, db: &Connection, kind: &str, id: &str) -> Result<bool, ApiError> {
+    fn identifies(&self, db: &Connection, identity: &MediaIdentity) -> Result<bool, ApiError> {
         db.query_row(
             "SELECT EXISTS(SELECT 1 FROM simkl_import_entries WHERE profile_id=?1 AND local_kind=?2 AND local_id=?3)",
-            params![self.profile, kind, id],
+            params![self.profile, identity.kind, identity.id],
             |r| r.get(0),
         )
         .map_err(db_error)

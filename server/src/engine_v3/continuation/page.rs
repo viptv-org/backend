@@ -229,7 +229,7 @@ fn attribute(
         return Ok(());
     }
     let lookup = card.parent_identity.as_ref().unwrap_or(&card.identity);
-    let Some(origin) = serving.origin(db, &lookup.kind, &lookup.id)? else {
+    let Some(origin) = serving.origin(db, lookup)? else {
         return Ok(());
     };
     card.provider_id = origin
