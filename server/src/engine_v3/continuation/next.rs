@@ -101,23 +101,44 @@ pub(crate) async fn resolve(
             )?;
         }
     }
-    let result = tokio::time::timeout(
-        Duration::from_secs(8),
-        super::metadata::document(
+    // An explicit metadata origin keeps its exact provider; without one the
+    // next episode comes from the same provider the release refresh and the
+    // Calendar read (`metadata::series_document`), so a Stremio-imported
+    // series Simkl cannot map still resolves from the add-ons (backend#47).
+    let document = if origin.is_none() {
+        super::metadata::series_document(
             &app,
             &lease,
             profile,
             &input,
             simkl,
-            origin.as_ref(),
-            request.metadata_origin.as_ref(),
             false,
-        ),
-    )
-    .await;
-    let (parent, episodes) = match result {
-        Ok(Ok(document)) => document,
-        Ok(Err(error))
+            Duration::from_secs(8),
+        )
+        .await
+    } else {
+        match tokio::time::timeout(
+            Duration::from_secs(8),
+            super::metadata::document(
+                &app,
+                &lease,
+                profile,
+                &input,
+                simkl,
+                origin.as_ref(),
+                request.metadata_origin.as_ref(),
+                false,
+            ),
+        )
+        .await
+        {
+            Ok(document) => document,
+            Err(_) => Err(ApiError::from("Metadata unavailable")),
+        }
+    };
+    let (parent, episodes) = match document {
+        Ok(document) => document,
+        Err(error)
             if matches!(
                 error.0,
                 StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::CONFLICT
