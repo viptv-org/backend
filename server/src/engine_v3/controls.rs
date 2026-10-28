@@ -171,7 +171,7 @@ pub(crate) async fn get(
             .db
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?;
-        let linked:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM simkl_links WHERE profile_id=?1 AND account_id=?2 AND credential IS NOT NULL)",params![profile,lease.principal.account_id()],|r|r.get(0)).map_err(db_error)?;
+        let linked = crate::simkl::linked_db(&db, lease.principal.account_id().ok_or_else(auth::forbidden)?, profile)?;
         if linked {
             available(true)
         } else {
