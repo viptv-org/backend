@@ -34,7 +34,7 @@ Fresh accounts remain at zero profiles until an authenticated household browser 
 
 ## Device pairing
 
-1. `POST /device/code {device_name}` returns `device_code`, `user_code`, `verification_uri`, `verification_uri_complete`, `qr_uri`, `expires_in`, and `interval`.
+1. `POST /device/code {device_name, device_code?}` returns `device_code`, `user_code`, `verification_uri`, `verification_uri_complete`, `qr_uri`, `expires_in`, and `interval`. A TV asking for a fresh code may send the `device_code` it currently holds; the server then expires that device's earlier pending code so it can no longer be approved or redeemed (its token poll reads `expired_token`).
 2. The QR contains only the complete dashboard activation URL. The server-generated PNG is bound to an unexpired user code and sent with `Cache-Control: no-store`.
 3. A signed-in browser uses `POST /device/lookup {user_code}`, then confirms `POST /device/approve {user_code}` or denies with `POST /device/deny {user_code}`. Approval always binds to the current account; no target account or profile subset is accepted.
 4. The TV polls `POST /device/token {device_code}`. Pending returns `authorization_pending`; approved one-time exchange returns a device access token and rotating refresh token. Exchange succeeds when the account has zero profiles.

@@ -57,6 +57,25 @@ pub(crate) fn dispatch_devices(
         }
         "/auth/device/code" => {
             sweep_pairings(db)?;
+            // A TV asking for a fresh code identifies itself by the device_code
+            // it already holds. Expire that device's earlier pending code so a
+            // superseded code can never be approved or redeemed: its token poll
+            // reads expired_token and lookup/approve refuse it with the usual
+            // wording. The row stays as a tombstone (see sweep_pairings); an
+            // approved grant or another device's row is left untouched.
+            if let Some(device_code) = v
+                .get("device_code")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|device_code| !device_code.is_empty())
+            {
+                let issued = now();
+                db.execute(
+                    "UPDATE auth_pairings SET expires=?1 WHERE device_hash=?2 AND account_id IS NULL AND denied=0 AND expires>?1",
+                    params![issued, hash(device_code)],
+                )
+                .map_err(crate::db_error)?;
+            }
             let pending: i64 = db
                 .query_row(
                     "SELECT count(*) FROM auth_pairings WHERE account_id IS NULL AND denied=0 AND expires>?1",
