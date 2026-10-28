@@ -14,32 +14,53 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
     );
     let reads = Arc::new(AtomicUsize::new(0));
     let count = reads.clone();
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = seen.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let addons = [
+        (1, json!(["meta"])),
+        (2, json!([{"name":"subtitles","types":["movie"]}])),
+    ];
+    // The fake add-ons are mounted at `http://{address}/{id}/manifest.json` and
+    // every endpoint the backend derives from one stays under its id. No other
+    // provider is configured here, so only those paths can be provider egress.
+    let addon_roots: Vec<String> = addons.iter().map(|(id, _)| format!("/{id}/")).collect();
+    let roots = addon_roots.clone();
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            Router::new().fallback(move |method: axum::http::Method| {
-                let count = count.clone();
-                async move {
-                    // Count every request the backend could make; ignore the host's
-                    // HEAD port probe to new loopback listeners (backend#48).
-                    if method != axum::http::Method::HEAD {
-                        count.fetch_add(1, Ordering::SeqCst);
+            Router::new().fallback(
+                move |method: axum::http::Method,
+                      uri: axum::http::Uri,
+                      headers: axum::http::HeaderMap| {
+                    let count = count.clone();
+                    let log = log.clone();
+                    let roots = roots.clone();
+                    async move {
+                        let path = uri.path();
+                        if roots.iter().any(|root| path.starts_with(root.as_str())) {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            log.lock().unwrap().push(format!(
+                                "{method} {path} host={:?}",
+                                headers.get(axum::http::header::HOST)
+                            ));
+                            // Nothing in the fixture serves a provider read.
+                            return StatusCode::BAD_GATEWAY;
+                        }
+                        // The host's port probe and a preview page load answer
+                        // normally; they are not add-on traffic.
+                        StatusCode::OK
                     }
-                    StatusCode::BAD_GATEWAY
-                }
-            }),
+                },
+            ),
         )
         .await
         .unwrap()
     });
     {
         let db = app.db.lock().unwrap();
-        for (id, resources) in [
-            (1, json!(["meta"])),
-            (2, json!([{"name":"subtitles","types":["movie"]}])),
-        ] {
+        for (id, resources) in addons {
             db.execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(?1,'Cached fixture',?2,?3,1)",params![id,format!("http://{address}/{id}/manifest.json"),json!({"id":format!("fixture-{id}"),"name":"Cached fixture","version":"1","resources":resources,"types":["movie"]}).to_string()]).unwrap();
         }
         db.execute("INSERT INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Foreign','foreign',1)",[]).unwrap();
@@ -83,7 +104,35 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
         .execute("UPDATE auth_sessions SET profile_id=NULL WHERE id='s1'", [])
         .unwrap();
     assert!(fact(&app, "member-token-1").await.is_null());
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    // The dev host reaches this listener too: its engine probes every new
+    // loopback listener with `HEAD /` and catalogues an HTTP answer as a dev
+    // server, so a preview of it can load the page later (backend#48,
+    // backend#58). Neither is provider egress, so the fake counts add-on paths
+    // only and the test sends both host requests.
+    crate::test_support::send_port_probe(address).await;
+    let page = reqwest::Client::new()
+        .get(format!("http://{address}/"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let provider_requests = seen.lock().unwrap().clone();
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        0,
+        "provider requests: {provider_requests:?}"
+    );
+    // Reads of the fixture add-ons are still counted, so the assertion above is
+    // not vacuous.
+    for root in &addon_roots {
+        let read = reqwest::Client::new()
+            .get(format!("http://{address}{root}manifest.json"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::BAD_GATEWAY);
+    }
+    assert_eq!(reads.load(Ordering::SeqCst), addon_roots.len());
     server.abort();
 }
 
