@@ -394,11 +394,15 @@ async fn ordered_catalogs_raw_pagination_search_constraints_and_meta() {
     use axum::{extract::OriginalUri, routing::get, Router};
     let paths = Arc::new(Mutex::new(Vec::<String>::new()));
     let captured = paths.clone();
-    let mock = Router::new().fallback(get(move |OriginalUri(uri): OriginalUri| {
+    let mock = Router::new().fallback(get(move |method: axum::http::Method, OriginalUri(uri): OriginalUri| {
             let captured = captured.clone();
             async move {
                 let path = uri.path().to_owned();
-                captured.lock().unwrap().push(path.clone());
+                // Record catalog/meta traffic only: the host probes every new
+                // loopback listener with a safe `HEAD /` (backend#48).
+                if method != axum::http::Method::HEAD {
+                    captured.lock().unwrap().push(path.clone());
+                }
                 if path == "/slow/manifest.json" {
                     return axum::Json(json!({"id":"slow","name":"Refreshed","resources":["catalog","meta"],"types":["movie"],"catalogs":[{"id":"custom","type":"movie","extra":[{"name":"skip"},{"name":"search"}]}]}));
                 }
@@ -412,6 +416,15 @@ async fn ordered_catalogs_raw_pagination_search_constraints_and_meta() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    // The dev host's engine probes every new loopback listener with `HEAD /`
+    // (backend#48). Send the same probe so the fixture is checked against it.
+    reqwest::Client::new()
+        .head(format!("http://{address}/"))
+        .send()
+        .await
+        .expect("HEAD / probe")
+        .error_for_status()
+        .expect("fixture answers the port probe");
     let addons = test_addons();
     let manifest = json!({"resources":["catalog","meta"],"types":["movie"],"catalogs":[{"id":"custom","type":"movie","extra":[{"name":"skip"},{"name":"search"}]},{"id":"other","type":"movie","extraSupported":["search"]}]});
     let fast = insert(
