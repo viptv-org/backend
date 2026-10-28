@@ -601,7 +601,7 @@ async fn an_imported_finished_series_card_keeps_the_episode_still_after_a_restar
     until(|| verdict(app, "tt100").is_some()).await;
     restart(app);
     let entry = show_entry(&queue(app).await);
-    assert_eq!(entry["card"]["provider_id"], "library", "{entry}");
+    assert_eq!(entry["card"]["provider_id"], "addon:1", "{entry}");
     assert_eq!(entry["card"]["landscape"], "https://img.invalid/1.jpg", "{entry}");
     // Without a still for that episode, the series backdrop.
     {
@@ -900,4 +900,22 @@ async fn a_prepared_target_projects_an_imported_row_the_release_document_cannot(
     assert_eq!(entry["card"]["identity"]["id"], "tt100:1:2", "{entry}");
     assert_eq!(entry["card"]["subtitle"], "S1 E2 · Chapter 2", "{entry}");
     assert_eq!(entry["record"]["identity"]["id"], "tt100:1:1", "{entry}");
+}
+
+/// backend#72: the up-next episode is projected from the stored release
+/// document, so the entry names that document's scope as its origin and the app
+/// starts finding sources on the tap.
+#[tokio::test]
+async fn the_up_next_entry_carries_the_documents_origin() {
+    let start = now();
+    let show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
+    let app = &show.app;
+    watch(app, episode(1), Some(series()), true, start - 10 * DAY).await;
+    resolve(app, 1).await;
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["status"], "Next", "{entry}");
+    assert_eq!(entry["card"]["identity"]["id"], "tt100:1:2", "{entry}");
+    assert_eq!(entry["card"]["metadata_origin"]["provider_id"], "stremio", "{entry}");
+    assert_eq!(entry["card"]["metadata_origin"]["connection_id"], "addon:1", "{entry}");
+    assert_eq!(entry["card"]["provider_id"], "addon:1", "{entry}");
 }

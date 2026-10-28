@@ -3956,8 +3956,8 @@ async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link
     let card = queue["entries"].as_array().unwrap().iter()
         .find(|entry| entry["card"]["identity"]["id"] == "tt13293588:3:4")
         .unwrap_or_else(|| panic!("the import did not create the episode card: {queue}"));
-    assert_eq!(card["card"]["provider_id"], "library");
-    assert!(card["card"]["metadata_origin"].is_null());
+    assert_eq!(card["card"]["provider_id"], "addon:101");
+    assert_eq!(card["card"]["metadata_origin"]["provider_id"], "stremio");
 
     for path in ["/api/meta/series/tt13293588", "/api/meta/series/tt13293588:3:4"] {
         let (status, detail) = request(&f.app, "member-token-1", "GET", path, Value::Null).await;
@@ -3973,5 +3973,92 @@ async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link
     let requested = requested.lock().unwrap();
     assert!(!requested.is_empty(), "the metadata add-on was never asked");
     assert!(requested.iter().all(|id| id == "tt13293588.json"), "{requested:?}");
+    addon.abort();
+}
+
+/// backend#72: a Continue Watching row the Stremio import wrote carries no
+/// provider provenance, so the app had to load Details before it could find
+/// sources. The server knows which scope serves the row, so its entries name it
+/// and the tap starts discovery at once.
+#[tokio::test]
+async fn imported_continue_watching_entries_carry_the_addon_origin() {
+    let mut series = movie("tt13293588");
+    series["type"] = json!("series");
+    series["name"] = json!("Mushoku Tensei");
+    series["state"]["video_id"] = json!("tt13293588:3:4");
+    let mut f = fixture(vec![series], login()).await;
+    f.app.addons.allow_test_loopback = true;
+    f.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:1"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let addon = tokio::spawn(async move {
+        let meta = get(|Path(id): Path<String>| async move {
+            axum::Json(json!({"meta":{"id":id.trim_end_matches(".json"),"type":"series",
+                "name":"Mushoku Tensei: Jobless Reincarnation",
+                "videos":[{"id":"tt13293588:3:4","season":3,"episode":4,"name":"Episode 4",
+                    "released":"2024-04-01T00:00:00Z"}]}}))
+        });
+        let streams = get(|| async {
+            axum::Json(json!({"streams":[{"url":"http://fixture.invalid/imported.mp4","name":"Imported fixture"}]}))
+        });
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/meta/series/:id", meta)
+                .route("/stream/series/:id", streams)
+                // The dev host probes every new loopback listener with HEAD / (backend#48).
+                .route("/", axum::routing::any(|| async { StatusCode::OK })),
+        )
+        .await
+        .unwrap();
+    });
+    crate::test_support::send_port_probe(address).await;
+    let manifest = json!({"id":"cinemeta","name":"Cinemeta","resources":["meta","stream"],"types":["movie","series"]});
+    f.app.db.lock().unwrap().execute(
+        "INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(101,'Cinemeta',?1,?2,1)",
+        params![format!("http://{address}/manifest.json"), manifest.to_string()],
+    ).unwrap();
+    crate::test_support::encrypt_fixture_sources(&f.app);
+    assert_eq!(f.app.db.lock().unwrap().query_row(
+        "SELECT COUNT(*) FROM simkl_links WHERE profile_id=1 AND credential IS NOT NULL", [], |r| r.get::<_, i64>(0)).unwrap(), 0,
+        "the fixture profile has no Simkl link");
+
+    let preview = get_preview(&f.app).await;
+    let (status, applied) = apply_preview(&f.app, &preview).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+
+    let entry = |page: &Value| -> Value {
+        page["entries"].as_array().unwrap().iter()
+            .find(|entry| entry["card"]["identity"]["id"] == "tt13293588:3:4")
+            .cloned()
+            .unwrap_or_else(|| panic!("the import did not create the episode card: {page}"))
+    };
+    let (status, page) = request(&f.app, "member-token-1", "GET", "/api/profiles/1/continue", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let resumed = entry(&page);
+    let (status, bootstrap) = request(&f.app, "member-token-1", "GET", "/api/bootstrap", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{bootstrap}");
+    let bootstrapped = entry(&bootstrap["continuation"]);
+    for (path, entry) in [("/continue", &resumed), ("/bootstrap", &bootstrapped)] {
+        assert_eq!(entry["card"]["metadata_origin"]["provider_id"], "stremio", "{path}: {entry}");
+        assert_eq!(entry["card"]["metadata_origin"]["connection_id"], "addon:101", "{path}: {entry}");
+        assert_eq!(entry["card"]["provider_id"], "addon:101", "{path}: {entry}");
+        assert_eq!(entry["card"]["parent_identity"]["id"], "tt13293588", "{path}: {entry}");
+    }
+    let origin = resumed["card"]["metadata_origin"].clone();
+    let card = resumed["card"].clone();
+
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query.append_pair("metadata_origin", &origin.to_string());
+    let (status, detail) = request(&f.app, "member-token-1", "GET",
+        &format!("/api/meta/series/tt13293588?{}", query.finish()), Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["item"]["metadata_origin"], origin, "{detail}");
+
+    let source = json!({"type":"series","id":card["identity"]["id"],"series_id":"tt13293588",
+        "season":card["identity"]["episode"]["season"],"episode":card["identity"]["episode"]["episode"],
+        "metadata_origin":origin,"card":card});
+    let (status, job) = request(&f.app, "member-token-1", "POST", "/api/streams", source).await;
+    assert_eq!(status, StatusCode::OK, "{job}");
     addon.abort();
 }
