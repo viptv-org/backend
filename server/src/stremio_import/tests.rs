@@ -3887,3 +3887,92 @@ async fn imported_titles_get_the_full_details_card_through_owned_metadata_addons
     assert_eq!(listed["metadata"]["rating"], 8.4);
     assert_eq!(listed["logo"], "https://images.example/tt1234567/logo.png");
 }
+
+/// backend#60: a profile with no Simkl link still gets the Simkl plugin
+/// connection, so the profile default browsing plugin is "simkl". A card the
+/// Stremio import created carries no metadata origin, so its details looked up
+/// a Simkl identity it never had (400 "A Simkl title identity is required").
+/// Imported Continue Watching rows open their Cinemeta metadata instead.
+#[tokio::test]
+async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link() {
+    let mut series = movie("tt13293588");
+    series["type"] = json!("series");
+    series["name"] = json!("Mushoku Tensei");
+    series["state"]["video_id"] = json!("tt13293588:3:4");
+    let mut f = fixture(vec![series], login()).await;
+    // The server has Simkl configured; the fixture base never answers, so any
+    // lookup that falls through to Simkl fails loudly instead of silently.
+    f.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:1"));
+    let requested = Arc::new(Mutex::new(Vec::new()));
+    let seen = requested.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let addon = tokio::spawn(async move {
+        let meta = get(move |Path(id): Path<String>| {
+            let seen = seen.clone();
+            async move {
+                seen.lock().unwrap().push(id);
+                Json(json!({"meta":{"id":"tt13293588","type":"series",
+                    "name":"Mushoku Tensei: Jobless Reincarnation",
+                    "description":"Cinemeta description",
+                    "videos":[{"id":"tt13293588:3:4","season":3,"episode":4,"name":"Episode 4"}]}}))
+            }
+        });
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/meta/series/:id", meta)
+                // The dev host probes every new loopback listener with HEAD / (backend#48).
+                .route("/", axum::routing::any(|| async { StatusCode::OK })),
+        )
+        .await
+        .unwrap();
+    });
+    // The dev host's engine probes every new loopback listener with `HEAD /`
+    // (backend#48). Send the same probe so the fixture is checked against it.
+    reqwest::Client::new()
+        .head(format!("http://{address}/"))
+        .send()
+        .await
+        .expect("HEAD / probe")
+        .error_for_status()
+        .expect("fixture answers the port probe");
+    let manifest = json!({"id":"cinemeta","name":"Cinemeta","resources":["meta"],"types":["movie","series"]});
+    f.app.db.lock().unwrap().execute(
+        "INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(101,'Cinemeta',?1,?2,1)",
+        params![format!("http://{address}/manifest.json"), manifest.to_string()],
+    ).unwrap();
+    crate::test_support::encrypt_fixture_sources(&f.app);
+    // No link, but the plugin connection is there, so Simkl is the profile's
+    // default browsing plugin - the state that broke the imported card.
+    let (status, integration) = request(&f.app, "member-token-1", "GET", "/api/profiles/1/integrations", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{integration}");
+    assert_eq!(integration["configuration"]["browsing_plugin"], "simkl", "{integration}");
+    assert_eq!(f.app.db.lock().unwrap().query_row(
+        "SELECT COUNT(*) FROM simkl_links WHERE profile_id=1 AND credential IS NOT NULL", [], |r| r.get::<_, i64>(0)).unwrap(), 0,
+        "the fixture profile has no Simkl link");
+
+    let preview = get_preview(&f.app).await;
+    let (status, applied) = apply_preview(&f.app, &preview).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let (status, queue) = request(&f.app, "member-token-1", "GET", "/api/profiles/1/continue", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{queue}");
+    let card = queue["entries"].as_array().unwrap().iter()
+        .find(|entry| entry["card"]["identity"]["id"] == "tt13293588:3:4")
+        .unwrap_or_else(|| panic!("the import did not create the episode card: {queue}"));
+    assert_eq!(card["card"]["provider_id"], "library");
+    assert!(card["card"]["metadata_origin"].is_null());
+
+    for path in ["/api/meta/series/tt13293588", "/api/meta/series/tt13293588:3:4"] {
+        let (status, detail) = request(&f.app, "member-token-1", "GET", path, Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {detail}");
+        assert_eq!(detail["item"]["identity"]["id"], "tt13293588", "{path}: {detail}");
+        assert_eq!(detail["item"]["description"], "Cinemeta description", "{path}: {detail}");
+        assert_eq!(detail["item"]["metadata_origin"]["provider_id"], "stremio", "{path}: {detail}");
+        assert_eq!(detail["item"]["metadata_origin"]["connection_id"], "addon:101", "{path}: {detail}");
+        assert_eq!(detail["episodes"][0]["identity"]["id"], "tt13293588:3:4", "{path}: {detail}");
+    }
+    // Both lookups read the parent title; the episode coordinates never reach the add-on.
+    assert_eq!(requested.lock().unwrap().as_slice(), ["tt13293588.json", "tt13293588.json"]);
+    addon.abort();
+}
