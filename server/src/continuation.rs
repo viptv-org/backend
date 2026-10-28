@@ -376,6 +376,7 @@ fn furthest_watched(
     }
     Ok(furthest.map(|(_, item)| item))
 }
+
 /// Whether stored episode facts describe the provider a queue row was played
 /// from. Two different explicit add-ons may mean different titles by the same
 /// opaque episode id, so those never pair; a row without provider provenance

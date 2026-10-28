@@ -103,7 +103,8 @@ pub(crate) fn snapshot(
             // The stored document cannot project this prepared target; the card
             // `continue/next` stored still names the episode it opened, so the
             // entry keeps its caption (backend#63).
-            if let Ok(prepared) = serde_json::from_value::<Card>(item["engine_presentation"].clone())
+            if let Ok(prepared) =
+                serde_json::from_value::<Card>(item["engine_presentation"].clone())
             {
                 if prepared.identity.id == card.identity.id
                     && prepared.identity.episode == card.identity.episode
