@@ -1266,6 +1266,37 @@ fn avatar_choices_respect_each_world_size() {
 }
 
 #[test]
+fn profile_payloads_validate_choices_in_the_world_they_name() {
+    for (style, size) in [
+        ("disney", 14),
+        ("princesses", 10),
+        ("animal-friends", 12),
+        ("villains", 12),
+        ("critters", 48),
+    ] {
+        let valid = json!({"name":"Kid","avatar_style":style,"avatar_choice":size});
+        assert!(validate_profile_payload(&valid, false, None).is_ok(), "{valid}");
+        let beyond = json!({"name":"Kid","avatar_style":style,"avatar_choice":size + 1});
+        assert!(
+            validate_profile_payload(&beyond, false, None).is_err(),
+            "{beyond}"
+        );
+    }
+    // A choice without a style is measured in the profile's current world.
+    assert!(
+        validate_profile_payload(&json!({"avatar_choice":12}), true, Some("princesses")).is_err()
+    );
+    assert!(
+        validate_profile_payload(
+            &json!({"avatar_choice":12}),
+            true,
+            Some("animal-friends")
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn profile_rows_outside_the_world_size_project_no_choice_and_still_rename() {
     let db = db();
     claim(&db);

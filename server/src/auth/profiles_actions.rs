@@ -41,7 +41,7 @@ pub(crate) fn create_profile(
     account_id: i64,
     value: &Value,
 ) -> Result<Value, ApiError> {
-    validate_profile_payload(value, false)?;
+    validate_profile_payload(value, false, None)?;
     let name = crate::text(value, "name", 80)?;
     let style = avatar_style(value.get("avatar_style").and_then(Value::as_str))?;
     let count: i64 = db
@@ -78,8 +78,8 @@ pub(crate) fn update_profile(
     profile_id: i64,
     value: &Value,
 ) -> Result<Value, ApiError> {
-    validate_profile_payload(value, true)?;
     let current=db.query_row("SELECT p.name,p.avatar_style,p.avatar_seed,p.presentation_complete FROM profiles p JOIN profile_owners o ON o.profile_id=p.id WHERE p.id=?1 AND o.account_id=?2",params![profile_id,account_id],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,bool>(3)?))).optional().map_err(crate::db_error)?.ok_or_else(forbidden)?;
+    validate_profile_payload(value, true, Some(&current.1))?;
     if !current.3
         && (!value.get("name").is_some_and(Value::is_string)
             || !value.get("avatar_style").is_some_and(Value::is_string)
