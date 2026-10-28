@@ -28,8 +28,8 @@ pub(crate) use device_actions::dispatch_devices;
 pub(crate) use device_pairing::device_qr;
 pub(crate) use handlers::{info, remove, status};
 pub(crate) use middleware::{
-    auth_error, bearer, canonical_origin, constant_eq, cookie, csrf_for_session, forbidden,
-    issue_csrf, origin, required_origins, unauthorized,
+    auth_error, auth_error_with_retry, bearer, canonical_origin, constant_eq, cookie,
+    csrf_for_session, forbidden, issue_csrf, origin, required_origins, unauthorized,
 };
 pub(crate) use profiles_actions::{
     create_profile, dispatch_profiles, list_profiles, update_profile,
@@ -42,7 +42,7 @@ pub(crate) use schema::{
 };
 pub(crate) use tokens::{
     acquire_auth_cpu, canonical, endpoint_global_limit, event, field, identifier, login_snapshot,
-    pairing_code, prepare_auth, rate, response, session, username, PreparedAuth, AUTH_CPU,
+    pairing_code, prepare_auth, rate, response, retry_after, session, username, PreparedAuth, AUTH_CPU,
 };
 
 #[cfg(test)]

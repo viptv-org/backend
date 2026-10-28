@@ -1,6 +1,31 @@
 use super::*;
 use axum::{extract::OriginalUri, http::HeaderMap, Json};
 
+/// Enforces one rate bucket, mapping a tripped limit to the `(error, retry-after)`
+/// pair that `auth_error_with_retry` turns into a 429 with a `Retry-After` header.
+async fn enforce_rate_limit(
+    app: App,
+    bucket: String,
+    limit: i64,
+) -> Result<(), (ApiError, Option<i64>)> {
+    match tokio::task::spawn_blocking(move || {
+        let db = app.db.lock().map_err(|_| (unauthorized(), None))?;
+        rate(&db, &bucket, limit).map_err(|error| (error, Some(retry_after(&db, &bucket))))
+    })
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(pair)) => Err(pair),
+        Err(_) => Err((
+            ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Authentication admission worker failed".into(),
+            ),
+            None,
+        )),
+    }
+}
+
 pub(crate) async fn action(
     State(app): State<App>,
     OriginalUri(uri): OriginalUri,
@@ -28,23 +53,52 @@ pub(crate) async fn action(
     if let Err(error) = origin(&h) {
         return auth_error(error);
     }
-    let global_app = app.clone();
     let global_bucket = format!("auth:global:{path}");
     let global_limit = endpoint_global_limit(&path);
-    let global_result = tokio::task::spawn_blocking(move || {
-        let db = global_app.db.lock().map_err(|_| unauthorized())?;
-        rate(&db, &global_bucket, global_limit)
-    })
-    .await;
-    match global_result {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => return auth_error(error),
-        Err(_) => {
-            return auth_error(ApiError(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Authentication admission worker failed".into(),
-            ))
-        }
+    if let Err((error, retry_seconds)) =
+        enforce_rate_limit(app.clone(), global_bucket, global_limit).await
+    {
+        return auth_error_with_retry(error, retry_seconds);
+    }
+    // Per-subject limits are keyed on the canonical path plus a bounded,
+    // hashed credential/device identifier, computed before entering the
+    // credential worker so a rate-limited request can carry its retry hint.
+    let subject = if matches!(
+        path.as_str(),
+        "/auth/login" | "/auth/device/login" | "/auth/recover" | "/auth/register"
+    ) {
+        username(&v).unwrap_or_else(|_| "invalid-user".into())
+    } else if path.contains("device/token") {
+        v.get("device_code")
+            .or_else(|| v.get("device_token"))
+            .and_then(Value::as_str)
+            .unwrap_or("invalid-device")
+            .into()
+    } else if path.contains("device/refresh") {
+        v.get("refresh_token")
+            .and_then(Value::as_str)
+            .unwrap_or("invalid-refresh")
+            .into()
+    } else if path.contains("device/code") {
+        v.get("device_name")
+            .and_then(Value::as_str)
+            .unwrap_or("unnamed-device")
+            .into()
+    } else if let Some(account_id) = p.as_ref().and_then(|principal| principal.0.account_id()) {
+        format!("account-{account_id}")
+    } else {
+        "anonymous".into()
+    };
+    let bucket = format!("auth:subject:{}:{}", path, hash(&subject));
+    let subject_limit = if path == "/auth/register" {
+        5
+    } else if path.contains("lookup") || path.contains("token") {
+        120
+    } else {
+        30
+    };
+    if let Err((error, retry_seconds)) = enforce_rate_limit(app.clone(), bucket, subject_limit).await {
+        return auth_error_with_retry(error, retry_seconds);
     }
     let expensive = matches!(
         path.as_str(),
@@ -58,46 +112,6 @@ pub(crate) async fn action(
     let result = tokio::task::spawn_blocking(move || {
         let snapshot = {
             let db = app.db.lock().map_err(|_| unauthorized())?;
-            let subject = if matches!(
-                path.as_str(),
-                "/auth/login" | "/auth/device/login" | "/auth/recover" | "/auth/register"
-            ) {
-                username(&v).unwrap_or_else(|_| "invalid-user".into())
-            } else if path.contains("device/token") {
-                v.get("device_code")
-                    .or_else(|| v.get("device_token"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("invalid-device")
-                    .into()
-            } else if path.contains("device/refresh") {
-                v.get("refresh_token")
-                    .and_then(Value::as_str)
-                    .unwrap_or("invalid-refresh")
-                    .into()
-            } else if path.contains("device/code") {
-                v.get("device_name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unnamed-device")
-                    .into()
-            } else if let Some(account_id) =
-                p.as_ref().and_then(|principal| principal.0.account_id())
-            {
-                format!("account-{account_id}")
-            } else {
-                "anonymous".into()
-            };
-            let bucket = format!("auth:subject:{}:{}", path, hash(&subject));
-            rate(
-                &db,
-                &bucket,
-                if path == "/auth/register" {
-                    5
-                } else if path.contains("lookup") || path.contains("token") {
-                    120
-                } else {
-                    30
-                },
-            )?;
             login_snapshot(&db, &path, &v)?
         };
         // No SQLite guard exists during any Argon2 work. Expensive actions alone
