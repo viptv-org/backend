@@ -331,6 +331,26 @@ const RELEASE_RANK: [(&str, u8); 7] = [
     ("other_rip", 4),
 ];
 
+/// The Best matches group is the top-ranked rows that pass every hard filter,
+/// at most this many; rows failing a filter sort after every other row.
+pub const BEST_MATCHES_LIMIT: usize = 5;
+
+/// The Best matches group alongside the ranked rows, in ranking order.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceRanking {
+    pub best_match_ids: Vec<String>,
+    pub best_match_id: Option<String>,
+}
+
+/// Cam, 3D and torrents reporting fewer than five seeders never join the Best
+/// matches group; an unknown seeder count is not filtered.
+pub fn fails_hard_filter(candidate: &crate::stremio::SourceCandidate) -> bool {
+    candidate.release_type.as_deref() == Some("cam")
+        || candidate.three_d
+        || (candidate.delivery.as_deref() == Some("torrent")
+            && candidate.seeders.is_some_and(|seeders| seeders < 5))
+}
+
 /// Quality and spoken-audio metadata come from plugins and the shared release
 /// facts normalizer, never presentation-label parsing at ranking time.
 /// `device_max_height` lowers the profile cap to what the device shows.
@@ -339,7 +359,7 @@ pub fn rank_sources(
     preferences: &ProfilePreferences,
     original_language: Option<&str>,
     device_max_height: Option<u32>,
-) {
+) -> SourceRanking {
     let cap = match (preferences.max_quality_height, device_max_height) {
         (Some(profile), Some(device)) => Some(profile.min(device)),
         (profile, device) => profile.or(device),
@@ -347,9 +367,7 @@ pub fn rank_sources(
     let requested = preferences.preferred_audio_language.as_deref();
     candidates.sort_by_key(|candidate| {
         let torrent = candidate.delivery.as_deref() == Some("torrent");
-        let excluded = candidate.release_type.as_deref() == Some("cam")
-            || candidate.three_d
-            || (torrent && candidate.seeders.is_some_and(|seeders| seeders < 5));
+        let excluded = fails_hard_filter(candidate);
         let quality_class = match (cap, candidate.quality_height) {
             (Some(cap), Some(height)) if height > cap => 2,
             (_, None) => 1,
@@ -391,4 +409,15 @@ pub fn rank_sources(
             seeders,
         )
     });
+    let best_match_ids = candidates
+        .iter()
+        .filter(|candidate| !fails_hard_filter(candidate))
+        .take(BEST_MATCHES_LIMIT)
+        .map(|candidate| candidate.id.clone())
+        .collect::<Vec<_>>();
+    let best_match_id = best_match_ids.first().cloned();
+    SourceRanking {
+        best_match_ids,
+        best_match_id,
+    }
 }
