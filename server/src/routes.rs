@@ -645,7 +645,7 @@ mod tv_web_mount_tests {
         std::fs::write(web.path().join("index.html"),SHELL).unwrap();
         std::fs::write(web.path().join("composeApp.js"),"startApp()").unwrap();
         let app=router_with_viewers(crate::auth_integration_tests::fixture(),Some(web.path().into()));
-        for path in ["/tv/assets/main-ABC123.js","/composeApp.js.map","/assets/app.css","/819d242a46ca39e513c","/composeResources/missing.png"] {
+        for path in ["/tv/assets/main-ABC123.js","/composeApp.js.map","/assets/app.css","/819d242a46ca39e513ca","/composeResources/missing.png"] {
             let response=web_request(&app,path).await;
             assert_eq!(response.status(),StatusCode::NOT_FOUND,"{path}");
             assert_ne!(response.headers().get(header::CONTENT_TYPE).and_then(|value|value.to_str().ok()),Some("text/html; charset=utf-8"),"{path}");
