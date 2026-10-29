@@ -48,7 +48,11 @@ pub(crate) async fn action(
     {
         return auth_error(forbidden());
     }
-    if let Err(error) = origin(&h) {
+    if let Err(error) = if device_path(&path) {
+        device_origin(&h)
+    } else {
+        origin(&h)
+    } {
         return auth_error(error);
     }
     let global_bucket = format!("auth:global:{path}");
