@@ -174,7 +174,9 @@ pub(crate) struct DetailPage {
     #[serde(default)]
     pub(crate) offset: usize,
     pub(crate) limit: Option<usize>,
+    #[serde(alias = "metadata_provider_id")]
     pub(crate) provider_id: Option<String>,
+    #[serde(alias = "metadata_addon_id")]
     pub(crate) addon_id: Option<i64>,
     pub(crate) metadata_origin: Option<String>,
     pub(crate) card: Option<String>,
@@ -365,7 +367,21 @@ async fn resolve(
             kids::require_item(&db, &app.identity(), &kind, &id)?;
         }
     }
-    let (value, issuer) = app.addons.meta_with_origin(&kind, lookup).await?;
+    let (value, issuer) = if page.addon_id.is_some() {
+        app.addons.meta_from_selected_addon(&kind, lookup).await
+    } else {
+        app.addons.meta_with_origin(&kind, lookup).await
+    }
+    .map_err(|error| {
+        if page.addon_id.is_some() && error == "Metadata not found" {
+            ApiError(
+                StatusCode::BAD_GATEWAY,
+                "The selected metadata add-on did not return this title".into(),
+            )
+        } else {
+            ApiError::from(error)
+        }
+    })?;
     if app.addons.revision()? != addon_revision {
         return Err(ApiError(
             StatusCode::CONFLICT,
@@ -383,8 +399,8 @@ async fn resolve(
     } else {
         value
     };
-    if meta["id"].as_str() != Some(lookup)
-        || meta["type"].as_str().is_some_and(|actual| actual != kind)
+    if meta["type"].as_str().is_some_and(|actual| actual != kind)
+        || !provider_identity::same_title(&meta, lookup)
     {
         return Err(ApiError(
             StatusCode::BAD_GATEWAY,
@@ -435,6 +451,10 @@ async fn resolve(
     let seasons = projected.seasons;
     let mut episodes = projected.episodes;
     let mut item = projected.item;
+    provider_identity::merge(&mut item.identity, &meta);
+    for episode in &mut episodes {
+        episode.parent_identity = Some(item.identity.clone());
+    }
     super::origins::stamp(&app, std::slice::from_mut(&mut item), &origin)?;
     super::origins::stamp(&app, &mut episodes, &origin)?;
     super::origins::check_expected_at(&app, expected.as_ref(), &item)?;
