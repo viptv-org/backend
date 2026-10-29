@@ -1,4 +1,3 @@
-//! Shared in-process fixtures for the `cfg(test)` router test modules.
 use crate::{router, App};
 use axum::{
     body::{to_bytes, Body},
@@ -22,8 +21,6 @@ pub(crate) fn configure_vault(app: &mut App) {
     app.addons.vault = Some(vault);
 }
 
-/// Explicit fixture conversion, preserving identities and ownership. Never
-/// called by a request or production runtime; legacy tests opt out.
 pub(crate) fn encrypt_fixture_sources(app: &App) {
     let db = app.db.lock().unwrap();
     let vault = app.secret_vault.as_ref().unwrap();
@@ -98,21 +95,16 @@ pub(crate) fn encrypt_fixture_db(db: &Connection, vault: &crate::secret_store::V
     }
 }
 
-/// `App` over `db` whose media tools can never run, so playback endpoints
-/// fail fast instead of spawning processes or touching the filesystem.
 pub(crate) fn app_with_db(db: Connection) -> App {
     let mut app = App::new(db, reqwest::Client::new()).unwrap();
-    // Protocol fixtures have no media origin. Real qualification hosts use App::new.
     app.direct_probe = std::sync::Arc::new(crate::gateway::direct_probe::Probe::protocol_fixture());
     app
 }
 
-/// In-memory `App` with unavailable media tools.
 pub(crate) fn app() -> App {
     app_with_db(Connection::open_in_memory().unwrap())
 }
 
-/// Bearer-authenticated JSON request against a fresh router for `app`.
 pub(crate) async fn request(
     app: &App,
     token: &str,
@@ -147,10 +139,6 @@ pub(crate) async fn request(
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
-/// Sends the dev host engine's `HEAD /` probe to a fake server bound on a
-/// loopback port. The engine probes every new listener (backend#48), so a
-/// fixture that records or counts requests must ignore it; tests send one
-/// explicitly instead of waiting for the host to flake them.
 pub(crate) async fn send_port_probe(address: std::net::SocketAddr) {
     reqwest::Client::new()
         .head(format!("http://{address}/"))

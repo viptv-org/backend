@@ -11,7 +11,6 @@ impl App {
         self.register_with_configuration(source, raw, kind, None)
     }
 
-    /// A previously resolved URL must not acquire a newer credential proof.
     pub(crate) fn register_with_configuration(
         &self,
         source: &str,
@@ -26,7 +25,6 @@ impl App {
         if expected.is_some() && configuration != expected {
             return (vec![], Some("source_configuration_changed".into()));
         }
-        // This label comes from the configured producer, never upstream release metadata.
         let source_name = source
             .split_once(':')
             .and_then(|(kind, id)| {
@@ -62,8 +60,6 @@ impl App {
         let mut unsupported_headers = false;
         let mut entries = self.streams.lock().unwrap();
         for r in raw.into_iter().take(100) {
-            // Only the host SDK producer authors this requirement. An add-on
-            // cannot use a display field to acquire a different playback policy.
             let required_audio_index = if source.starts_with("vsources:") {
                 match r
                     .get("required_audio_index")
@@ -129,8 +125,6 @@ impl App {
                     };
                     headers.insert(key, value.into());
                 }
-                // Explicit request headers are required source context. Never
-                // publish an opaque handle after silently discarding one.
                 if invalid {
                     unsupported_headers = true;
                     continue;
@@ -142,19 +136,14 @@ impl App {
                 continue;
             }
             let mut public = source_card(&r, source, &id, url, &headers, &input.private_values);
-            // IDs/ownership are server-authored; upstream metadata cannot replace them.
             public["id"] = json!(id);
             public["source"] = json!(source);
-            // Stable across rediscovery, without persisting expiring playback URLs.
             let mut identity = if public["filename"].as_str().is_some_and(|v| !v.is_empty()) {
                 json!([source, public["name"], public["filename"]])
             } else {
                 json!([source, public["name"], public["title"]])
             };
             if input.requires_gateway {
-                // Public continuation identity is opaque and derived from
-                // private payload context, never an add-on's display label.
-                // Configuration includes producer account ownership/revision.
                 let canonical_headers: std::collections::BTreeMap<_, _> = headers.iter().collect();
                 identity = json!([
                     source,
@@ -188,7 +177,6 @@ impl App {
             if source.starts_with("addon:") {
                 public["presentation"]["provider_name"] = public["source_name"].clone();
             }
-            // Delivery is the transport the server just validated, never release text.
             public["delivery"] = json!(if input.torrent { "torrent" } else { "direct" });
             entries.insert(
                 id.clone(),
@@ -226,8 +214,6 @@ impl App {
     }
 }
 
-/// A private fingerprint, never a wire credential. Changes to ownership, source
-/// credentials, enabled scopes or routing invalidate a cached source at use time.
 pub(crate) fn source_configuration(
     db: &Connection,
     producer: &str,
@@ -284,9 +270,6 @@ fn source_display_text(
     for value in private_values {
         text = redact_private_value(&text, value);
     }
-    // Ordinary negotiation/client-identification values are display text too:
-    // e.g. Accept-Language: en must not erase en/eng or letters inside French.
-    // Origin/Referer links are handled by the URL redaction below.
     for (_, value) in headers.iter().filter(|(key, value)| {
         (key.eq_ignore_ascii_case("authorization")
             || key.eq_ignore_ascii_case("x-csrf-token")
@@ -339,9 +322,6 @@ fn redact_private_value(text: &str, value: &str) -> String {
     if value.is_empty() {
         return text.to_owned();
     }
-    // Opaque values remain private even when reflected inside filenames or
-    // longer text. Very short values use token boundaries so e.g. cookie en
-    // does not tear letters out of French/eng or client-identification words.
     if value.chars().count() >= 4 {
         return text.replace(value, "[private value omitted]");
     }
@@ -522,8 +502,6 @@ fn source_card(
         card["reported_languages"] = json!(languages);
         card["audio_language_status"] = json!("unverified");
     }
-    // Parse only the already redacted public fields. Hints are informational;
-    // opaque grants and private playback context remain host-authored above.
     if let Some(presentation) = viptv_engine::stremio::SourcePresentation::from_stream(&card) {
         card["presentation"] = json!(presentation);
     }
@@ -545,8 +523,6 @@ fn source_card(
     if !languages.is_empty() {
         card["audio_language_status"] = json!("unverified");
     }
-    // Release facts (SRC-BEST-MATCH-001): add-on declarations first, then the
-    // already redacted release text. Unknown facts are omitted.
     let mut evidence = card.clone();
     for key in ["release_type", "three_d", "dynamic_range", "audio_flags", "seeders"] {
         if let Some(value) = raw.get(key) {
@@ -605,7 +581,6 @@ mod metadata_tests {
                         }
                         value
                     }
-                    // Backend detail includes a stable fallback when all upstream text is absent.
                     "detail" => &card["detail"],
                     _ => &card["presentation"][field],
                 };

@@ -1,4 +1,3 @@
-//! Resolve supplied episode facts together; row order is never mapping evidence.
 use serde_json::Value;
 use viptv_engine::presentation::Card;
 

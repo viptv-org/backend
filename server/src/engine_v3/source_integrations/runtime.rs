@@ -75,7 +75,6 @@ pub(crate) async fn canonical_card(
         let expected:Card=serde_json::from_value(value["card"].clone()).ok()?;
         return crate::engine_v3::origins::verified_card(app,&expected).await.ok();
     }
-    // IDs supplied by a client are lookup hints only; fetch current selected-provider metadata.
     let Some(kind) = value["type"]
         .as_str()
         .filter(|k| matches!(*k, "movie" | "series"))
@@ -243,7 +242,6 @@ pub(crate) fn spawn(
         let result = if let Ok(media) = media {
             viptv_engine::vsources_runtime::resolve_progressive(config,media,authorize.clone(),app.cloudflare.clone(),|streams|{
             if !authorize(){return;}let ttls:std::collections::HashMap<_,_>=streams.iter().map(|s|((s.url.to_string(),s.meta.audio_selection.as_ref().map(|audio|audio.audio_index)),s.ttl)).collect();let limit=job.reserve_sources(streams.len());let raw=streams.iter().take(limit).map(projection::sdk_source).collect::<Vec<_>>();
-            // Registration carries the exact credential/assignment proof used by this producer.
             let (cards,error)=app.register_with_configuration(&source,raw,&job.kind,Some(proof));
             if !authorize(){return;}let mut entries=app.streams.lock().unwrap();for card in &cards{if let Some(entry)=card["id"].as_str().and_then(|id|entries.get_mut(id)){entry.profile_revision=job.configuration_revision;entry.metadata_proof=job.metadata_proof.clone();entry.exact_vod=job.exact_vod.clone();entry.media_id=job.media_id.clone();if let Some(ttl)=ttls.get(&(entry.url.clone(),entry.required_audio_index)){entry.expire_upstream_after(*ttl);}}}drop(entries);
             let mut state=job.state.lock().unwrap();let seq=state.events.len()+1;state.events.push(json!({"seq":seq,"source":source,"streams":cards,"error_code":error.map(|_|"source_format_unsupported")}));drop(state);job.notify.notify_waiters();

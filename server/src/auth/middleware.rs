@@ -21,7 +21,6 @@ pub(crate) fn auth_error_with_retry(error: ApiError, retry_after: Option<i64>) -
     } else if let Some(code @ (MSG_AUTHORIZATION_PENDING | MSG_ACCESS_DENIED | MSG_EXPIRED_TOKEN)) =
         error.api_error_code()
     {
-        // RFC 8628 section 3.5 device token errors keep their own code.
         code
     } else {
         match error.0 {
@@ -93,18 +92,11 @@ fn configured_origins() -> Result<Vec<url::Url>, ApiError> {
         Err(_) => Err(forbidden()),
     }
 }
-/// The canonical origin is the first configured entry: pairing QR codes and
-/// verification URLs always send devices there. Additional entries are extra
-/// accepted browser origins — for example a reverse-proxy hostname that
-/// serves the same bundle behind the same backend.
 pub(crate) fn canonical_origin() -> Result<Option<url::Url>, ApiError> {
     Ok(required_origins()?.into_iter().next())
 }
 pub(crate) fn required_origins() -> Result<Vec<url::Url>, ApiError> {
     let configured = configured_origins()?;
-    // Production/release builds fail at startup and on QR generation without a
-    // pinned HTTPS origin. Debug builds retain Host fallback only for isolated
-    // in-memory integration tests and explicit local development.
     if configured.is_empty() && !cfg!(debug_assertions) {
         return Err(ApiError(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -248,7 +240,6 @@ pub async fn authenticate(State(app): State<App>, mut req: Request, next: Next) 
         Err(e) => auth_error(e),
     }
 }
-/// Use this variant when mounting outside an already authenticated API router.
 pub fn router_with_auth(app: App) -> Router<App> {
     router().route_layer(axum::middleware::from_fn_with_state(app, authenticate))
 }

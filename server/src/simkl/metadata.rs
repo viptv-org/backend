@@ -112,11 +112,6 @@ pub(super) async fn title(
     Ok(title_in(app, profile, credential, category, id).await?.0)
 }
 
-/// The title card and the catalog path that served it. Simkl lists one movie
-/// under the movie catalog and, for an anime film, under the anime catalog;
-/// the durable `simkl:movie:` key must open either one (backend#29). The card
-/// keeps the identity of the document it came from; a caller that emits a
-/// durable key normalises it (`simkl::key`).
 pub(super) async fn title_in(
     app: &App,
     profile: i64,
@@ -147,7 +142,6 @@ pub(super) async fn title_in(
     };
     let (value, served) = match cache::metadata(app, profile, credential, &path(category)).await {
         Ok(value) => (value, category),
-        // A canonical movie key may name a film only the anime catalog lists.
         Err(primary) if category == "movie" => {
             match cache::metadata(app, profile, credential, &path("anime")).await {
                 Ok(value) => (value, "anime"),

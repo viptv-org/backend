@@ -1,4 +1,3 @@
-//! Shared credential-safe JSON egress for configured sources.
 use serde_json::Value;
 use std::{net::IpAddr, time::Duration};
 use url::{Host, Url};
@@ -130,9 +129,6 @@ fn redirect_target(target: &Url, location: &str, fixture: bool) -> Result<Url, F
     validate(&next, fixture)?;
     Ok(next)
 }
-/// Addons may follow at most ten public redirects. Each hop is resolved and
-/// pinned independently, without Referer, cookies, copied credentials or proxies.
-/// Provider callers retain their canonical-endpoint/no-redirect contract.
 pub(crate) async fn json(
     target: Url,
     limit: usize,
@@ -148,8 +144,6 @@ pub(crate) async fn json(
     .map_err(|_| Failure::Unavailable)?
 }
 
-/// The same pinned, bounded egress is used for subtitle text. URLs/response
-/// errors are never copied into public error messages.
 pub(crate) async fn bytes(
     target: Url,
     limit: usize,

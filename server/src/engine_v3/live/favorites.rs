@@ -1,4 +1,3 @@
-//! Profile-owned live preferences. Channel IDs remain issued by the live host.
 use super::*;
 use viptv_engine::{profile::ProfileConfiguration, registry::Registry};
 const MAX_FAVORITES: usize = 10_000;
@@ -11,7 +10,6 @@ fn allowed(
     config: &ProfileConfiguration,
     connections: &[IntegrationConnection],
 ) -> Result<Vec<IntegrationConnection>, ApiError> {
-    // Removed/disabled capabilities are omitted, never revived by a saved star.
     let mut effective = config.clone();
     effective.assignments.retain(|assignment| {
         connections
@@ -106,8 +104,6 @@ fn known(
             }
         }
     }
-    // Look up only saved/requested IDs through the indexed registry. Do not
-    // materialize every channel of every large account-wide provider.
     let ids = wanted.iter().collect::<Vec<_>>();
     for batch in ids.chunks(400) {
         let placeholders = vec!["?"; batch.len()].join(",");
@@ -149,8 +145,7 @@ async fn execute(
         kids::require_parent(&db, &lease.principal)?;
     }
     let (config, _) = super::super::configuration::read(&app, &lease, profile)?;
-    // Cache -> DB is held only for synchronous registry checks and the small
-    // preference transaction; no provider IO occurs in this operation.
+    // No provider IO while the live-cache and DB locks are held.
     let caches = app.live_cache.lock().await;
     let mut db = app
         .db

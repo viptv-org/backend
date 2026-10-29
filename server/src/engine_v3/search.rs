@@ -1,4 +1,3 @@
-//! Search fans out over assigned capabilities without changing browsing defaults.
 use super::*;
 use viptv_engine::{capabilities::Capability, presentation::Card, registry::Registry};
 
@@ -130,8 +129,6 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
     let addon_revision = addons.addons.revision()?;
     let catalogs = addons.addons.catalogs()?;
     for id in ids {
-        // One row per searchable catalog so each catalog the add-on returns
-        // renders as its own carousel with the catalog's name.
         let mut by_catalog: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
             std::collections::BTreeMap::new();
         for catalog in catalogs.as_array().into_iter().flatten() {
@@ -165,9 +162,6 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
                     .collect::<String>()
             })
             .unwrap_or_else(|| "Stremio addon".into());
-        // Single-catalog add-ons keep the legacy row identity; multi-catalog
-        // add-ons get one row per catalog so each carousel carries the
-        // catalog's own name instead of the add-on connection name.
         let split = by_catalog.len() > 1;
         for (catalog_id, kinds) in by_catalog {
             let label = if split {
@@ -227,8 +221,6 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
         }
     }))
     .await;
-    // Provider failures are isolated above; authority changes always invalidate
-    // the entire response, including successful rows acquired before the change.
     if let Some(scope) = &parent_scope {
         scope.recheck(&app)?;
     } else {
@@ -328,9 +320,6 @@ async fn load(
     }
 }
 
-/// Explicit metadata origin selects only currently assigned connectors. The
-/// add-on that supplied search can delegate metadata to another assigned Stremio
-/// connector when it has no enabled metadata capability of its own.
 pub(crate) fn metadata_scope(
     app: App,
     lease: &ResourceLease,
@@ -426,7 +415,6 @@ fn metadata_scope_inner(
     Ok((app, origin, revision))
 }
 
-/// Parse and validate optional metadata provenance on source discovery requests.
 pub(crate) fn source_origin(
     app: &App,
     value: &Value,

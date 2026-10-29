@@ -27,10 +27,8 @@ async fn ranking_caps_quality_at_the_device_height_and_the_profile_cap(){
  let streams=[2160,1440,1080,720].into_iter().map(|h|json!({"url":format!("https://media.example/{h}.mp4"),"name":format!("{h}"),"quality_height":h})).collect();
  let(app,cards)=rank_fixture(streams);let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
  assert_eq!(rank_names(&app,&ids,None).await,["2160","1440","1080","720"]);
- // Device only: over the cap, the height closest to the device comes first.
  assert_eq!(rank_names(&app,&ids,Some(1080)).await,["1080","720","1440","2160"]);
  let(_,defaults)=request(&app,"member-token-1","GET","/api/profiles/1/preferences",Value::Null).await;let mut prefs=defaults["preferences"].clone();prefs["max_quality_height"]=json!(1440);assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":0,"preferences":prefs})).await.0,StatusCode::OK);
- // Profile only, then both: the lower cap wins.
  assert_eq!(rank_names(&app,&ids,None).await,["1440","1080","720","2160"]);
  assert_eq!(rank_names(&app,&ids,Some(720)).await,["720","1080","1440","2160"]);
  assert_eq!(rank_names(&app,&ids,Some(2160)).await,["1440","1080","720","2160"]);
@@ -56,8 +54,6 @@ async fn cards_carry_release_facts_and_ranking_reads_them_back(){
  assert_eq!(cards[3]["seeders"],3);
  assert!(!cards.iter().any(|card|card.to_string().contains(hash)));
  let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
- // Direct WEB-DL before torrent WEB-DL (3 declared seeders do not sink a direct
- // stream), REMUX after both at equal height, camera last.
  let ranked=rank_names(&app,&ids,None).await;
  assert_eq!(ranked,["Debrid\n4k","Torrentio\n4k DV | HDR10+ | HDR","Debrid\n4k","Torrentio\n1080p"]);
  let(_,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids})).await;

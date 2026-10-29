@@ -15,8 +15,6 @@ async fn discovery_multi_choices_preserve_controls_owner_and_validate_before_pro
     let mock=Router::new().fallback(move |method:axum::http::Method,url:axum::http::Uri| {
         let (count,paths)=(count.clone(),paths.clone());
         async move {
-            // Count discovery reads only: the host probes every new loopback
-            // listener with a safe `HEAD /` (backend#48).
             if method!=axum::http::Method::HEAD {count.fetch_add(1,Ordering::SeqCst);paths.lock().unwrap().push(url.path().to_owned());}
             axum::Json(json!({"metas":[{"id":"tt1234567","type":"movie","name":"Film"}]}))
         }

@@ -1,4 +1,3 @@
-//! Account/session-guarded addon management; network preparation never writes DB.
 use super::*;
 use crate::{
     account_api::{self, Error},
@@ -32,8 +31,6 @@ fn own(db: &Connection, account: i64, id: i64) -> Result<(), Error> {
         Err(Error::Code("addon_not_found"))
     }
 }
-/// The public row of one owned add-on. `logo` is the server's logo route, never
-/// the manifest's own address, which can carry private configuration.
 pub(super) fn record(
     db: &Connection,
     vault: Option<&crate::secret_store::Vault>,
@@ -56,8 +53,6 @@ pub(super) fn record(
     }
     Ok(value)
 }
-/// An owned add-on's public fields and its decrypted manifest (or the safe
-/// configuration error code when it cannot be read).
 fn manifest(
     db: &Connection,
     vault: Option<&crate::secret_store::Vault>,
@@ -72,8 +67,6 @@ fn manifest(
         .map_err(|raw| crate::service_errors::provider(raw).unwrap_or("addon_protocol_invalid"));
     Ok((value, manifest))
 }
-/// `GET /api/addons/:id/logo`: the owned add-on's logo bytes, fetched by the
-/// server. Any missing, unsafe or unusable logo is a 404.
 pub(crate) async fn logo(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -96,7 +89,6 @@ pub(crate) async fn logo(
     Ok((
         [
             (header::CONTENT_TYPE, asset.content_type),
-            // The listing's path changes with the logo, so a client may keep it.
             (header::CACHE_CONTROL, "private, max-age=86400"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (header::CONTENT_SECURITY_POLICY, "default-src 'none'; sandbox"),

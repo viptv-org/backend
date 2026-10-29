@@ -15,7 +15,6 @@ pub(super) fn confirmed(
     Ok(state.as_deref() == Some("done"))
 }
 
-/// Called while holding the shared profile dispatch gate after provider confirmation.
 pub(super) fn confirm(app: &App, profile: i64, id: &str, revision: u64) -> Result<(), ApiError> {
     let db = app
         .db

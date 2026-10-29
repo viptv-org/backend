@@ -84,8 +84,6 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
         1,
         "warm discovery reuses public metadata"
     );
-    // A legacy catalog prefix names the same title as the durable key
-    // (backend#29).
     let (status, legacy) = request(
         &app,
         "member-token-1",

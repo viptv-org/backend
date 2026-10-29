@@ -3,7 +3,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) const ACCESS: i64 = 1800;
 pub(crate) const REFRESH: i64 = 30 * 86400;
-// Device grants persist until explicit revocation; short-lived access tokens still rotate.
 pub(crate) const DEVICE_EXPIRY: i64 = 253_402_300_799;
 pub(crate) const MAX_PROFILES: i64 = 12;
 pub(crate) const MAX_SESSIONS_PER_ACCOUNT: i64 = 32;
@@ -13,9 +12,6 @@ pub(crate) const MAX_AUTH_BUCKETS: i64 = 10_000;
 pub(crate) const MAX_PENDING_PAIRINGS: i64 = 192;
 pub(crate) const MAX_PAIRINGS: i64 = 256;
 pub(crate) const MAX_APPROVED_PAIRINGS_PER_ACCOUNT: i64 = 8;
-// Denied and expired pairings stay as tombstones this long past their expiry,
-// so the polling device reads `access_denied`/`expired_token` instead of
-// `authorization_pending` (RFC 8628 section 3.5).
 pub(crate) const PAIRING_TOMBSTONE_SECS: i64 = 600;
 pub(crate) const MAX_REFRESH_TOMBSTONES_PER_FAMILY: i64 = 64;
 pub(crate) const MAX_REFRESH_TOMBSTONES_PER_ACCOUNT: i64 = 2_048;

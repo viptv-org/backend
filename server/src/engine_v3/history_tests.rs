@@ -133,7 +133,6 @@ async fn conflicting_parent_is_rejected_and_legacy_context_is_projected_without_
         .as_array()
         .unwrap()
         .is_empty());
-    // Legacy rows (written by imports) project into typed history cards.
     app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at,context,title_id) VALUES(1,'legacy-opaque','series','Legacy episode',20,100,0,'{\"series_id\":\"legacy-parent\",\"season\":1,\"episode\":3}','legacy-parent')",[]).unwrap();
     let history = get(&app, "/api/profiles/1/history?limit=1").await;
     assert_eq!(history[0]["card"]["identity"]["id"], "legacy-opaque");

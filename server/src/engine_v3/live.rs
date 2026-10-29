@@ -313,8 +313,6 @@ pub(super) fn viewing_action(
     lease.validate(&db)?;
     kids::require_parent(&db, &lease.principal)?;
     let preferences = super::preferences::read(&db, lease.principal.account_id().ok_or_else(auth::forbidden)?, profile)?;
-    // The source envelope remains URL-free. Artwork stays in the channel
-    // directory; this intent needs only the canonical target and display title.
     let target = viptv_engine::live::live_card(card.identity.id.clone(), card.title.clone(), None, card.provider_id.clone());
     Ok(json!({"card":target,"label":"Watch live","resume":false,"source_selection":preferences.preferences.source_selection}))
 }

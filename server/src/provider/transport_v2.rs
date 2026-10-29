@@ -1,4 +1,3 @@
-//! Credential-safe HTTP(S) Xtream transport: validate DNS and pin every request.
 use super::*;
 
 pub(super) fn base(raw: &str, fixture: bool) -> Result<Url, &'static str> {

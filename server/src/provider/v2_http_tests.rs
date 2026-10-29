@@ -43,8 +43,6 @@ async fn oversized_catalog_cursors_fail_safely_without_changing_raw_identifiers(
         .unwrap()
         .contains("identifiers too large"));
     assert!(!error.to_string().contains(&long_id));
-    // Make the oversized row terminal: its reverse cursor must obey the same
-    // bound, not only next-page tokens. This changes fixture order, not IDs.
     {
         let db = app.db.lock().unwrap();
         db.execute("UPDATE provider_live_categories_v2 SET ordinal=CASE WHEN id=?1 THEN 1 ELSE 0 END WHERE provider_id=1", [&long_id]).unwrap();
@@ -116,7 +114,6 @@ async fn oversized_match_cursor_fails_before_emitting_an_unusable_token() {
     assert!(!error.to_string().contains(&long_id));
     {
         let db = app.db.lock().unwrap();
-        // Isolate a terminal oversized identity to exercise reverse encoding.
         db.execute(
             "DELETE FROM provider_vod WHERE provider_id=1 AND id<>?1",
             [&long_id],
@@ -493,7 +490,6 @@ async fn match_edits_and_defaults_are_account_owned_not_owner_role_global() {
     )
     .await;
     assert_eq!(default["catalog_id"], 1);
-    // Operator role does not expand the account-owned data boundary.
     app.db
         .lock()
         .unwrap()
@@ -826,7 +822,6 @@ async fn raw_live_browsing_allows_paired_devices_but_not_locked_kids() {
         )
         .unwrap();
     let path = "/api/iptv/live/channels";
-    // Account two has no selected profile: catalog access cannot bypass that.
     assert_eq!(
         request(&app, "member-token-2", "GET", path, Value::Null)
             .await
@@ -1054,7 +1049,6 @@ async fn v2_discovery_uses_three_owned_providers_not_live_default_or_foreign_sou
                 }
             }
         }
-        // Revocation after publication strips cached metadata while preserving seq.
         app.db
             .lock()
             .unwrap()
@@ -1072,7 +1066,6 @@ async fn v2_discovery_uses_three_owned_providers_not_live_default_or_foreign_sou
     let mut actual = calls.lock().unwrap().clone();
     actual.sort();
     assert_eq!(actual, vec!["u1", "u2", "u5"]);
-    // Explicit provider narrowing cannot turn into an ownership grant.
     let (_, foreign) = finish(
         &app,
         json!({"type":"movie","id":"tt1234567","only_provider_id":3}),

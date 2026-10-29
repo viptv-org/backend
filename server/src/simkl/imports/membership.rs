@@ -1,4 +1,3 @@
-//! Remote membership adds to the shared library; local removals remain durable.
 use super::*;
 use viptv_engine::library::{Entry, LibraryProvenance, LibraryStatistics};
 fn local_identity(
@@ -10,7 +9,6 @@ fn local_identity(
     if let Some(old) = old {
         return Ok(old);
     }
-    // An actual IMDb canonical key is proof; arbitrary user-supplied external-ID hints are not.
     if let Some(imdb) = card
         .identity
         .ids
@@ -107,7 +105,6 @@ pub(crate) fn merge(
             .into_iter()
             .chain(remote.last_watched_millis)
             .max();
-        // No local observations cannot turn an unknown remote lifetime count into zero.
         statistics.times_watched = if newer_local {
             None
         } else {

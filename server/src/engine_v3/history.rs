@@ -1,4 +1,3 @@
-//! Typed views over the existing personal library; no second history store.
 use super::*;
 use viptv_engine::{
     identity::MediaIdentity,
@@ -138,9 +137,6 @@ fn history_limit() -> u32 {
     20
 }
 
-/// Keep one row per durable title key: a legacy Simkl catalog prefix
-/// normalises onto the canonical key, so the newest row for that title wins
-/// instead of the title being listed twice (backend#29).
 fn keep_newest(
     records: &mut std::collections::BTreeMap<scoped_library::Key, PlaybackRecord>,
     mut record: PlaybackRecord,
@@ -158,6 +154,7 @@ fn keep_newest(
     }
     Ok(())
 }
+
 pub(crate) async fn list(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -230,7 +227,6 @@ pub(super) fn revision(db: &Connection, profile: i64) -> Result<u64, ApiError> {
     .map(|r| r.unwrap_or(0))
 }
 
-/// Clears this selected profile's local progress; never calls a provider history API.
 pub(crate) async fn clear(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,

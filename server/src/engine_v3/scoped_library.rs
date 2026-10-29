@@ -1,4 +1,3 @@
-//! Origin-aware personal records. Legacy rows are never attributed to an installed connector.
 use super::*;
 use std::collections::BTreeMap;
 use viptv_engine::{
@@ -63,7 +62,6 @@ fn verified_key(card: &Card) -> Result<Key, ApiError> {
     c.identity = verified_storage_identity(card);
     raw_key(&c)
 }
-// Existing account-owned import receipts retain the legacy canonical alias contract.
 fn imported_key(db: &Connection, profile: i64, card: &Card) -> Result<Option<Key>, ApiError> {
     if !card
         .metadata_origin
@@ -254,7 +252,6 @@ impl Lookup for PlaybackRecord {
         self
     }
 }
-/// Posted assertions select a stored binding; they never create one or grant an alias.
 fn lookup<T: Lookup>(
     db: &Connection,
     profile: i64,
@@ -320,8 +317,6 @@ fn lookup_for_write<T: Lookup>(
     } else {
         raw_key(card)?
     };
-    // A fresh host proof may select an existing exact storage key even when
-    // old aliases for this raw lookup are deliberately retained alongside it.
     let mut old = if verified {
         by_key::<T>(db, profile, kind, &desired)?
     } else {
@@ -338,7 +333,7 @@ fn lookup_for_write<T: Lookup>(
                 if saved.key == desired {
                     return Err(conflict());
                 }
-                // Loss of alias proof is not permission to copy shared A into a private lookup.
+                // A lost alias proof must not fall back to the shared record.
                 old = None;
             }
         }
@@ -433,7 +428,6 @@ pub(crate) fn save_db(
 ) -> Result<(), ApiError> {
     let (card, verified) = evidence(db, app, profile, e)?;
     card.validate_library().map_err(|_| invalid())?;
-    // Fresh metadata can change an opaque lookup's binding A -> B. Do not move A's state.
     let old = lookup_for_write::<Card>(db, profile, "favorite", card, verified)?
         .filter(|old| !verified || old.verified || metadata_assertions_match(&old.value, card));
     let key = if verified {
@@ -496,7 +490,6 @@ pub(crate) fn save_db(
         verified || old.is_some_and(|o| o.verified),
     )
 }
-/// Exact stored selectors also work after connector removal; no legacy delete fallback.
 pub(crate) fn remove_db(
     db: &Connection,
     app: &App,
@@ -530,8 +523,6 @@ pub(crate) fn remove_db(
             params![profile, key.1, key.2],
         )
         .map_err(db_error)?;
-        // Only an intrinsically shared legacy identity or a verified import alias
-        // is the same logical backing row. Ambiguous private legacy rows survive.
         let old:Option<String>=db.query_row("SELECT json_object('id',id,'type',type,'name',name,'poster',poster,'engine_favorite',json(context)) FROM favorites WHERE profile_id=?1 AND type=?2 AND id=?3",params![profile,key.1,key.2],|r|r.get(0)).optional().map_err(db_error)?;
         if let Some(old) = old {
             let item: Value = decode(&old)?;
@@ -691,8 +682,7 @@ pub(crate) fn membership_db(
     let principal = app.identity();
     let mut seen = std::collections::BTreeSet::new();
     let mut bytes = 0usize;
-    // Complete membership must not deserialize titles/artwork/metadata for 10k
-    // cards. Only the bounded identity columns and optional parent are needed.
+    // Read only the bounded identity columns: full cards for 10k memberships do not fit.
     let mut q=db.prepare("SELECT identity_scope,kind,identity_id,lookup_origin,lookup_identity,json_extract(value,'$.parent_identity') FROM engine_scoped_records WHERE profile_id=?1 AND record_kind='favorite' ORDER BY identity_scope,kind,identity_id LIMIT 10001").map_err(db_error)?;
     let mut count = 0;
     for row in q
@@ -975,8 +965,6 @@ pub(crate) fn continuation_db(
                 record,
                 status,
                 previous_identity,
-                // A scoped row's next episode is a separate selector's answer
-                // (`engine_scoped_next`); nothing announces it yet.
                 next_episode: None,
             },
         ));
@@ -988,7 +976,6 @@ pub(crate) fn continuation_db(
 #[path = "scoped_library_tests.rs"]
 mod tests;
 
-/// Visibility is keyed by the saved storage identity; raw legacy queue rows never hide it.
 pub(crate) fn visibility_db(
     db: &Connection,
     app: &App,
@@ -1005,8 +992,6 @@ pub(crate) fn visibility_db(
         .map_err(|_| invalid())?;
     let mut saved = lookup::<PlaybackRecord>(db, profile, "playback", card)?;
     if saved.is_none() {
-        // A record saved under a legacy Simkl catalog prefix is the same title
-        // as the durable key the queue now emits (backend#29).
         for alias in crate::simkl::key::aliases(&card.identity.kind, &card.identity.id) {
             if alias == card.identity.id {
                 continue;
@@ -1078,8 +1063,6 @@ pub(crate) fn visibility_db(
     Ok(identity)
 }
 
-/// Caller supplies the card held by a freshly validated host MetadataProof.
-/// Exact private lookup records never fall back to raw-ID legacy progress.
 pub(crate) fn resume_db(
     db: &Connection,
     app: &App,
@@ -1107,9 +1090,6 @@ pub(crate) fn resume_db(
         .map_or(0.0, |saved| saved.value.position_millis as f64 / 1000.0))
 }
 
-/// Storage keys a playback record for this exact host-issued card can live
-/// under: its verified key, then its raw key (unverified writes). A key that
-/// cannot be derived (for example an ambiguous import alias) is skipped.
 pub(crate) fn playback_keys_db(db: &Connection, profile: i64, card: &Card) -> Vec<Key> {
     let mut keys: Vec<Key> = verified_key_db(db, profile, card).into_iter().collect();
     if let Ok(raw) = raw_key(card) {
@@ -1120,7 +1100,6 @@ pub(crate) fn playback_keys_db(db: &Connection, profile: i64, card: &Card) -> Ve
     keys
 }
 
-/// Prepared Home favorites need only the first page, not every saved card/statistic.
 pub(crate) fn home_favorites_db(
     db: &Connection,
     app: &App,

@@ -3,8 +3,6 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// A loopback metadata add-on owned by account 1, answering Details lookups
-/// with full presentation metadata for IMDb titles and 404 for anything else.
 pub(crate) struct MetadataAddon {
     pub(crate) calls: Arc<AtomicUsize>,
     pub(crate) peak: Arc<AtomicUsize>,
@@ -67,7 +65,6 @@ pub(crate) async fn metadata_addon(app: &mut App) -> MetadataAddon {
     MetadataAddon { calls, peak, task }
 }
 
-/// Starts a run as the member's own session, as applying a Stremio import does.
 fn start(app: &App) -> bool {
     let principal = auth::Principal::Account {
         account_id: 1,
@@ -114,7 +111,6 @@ fn card<'a>(page: &'a Value, id: &str) -> &'a Value {
 async fn thin_rows_gain_the_details_card_in_the_background_without_overwriting_row_data() {
     let mut app = fixture();
     let addon = metadata_addon(&mut app).await;
-    // A row saved earlier with a partial card: its own values must survive.
     let partial = json!({"identity":{"id":"tt0000003","kind":"series","ids":[],"edition":null,"episode":null},
         "provider_id":"addon:9","title":"Old","subtitle":null,"description":null,"poster":null,
         "landscape":"https://user.example/landscape.jpg","logo":null,"progress":null,"badges":[],"parent_identity":null});
@@ -135,7 +131,6 @@ async fn thin_rows_gain_the_details_card_in_the_background_without_overwriting_r
     );
     super::hydration::settled(&app, 1).await;
 
-    // What is served comes from the stored rows, not the in-memory Details cache.
     app.verified_cards.lock().unwrap().clear();
     let page = get_ok(&app, "/api/profiles/1/library").await;
     assert!(page["refresh_after_millis"].is_null(), "{page}");
@@ -160,7 +155,6 @@ async fn thin_rows_gain_the_details_card_in_the_background_without_overwriting_r
     assert!(stored.get("metadata_origin").is_none());
     assert!(stored["progress"].is_null());
 
-    // A row without art takes the resolved poster into its column too.
     let movie = card(&page, "tt0000002");
     assert_eq!(
         movie["poster"],
@@ -168,14 +162,12 @@ async fn thin_rows_gain_the_details_card_in_the_background_without_overwriting_r
     );
     assert_eq!(movie["metadata"]["year"], 2019);
 
-    // Existing values win; only missing fields are filled.
     let kept = card(&page, "tt0000003");
     assert_eq!(kept["title"], "My name");
     assert_eq!(kept["provider_id"], "addon:9");
     assert_eq!(kept["landscape"], "https://user.example/landscape.jpg");
     assert_eq!(kept["description"], "Full description of tt0000003");
 
-    // Unresolvable ids stay as they were.
     assert_eq!(context(&app, "kitsu:42"), json!({}));
     assert!(card(&page, "kitsu:42")["description"].is_null());
 
@@ -189,7 +181,6 @@ async fn thin_rows_gain_the_details_card_in_the_background_without_overwriting_r
         "lookups are bounded"
     );
 
-    // Idempotent: another import's run resolves nothing already filled.
     let calls = addon.calls.load(Ordering::SeqCst);
     start(&app);
     super::hydration::settled(&app, 1).await;
@@ -259,7 +250,6 @@ async fn a_request_never_waits_for_metadata_lookups() {
     let started = std::time::Instant::now();
     assert!(start(&app));
     let page = get_ok(&app, "/api/profiles/1/library").await;
-    // 40 spaced lookups take well over a second; the listing does not.
     assert!(
         started.elapsed() < Duration::from_millis(1500),
         "{:?}",
@@ -298,7 +288,6 @@ async fn listing_my_list_never_starts_metadata_lookups() {
 async fn details_progress_counts_the_titles_of_a_run_until_it_finishes() {
     let mut app = fixture();
     let _addon = metadata_addon(&mut app).await;
-    // Nothing ran yet: an idle, empty status.
     assert_eq!(
         get_ok(&app, "/api/profiles/1/library/details").await,
         json!({"running":false,"done":0,"filled":0,"total":0})
@@ -312,7 +301,6 @@ async fn details_progress_counts_the_titles_of_a_run_until_it_finishes() {
             )
             .unwrap();
         }
-        // An unresolvable title is still counted once it has been looked up.
         db.execute(
             "INSERT INTO favorites(profile_id,id,type,name) VALUES(1,'kitsu:42','series','Opaque')",
             [],
@@ -349,7 +337,6 @@ async fn details_progress_counts_the_titles_of_a_run_until_it_finishes() {
         tokio::time::sleep(Duration::from_millis(40)).await;
     };
     assert!(seen_partial, "progress is visible while the run is active");
-    // The opaque id is looked up but has no metadata to give it a card.
     assert_eq!(
         finished,
         json!({"running":false,"done":25,"filled":24,"total":25})
@@ -401,7 +388,6 @@ async fn finished_counts_stay_until_the_next_run() {
         get_ok(&app, "/api/profiles/1/library/details").await,
         json!({"running":false,"done":12,"filled":12,"total":12})
     );
-    // Listing My List starts nothing; the finished counts stay.
     get_ok(&app, "/api/profiles/1/library").await;
     assert_eq!(
         get_ok(&app, "/api/profiles/1/library/details").await,

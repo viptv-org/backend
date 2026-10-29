@@ -1,55 +1,17 @@
-//! New-episode facts for Continue Watching, and the durable next-episode
-//! verdict per finished series.
-//!
-//! A finished episode with a released next one is projected as that episode
-//! (`up_next_db`), whether or not the release came after the finish: an
-//! episode the profile is behind on is still what plays next (an imported
-//! finish is dated by the import, after episodes it precedes). Only a release
-//! that did come after the finish is new, and only that one earns the compact
-//! "+N" badge and the single move up (`new_release_at_millis`).
-//! The rule itself is `viptv_engine::continuation::new_episodes`; this module
-//! keeps the metadata it needs. Per profile and series it stores the episodes
-//! after the finished one (identity, release time, aired flag, and the first
-//! few cards) and the series backdrop in `continuation_releases`, so Home
-//! stays synchronous: ordering, badges and the next-episode verdict
-//! (`verdicts_db`, read by the Watched badge) come from stored release times
-//! and the clock, card art (`landscape_db`) from the stored cards. Rows are
-//! never evicted.
-//!
-//! Each row carries `next_check_at`. Home loads and Stremio imports start a
-//! background run for the profile's own session that refreshes every due
-//! series in rate-limited batches until none is due, so a whole import is
-//! covered and an interrupted run resumes on the next trigger. A series is
-//! checked again shortly after its next known air time (bypassing the add-on
-//! response cache), daily without a known date, weekly once dormant, and with
-//! growing back-off while its metadata is unavailable. A refresh that changes
-//! what the queue shows bumps the library revision, so clients refresh quietly.
-//! The episode list comes from the profile's provider, or from the series' own
-//! one when that cannot serve it (`metadata::series_document`): a Stremio
-//! import Simkl has no mapping for keeps its add-on facts on a Simkl profile.
 use super::*;
 use serde::Serialize;
 use viptv_engine::origin::MetadataOrigin;
 use std::collections::{HashMap, HashSet};
 use viptv_engine::playback::PlaybackRecord;
 
-/// The provider bound on one series' episode list (`next_episode` takes at
-/// most this many); the first few after the finished one keep their cards.
 const STORED_EPISODES: usize = 10000;
 const STORED_CARDS: usize = 4;
-/// Re-check this long after a known air time passes.
 const AIRED_GRACE_SECS: i64 = 5 * 60;
-/// Without a known future air date: daily, or weekly once the newest known
-/// episode is older than `DORMANT_AFTER_SECS`.
 const ACTIVE_SECS: i64 = 24 * 3600;
 const DORMANT_SECS: i64 = 7 * 24 * 3600;
 const DORMANT_AFTER_SECS: i64 = 180 * 24 * 3600;
-/// Unavailable metadata: one hour, doubling per failure, at most a week.
 const RETRY_SECS: i64 = 3600;
-/// A claimed series is retried after this long if its run never finished.
 const CLAIM_SECS: i64 = 15 * 60;
-/// Series claimed per batch, lookups in flight per run and server-wide, and
-/// the spacing of lookup starts: the add-on request rate limit.
 const BATCH: usize = 24;
 const CONCURRENCY: usize = 3;
 const SERVER_LOOKUPS: usize = 4;
@@ -67,25 +29,18 @@ struct Stored {
     card: Option<Card>,
 }
 
-/// One series' episodes after `from_id`, valid for one account, configuration
-/// and add-on revision (the same provenance the next-episode cache checks).
 #[derive(Serialize, Deserialize)]
 struct Document {
     account_id: i64,
     configuration_revision: u64,
     addon_revision: String,
     episodes: Vec<Stored>,
-    /// The series backdrop (absent from documents stored before it was kept).
     #[serde(default)]
     landscape: Option<String>,
-    /// The scope that published these episodes (absent from documents stored
-    /// before it was kept): the entry names it as its origin (backend#72).
     #[serde(default)]
     origin: Option<MetadataOrigin>,
 }
 
-/// Record the metadata a next-episode resolution or refresh fetched for
-/// `anchor`, the profile's latest finished episode of `series`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn store_db(
     db: &Connection,
@@ -153,7 +108,6 @@ pub(crate) fn store_db(
     let (next_check_at, failures) = if at.is_some() {
         (next_check(now, episodes), 0)
     } else {
-        // The finished episode is not in the provider's list: unavailable.
         let failures: i64 = db
             .query_row(
                 "SELECT failures FROM continuation_releases WHERE profile_id=?1 AND series_id=?2",
@@ -169,8 +123,6 @@ pub(crate) fn store_db(
     Ok(())
 }
 
-/// When to look at a series again: just after its next known air time, else
-/// daily, or weekly when its newest known episode is long past.
 fn next_check(now: i64, episodes: &[EpisodeAvailability]) -> i64 {
     let now_millis = (now as u64).saturating_mul(1000);
     let releases = episodes.iter().filter_map(|e| e.released_at_millis);
@@ -191,8 +143,6 @@ fn retry_after(failures: i64) -> i64 {
         .min(DORMANT_SECS)
 }
 
-/// The episodes this profile has finished in `series`, by identity and by
-/// aired-order coordinates (imported history may lack provider identities).
 struct Watched {
     ids: HashSet<String>,
     coordinates: HashSet<(u32, u32)>,
@@ -267,29 +217,14 @@ fn bare(identity: MediaIdentity, parent_identity: Option<MediaIdentity>) -> Card
     }
 }
 
-/// Where a finished episode of `series` stands in Continue Watching: the
-/// released next episode to play, and the release facts when it is a new one.
 pub(crate) struct UpNext {
-    /// The first released episode the profile has not finished: the one to play.
     pub card: Card,
-    /// Released, unfinished episodes after the anchor, `card` included.
     pub count: u32,
-    /// Ascending release times of the counted episodes that carry one.
     pub released_at_millis: Vec<u64>,
-    /// When `card` was released, and only when that is after the anchor was
-    /// finished: a new release, which alone earns the `+N` badge and the
-    /// queue's order bump. An episode that was already out when the profile
-    /// finished the anchor is still up next (a backlog resumes at it).
     pub new_release_at_millis: Option<u64>,
-    /// The scope that published the document this card came from.
     pub origin: Option<MetadataOrigin>,
 }
 
-/// Every released episode of `series` the profile has not finished, from the
-/// anchor, whatever the anchor's finish time: a backlog still has to resume
-/// somewhere. The start of the range is the epoch because
-/// `viptv_engine::continuation::new_episodes` drops a release that predates
-/// `finished_at`, and that is the separate question [`up_next_db`] answers.
 fn pending_episodes(
     anchor: &MediaIdentity,
     episodes: &[EpisodeAvailability],
@@ -299,9 +234,6 @@ fn pending_episodes(
     viptv_engine::continuation::new_episodes(anchor, 0, episodes, watched, now_millis)
 }
 
-/// The released next episode after `anchor` in `series`, from the stored
-/// document, or `None` when there is none (caught up, or the next one has not
-/// aired) or the facts are stale, foreign or for another finished episode.
 pub(crate) fn up_next_db(
     db: &Connection,
     app: &App,
@@ -333,11 +265,6 @@ pub(crate) fn up_next_db(
     }))
 }
 
-/// The episode a caught-up entry is waiting for, from the same stored document
-/// and provenance checks that project the up-next card (backend#78). `None`
-/// when nothing further is listed (the show is over), when the next one is
-/// already out (it is the entry's card then), or when the document is stale,
-/// foreign or for another finished episode.
 pub(crate) fn upcoming_db(
     db: &Connection,
     app: &App,
@@ -357,14 +284,9 @@ pub(crate) fn upcoming_db(
     ))
 }
 
-/// A stored release document that still describes `anchor`: read for that
-/// finished episode, for this account, configuration and add-on revision, and
-/// from the provider the row was played from. The episodes keep the anchor
-/// first and the ones after it in its own order and season family.
 struct Facts {
     anchor: MediaIdentity,
     episodes: Vec<EpisodeAvailability>,
-    /// The scope that published the document.
     origin: Option<MetadataOrigin>,
 }
 
@@ -402,7 +324,6 @@ fn facts_db(
     }))
 }
 
-/// The stored document of `series` and the finished episode it was read for.
 fn document_db(
     db: &Connection,
     profile: i64,
@@ -419,10 +340,6 @@ fn document_db(
     Ok(row.and_then(|(from, raw)| Some((from, serde_json::from_str::<Document>(&raw?).ok()?))))
 }
 
-/// Stored 16:9 art for a Continue Watching card of `series`: the still of
-/// `episode`, else the series backdrop, from this account's metadata document
-/// (whichever finished episode it was read for; art does not go stale the
-/// way release facts do).
 pub(crate) fn landscape_db(
     db: &Connection,
     lease: &ResourceLease,
@@ -456,8 +373,6 @@ fn current(
         && app.addons.revision_db(db)? == document.addon_revision)
 }
 
-/// The up-next caption: the episode's coordinates, and its own title when the
-/// document names one (`"S2 E1 · Episode title"`).
 pub(crate) fn caption(
     identity: &MediaIdentity,
     episode_title: &str,
@@ -479,15 +394,10 @@ pub(crate) fn caption(
     }
 }
 
-/// The queue card for a series with an episode to play: the series title and
-/// art with that episode as its identity and caption, and the count badge when
-/// it is a new release.
 pub(crate) fn present(found: &UpNext, anchor: &PlaybackRecord, verified: Option<Card>) -> Card {
     let mut card = verified
         .filter(|card| card.identity == found.card.identity)
         .unwrap_or_else(|| found.card.clone());
-    // The document's own scope is the entry's origin, so the app can start
-    // finding sources on the tap (backend#72).
     if card.metadata_origin.is_none() {
         card.metadata_origin = found.origin.clone();
     }
@@ -516,10 +426,6 @@ struct Candidate {
     anchor: PlaybackRecord,
 }
 
-/// The durable next-episode verdict per series for the finished episode it
-/// was computed from: `(from_id, "next" | "caught_up" | "upcoming" |
-/// "unavailable")`, evaluated against the clock (the spelling the queue cache
-/// uses).
 pub(crate) fn verdicts_db(
     db: &Connection,
     profile: i64,
@@ -567,8 +473,6 @@ fn availability(stored: Vec<Stored>) -> Vec<EpisodeAvailability> {
         .collect()
 }
 
-/// One background run per profile at a time; a trigger during a run asks it
-/// to look for due series once more before it ends.
 fn runs() -> &'static std::sync::Mutex<HashMap<(usize, i64), bool>> {
     static RUNS: std::sync::OnceLock<std::sync::Mutex<HashMap<(usize, i64), bool>>> =
         std::sync::OnceLock::new();
@@ -579,10 +483,7 @@ fn lookups() -> &'static tokio::sync::Semaphore {
     LOOKUPS.get_or_init(|| tokio::sync::Semaphore::new(SERVER_LOOKUPS))
 }
 
-/// Refresh every due series of this profile in the background, batch after
-/// batch until none is due. Never blocks the caller.
 pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64) {
-    // Only the profile's own session refreshes it (as Details hydration does).
     let auth::Principal::Account {
         profile_id: Some(selected),
         ..
@@ -626,8 +527,6 @@ pub(crate) fn schedule(app: &App, lease: &ResourceLease, profile: i64) {
     });
 }
 
-/// Pick up to one batch of due series and lease them for `CLAIM_SECS`, so a
-/// concurrent run never fetches them twice and an interrupted one resumes.
 fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate>, ApiError> {
     let db = app
         .db
@@ -635,7 +534,6 @@ fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate
         .map_err(|_| ApiError::from("Database unavailable"))?;
     app.require_profile(&db, profile)?;
     lease.validate(&db)?;
-    // Restricted kids sessions keep the existing queue; they never trigger fetches.
     if crate::kids::restricted(&db, &lease.principal)? {
         return Ok(vec![]);
     }
@@ -649,8 +547,6 @@ fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate
         if item["type"] != "series" {
             continue;
         }
-        // Only finished episodes (the queue page's own status): an in-progress
-        // episode is resumed, not promoted.
         match super::super::history::record(item) {
             Some(rendered) if state(item, &rendered) != ContinuationStatus::Resume => {}
             _ => continue,
@@ -671,8 +567,6 @@ fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate
         else {
             continue;
         };
-        // A release after its removal brought this title back: un-hide it for
-        // good, so playing the new episode does not remove it again.
         if let Some(hidden) = item["queue_hidden_at"].as_u64() {
             let returned = up_next_db(
                 &db,
@@ -710,8 +604,6 @@ fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate
             Some((from, next_check_at, raw, failures)) => {
                 *from != anchor.identity.id
                     || *next_check_at <= now
-                    // Facts from another configuration are refetched once;
-                    // a failing refetch then waits for its back-off.
                     || *failures == 0 && raw
                         .as_deref()
                         .and_then(|raw| serde_json::from_str::<Document>(raw).ok())
@@ -723,8 +615,6 @@ fn claim(app: &App, lease: &ResourceLease, profile: i64) -> Result<Vec<Candidate
         if !due {
             continue;
         }
-        // Keep the previous facts for the same finished episode until the
-        // refresh replaces them; another episode's facts no longer apply.
         db.execute("INSERT INTO continuation_releases(profile_id,series_id,from_id,checked_at,document,next_check_at,failures) VALUES(?1,?2,?3,?4,NULL,?5,0) ON CONFLICT(profile_id,series_id) DO UPDATE SET document=CASE WHEN continuation_releases.from_id=excluded.from_id THEN continuation_releases.document END,failures=CASE WHEN continuation_releases.from_id=excluded.from_id THEN continuation_releases.failures ELSE 0 END,from_id=excluded.from_id,next_check_at=excluded.next_check_at",params![profile,series,anchor.identity.id,now,now+CLAIM_SECS]).map_err(db_error)?;
         candidates.push(Candidate { series, anchor });
     }
@@ -755,7 +645,6 @@ async fn refresh(app: &App, lease: &ResourceLease, profile: i64, candidates: Vec
         .await;
 }
 
-/// Back off a series whose metadata could not be read.
 fn failed(app: &App, profile: i64, series: &str, from: &str) {
     let Ok(db) = app.db.lock() else {
         return;
@@ -789,9 +678,6 @@ async fn refresh_one(
         parent_identity: candidate.anchor.parent_identity.clone(),
     };
     validate(&input.identity, input.parent_identity.as_ref())?;
-    // Background checks are spaced and rare, so they skip the add-on response
-    // cache: a check right after an air time must see the provider's list.
-    // A series Simkl cannot map is read from the add-ons (backend#36).
     let (parent, episodes) = super::metadata::series_document(
         app,
         lease,
@@ -819,7 +705,6 @@ async fn refresh_one(
             "Profile configuration changed".into(),
         ));
     }
-    // The profile finished another episode meanwhile: its own refresh owns the row.
     let from: Option<String> = db
         .query_row(
             "SELECT from_id FROM continuation_releases WHERE profile_id=?1 AND series_id=?2",

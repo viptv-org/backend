@@ -1,5 +1,3 @@
-//! Resolve a Play intent on the server. Renderers never choose a series episode
-//! or derive resume policy from a locally cached episode/history list.
 use super::*;
 use viptv_engine::{
     continuation::{ContinuationEntry, ContinuationStatus},
@@ -196,8 +194,6 @@ pub(crate) struct AddonActivation {
     connection_id: String,
     enabled: bool,
 }
-/// Translate the viewer's enable/disable intent into the canonical assignment
-/// update on the server, including the connection's supported capabilities.
 pub(crate) async fn set_addon(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -289,8 +285,6 @@ mod tests {
     }
 }
 
-/// Profile activation facts over the existing server configuration. Inventory
-/// remains account-owned; clients do not reconstruct assignment semantics.
 pub(crate) async fn addon_states(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,

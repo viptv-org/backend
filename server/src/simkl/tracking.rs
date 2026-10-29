@@ -184,8 +184,6 @@ pub(crate) async fn watched(
     ))
 }
 
-/// Translate only an exact verified provider episode ID. UI coordinates and
-/// list position cannot stand in for AniDB's sequential episode number.
 pub(super) async fn anime_number(
     app: &App,
     profile: i64,

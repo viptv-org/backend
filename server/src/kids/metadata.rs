@@ -36,8 +36,6 @@ pub(super) fn assessment(meta: &Value) -> (Option<i64>, bool) {
     let age = ages.iter().max().copied();
     (age, unknown || ages.len() > 1)
 }
-/// Only call with metadata returned by an account's configured server-side addon fetch.
-// Store only presentation and policy fields; addon extension blobs never enter the policy cache.
 fn compact_metadata(meta: &Value) -> Value {
     let mut out = json!({});
     for key in [
@@ -169,7 +167,6 @@ pub(crate) fn observe(
     db.execute("INSERT INTO kids_media(account_id,kind,id,parent_id,metadata,age,conflict,updated_at) VALUES(?1,?2,?3,?3,?4,?5,?6,?7) ON CONFLICT(account_id,kind,id) DO UPDATE SET metadata=excluded.metadata,age=COALESCE(MAX(kids_media.age,excluded.age),excluded.age,kids_media.age),conflict=MAX(kids_media.conflict,excluded.conflict,CASE WHEN kids_media.age IS NOT NULL AND excluded.age IS NOT NULL AND kids_media.age<>excluded.age THEN 1 ELSE 0 END),updated_at=excluded.updated_at",params![account,kind,id,encoded,age,conflict,util::now()]).map_err(db_error)?;
     let mut episode_policy_changed = false;
     if kind == "series" {
-        // Exact video IDs are learned here, never from a playback/progress request's series_id.
         if let Some(videos) = meta["videos"]
             .as_array()
             .or_else(|| metadata["videos"].as_array())
@@ -210,7 +207,6 @@ pub(crate) fn observe(
     Ok(())
 }
 pub(super) fn prune_observations(db: &Connection, account: i64) -> Result<(), ApiError> {
-    // Bound once per response, rather than sorting the cache for every catalog item.
     db.execute("DELETE FROM kids_media WHERE account_id=?1 AND rowid NOT IN(SELECT rowid FROM kids_media WHERE account_id=?1 ORDER BY updated_at DESC,rowid DESC LIMIT 10000) AND NOT EXISTS(SELECT 1 FROM kids_approvals a JOIN profile_owners o ON o.profile_id=a.profile_id WHERE o.account_id=?1 AND a.kind=kids_media.kind AND a.id=kids_media.parent_id)",[account]).map_err(db_error)?;
     Ok(())
 }

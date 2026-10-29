@@ -253,7 +253,7 @@ async fn runtime_grants_support_local_platforms_automatic_selection_and_tracker_
 
 #[tokio::test]
 async fn runtime_request_never_substitutes_gateway_delivery() {
-    let app = setup().await; // Native v1 negotiation does not authorize runtime v2.
+    let app = setup().await;
     let source = torrent(&app, None);
     let (status, value) = request(
         &app,
@@ -885,7 +885,6 @@ async fn children_negotiate_cancel_and_keep_duplicate_validation_while_title_pol
         .1,
         json!({"ok":true})
     );
-    // Metadata denial can change without a profile revision bump; recheck the exact title.
     app.db
         .lock()
         .unwrap()

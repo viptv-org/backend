@@ -1,4 +1,3 @@
-//! Private, fenced background projection over coalesced public detail reads.
 use super::*;
 #[derive(Default)]
 pub(in crate::simkl) struct State {

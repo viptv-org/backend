@@ -1,4 +1,3 @@
-//! Profile-private SDK credentials. Public records contain no credential values.
 use super::*;
 use viptv_engine::{
     capabilities::Capability,
@@ -59,8 +58,6 @@ pub(crate) async fn schemas(
         schema.state = viptv_engine::source_integration::IntegrationState::Unavailable;
         schema.runtime_enabled = false;
     }
-    // The saved provider *count* (never the ids) feeds the list's
-    // "TMDB key saved · 8 providers" line; an empty selection means the default set.
     #[cfg(feature = "vsources-runtime")]
     if let (Some(id), Some(vault)) = (id, app.secret_vault.as_ref()) {
         if let Ok(envelope) = db.query_row(
@@ -290,7 +287,6 @@ pub(crate) async fn remove(
     tx.commit().map_err(db_error)?;
     Ok(axum::Json(json!({"configuration":config})))
 }
-/// Used at publication and every admission; profile revisions bind saved assignments.
 pub(crate) fn available(app: &App, id: i64) -> bool {
     if !cfg!(feature = "vsources-runtime") {
         return false;
@@ -385,8 +381,6 @@ pub(crate) fn cache_card_at(
     let Ok(mut cache) = app.verified_cards.lock() else {
         return;
     };
-    // Evict a slice on overflow; clearing all 8192 entries on one insert turned
-    // the cap into a full-cache stampede.
     if cache.len() > 8192 {
         let drop: Vec<_> = cache.keys().take(2048).cloned().collect();
         for key in drop {

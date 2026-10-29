@@ -1,7 +1,5 @@
 use super::*;
 
-/// API responses are never stored, except where a handler has explicitly
-/// allowed a private (browser/app-only) cache, such as add-on logos.
 pub(crate) async fn private_api_response(mut response: Response) -> Response {
     let private = response
         .headers()
@@ -28,8 +26,6 @@ pub(crate) async fn json_errors(req: Request, next: Next) -> Response {
     {
         let status = response.status();
         if v2 {
-            // Framework rejections can contain a submitted value or parser
-            // diagnostic. Preserve their HTTP status, never their body.
             let mut response = account_api::Error::Code("invalid_v2_request").into_response();
             *response.status_mut() = status;
             return response;
@@ -50,8 +46,6 @@ fn capture_lease(
     token: Option<&str>,
     principal: auth::Principal,
 ) -> Result<ResourceLease, ApiError> {
-    // Authentication already succeeded. Resolve its credential once to a stable lease;
-    // downstream media requests carry only the playback capability, not this credential.
     let token = token.ok_or_else(auth::unauthorized)?;
     let db = app.db.lock().unwrap();
     let session_id = db.query_row("SELECT id FROM auth_sessions WHERE access_hash=?1 AND account_id=?2 AND id IS ?3 AND access_expires>?4", params![format!("{:x}",Sha256::digest(token.as_bytes())), principal.account_id(), principal.session_id(), util::now()], |r| r.get::<_,String>(0)).optional().map_err(db_error)?;
@@ -179,9 +173,6 @@ mod v2_error_tests {
     #[tokio::test]
     async fn v2_framework_rejections_have_safe_codes_without_changing_legacy_or_auth() {
         let app = fixture();
-        // All of these are rejected with safe codes and without reflecting
-        // the sentinel: opaque ids by the handlers, malformed URIs by the
-        // framework layer.
         for (method, path) in [
             ("DELETE", "/api/addons/private-sentinel"),
             ("DELETE", "/api/iptv/connections/private-sentinel"),

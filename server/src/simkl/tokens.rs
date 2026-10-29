@@ -1,4 +1,3 @@
-//! OAuth V2 token lifetimes and serialized refresh; all token material stays sealed.
 use super::*;
 use zeroize::Zeroizing;
 
@@ -37,7 +36,6 @@ pub(super) async fn access(
     };
     let text = std::str::from_utf8(raw.expose()).map_err(|_| unavailable())?;
     let Ok(token) = serde_json::from_str::<Value>(text) else {
-        // Existing links remain readable; new links always contain a V2 document.
         return Ok(Some(Zeroizing::new(text.to_owned())));
     };
     if token["expires_at"]
@@ -48,9 +46,6 @@ pub(super) async fn access(
             .as_str()
             .map(|v| Zeroizing::new(v.into())));
     }
-    // A search deadline may drop its caller after the provider consumed the
-    // refresh token. Own the bounded exchange+seal transaction independently;
-    // dropping the JoinHandle leaves that transaction running to completion.
     let app = app.clone();
     let capability = credential.capability;
     let revision = credential.revision;
@@ -135,9 +130,6 @@ async fn refresh_locked(
         .map(|v| Zeroizing::new(v.into())))
 }
 
-/// A consumed refresh belongs to the persistent link, not the caller's temporary
-/// viewing grant. Exact ciphertext CAS prevents unlink/relink or numeric-ID reuse
-/// from acquiring a response authorized for a different credential incarnation.
 struct Rotation {
     account: i64,
     profile: i64,

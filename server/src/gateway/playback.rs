@@ -1,5 +1,3 @@
-//! Backend-owned playback leases. Video bytes travel directly to the selected
-//! delivery endpoint; this module never invokes or relays the embedded engine.
 use rusqlite::OptionalExtension;
 use super::{
     client::Client,
@@ -254,7 +252,6 @@ impl StateData {
 struct Entry {
     live: bool,
     caption_style: bool,
-    /// The profile's Next episode button preference at admission.
     next_episode_button: bool,
     id: String,
     scope: String,
@@ -263,7 +260,6 @@ struct Entry {
     request_identity: viptv_core::native_torrent_policy::NativeTorrentRequestIdentity,
     lease: ResourceLease,
     proof: Proof,
-    /// The discovery grant this playback was admitted from.
     stream_id: String,
     identity: [u8; 32],
     cancelled: AtomicBool,
@@ -285,7 +281,6 @@ impl Registry {
         let remote = state.remote.as_ref().unwrap();
         (state.touched, remote.expires_at, remote.client_frame_ack)
     }
-    /// Lapses a playback lease as a long network drop would.
     #[cfg(test)]
     pub(super) fn lapse_lease(&self, id: &str) {
         let entries = self.entries.lock().unwrap();
@@ -625,8 +620,6 @@ fn response(entry: &Entry) -> Value {
     };
     tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), status = state.status, expires_at, error_code = state.error.unwrap_or("none"), gateway_session_tag = %state.remote.as_ref().map(|remote| super::diagnostics::tag(&remote.viewer)).unwrap_or_default(), "Playback lease state");
     let mut value = json!({"id":entry.id,"status":state.status,"delivery":state.delivery,"live":entry.live,"error_code":state.error,"error":error,"expires_at":expires_at,"renew_after_seconds":20});
-    // Native torrent envelopes are deliberately closed and are outside this
-    // remote wrapper contract. Preserve their existing consumer wire shape.
     if state.native.is_none() { value["actions"] = viewing::actions(entry,&state); }
     value
 }
@@ -681,7 +674,6 @@ async fn cancel_gateway_preparation(entry: &Arc<Entry>) {
     if let Some(preparation) = target {
         let target = preparation.target;
         let body = json!({"namespace":target.gateway.namespace});
-        // Old gateways may lack this endpoint; their late viewer is still reconciled/released.
         let _ = preparation
             .client
             .request(
@@ -767,8 +759,6 @@ fn core_request(request: &Start) -> Result<viptv_core::dto::PlaybackV2Request, E
     serde_json::to_value(request)
         .and_then(|mut v| {
             if let Some(fields) = v.as_object_mut() { fields.remove("resume"); fields.remove("replace_source"); }
-            // Delivery-only native-player negotiation is outside torrent policy.
-            // The complete request (including this fact) remains in the admission hash.
             if let Some(fields) = v["client"].as_object_mut() { fields.remove("supports_required_audio_index"); }
             serde_json::from_value(camel(v))
         })
@@ -1107,8 +1097,6 @@ pub(crate) async fn cancel_request(
             .as_ref()
             .ok_or(Error::Code("playback_expired"))?;
         let scope = App::scoped_key(&lease.principal);
-        // Even an absent request gets a durable, session-lifetime tombstone.
-        // Cancellation never evicts a live record; admission refuses quota exhaustion.
         db.execute("INSERT INTO playback_request_authority(session_id,request_id,scope,cancelled) VALUES(?1,?2,?3,1) ON CONFLICT(session_id,request_id) DO UPDATE SET cancelled=1 WHERE playback_request_authority.scope=excluded.scope",params![session,request_id,scope])
             .map_err(|_| Error::Code("provider_storage_unavailable"))?;
         let entry = app
@@ -1185,8 +1173,6 @@ async fn choose(
             .filter_map(|candidate| candidate.as_ref().ok())
             .find(|candidate| candidate.gateway.id == id && candidate.gateway.revision == revision)
         {
-            // Joining an existing output does not require fresh input capacity,
-            // but still requires current support, namespace and all scopes.
             match app
                 .gateway_client
                 .capabilities(
@@ -1396,9 +1382,6 @@ async fn start_mode(
             crate::engine_v3::scoped_library::resume_db(&db,&app.clone().with_lease(lease.clone()),*profile,&metadata.card)?
         }else{super::resume::position(&db,*profile,&input.proof.kind,input.proof.media_id.as_deref())?};
     }
-    // Snapshot profile defaults only for a new admission. The idempotency hash
-    // above is the caller's body, so later preference edits cannot mutate an
-    // existing playback or turn a safe retry into a conflicting request.
     let database = app.db.clone();
     let preference_lease = lease.clone();
     request = tokio::task::spawn_blocking(move || {
@@ -1408,7 +1391,6 @@ async fn start_mode(
     })
     .await
     .map_err(|_| Error::Code("provider_storage_unavailable"))??;
-    // Do not apply Preferences::cap: v2 uses actual decoder limits only.
     validate(&request)?;
     if input.live && request.position != 0.0 {
         return Err(Error::Code("invalid_playback_request"));
@@ -1437,9 +1419,6 @@ async fn start_mode(
     {
         return Err(Error::Code("source_format_unsupported"));
     }
-    // The legacy gateway input has no metainfo hash-binding field. A paired URL
-    // and hash was previously unsupported there; never drop that exact identity
-    // when force-gateway/old-client gates bypass native admission.
     if !native_candidate && input.info_hash.is_some() && !input.url.starts_with("magnet:") {
         return Err(Error::Code("source_format_unsupported"));
     }
@@ -1622,13 +1601,6 @@ async fn start_mode(
     }));
     Ok((StatusCode::ACCEPTED, Json(response(&entry))))
 }
-/// Rejects a playback whose current authority no longer allows it.
-///
-/// A session whose authority failed may already have been terminated by the
-/// stale-session sweep, which marks it expired. The authority failure still
-/// answers first: a revoked approval or a changed profile policy is the reason
-/// the client must see, and answering `playback_expired` there would tell it to
-/// reconnect and pick a source it is no longer allowed to play (backend#66).
 async fn validate_entry(app: &App, entry: &Entry) -> Result<(), Error> {
     let terminated =
         entry.cancelled.load(Ordering::Acquire) || expired(&entry.state.lock().unwrap());
@@ -1846,8 +1818,6 @@ async fn prepare(
         if state.remote.as_ref().is_some_and(|remote| !gateway_current(&tx, &entry.lease, &remote.target.gateway.id, remote.target.gateway.revision)) {
             return Err(Error::Code("gateway_not_found"));
         }
-        // History belongs to the admitted profile and exact provider-qualified
-        // channel. Retry/renewal never repeat this write; old progress survives.
         if let Some(channel) = &entry.proof.live_channel_id {
             let crate::auth::Principal::Account { profile_id: Some(profile), .. } = entry.lease.principal else {
                 return Err(ApiError(StatusCode::FORBIDDEN, crate::MSG_PROFILE_REQUIRED.into()).into());
@@ -1890,7 +1860,6 @@ pub(crate) async fn get(
     }
     Ok(Json(response(&entry)))
 }
-/// Advisory progress is separately versioned and cannot extend playback authority.
 pub(crate) async fn progress(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -1953,8 +1922,6 @@ pub(crate) async fn progress(
     validate_entry(&app, &entry).await?;
     Ok(Json(json!({"stage":stage})))
 }
-/// Decoder acknowledgement never renews backend or gateway authority. Like a
-/// heartbeat, it keeps the source grant reopenable (backend#18).
 pub(crate) async fn first_frame(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -1997,8 +1964,6 @@ pub(crate) async fn first_frame(
     refresh_grant(&app, &entry);
     Ok(Json(json!({"ok":true})))
 }
-/// Playback just used the entry's source, so its grant stays reopenable for
-/// another 30 minutes after a lease lapse (backend#18).
 fn refresh_grant(app: &App, entry: &Entry) {
     app.refresh_stream(&entry.scope, entry.lease.session_id.as_deref(), &entry.stream_id);
 }
@@ -2009,8 +1974,6 @@ pub(crate) async fn renew(
     Path(id): Path<String>,
     request: axum::extract::Request,
 ) -> Result<Json<Value>, Error> {
-    // Existing direct/gateway clients send an empty JSON object. Native v1
-    // remains bodyless; no other legacy request payload is accepted.
     let body = control_body(request, 2).await?;
     let entry = app.gateway_playbacks.snapshot(&id, &lease)?;
     if !body.is_empty() && (body.as_ref() != b"{}" || entry.state.lock().unwrap().native.is_some())
@@ -2134,7 +2097,6 @@ pub(crate) async fn stop(
     Ok(Json(json!({"ok":true})))
 }
 
-/// Reports implemented protocol support, never playback admission or device qualification.
 pub(crate) async fn support(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -2166,7 +2128,6 @@ async fn support_version(
             .map_err(|_| Error::Code("provider_storage_unavailable"))?;
         lease.validate(&db)?;
         app.require_media(&db)?;
-        // Negotiation belongs to the authenticated account/profile/session scope.
         let scope = App::scoped_key(&lease.principal);
         let session = lease
             .session_id
@@ -2186,7 +2147,6 @@ async fn support_version(
     .map_err(|_| Error::Code("provider_storage_unavailable"))?
 }
 
-/// Bound the complete control handler and always prevent caching private results.
 pub(crate) async fn control_deadline(
     request: axum::extract::Request,
     next: axum::middleware::Next,

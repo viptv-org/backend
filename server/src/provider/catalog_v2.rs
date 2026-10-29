@@ -1,4 +1,3 @@
-//! Raw account-owned live snapshots: provider order, bounded pages, no lineup rules.
 use super::v2::Direction;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -18,7 +17,6 @@ pub(super) fn init(db: &Connection) -> rusqlite::Result<()> {
             UPDATE provider_live SET ordinal=rowid;",
         )?;
     }
-    // Legacy row insertion order is the best available order until the next refresh.
     tx.execute_batch("CREATE INDEX IF NOT EXISTS provider_live_page_v2 ON provider_live(provider_id,ordinal,id);
         CREATE INDEX IF NOT EXISTS provider_live_category_page_v2 ON provider_live(provider_id,category_id,ordinal,id);
         CREATE TABLE IF NOT EXISTS provider_live_generations(provider_id INTEGER PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,generation INTEGER NOT NULL);
@@ -48,7 +46,6 @@ pub(super) fn replace_categories(
             insert.execute(params![provider, id, name, ordinal as i64])?;
         }
     }
-    // Some providers omit a category from get_live_categories; retain its ID.
     db.execute("INSERT INTO provider_live_categories_v2(provider_id,id,name,ordinal)
         SELECT provider_id,category_id,COALESCE(category,category_id),?2+MIN(ordinal) FROM provider_live
         WHERE provider_id=?1 AND category_id IS NOT NULL GROUP BY category_id
@@ -64,7 +61,6 @@ pub(crate) struct Filter {
     #[serde(default)]
     pub search: String,
     pub collection: Option<String>,
-    /// Selected server-authenticated profile, never a public query override.
     pub profile_id: Option<i64>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -143,8 +139,6 @@ pub(crate) fn page(
             Ok(decoded)
         })
         .transpose()?;
-    // A read transaction keeps ownership, generation and page rows on one snapshot,
-    // including when another process commits a provider refresh.
     let tx = db.unchecked_transaction().map_err(storage)?;
     let catalog = super::v2::live_catalog(&tx, account, filter.catalog_id)?;
     let Some(catalog) = catalog else {
@@ -177,10 +171,6 @@ pub(crate) fn page(
     }
     let ordinal = previous.as_ref().map_or(-1, |c| c.ordinal);
     let id = previous.as_ref().map_or("", |c| c.id.as_str());
-    // instr treats user '%'/'_' literally. Filtering happens before the bound;
-    // no full catalog collection or synchronous count is performed.
-    // Personal subsets start at the profile's saved-row index. CROSS JOIN keeps
-    // a sparse list from becoming a full-provider scan just to satisfy ordering.
     let sql = match (kind,filter.collection.as_deref()) {
         (Kind::Channels,None) => {
             "SELECT l.ordinal,l.id,l.name,l.logo,l.category_id,l.category,l.epg_channel_id FROM provider_live l

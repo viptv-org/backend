@@ -26,7 +26,6 @@ fn ready(root: &Path) -> (Connection, crate::secret_store::Vault) {
         &vault,
     )
     .unwrap();
-    // This routed connection is deliberately archived, not silently rerouted.
     db.execute("UPDATE providers SET enabled=0 WHERE id=1", [])
         .unwrap();
     (db, vault)
@@ -285,7 +284,6 @@ fn incoming_foreign_dependencies_refuse_cascade_null_empty_and_mixed_case_target
             for target in ["family_channels", "FaMiLy_ChAnNeLs"] {
                 let root = tempfile::tempdir().unwrap();
                 let (db, vault) = ready(root.path());
-                // Quoted child names must be treated as data, never SQL fragments.
                 db.execute_batch(&format!("CREATE TABLE \"extension'odd\"(id INTEGER PRIMARY KEY,family_id TEXT REFERENCES \"{target}\"(id) ON DELETE {action});")).unwrap();
                 if populated {
                     db.execute_batch("INSERT INTO \"extension'odd\" VALUES(1,'family:old');")

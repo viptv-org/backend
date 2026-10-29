@@ -9,8 +9,6 @@ fn member_principal(id: i64) -> Principal {
     }
 }
 
-// Denying leaves a tombstone for the polling device (backend#44), so "gone"
-// means no longer usable rather than deleted.
 fn pairing_usable(db: &Connection, user_code: &str) -> bool {
     db.query_row(
         "SELECT EXISTS(SELECT 1 FROM auth_pairings WHERE code_hash=?1 AND denied=0)",
@@ -34,8 +32,6 @@ fn deny_retires_live_pending_codes_for_any_authenticated_user() {
     )
     .unwrap()
     .0;
-    // Pending, unowned codes are deniable by any authenticated user: the
-    // browser user is exactly the person the TV asked to approve or deny.
     dispatch(
         &db,
         "/auth/device/deny",
@@ -82,7 +78,6 @@ fn deny_refuses_already_approved_pairings_from_foreign_accounts() {
         SESSION_TOKEN,
     )
     .unwrap();
-    // A different account cannot deny an already-approved foreign pairing.
     let err = dispatch(
         &db,
         "/auth/device/deny",
@@ -94,7 +89,6 @@ fn deny_refuses_already_approved_pairings_from_foreign_accounts() {
     .unwrap_err();
     assert_eq!(err.0, StatusCode::FORBIDDEN);
     assert!(pairing_usable(&db, code["user_code"].as_str().unwrap()));
-    // The owning account can deny its own approved pairing.
     dispatch(
         &db,
         "/auth/device/deny",
@@ -121,7 +115,6 @@ fn deny_refuses_expired_and_unknown_codes() {
     )
     .unwrap()
     .0;
-    // Expire the pairing, then deny: must be refused, not "success".
     db.execute(
         "UPDATE auth_pairings SET expires=?1 WHERE code_hash=?2",
         params![now() - 1, hash(code["user_code"].as_str().unwrap())],
@@ -138,7 +131,6 @@ fn deny_refuses_expired_and_unknown_codes() {
     .unwrap_err();
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert_eq!(err.1, "Invalid or expired pairing code");
-    // Unknown code: refused with the same contract as lookup/approve.
     let err = dispatch(
         &db,
         "/auth/device/deny",

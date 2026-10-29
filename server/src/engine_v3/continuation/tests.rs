@@ -253,8 +253,6 @@ async fn queue_visibility_rejects_unknown_and_restricted_identities_without_writ
 #[tokio::test]
 async fn continue_collapses_duplicate_episode_progress_to_the_most_recent() {
     let app = fixture();
-    // Two progress rows for the same series+episode (different positions and
-    // update times) must collapse to one card keeping the most recent record.
     for (position, updated) in [(30000, 100), (50000, 200)] {
         let (status, value) = request(
             &app,
@@ -312,9 +310,6 @@ async fn continue_collapses_duplicate_movie_progress_to_one_card() {
 #[tokio::test]
 async fn continue_and_history_emit_one_durable_simkl_movie_key() {
     let app = fixture();
-    // The reported queue carried one anime film under the movie catalog, the
-    // anime catalog and the old store prefix, with two different progress
-    // values (backend#29).
     {
         let db = app.db.lock().unwrap();
         for (id, provider, position, updated) in [
@@ -345,7 +340,6 @@ async fn continue_and_history_emit_one_durable_simkl_movie_key() {
         entries[0]["record"]["identity"]["id"],
         "simkl:movie:250822"
     );
-    // The most recently updated row is the one the card shows.
     assert_eq!(entries[0]["record"]["position_millis"], 49000);
     let body = page.to_string();
     assert!(!body.contains("simkl:movies:"), "{page}");

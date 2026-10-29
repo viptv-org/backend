@@ -7,8 +7,6 @@ async fn mapping_fixture() -> (App, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<S
         let observed = observed.clone();
         async move {
             let path = request.uri().path().to_owned();
-            // Record backend traffic only: the host probes every new loopback
-            // listener with a safe `HEAD /` (backend#48).
             if request.method() != axum::http::Method::HEAD {
                 observed.lock().unwrap().push(path.clone());
             }

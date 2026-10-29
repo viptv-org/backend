@@ -1,24 +1,14 @@
-//! Add-on manifest logos, fetched and checked by the server.
-//!
-//! A manifest's `logo` URL can carry the add-on's private configuration (the
-//! same token as its manifest URL), so clients never receive it. Listings
-//! carry `/api/addons/:id/logo?v=…` instead; that route re-checks ownership,
-//! fetches through the pinned source egress policy and serves only raster
-//! images the clients can draw. SVG is refused: no client renders it and it can
-//! carry script.
 use super::*;
 use axum::body::Bytes;
 use sha2::{Digest, Sha256};
 use std::time::Instant;
 
-/// Largest logo accepted from an add-on.
 pub(crate) const LIMIT: usize = 512 * 1024;
 const CACHE_BYTES: usize = 16 * 1024 * 1024;
 const CACHE_ENTRIES: usize = 128;
 const FRESH: Duration = Duration::from_secs(6 * 3600);
 const RETRY: Duration = Duration::from_secs(300);
 
-/// The manifest's logo when it is a public HTTP(S) address the egress policy allows.
 pub(crate) fn source(manifest: &Value, fixture: bool) -> Option<url::Url> {
     let raw = manifest["logo"]
         .as_str()
@@ -28,13 +18,11 @@ pub(crate) fn source(manifest: &Value, fixture: bool) -> Option<url::Url> {
     Some(url)
 }
 
-/// Opaque revision of one add-on's logo: changes when the manifest's logo does.
 fn version(id: i64, url: &url::Url) -> String {
     let digest = Sha256::digest(format!("viptv-addon-logo\0{id}\0{url}").as_bytes());
     digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The relative path a listing exposes, only when the manifest has a usable logo.
 pub(crate) fn path(id: i64, manifest: &Value, fixture: bool) -> Option<String> {
     source(manifest, fixture).map(|url| format!("/api/addons/{id}/logo?v={}", version(id, &url)))
 }
@@ -50,8 +38,6 @@ struct Entry {
 }
 type Key = (i64, i64, String);
 
-/// Logos by account, add-on and logo revision. Failures are remembered briefly
-/// so a broken logo is not refetched on every settings visit.
 pub(crate) struct Cache {
     entries: std::sync::Mutex<HashMap<Key, Entry>>,
     flights: std::sync::Mutex<HashMap<Key, Weak<tokio::sync::Mutex<()>>>>,
@@ -100,7 +86,6 @@ impl Cache {
             },
         );
     }
-    /// The checked logo bytes, or `None` when the add-on's logo is unusable.
     pub(crate) async fn load(
         &self,
         account: i64,
@@ -168,7 +153,6 @@ async fn fetch(url: url::Url, fixture: bool) -> Option<Asset> {
     })
 }
 
-/// The served type comes from the bytes, never from the add-on's header.
 pub(crate) fn signature(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")

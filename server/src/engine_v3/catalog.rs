@@ -188,7 +188,6 @@ pub(crate) async fn detail(
 ) -> ApiResult {
     let profile = super::watched::selected_profile(&lease);
     let mut detail = resolve(app.clone(), lease.clone(), kind, id, page, true).await?;
-    // The title itself is the page; its recommendations are cards.
     if let Some(profile) = profile {
         super::watched::Watched::for_profile(&app, profile)
             .mark_values(&mut detail.0["recommendations"]);
@@ -197,9 +196,6 @@ pub(crate) async fn detail(
     Ok(detail)
 }
 
-/// The title card Details shows for the session's selected profile: the same
-/// metadata selection, policy checks and identity verification, without
-/// episodes paging or genre recommendations.
 pub(crate) async fn title_card(
     app: App,
     lease: ResourceLease,
@@ -235,9 +231,6 @@ async fn resolve(
     let auth::Principal::Account { profile_id, .. } = &lease.principal;
     let profile = profile_id.ok_or_else(auth::forbidden)?;
     let app = app.with_lease(lease.clone());
-    // A provider `:` key has one durable spelling: a legacy Simkl catalog path
-    // (`simkl:movies:`, or an `simkl:anime:` movie) names the same title as the
-    // key the queue, history and library emit (backend#29).
     let id = crate::simkl::key::media(&kind, &id).into_owned();
     let mut expected = super::origins::parse_card(page.card.as_deref())?;
     if let Some(card) = expected.as_mut() {
@@ -289,10 +282,6 @@ async fn resolve(
         .as_deref()
         .unwrap_or(&configuration.browsing_plugin)
         == "simkl";
-    // A profile keeps its Simkl plugin connection without a link, so the
-    // browsing plugin alone cannot pick the metadata provider: an imported card
-    // with no origin would look for a Simkl identity it never had (backend#60).
-    // A `simkl:` id can only be served by Simkl itself.
     let stremio_fallback = simkl
         && page.provider_id.is_none()
         && !id.starts_with("simkl:")
@@ -326,8 +315,6 @@ async fn resolve(
         super::origins::stamp(&app, std::slice::from_mut(&mut detail.item), "simkl")?;
         super::origins::stamp(&app, &mut detail.episodes, "simkl")?;
         super::origins::stamp(&app, &mut detail.recommendations, "simkl")?;
-        // Emit the durable key, so Details opened from a queue, history or
-        // library card answers with the same identity (backend#29).
         crate::simkl::key::card(&mut detail.item);
         for episode in &mut detail.episodes {
             crate::simkl::key::identity(&mut episode.identity);
@@ -346,14 +333,13 @@ async fn resolve(
             &addon_revision,
             &result.0,
         );
-        // Private watch state is added after the shared verified-card cache.
+        // Private watch state goes in after the shared verified-card cache.
         super::episode_progress::mark(&app, profile, &mut result.0);
         return Ok(result);
     }
     let (app, origin, revision) = if let Some(explicit) = explicit {
         explicit
     } else if stremio_fallback {
-        // The imported card keeps the Stremio metadata it came from (backend#60).
         super::search::metadata_scope(app, &lease, profile, "stremio", None)?
     } else {
         let (app, revision) = configuration::apply(
@@ -364,8 +350,6 @@ async fn resolve(
         )?;
         (app, "stremio".to_owned(), revision)
     };
-    // A series lookup may name one episode; add-on metadata documents index the
-    // episodes under their parent title.
     let lookup = if kind == "series" {
         episode_parent(&id).unwrap_or(&id)
     } else {
@@ -450,7 +434,6 @@ async fn resolve(
     .map_err(|_| ApiError::from("Invalid episode metadata"))?;
     let seasons = projected.seasons;
     let mut episodes = projected.episodes;
-    // Complete metadata alone supplies external-ID proof; catalog projection never does.
     let mut item = projected.item;
     super::origins::stamp(&app, std::slice::from_mut(&mut item), &origin)?;
     super::origins::stamp(&app, &mut episodes, &origin)?;
@@ -543,14 +526,11 @@ async fn resolve(
     })
     .map_err(|_| ApiError::from("Title unavailable"))?;
     super::source_integrations::cache_detail(&app, &lease, revision, &addon_revision, &value);
-    // Private watch state is added after the shared verified-card cache.
+    // Private watch state goes in after the shared verified-card cache.
     super::episode_progress::mark(&app, profile, &mut value);
     Ok(axum::Json(value))
 }
 
-/// The title an IMDb episode lookup names: `<tt-id>:<season>:<episode>`, as
-/// Continue Watching and the player hold it. Stremio metadata add-ons publish
-/// one document per title, so the coordinates never reach them (backend#60).
 pub(super) fn episode_parent(id: &str) -> Option<&str> {
     let numeric = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
     let mut parts = id.split(':');

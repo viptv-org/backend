@@ -70,8 +70,6 @@ pub(crate) async fn check(
             &target.gateway.namespace,
         )
         .await?;
-    // Do not return stale success after the account/session was revoked while
-    // the gateway request was in flight.
     account_api::work(app, lease, move |db, account| {
         if !registry::list(db, account)?.iter().any(|current| {
             current.id == target.gateway.id

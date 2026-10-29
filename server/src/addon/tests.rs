@@ -69,7 +69,6 @@ fn account_revision_tracks_only_committed_addon_changes() {
         assert_ne!(addons.revision().unwrap(), after_secret);
         assert_eq!(account2.revision().unwrap(), other_initial);
     }
-    // A later add does not reuse the token from before the final deletion.
     let before_readd = addons.revision().unwrap();
     let db = addons.db.lock().unwrap();
     db.execute("INSERT INTO addons(name,manifest_url,manifest,account_id) VALUES('B','https://b.invalid/manifest.json','{}',1)", []).unwrap();
@@ -138,7 +137,6 @@ fn test_addons() -> Addons {
     remove(&addons, 1);
     addons
 }
-/// Install a manifest URL the way `/api/addons` does and return its id.
 pub(super) async fn install(addons: &Addons, url: &str) -> Result<i64, String> {
     let vault = addons.vault.clone().ok_or("secret_store_not_configured")?;
     let (url, manifest) = addons.prepare_manifest(url).await?;
@@ -153,7 +151,6 @@ pub(super) async fn install(addons: &Addons, url: &str) -> Result<i64, String> {
         &expected,
     )?)
 }
-/// Saved (id, enabled) rows for the addons' account, in id order.
 fn saved(addons: &Addons) -> Vec<(i64, bool)> {
     let db = addons.db.lock().unwrap();
     let mut rows = db
@@ -348,7 +345,6 @@ fn seed_migration_and_restarts_never_restore_deleted_addons() {
     assert_eq!(reopened.revision().unwrap(), deleted_revision);
     drop(reopened);
     std::fs::remove_file(&path).unwrap();
-    // Both empty and populated pre-priority schemas are already initialized.
     for populated in [false, true] {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch("CREATE TABLE addons(id INTEGER PRIMARY KEY,name TEXT NOT NULL,manifest_url TEXT UNIQUE NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,manifest TEXT NOT NULL)").unwrap();
@@ -398,8 +394,6 @@ async fn ordered_catalogs_raw_pagination_search_constraints_and_meta() {
             let captured = captured.clone();
             async move {
                 let path = uri.path().to_owned();
-                // Record catalog/meta traffic only: the host probes every new
-                // loopback listener with a safe `HEAD /` (backend#48).
                 if method != axum::http::Method::HEAD {
                     captured.lock().unwrap().push(path.clone());
                 }
@@ -473,9 +467,6 @@ async fn ordered_catalogs_raw_pagination_search_constraints_and_meta() {
     assert_eq!(search["has_more"], false);
     assert!(search["next_skip"].is_null());
     assert_eq!(search["aggregated"], false);
-    // meta() cancels its lower-priority futures once the preferred result
-    // arrives, but an already-sent metadata request can reach this mock
-    // after clear(). Count catalog requests, not unrelated in-flight work.
     let requests = paths
         .lock()
         .unwrap()
@@ -502,7 +493,6 @@ async fn ordered_catalogs_raw_pagination_search_constraints_and_meta() {
         .await
         .is_err());
     set_enabled(&addons, slow, false);
-    // Reinstalling refreshes the manifest but keeps the saved disabled state.
     assert_eq!(install(&addons, &slow_url).await.unwrap(), slow);
     let (name, enabled): (String, bool) = addons
         .db

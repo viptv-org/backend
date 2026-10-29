@@ -30,7 +30,6 @@ async fn ok(app: &App, token: &str, method: &str, path: &str, body: Value) -> Va
     assert_eq!(status, StatusCode::OK, "{method} {path}: {value}");
     value
 }
-/// Names of the tokens that differ, in contract order.
 fn changed(before: &Value, after: &Value) -> Vec<&'static str> {
     KEYS.into_iter()
         .filter(|key| before[*key] != after[*key])
@@ -46,7 +45,6 @@ fn progress(position: u64) -> Value {
 fn favorite(id: &str) -> Value {
     json!({"card":{"identity":{"id":id,"kind":"movie","ids":[{"namespace":"imdb","value":"tt7654321"}],"edition":null,"episode":null},"provider_id":"stremio","title":"Saved","subtitle":null,"description":null,"poster":null,"landscape":null,"logo":null,"progress":null,"badges":[],"parent_identity":null}})
 }
-/// Gives account 2 its own selected profile 2.
 fn attach_second_account_profile(app: &App) {
     app.db.lock().unwrap().execute_batch("INSERT INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Other account','fixture-two',1);
         INSERT INTO profile_owners(profile_id,account_id,created_at) VALUES(2,2,0);
@@ -125,7 +123,6 @@ async fn revisions_reject_missing_sessions_unselected_and_foreign_profiles() {
         }
     };
     assert_eq!(get("invalid-token", "1").await.0, StatusCode::UNAUTHORIZED);
-    // Account 2 has a session but no selected profile yet.
     let (status, body) = get("member-token-2", "1").await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     attach_second_account_profile(&app);
@@ -136,7 +133,6 @@ async fn revisions_reject_missing_sessions_unselected_and_foreign_profiles() {
         get("member-token-1", "abc").await.0,
         StatusCode::BAD_REQUEST
     );
-    // A second owned but unselected profile follows the selected-profile rule.
     let created = ok(
         &app,
         "member-token-1",
@@ -242,13 +238,10 @@ async fn kids_policy_and_parent_controls_bump_policy_and_profile_management() {
     let app = fixture();
     let token = "member-token-1";
     let before = revisions(&app).await;
-    // The account PIN changes the advertised profile-management state only.
     ok(&app, token, "PUT", "/api/parent/pin", json!({"pin":"7248"})).await;
     let after = revisions(&app).await;
     assert_eq!(changed(&before, &after), ["profiles"]);
 
-    // A kids setting changes this profile's policy and the profile cards
-    // (kids/max_age), so both signals move.
     let before = after;
     ok(
         &app,
@@ -261,7 +254,6 @@ async fn kids_policy_and_parent_controls_bump_policy_and_profile_management() {
     let after = revisions(&app).await;
     assert_eq!(changed(&before, &after), ["policy", "profiles"]);
 
-    // Title approvals change only what the kids profile sees.
     let before = after;
     app.db
         .lock()
@@ -274,8 +266,6 @@ async fn kids_policy_and_parent_controls_bump_policy_and_profile_management() {
     let after = revisions(&app).await;
     assert_eq!(changed(&before, &after), ["policy"]);
 
-    // Restricting the selected profile: the restricted session can still poll
-    // without a parent grant and sees the kids add-on revision.
     let before = after;
     ok(
         &app,
@@ -291,7 +281,6 @@ async fn kids_policy_and_parent_controls_bump_policy_and_profile_management() {
     let catalogs = ok(&app, token, "GET", "/api/catalogs/revision", Value::Null).await;
     assert_eq!(after["addons"], catalogs["revision"]);
 
-    // Unlocking the parent grant changes this session's profile locks.
     let before = after;
     ok(
         &app,
@@ -452,9 +441,7 @@ async fn bootstrap_carries_the_selected_profile_revisions() {
     assert!(bootstrap["revisions"].is_object(), "{bootstrap}");
     assert_eq!(bootstrap["revisions"], revisions(&app).await);
     assert_ne!(bootstrap["revisions"]["library"], "0");
-    // Existing fields are unchanged.
     assert!(bootstrap["home"]["revision"].is_u64(), "{bootstrap}");
-    // An unselected session has no profile revisions.
     let unselected = ok(&app, "member-token-2", "GET", "/api/bootstrap", Value::Null).await;
     assert!(unselected["revisions"].is_null(), "{unselected}");
 }
@@ -479,7 +466,6 @@ async fn profile_revision_triggers_are_idempotent_and_survive_cascading_deletes(
     assert!(created > start);
     db.execute("DELETE FROM profiles WHERE id=7", []).unwrap();
     assert!(read(&db) > created, "profile deletion cascades to a bump");
-    // Deleting an account removes its revision row without failing the cascade.
     db.execute("DELETE FROM auth_accounts WHERE id=1", [])
         .unwrap();
     let rows: i64 = db

@@ -1,9 +1,3 @@
-//! Anime ids (kitsu/mal/anilist/anidb) → IMDb through Simkl, verified
-//! against Cinemeta. Matching library items are rewritten
-//! into IMDb items before mapping, so every mapper check still applies.
-//! Several anime entries of one IMDb show (seasons, split cours) merge into one
-//! item. An episode that cannot be translated and found in Cinemeta is left
-//! for review, never guessed.
 use super::*;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use flate2::{write::ZlibEncoder, Compression};
@@ -18,8 +12,6 @@ const MAX_TITLES: usize = 500;
 const MAX_RESPONSE: usize = 4_000_000;
 const MAX_EPISODES: i64 = 2000;
 
-/// Simkl (`SIMKL_CLIENT_ID`): anime id → cross ids and per-episode TVDB
-/// numbering. Lookups are on demand and paced under Simkl's 10 GET/s rule.
 pub(crate) struct MetadataService {
     base: String,
     key: String,
@@ -42,11 +34,8 @@ impl MetadataService {
         })
     }
 
-    /// `transient` is raised when the answer may differ on a later attempt (network
-    /// error, rate limit, server error), as opposed to a definitive "not found".
     async fn get(&self, client: &reqwest::Client, path: &str, transient: &AtomicBool) -> Option<Value> {
         {
-            // At most ~8 requests per second across every lookup.
             let mut next = self.next.lock().await;
             tokio::time::sleep_until(*next).await;
             *next = tokio::time::Instant::now() + Duration::from_millis(125);
@@ -80,25 +69,17 @@ impl MetadataService {
 }
 
 pub(super) struct Remapped {
-    /// Source items with resolved anime entries replaced by IMDb items.
     pub items: Vec<Value>,
-    /// Original anime id → IMDb id, for every replaced item.
     pub renamed: HashMap<String, String>,
-    /// Trimmed Cinemeta metadata for the IMDb targets.
     pub meta: HashMap<(String, String), Value>,
-    /// Replaced items that lost watched or resume state to verification.
     pub unverified: usize,
-    /// Every lookup finished within the deadline and none failed in a way a later
-    /// attempt could change. An incomplete remap is retried by a later review.
     pub complete: bool,
 }
 
 impl Remapped {
-    /// No anime remap (unavailable or not finished in time): every item as fetched.
     pub(super) fn unchanged(items: &[Value]) -> Self {
         Self { items: items.to_vec(), renamed: HashMap::new(), meta: HashMap::new(), unverified: 0, complete: false }
     }
-    /// Bytes of trimmed metadata a preview keeps while it retains this result.
     pub(super) fn retained_bytes(&self) -> usize {
         self.meta.values().map(|m| serde_json::to_vec(m).map_or(usize::MAX, |v| v.len())).fold(0, usize::saturating_add)
     }
@@ -120,7 +101,6 @@ fn anime_id(id: &str) -> Option<(&str, &str)> {
 
 struct Resolution {
     imdb: String,
-    /// Anime episode number → (season, episode) in the target's numbering.
     episodes: HashMap<i64, (i64, i64)>,
 }
 
@@ -132,7 +112,6 @@ async fn resolve(
     number: &str,
     transient: &AtomicBool,
 ) -> Option<Resolution> {
-    // Exactly one Simkl anime may claim the id.
     let found = service.get(client, &format!("/search/id?{source}={number}"), transient).await?;
     let [hit] = found.as_array()?.as_slice() else { return None };
     if hit["type"] != "anime" {
@@ -141,7 +120,7 @@ async fn resolve(
     let simkl = hit["ids"]["simkl"].as_i64()?;
     let detail = service.get(client, &format!("/anime/{simkl}?extended=full"), transient).await?;
     if detail["ids"][source].as_str() != Some(number) {
-        return None; // the hit does not name this exact work
+        return None;
     }
     let imdb = detail["ids"]["imdb"].as_str().filter(|i| imdb(i))?.to_owned();
     if kind == "movie" {
@@ -163,7 +142,6 @@ async fn resolve(
             conflicting.insert(n);
         }
     }
-    // Two different targets for one episode: neither is trusted.
     episodes.retain(|n, _| !conflicting.contains(n));
     Some(Resolution { imdb, episodes })
 }
@@ -183,8 +161,6 @@ fn translate(n: i64, resolution: &Resolution, known: &HashSet<String>) -> Option
     known.contains(&video).then_some(video)
 }
 
-/// Anime-side watched episodes, decoded against the anime's own sequential
-/// episode list (`<id>:1`, `<id>:2`, … as Stremio's anime add-ons number them).
 fn anime_watched(field: &str, title: &str, resolution: &Resolution) -> Option<Vec<i64>> {
     let (prefix, _) = field.rsplit_once(':')?;
     let (anchor, _) = prefix.rsplit_once(':')?;
@@ -201,7 +177,6 @@ fn anime_watched(field: &str, title: &str, resolution: &Resolution) -> Option<Ve
     Some(decoded.into_iter().map(|(_, _, n)| n).collect())
 }
 
-/// Stremio's anchored bitfield over `meta`'s ordered videos.
 fn encode(watched: &HashSet<String>, title: &str, meta: &Value) -> Option<String> {
     let ordered: Vec<&str> = meta["videos"].as_array()?.iter().filter_map(|v| v["id"].as_str()).collect();
     let anchor = ordered.iter().rposition(|id| watched.contains(*id))?;
@@ -215,7 +190,6 @@ fn encode(watched: &HashSet<String>, title: &str, meta: &Value) -> Option<String
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(&bytes).ok()?;
     let field = format!("{}:{count}:{}", ordered[anchor], STANDARD.encode(encoder.finish().ok()?));
-    // Round trip through the mapper's own verification before trusting it.
     let decoded: HashSet<String> = mapper::verified_episodes(&field, title, meta)?
         .into_iter()
         .map(|(id, _, _)| id)
@@ -230,7 +204,6 @@ fn last_watched(item: &Value) -> i64 {
         .map_or(0, |d| d.timestamp_millis())
 }
 
-/// One IMDb item from every source entry that names it.
 fn merge(
     kind: &str,
     target: &str,
@@ -331,7 +304,6 @@ fn merge(
 pub(super) async fn remap(app: &App, items: &[Value]) -> Remapped {
     use futures::{stream, StreamExt};
     let mut out = Remapped::unchanged(items);
-    // Nothing to look up is as final as it gets.
     out.complete = true;
     let Some(service) = app.stremio_import.metadata_service.as_ref() else {
         return out;
@@ -349,8 +321,6 @@ pub(super) async fn remap(app: &App, items: &[Value]) -> Remapped {
     if wanted.is_empty() {
         return out;
     }
-    // Shares the review request budget with add-on verification, which runs
-    // alongside; unfinished titles stay review-only.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
     let mut resolved: HashMap<(String, String), Resolution> = HashMap::new();
     let transient = AtomicBool::new(false);
@@ -391,8 +361,6 @@ pub(super) async fn remap(app: &App, items: &[Value]) -> Remapped {
         }
     }
     drop(fetching);
-    // On IMDb but absent from Cinemeta: verify against Simkl's own episode
-    // list for that show. The mapper's ordering rules still apply to it.
     let mut fallback: BTreeMap<String, BTreeSet<(i64, i64)>> = BTreeMap::new();
     for ((kind, _), r) in &resolved {
         if kind == "series" && !out.meta.contains_key(&(kind.clone(), r.imdb.clone())) {
@@ -407,7 +375,6 @@ pub(super) async fn remap(app: &App, items: &[Value]) -> Remapped {
         out.meta.insert(("series".into(), imdb.clone()), json!({"id":imdb,"type":"series","videos":videos}));
     }
 
-    // Group every entry (anime or native IMDb) by its IMDb target.
     let mut groups: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
     for (index, item) in items.iter().enumerate() {
         let (Some(kind), Some(id)) = (item["type"].as_str(), item["_id"].as_str()) else { continue };

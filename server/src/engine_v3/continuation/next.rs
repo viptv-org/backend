@@ -101,10 +101,6 @@ pub(crate) async fn resolve(
             )?;
         }
     }
-    // An explicit metadata origin keeps its exact provider; without one the
-    // next episode comes from the same provider the release refresh and the
-    // Calendar read (`metadata::series_document`), so a Stremio-imported
-    // series Simkl cannot map still resolves from the add-ons (backend#47).
     let document = if origin.is_none() {
         super::metadata::series_document(
             &app,
@@ -216,7 +212,6 @@ pub(crate) async fn resolve(
             serde_json::to_value(output).map_err(|_| ApiError::from("Next episode unavailable"))?,
         ));
     }
-    // Keep legacy Home/queue projection coherent without manufacturing a progress record.
     let mut legacy = if let Some(card) = output.item.as_ref() {
         let coordinates = card.identity.episode.as_ref();
         json!({"status":"next","item":{"id":card.identity.id,"type":card.identity.kind,"name":parent.title,"poster":parent.poster,"position":0,"duration":0,"series_id":parent.identity.id,"season":coordinates.and_then(|e|e.season),"episode":coordinates.map(|e|e.episode),"watched":false,"queue_status":"next","engine_identity":card.identity,"engine_parent_identity":parent.identity,"engine_provider_id":card.provider_id,"engine_presentation":card,"background":parent.landscape}})
@@ -233,8 +228,6 @@ pub(crate) async fn resolve(
         db.execute("INSERT INTO engine_library_revisions VALUES(?1,1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",[profile]).map_err(db_error)?;
     }
     db.execute("DELETE FROM continuation_cache WHERE profile_id=?1 AND rowid NOT IN(SELECT rowid FROM continuation_cache WHERE profile_id=?1 ORDER BY updated_at DESC,rowid DESC LIMIT 200)",[profile]).map_err(db_error)?;
-    // The same document is the durable next-episode and release record
-    // (Continue Watching badges, the Watched badge).
     let _ = super::releases::store_db(
         &db,
         &lease,

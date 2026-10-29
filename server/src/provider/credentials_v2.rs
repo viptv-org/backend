@@ -1,4 +1,3 @@
-//! Encrypted Xtream tuples. Ownership/record binding prevents ciphertext swaps.
 use super::*;
 use crate::secret_store::Vault;
 use rusqlite::OptionalExtension;
@@ -97,7 +96,6 @@ pub(super) fn read(
     Ok(())
 }
 
-/// Only the backup-first, explicitly approved offline migration calls this.
 pub(crate) fn encrypt_legacy(
     tx: &rusqlite::Transaction<'_>,
     vault: &Vault,
@@ -140,7 +138,6 @@ pub(crate) fn encrypt_legacy(
             if version != 1 {
                 return Err("invalid_secret_envelope");
             }
-            // Re-run verifies that saved data can still be unlocked; no plaintext fallback.
             vault.open(account, "xtream", &id.to_string(), &prior)?;
             if !credentials.url.is_empty()
                 || !credentials.username.is_empty()
@@ -173,7 +170,6 @@ pub(crate) fn encrypt_legacy(
             [id],
         )
         .map_err(|_| "provider_storage_unavailable")?;
-        // Cached provider payloads may embed upstream URLs/credentials.
         tx.execute("DELETE FROM provider_cache WHERE provider_id=?1", [id])
             .map_err(|_| "provider_storage_unavailable")?;
         count += 1;
@@ -206,7 +202,6 @@ mod tests {
             let tx = db.unchecked_transaction().unwrap();
             assert_eq!(encrypt_legacy(&tx, &vault).unwrap(), 1);
             tx.commit().unwrap();
-            // Restart schema initialization must not reinterpret encrypted rows.
             crate::provider::init(&db).unwrap();
         }
         assert_eq!(

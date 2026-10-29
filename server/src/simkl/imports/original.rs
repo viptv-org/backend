@@ -69,7 +69,6 @@ pub(super) fn original(
                     let mut card = parent.clone();
                     card.identity.ids.clear();
                     card.parent_identity = Some(parent.identity.clone());
-                    // Simkl anime history numbers are absolute AniDB order, never fabricated aired seasons.
                     let coordinates = if category == "anime" {
                         EpisodeCoordinates {
                             order: "anidb".into(),

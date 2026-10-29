@@ -1,4 +1,3 @@
-//! Counts only observed completion transitions; old watch totals remain unknown.
 use super::*;
 use viptv_engine::library::{Entry, LibraryStatistics};
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
@@ -86,8 +85,6 @@ pub(crate) fn entries(
         .into_iter()
         .map(|mut card| {
             crate::simkl::imports::enrich(&db, profile, &mut card)?;
-            // The durable provider key, whichever catalog the row was stored
-            // under (backend#29).
             crate::simkl::key::card(&mut card);
             let mut statistics = LibraryStatistics::empty(card.identity.clone());
             let matched = history
@@ -168,7 +165,6 @@ pub(crate) fn entries(
         if entry.card.identity.id != before {
             key = super::scoped_library::raw_key(&entry.card)?;
         }
-        // A canonical legacy observation remains valid for that same shared title.
         if let Some(old) = entries
             .iter()
             .find(|old| super::scoped_library::raw_key(&old.card).is_ok_and(|old| old == key))
@@ -180,8 +176,6 @@ pub(crate) fn entries(
             }
         }
         if key.0 == "shared" {
-            // Only the host-verified storage key may select authoritative imports.
-            // Keep the public lookup ID/origin on the response, not the canonical alias.
             entry.statistics.identity.id = key.2.clone();
             entry.statistics.identity.kind = key.1.clone();
             crate::simkl::imports::merge(&db, profile, &mut entry.statistics)?;
@@ -202,7 +196,6 @@ pub(crate) fn entries(
             }
             entry.statistics.provenance = provenance;
         }
-        // Only canonical public identities can replace a corresponding legacy view.
         entries.retain(|old| super::scoped_library::raw_key(&old.card).is_ok_and(|old| old != key));
         entries.push(entry);
     }

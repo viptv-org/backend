@@ -1,5 +1,3 @@
-//! Contracts that outlived the removed legacy runtime: preserved history IDs,
-//! archived preference data and database fairness without a media engine.
 use crate::test_support::request;
 use serde_json::{json, Value};
 
@@ -125,8 +123,6 @@ async fn historical_maximum_quality_is_archived_but_never_returned_or_updated_as
     .await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert!(saved.get("quality").is_none());
-    // The legacy row is preserved verbatim; the typed snapshot carries the
-    // active policy separately.
     let stored: String = app
         .db
         .lock()
@@ -152,8 +148,6 @@ async fn historical_maximum_quality_is_archived_but_never_returned_or_updated_as
             .contains("\"preferred_audio_language\":\"ja\""),
         true
     );
-    // A retired "quality" field is rejected outright by the typed contract
-    // instead of the legacy client-update handshake.
     assert_eq!(
         request(
             &app,

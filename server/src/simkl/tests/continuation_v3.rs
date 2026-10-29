@@ -112,9 +112,6 @@ async fn profile_switch_during_next_metadata_read_never_publishes_a_transition()
     task.abort();
 }
 
-/// backend#31: with Simkl as the browsing integration (the default once Simkl
-/// is configured), a Stremio-imported series Simkl can identify keeps the
-/// episode still from Simkl's document on its Continue Watching card.
 #[tokio::test]
 async fn imported_continue_watching_series_gets_the_simkl_episode_still() {
     let (mut app, initial, _) = server().await;
@@ -135,7 +132,6 @@ async fn imported_continue_watching_series_gets_the_simkl_episode_still() {
     {
         let db = app.db.lock().unwrap();
         db.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,'tt1234567:1:2','series','Actual series',NULL,5,100,1000,?1,'tt1234567')", [json!({"season":1,"episode":2,"series_id":"tt1234567","stremio_import_watched":true}).to_string()]).unwrap();
-        // The title is one Simkl knows (a Simkl import mapped it).
         db.execute("INSERT INTO simkl_import_entries(profile_id,remote_id,remote_kind,local_id,local_kind,card,statistics,link_revision) VALUES(1,'simkl:tv:20','series','tt1234567','series','{}','{}',0)", []).unwrap();
     }
     request(&app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
@@ -149,7 +145,6 @@ async fn imported_continue_watching_series_gets_the_simkl_episode_still() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(stored(), 1, "the release refresh read Simkl's document");
-    // A restart empties Home's in-memory card enrichment.
     app.verified_cards.lock().unwrap().clear();
     let (status, page) = request(&app, "member-token-1", "GET", "/api/profiles/1/continue", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{page}");

@@ -1,5 +1,3 @@
-//! Gateway-only HTTPS control transport. Resolve/validate/pin each destination;
-//! do not follow redirects with integration credentials or inherit host proxies.
 pub(crate) use crate::source_http::public_ip;
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
@@ -277,7 +275,6 @@ impl Client {
             } else {
                 match serde_json::from_slice(&data) {
                     Ok(value) => value,
-                    // HTTPS ingress may replace an origin error with plain text.
                     Err(_) if !(200..300).contains(&status) => serde_json::Value::Null,
                     Err(_) => return Err("gateway_protocol_invalid"),
                 }

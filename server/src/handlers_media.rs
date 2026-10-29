@@ -35,8 +35,6 @@ pub(crate) fn emit_batch(
             .require_owner(&a.db.lock().unwrap(), id)
             .is_err()
         {
-            // An ownership change during a queued lookup must not publish even
-            // the previous provider name or source identifier.
             emit_batch(
                 a,
                 j,

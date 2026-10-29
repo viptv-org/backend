@@ -1,14 +1,8 @@
-//! Android App Links: `/.well-known/assetlinks.json` lets Android open the VIPTV app, rather than
-//! the browser, for this server's links (the sign-in QR code, for one). The server only vouches for
-//! the app it is told about, so the file is served only when an operator configures it.
-
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-/// `VIPTV_ANDROID_PACKAGE`: the application id, e.g. `org.viptv.app`.
 const PACKAGE_VARIABLE: &str = "VIPTV_ANDROID_PACKAGE";
-/// `VIPTV_ANDROID_CERT_SHA256`: comma-separated SHA-256 fingerprints of the app's signing certificates.
 const FINGERPRINT_VARIABLE: &str = "VIPTV_ANDROID_CERT_SHA256";
 
 fn valid_package(value: &str) -> bool {
@@ -22,14 +16,12 @@ fn valid_segment(segment: &str) -> bool {
         && segment.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Android requires upper-case hex pairs separated by colons (32 bytes).
 fn normalized_fingerprint(value: &str) -> Option<String> {
     let pairs: Vec<_> = value.trim().split(':').collect();
     let valid = pairs.len() == 32 && pairs.iter().all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()));
     valid.then(|| value.trim().to_ascii_uppercase())
 }
 
-/// The statement list, or `None` when no valid package and fingerprint are configured.
 pub(crate) fn statements(package: Option<&str>, fingerprints: Option<&str>) -> Option<String> {
     let package = package.map(str::trim).filter(|p| valid_package(p))?;
     let fingerprints: Vec<String> = fingerprints?.split(',').filter_map(normalized_fingerprint).collect();
@@ -57,7 +49,6 @@ pub(crate) fn response(body: Option<String>) -> Response {
         Some(body) => (
             [
                 (header::CONTENT_TYPE, "application/json"),
-                // Short enough that fixing a wrong fingerprint takes effect quickly.
                 (header::CACHE_CONTROL, "public, max-age=300"),
             ],
             body,

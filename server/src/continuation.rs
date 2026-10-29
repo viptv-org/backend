@@ -41,7 +41,6 @@ pub fn title_id(item: &Value) -> String {
     } else {
         id.to_owned()
     };
-    // The queue's durable title key, never a legacy catalog prefix (backend#29).
     crate::simkl::key::media(item["type"].as_str().unwrap_or(""), &title).into_owned()
 }
 pub fn init(db: &Connection) -> rusqlite::Result<()> {
@@ -99,8 +98,6 @@ pub(crate) fn hide(db: &Connection, profile: i64, kind: &str, title: &str) -> ru
     Ok(())
 }
 
-/// Un-hide a queue title under every spelling it was stored with, so a row
-/// hidden before the durable key (backend#29) comes back too.
 pub(crate) fn show(db: &Connection, profile: i64, kind: &str, title: &str) -> rusqlite::Result<()> {
     for title in crate::simkl::key::aliases(kind, title) {
         db.execute(

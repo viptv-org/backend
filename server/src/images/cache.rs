@@ -60,8 +60,6 @@ impl Service {
             }
             records.entries.entry(image.clone()).or_default().clone()
         };
-        // Both coalescing and permit waiting share the outer deadline. Local
-        // backpressure must never become a cached upstream image failure.
         let mut cached = entry.lock().await;
         if let Some(value) = cached.value.as_ref().filter(|value| {
             cached.at.is_some_and(|at| {
@@ -155,6 +153,8 @@ fn signature(bytes: &[u8]) -> Option<&'static str> {
         Some("image/jpeg")
     } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         Some("image/webp")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
     } else {
         None
     }

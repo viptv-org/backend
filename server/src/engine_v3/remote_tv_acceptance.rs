@@ -1,5 +1,3 @@
-//! Opt-in disposable producer for TV-web HTTPS acceptance. Only the external
-//! add-on is a fixture; auth, profiles, discovery and mutations use real routes.
 use super::*;
 
 #[tokio::test]
@@ -16,8 +14,6 @@ async fn remote_tv_backend() {
     assert!(dist.is_absolute() && dist.join("index.html").is_file());
     let mut app = crate::auth_integration_tests::fixture();
     app.addons.allow_test_loopback = true;
-    // Keep only the seeded test operators alive for a long acceptance session.
-    // Device grants created later still use the normal auth/refresh lifetimes.
     app.db.lock().unwrap().execute("UPDATE auth_sessions SET access_expires=?1,refresh_expires=?1",[crate::util::now()+172800]).unwrap();
     let (status, result) = crate::test_support::request(
         &app, "member-token-1", "POST", "/api/addons",
@@ -25,8 +21,6 @@ async fn remote_tv_backend() {
     ).await;
     assert_eq!(status, StatusCode::OK, "{result}");
     let addon_id = result["id"].as_i64().unwrap();
-    // Pin fixture discovery to this owned add-on, regardless of optional
-    // Simkl test environment settings used by the wider server test suite.
     let (status, result) = crate::test_support::request(
         &app, "member-token-1", "PUT", "/api/profiles/1/integrations",
         json!({"revision":0,"browsing_plugin":"stremio","assignments":[{

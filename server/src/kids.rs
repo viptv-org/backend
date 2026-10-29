@@ -1,4 +1,3 @@
-//! Household policy: server-observed identities, bounded parent authority, and fail-closed browsing.
 use super::*;
 
 pub(crate) mod consumers;

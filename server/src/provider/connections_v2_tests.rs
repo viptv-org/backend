@@ -111,7 +111,6 @@ async fn connection_crud_encrypts_immediately_and_preserves_account_defaults() {
         .0,
         StatusCode::CONFLICT
     );
-    // A different account may have the same provider login without disclosure.
     assert_eq!(
         request(
             &app,

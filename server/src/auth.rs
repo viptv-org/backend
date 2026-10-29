@@ -1,5 +1,3 @@
-//! Account authentication, browser sessions and explicit device authorization.
-//! All bearer credentials are random; only SHA-256 digests are persisted.
 use super::*;
 mod actions;
 mod avatars;

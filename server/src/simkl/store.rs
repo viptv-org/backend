@@ -34,9 +34,6 @@ pub(crate) fn connections(
     }])
 }
 
-/// Whether the profile holds a Simkl credential. The plugin connection exists
-/// even when it does not, so a read-only lookup must ask this instead of the
-/// browsing plugin alone.
 pub(crate) fn linked(app: &App, profile: i64) -> Result<bool, ApiError> {
     let account = app.identity().account_id().ok_or_else(auth::forbidden)?;
     let db = app
@@ -217,7 +214,6 @@ pub(super) async fn request(
 ) -> Result<Value, ApiError> {
     let token = tokens::access(app, profile, credential).await?;
     let token = token.as_deref().map(String::as_str);
-    // Public documents stay credential-free unless this application requires OAuth.
     let initial_token = (credential.capability == Capability::Tracking)
         .then_some(token)
         .flatten();

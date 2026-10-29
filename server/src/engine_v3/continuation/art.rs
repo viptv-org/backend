@@ -1,12 +1,3 @@
-//! Durable 16:9 art for Continue Watching cards that carry none.
-//!
-//! Stremio-imported history stores no artwork, and Home's metadata
-//! enrichment lives only in memory: a restart empties it and its deadline
-//! leaves later cards out. A card without a landscape takes, from what the
-//! profile already stores: the still of its own episode in the series'
-//! release document, then that document's series backdrop, then the backdrop
-//! its My List card gained (the Stremio import's Details fill). Nothing is
-//! fetched here.
 use super::*;
 
 pub(super) fn fill(
@@ -23,7 +14,6 @@ pub(super) fn fill(
         card.landscape =
             super::releases::landscape_db(db, lease, profile, &series.id, &card.identity.id)?;
     }
-    // Restricted profiles never read My List's stored cards (see `library::cards`).
     if card.landscape.is_none() && !restricted {
         let title = card.parent_identity.as_ref().unwrap_or(&card.identity);
         card.landscape = my_list(db, profile, &title.kind, &title.id)?;

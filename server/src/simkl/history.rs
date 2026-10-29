@@ -10,7 +10,6 @@ pub(crate) struct Progress {
     ended: bool,
 }
 
-/// Typed history write; client timestamps never become server activity/completion authority.
 pub(crate) async fn progress(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -99,6 +98,5 @@ pub(crate) async fn progress(
         }
         return Ok(axum::Json(json!({"ok":true})));
     }
-    // Legacy persistence preserves existing lists, completion policy and history corrections.
     crate::handlers_profiles::save_progress(State(app), Path(profile), axum::Json(value)).await
 }

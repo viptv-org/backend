@@ -247,7 +247,6 @@ pub(crate) async fn content(
         .into_response())
 }
 
-/// Raw media IDs alone do not identify a modern private playback context.
 pub(crate) fn validate_playback_context(
     app: &App,
     lease: &ResourceLease,

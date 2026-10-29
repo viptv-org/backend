@@ -13,19 +13,14 @@ pub(crate) async fn blocking<T: Send + 'static>(
 }
 #[derive(Debug)]
 pub struct ApiError(pub StatusCode, pub String);
-// Messages that control wire behavior. Status codes and client error codes
-// are derived by matching these constants in exactly one place each; never
-// compare a display message inline.
 pub(crate) const MSG_PROFILE_REQUIRED: &str = "Profile selection required";
 pub(crate) const MSG_PARENT_REQUIRED: &str = "Parent PIN required";
 pub(crate) const MSG_PARENT_PIN_INVALID: &str = "Incorrect parent PIN";
 pub(crate) const MSG_PROFILE_POLICY_CHANGED: &str = "Profile policy changed";
-// RFC 8628 section 3.5 device token poll errors; message and code are equal.
 pub(crate) const MSG_AUTHORIZATION_PENDING: &str = "authorization_pending";
 pub(crate) const MSG_ACCESS_DENIED: &str = "access_denied";
 pub(crate) const MSG_EXPIRED_TOKEN: &str = "expired_token";
 impl ApiError {
-    /// Stable recovery reasons shared by all platform clients.
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
             "Verified source mapping is unavailable for this title or episode" => {
@@ -123,8 +118,6 @@ pub struct App {
     pub addons: Addons,
     pub providers: ProviderService,
     pub(crate) secret_vault: Option<Arc<secret_store::Vault>>,
-    /// Operator-hosted FlareSolverr daemon for source scraping challenges;
-    /// absent unless VIPTV_FLARESOLVERR_URL is set and the runtime is built in.
     #[cfg(feature = "vsources-runtime")]
     pub(crate) cloudflare: Option<Arc<viptv_engine::vsources_cloudflare::SolverChain>>,
     pub(crate) gateway_client: gateway::client::Client,
@@ -135,7 +128,6 @@ pub struct App {
     pub(crate) images: Arc<images::Service>,
     pub(crate) stremio_import: Arc<stremio_import::Service>,
     pub(crate) jobs: Arc<Mutex<HashMap<String, Arc<Job>>>>,
-    /// Parent-PIN hashing budget owned by this app instance (kids::pin).
     pub(crate) pin_cpu_gate: Arc<tokio::sync::Semaphore>,
     pub(crate) live_fetch_gates: Arc<engine_v3::live::FetchGates>,
     pub(crate) live_cache: Arc<tokio::sync::Mutex<HashMap<String, engine_v3::live::Cache>>>,
@@ -149,7 +141,6 @@ pub struct App {
     >,
     pub(crate) library_hydration: Arc<engine_v3::library::hydration::Jobs>,
     pub(crate) streams: Arc<Mutex<HashMap<String, StreamEntry>>>,
-    // Request-local identity travels with discovery producers; ownership is never upstream-authored.
     pub(crate) principal: Option<auth::Principal>,
     pub(crate) resource_owners: Arc<Mutex<HashMap<String, ResourceOwner>>>,
     pub(crate) lease: Option<ResourceLease>,
@@ -158,7 +149,6 @@ pub struct App {
 pub(crate) struct ResourceLease {
     pub(crate) policy_revision: i64,
     pub(crate) principal: auth::Principal,
-    // Stable database session identifier, never a bearer credential or media capability.
     pub(crate) session_id: Option<String>,
 }
 #[derive(Clone)]
@@ -173,17 +163,6 @@ impl ResourceOwner {
     }
 }
 impl ResourceLease {
-    /// Full lease validation in one database round trip.
-    ///
-    /// Session and account liveness, the role/kind binding, profile
-    /// ownership and the kids policy revision were previously five separate
-    /// queries behind the process-wide mutex. They are fused here because
-    /// every hot path — request middleware, the shared playback worker
-    /// loop and each media chunk validation — pays for this call. Failure
-    /// precedence matches the previous step order: a scope failure reports
-    /// the auth middleware's `Unauthorized`, a policy revision change
-    /// reports `Profile policy changed`, and an unbound or mismatched
-    /// session reports an expired authorization.
     pub(crate) fn validate(&self, db: &Connection) -> Result<(), ApiError> {
         let denied = || {
             ApiError(
@@ -247,8 +226,6 @@ pub(crate) struct ExactVod {
     pub(crate) episode: Option<u32>,
 }
 pub(crate) const MAX_SOURCES_PER_JOB: usize = 4096;
-/// How long a stream grant stays usable after discovery or its last playback
-/// heartbeat or first frame.
 pub(crate) const STREAM_GRANT_WINDOW: Duration = Duration::from_secs(1800);
 pub(crate) struct Job {
     pub(crate) metadata_proof: Option<engine_v3::origins::MetadataProof>,
@@ -257,7 +234,6 @@ pub(crate) struct Job {
     pub(crate) configuration_revision: Option<(i64, u64)>,
     pub(crate) media_id: Option<String>,
     pub(crate) exact_vod: Option<ExactVod>,
-    // Validated original API request kind, never an upstream stream field.
     pub(crate) kind: String,
     pub(crate) created: Instant,
     pub(crate) state: Mutex<JobState>,
@@ -272,7 +248,6 @@ pub(crate) struct StreamEntry {
     pub(crate) profile_revision: Option<(i64, u64)>,
     pub(crate) media_id: Option<String>,
     pub(crate) exact_vod: Option<ExactVod>,
-    // Set only by exact, account-authorized raw live-channel resolution.
     pub(crate) live_channel_id: Option<String>,
     pub(crate) producer: String,
     pub(crate) configuration: Option<[u8; 32]>,
@@ -286,15 +261,10 @@ pub(crate) struct StreamEntry {
     pub(crate) requires_torrent_gateway: bool,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) required_audio_index: Option<u32>,
-    /// Start of the grant's `STREAM_GRANT_WINDOW`: discovery, or the last
-    /// playback heartbeat or first frame that used it (`App::refresh_stream`).
     pub(crate) created: Instant,
-    /// When the upstream URL itself stops working, if it does. Playback never
-    /// extends the grant past it.
     pub(crate) upstream_deadline: Option<Instant>,
 }
 impl StreamEntry {
-    /// Binds the grant to an upstream URL that works for `ttl` from now.
     pub(crate) fn expire_upstream_after(&mut self, ttl: Duration) {
         let now = Instant::now();
         self.created = now
@@ -302,8 +272,6 @@ impl StreamEntry {
             .unwrap_or(now);
         self.upstream_deadline = now.checked_add(ttl);
     }
-    /// Restarts the window at `now`, but never past the upstream deadline and
-    /// never backwards.
     fn restart_window(&mut self, now: Instant) {
         let start = match self.upstream_deadline {
             None => now,
@@ -474,13 +442,7 @@ impl App {
             Err(ApiError(StatusCode::NOT_FOUND, "Resource not found".into()))
         }
     }
-    /// Restarts a stream grant's window because playback just used it, so a
-    /// lapsed lease can reopen the same source without discovery
-    /// (backend#18). Only the owner that admitted the playback refreshes it,
-    /// and never past the upstream URL's own deadline.
     pub(crate) fn refresh_stream(&self, owner: &str, session_id: Option<&str>, id: &str) {
-        // Registration's lock order. Both records change in one critical
-        // section so a concurrent prune never keeps one without the other.
         let mut streams = self.streams.lock().unwrap();
         let mut owners = self.resource_owners.lock().unwrap();
         let (Some(stream), Some(record)) =
@@ -502,8 +464,6 @@ impl App {
     ) {
         self.resource_owners.lock().unwrap().retain(|key, owner| {
             !key.starts_with("playback:")
-                // A playback created after the active-ID snapshot started may not be
-                // in that snapshot. Never discard its authorization record.
                 || owner.created >= snapshot_started
                 || active.contains(key.trim_start_matches("playback:"))
         });

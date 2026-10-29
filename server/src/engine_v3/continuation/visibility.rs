@@ -14,8 +14,6 @@ pub(crate) async fn update(
     Path(profile): Path<i64>,
     axum::Json(mut input): axum::Json<Visibility>,
 ) -> ApiResult {
-    // One durable provider key: a legacy Simkl catalog prefix names the same
-    // title as the key this card carries (backend#29).
     crate::simkl::key::identity(&mut input.identity);
     if let Some(parent) = input.parent_identity.as_mut() {
         crate::simkl::key::identity(parent);
@@ -92,7 +90,6 @@ pub(crate) async fn update(
             stored,
         )
     } else {
-        // A prepared next episode has no artificial history row. Its verified cache is proof.
         let mut query=db.prepare("SELECT series_id,result FROM continuation_cache WHERE profile_id=?1 AND updated_at>?2 ORDER BY updated_at DESC LIMIT 200").map_err(db_error)?;
         let rows = query
             .query_map(params![profile, util::now() - 3600], |r| {

@@ -1,4 +1,3 @@
-//! V2 discovery uses account-owned inputs while retaining incremental source jobs.
 use crate::account_api::Error;
 use crate::*;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
@@ -103,8 +102,6 @@ pub(crate) async fn poll(
     blocking(move || {
     app.check_resource(&app.identity(), "job", &path.0)?;
     let job = job(&app,&path.0)?;
-    // Preserve event sequence positions when an ownership grant disappears.
-    // No stale source metadata or opaque playback handles survive this check.
     let db = app.db.lock().unwrap();
     app.require_media(&db)?;
     let state = job.state.lock().unwrap();
@@ -168,7 +165,6 @@ pub(crate) async fn guide(
     Ok(axum::Json(value))
 }
 
-/// Guide playback selects exactly this owned raw channel, never an addon result.
 pub(crate) async fn live_source(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -270,7 +266,6 @@ pub(crate) async fn live_source(
 #[path="discovery_wait_tests.rs"]
 mod wait_tests;
 
-/// Cancelling work preserves published grants for early source selection.
 pub(crate) async fn cancel(State(app):State<App>,Extension(lease):Extension<ResourceLease>,Path(id):Path<String>)->Result<axum::Json<Value>,Error>{
  let app=scoped(app,lease.clone()).await?;
  blocking(move||{

@@ -1,22 +1,3 @@
-//! The profile's `Watched` card badge, derived from facts the server already
-//! keeps: no new table and no provider request.
-//!
-//! - A movie is watched when its progress row is complete under
-//!   [`crate::library::watched`] (the History/correction rule: 95 %, an explicit
-//!   "Mark watched", or an imported completion), or when an origin-scoped
-//!   playback record has a completion time.
-//! - A series is watched when the profile is caught up on it: the episode with
-//!   the newest activity is complete *and* the next-episode resolver found no
-//!   later aired episode after it (`caught_up`, or `upcoming` when the next one
-//!   has not aired yet). A new aired episode turns the verdict into `next` and
-//!   the badge disappears. A Simkl import whose show is `completed` with no
-//!   unwatched aired episode also counts.
-//!
-//! Episode cards never get this badge here; their own completion is shown on
-//! the episode rows, and Continue Watching marks the finished episode a series
-//! stays on (`continuation::page`). The badge is private profile state, so every response
-//! recomputes it and any `Watched` already on a card (cached metadata, a
-//! client-sent card) is removed first.
 use super::*;
 use std::collections::{BTreeSet, HashSet};
 use viptv_engine::presentation::Card;
@@ -25,9 +6,7 @@ pub(crate) const BADGE: &str = "Watched";
 
 #[derive(Default)]
 pub(crate) struct Watched {
-    /// `(kind, id)` for shared identities (`tt…`, `simkl:…`) and IMDb hints.
     titles: HashSet<(String, String)>,
-    /// Storage keys of completed origin-scoped movie playback.
     scoped: BTreeSet<scoped_library::Key>,
 }
 
@@ -49,10 +28,6 @@ impl Watched {
                 watched.insert("movie", &id, &context);
             }
         }
-        // The newest activity per show decides; the resolver verdict must be for
-        // that exact episode, so an older "caught up" never outlives a rewatch.
-        // The durable verdict (`continuation::releases`, kept for every finished
-        // series and evaluated against the clock) wins over the queue cache.
         let durable = super::continuation::releases::verdicts_db(db, profile)?;
         let mut series = db
             .prepare("WITH ranked AS (SELECT id,title_id,position,duration,context,ROW_NUMBER() OVER(PARTITION BY title_id ORDER BY updated_at DESC,rowid DESC) AS rank FROM progress WHERE profile_id=?1 AND type='series' AND title_id!='') SELECT r.title_id,r.position,r.duration,r.context,c.result,r.id FROM ranked r LEFT JOIN continuation_cache c ON c.profile_id=?1 AND c.series_id=r.title_id AND c.from_id=r.id WHERE r.rank=1 LIMIT 50001")
@@ -117,7 +92,6 @@ impl Watched {
         Ok(watched)
     }
 
-    /// Best effort for a response: a failure draws no badge, never a failed page.
     pub(crate) fn for_profile(app: &App, profile: i64) -> Self {
         app.db
             .lock()
@@ -158,7 +132,7 @@ impl Watched {
 
     pub(crate) fn mark(&self, card: &mut Card) {
         card.badges.retain(|badge| !badge.eq_ignore_ascii_case(BADGE));
-        // The card contract bounds badges at 32; never make a valid card invalid.
+        // The card contract allows 32 badges; never make a valid card invalid.
         if card.badges.len() < 32 && self.contains(card) {
             card.badges.push(BADGE.into());
         }
@@ -170,10 +144,8 @@ impl Watched {
         }
     }
 
-    /// For responses that are already JSON (search rows, catalog pages).
     pub(crate) fn mark_values(&self, cards: &mut Value) {
         for value in cards.as_array_mut().into_iter().flatten() {
-            // Only the badge list changes; the rest of the card stays byte-for-byte.
             if let Ok(mut card) = serde_json::from_value::<Card>(value.clone()) {
                 self.mark(&mut card);
                 value["badges"] = json!(card.badges);
@@ -182,7 +154,6 @@ impl Watched {
     }
 }
 
-/// Stored cards are not a place for another profile's (or a stale) badge.
 pub(crate) fn strip(card: &mut Card) {
     card.badges.retain(|badge| !badge.eq_ignore_ascii_case(BADGE));
 }

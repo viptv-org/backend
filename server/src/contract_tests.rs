@@ -1,10 +1,6 @@
-//! Entirely in-process contract tests: no listeners, provider requests or temp files.
 use super::*;
 use axum::body::to_bytes;
 
-/// Retired embedded-engine diagnostics are no longer classified: they pass
-/// through as plain 400s without a recovery code, so no client can be steered by
-/// a message the current runtime never produces.
 #[tokio::test]
 async fn retired_engine_messages_are_not_classified() {
     for message in [
@@ -78,7 +74,6 @@ fn indexed_series(app: &App) {
     db.execute("INSERT INTO provider_cache(provider_id,cache_key,expires_at,payload) VALUES(1,'get_series_info:33',?1,?2)",params![util::now()+3600,json!({"episodes":{"2":[{"id":44,"episode_num":4,"container_extension":"mp4"}]}}).to_string()]).unwrap();
 }
 async fn discover(app: &App, body: Value) -> Value {
-    // Explicit synthetic fixture ownership; never production migration inference.
     app.db.lock().unwrap().execute("INSERT OR IGNORE INTO provider_ownership(provider_id,account_id) SELECT id,1 FROM providers",[]).unwrap();
     crate::test_support::encrypt_fixture_sources(app);
     let (status, job) = api(app, "POST", "/api/streams", body).await;
@@ -169,7 +164,6 @@ async fn opaque_episode_progress_roundtrip_rediscovers_without_metadata() {
         let entry = source.get(streams[0]["id"].as_str().unwrap()).unwrap();
         assert!(entry.url.ends_with("/44.mp4"));
     }
-    // An old client must not erase context written by a newer client.
     let mut resumed = record.clone();
     resumed["position_millis"] = json!(600_000);
     assert_eq!(
@@ -217,9 +211,6 @@ async fn migration_and_old_client_are_idempotent() {
 #[tokio::test]
 async fn invalid_optional_context_rejected_before_save_or_job() {
     let app = app(Connection::open_in_memory().unwrap());
-    // The typed record rejects invalid optional context (oversized ids,
-    // control characters, out-of-range coordinates) before any row is saved
-    // or a discovery job starts.
     for (key, value) in [
         ("id", json!("x".repeat(513))),
         ("id", json!("parent\u{0001}id")),
@@ -249,9 +240,6 @@ async fn invalid_optional_context_rejected_before_save_or_job() {
             "ids" => record["identity"]["ids"] = value.clone(),
             _ => record[key] = value.clone(),
         }
-        // Malformed shapes are rejected at deserialization (422) while
-        // semantic violations are rejected by validation (400); either way
-        // nothing is saved and no discovery job starts.
         let status = api(
             &app,
             "PUT",
@@ -304,8 +292,6 @@ async fn final_roku_wire_get_accepts_parent_512_and_emits_decimal_tmdb() {
     assert_eq!(row["season"], 0);
     assert_eq!(row["episode"], 100000);
     assert_eq!(row["position"], 42.0);
-    // External ids stay in the typed identity; they are no longer
-    // duplicated onto the legacy row projection.
     assert!(row.get("tmdb_id").is_none() || row["tmdb_id"].is_null());
 }
 
@@ -420,7 +406,6 @@ async fn pengu_fetch_context_retains_only_explicit_safe_headers_privately() {
         "quality_height",
         "audio_languages",
         "detail",
-        // SRC-BEST-MATCH-001 release facts; delivery is server-authored.
         "delivery",
         "release_type",
         "three_d",
@@ -833,7 +818,6 @@ async fn viewing_queue_keeps_completed_series_hides_without_erasing_and_pages_ti
         .flat_map(|p| p["entries"].as_array().unwrap())
         .map(|v| v["card"]["identity"]["id"].as_str().unwrap().to_owned())
         .collect();
-    // The hidden entry stays hidden: 45 films plus the current episode.
     assert_eq!(ids.len(), 45);
     assert_eq!(
         api(&app, "GET", "/api/profiles/999/continue", json!(null))
@@ -960,7 +944,6 @@ async fn next_queue_preserves_resume_only_in_final_seconds() {
         "parent_identity":{"id":"show","kind":"series","ids":[],"episode":null,"edition":null}
     },"ended":false});
     api(&app, "PUT", "/api/profiles/1/progress", record.clone()).await;
-    // Prepare the next episode through the resolve endpoint.
     let (status, next) = api(
         &app,
         "POST",

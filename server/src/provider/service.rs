@@ -39,7 +39,6 @@ impl Provider {
     }
 }
 
-// Single enabled-provider row mapping, shared by locked and already-locked callers.
 pub(super) fn provider_row(
     db: &Connection,
     id: i64,
@@ -118,7 +117,6 @@ impl ProviderService {
         Ok(())
     }
 
-    // Only an internal integer principal is interpolated, never request SQL/text.
     pub(super) fn ownership_predicate(&self) -> String {
         self.account.map_or_else(String::new, |account|format!(" AND EXISTS(SELECT 1 FROM provider_ownership own WHERE own.provider_id=p.id AND own.account_id={account}) "))
     }

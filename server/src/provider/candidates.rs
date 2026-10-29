@@ -1,9 +1,6 @@
-// The pure candidate parsing, validation, and ranking logic now lives in the
-// shared `viptv-provider` crate; the backend keeps the SQL/service layer.
 use super::*;
 pub(super) use viptv_provider::candidate::*;
 
-// Both candidate queries select the same leading columns in the same order.
 fn candidate_row(
     r: &rusqlite::Row<'_>,
     override_id: Option<String>,
@@ -38,7 +35,6 @@ impl ProviderService {
         let ids = request.map(|r| json!(r.ids).to_string());
         let title = request.and_then(|r| r.normalized.as_deref());
         let year = request.and_then(|r| r.year);
-        // Each UNION arm uses its lookup index, avoiding materializing entire IPTV libraries.
         let owner = self.ownership_predicate();
         let mut stmt = db.prepare(&format!("SELECT v.id,v.provider_id,v.stream_id,v.kind,v.name,v.normalized,v.year,v.imdb_id,v.tmdb_id,v.extension,v.poster,m.metadata_id
             FROM provider_vod v JOIN providers p ON p.id=v.provider_id
@@ -67,7 +63,6 @@ impl ProviderService {
             return Ok(Vec::new());
         };
         let db = self.lock()?;
-        // Indexed exact title lookup, bounded before materialization. Never use a LIKE scan.
         let owner = self.ownership_predicate();
         let mut stmt = db.prepare(&format!("SELECT v.id,v.provider_id,v.stream_id,v.kind,v.name,v.normalized,v.year,v.imdb_id,v.tmdb_id,v.extension,v.poster
             FROM provider_vod v JOIN providers p ON p.id=v.provider_id
@@ -112,7 +107,6 @@ impl ProviderService {
             return Ok(None);
         };
         self.blocking(move |s| {
-            // Compare-and-set: do not overwrite a concurrent sync, edit, or manual mapping.
             let db = s.lock()?;
             s.require_owner(&db, provider_id)?;
             let changed = db

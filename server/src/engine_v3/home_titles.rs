@@ -1,20 +1,11 @@
-//! Home titles for add-on catalog rows. Catalog names repeat across types and
-//! add-ons ("Popular" for Cinemeta movies and series, and again elsewhere), so
-//! a row title always says its type and names the add-on only on a clash.
 use std::collections::HashMap;
 
-/// One add-on catalog row before its title is decided.
 pub(super) struct CatalogRow<'a> {
-    /// The catalog's own name from the add-on manifest.
     pub name: &'a str,
-    /// The catalog's content type (`movie`, `series`, ...).
     pub kind: &'a str,
-    /// The add-on's display name from its manifest, as stored (may be blank).
     pub addon: &'a str,
 }
 
-/// Titles for the whole list of add-on rows, in the same order. Decided over
-/// the complete list, so a title never depends on load order or failures.
 pub(super) fn catalog_row_titles(rows: &[CatalogRow]) -> Vec<String> {
     let typed = rows.iter().map(typed_title).collect::<Vec<_>>();
     let mut counts = HashMap::<String, usize>::new();
@@ -31,8 +22,6 @@ pub(super) fn catalog_row_titles(rows: &[CatalogRow]) -> Vec<String> {
         .collect()
 }
 
-/// The manifest name as a title part: one line, bounded like Search's add-on
-/// rows, with the same fallback for a nameless add-on.
 fn addon_name(name: &str) -> String {
     let name = name
         .chars()
@@ -45,8 +34,6 @@ fn addon_name(name: &str) -> String {
     }
 }
 
-/// The single place for each type's title copy: the label added to a row
-/// title, and the words that mean a catalog name already says the type.
 fn type_copy(kind: &str) -> (String, &'static [&'static str]) {
     let (label, words): (&str, &'static [&'static str]) = match kind.to_lowercase().as_str() {
         "movie" => ("Movies", &["movie", "movies", "film", "films"]),
@@ -54,14 +41,11 @@ fn type_copy(kind: &str) -> (String, &'static [&'static str]) {
         "anime" => ("Anime", &["anime"]),
         "channel" => ("Channels", &["channel", "channels"]),
         "tv" => ("TV", &["tv"]),
-        // Add-ons may declare any type: title-case its words.
         _ => return (title_case(kind), &[]),
     };
     (label.to_owned(), words)
 }
 
-/// "Popular" + Movies → "Popular Movies"; a name that already says the type
-/// (any of its words, or every word of the label) stays as it is.
 fn typed_title(row: &CatalogRow) -> String {
     let (label, words) = type_copy(row.kind);
     let name_words = words_of(row.name).collect::<Vec<_>>();

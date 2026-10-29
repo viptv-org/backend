@@ -18,6 +18,7 @@ pub(crate) mod configuration;
 pub(crate) mod continuation;
 pub(crate) mod history;
 mod home;
+mod home_catalogs;
 mod home_titles;
 pub(crate) mod library;
 pub(crate) mod library_stats;
@@ -68,8 +69,6 @@ pub(crate) async fn bootstrap(
     let identity: Value =
         serde_json::from_slice(&bytes).map_err(|_| ApiError::from("Identity unavailable"))?;
     let auth::Principal::Account { profile_id, .. } = lease.principal;
-    // Read change tokens before Home is built: a write committing during the
-    // build then shows up as a change on the client's next revision check.
     let revisions = profile_id
         .map(|profile| revisions::snapshot(&app.clone().with_lease(lease.clone()), profile))
         .transpose()?;
@@ -131,7 +130,6 @@ pub(crate) async fn bootstrap(
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?,
     )?;
-    // Only implemented integrations are advertised, even though the engine registry has more descriptors.
     let mut integrations: Vec<_> = builtins()
         .into_iter()
         .filter(|p| {
@@ -164,8 +162,6 @@ pub(crate) async fn bootstrap(
     let mut value=json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial.as_ref().map(|home| &home.snapshot),"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions});
     value["navigation"] = navigation;
     if let Some(membership)=membership.as_ref(){
-        // The bootstrap already loaded the profile's preferences snapshot;
-        // its display section carries the ratings visibility decision.
         let show_ratings = bootstrap_preferences
             .as_ref()
             .and_then(|snapshot| snapshot["display"]["show_ratings"].as_bool())

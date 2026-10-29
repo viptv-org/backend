@@ -1,5 +1,3 @@
-//! No server-global default or implicit public grants. Every gateway has an
-//! account owner; other accounts require an explicit recorded grant.
 use crate::secret_store::{SecretBytes, Vault};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -288,7 +286,6 @@ pub(crate) fn grant(
     tx.commit().map_err(|_| "gateway_storage_unavailable")
 }
 
-/// Bounded recipients for this account's registration, never a global directory.
 pub(crate) fn grants(
     db: &Connection,
     owner: i64,

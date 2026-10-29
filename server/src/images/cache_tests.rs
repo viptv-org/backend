@@ -49,7 +49,6 @@ async fn fetches_are_bounded_coalesced_cached_and_never_forward_inbound_credenti
     assert_eq!(a.unwrap().content_type, "image/webp");
     assert_eq!(b.unwrap().bytes.len(), 16);
     assert_eq!(reads.load(Ordering::SeqCst), 1);
-    // An active saturated cache cannot exceed its strict byte budget.
     let full = Service::new();
     full.records.lock().await.bytes = 32 * 1024 * 1024;
     let bounded = full
@@ -141,4 +140,57 @@ async fn queued_images_wait_for_a_slot_and_local_deadlines_never_poison_the_cach
     );
     assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 2);
     server.abort();
+}
+
+#[tokio::test]
+async fn gif_artwork_keeps_its_bytes_and_is_served_as_gif() {
+    let routes = axum::Router::new()
+        .route(
+            "/gif",
+            axum::routing::get(|| async { b"GIF89a\x01\x00\x01\x00\x80\x00\x00;\x00".to_vec() }),
+        )
+        .route(
+            "/legacy",
+            axum::routing::get(|| async { b"GIF87a\x01\x00\x01\x00;\x00\x00\x00".to_vec() }),
+        )
+        .route(
+            "/not-an-image",
+            axum::routing::get(|| async { b"<html>denied</html>".to_vec() }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    let service = Service::new();
+    for path in ["gif", "legacy"] {
+        let image = descriptor::Image::parts("posters", "11/abc_m.gif").unwrap();
+        let asset = service
+            .fetch(
+                image,
+                Some(url::Url::parse(&format!("http://{address}/{path}")).unwrap()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(asset.content_type, "image/gif");
+        assert!(asset.bytes.starts_with(b"GIF8"));
+    }
+    let image = descriptor::Image::parts("posters", "11/abc_w.gif").unwrap();
+    assert!(service
+        .fetch(
+            image,
+            Some(url::Url::parse(&format!("http://{address}/not-an-image")).unwrap())
+        )
+        .await
+        .is_err());
+    server.abort();
+}
+
+#[test]
+fn signature_reads_the_type_from_the_bytes() {
+    assert_eq!(signature(b"GIF89a\x01\x00"), Some("image/gif"));
+    assert_eq!(signature(b"GIF87a\x01\x00"), Some("image/gif"));
+    assert_eq!(signature(b"RIFF\x10\0\0\0WEBPtest"), Some("image/webp"));
+    assert_eq!(signature(b"\x89PNG\r\n\x1a\n"), Some("image/png"));
+    assert_eq!(signature(b"\xff\xd8\xff\xe0"), Some("image/jpeg"));
+    assert_eq!(signature(b"GIF90a"), None);
+    assert_eq!(signature(b"<html>"), None);
 }

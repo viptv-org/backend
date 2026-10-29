@@ -29,21 +29,13 @@ fn avatar_url(style: &str, seed: &str) -> String {
     }
     format!("https://api.dicebear.com/10.x/{style}/png?seed={seed}&size=256")
 }
-/// Whether `choice` is a position of the catalog world `style`. The bound is
-/// the engine's per-world size (`viptv_engine::profile::AVATAR_WORLDS`), not
-/// one span for every style.
 fn is_catalog_choice(style: &str, choice: u64) -> bool {
     u16::try_from(choice).is_ok_and(|choice| is_catalog_avatar(style, choice))
 }
-/// The position a `viptv-{style}-{choice}` seed names, before checking it
-/// against the world's size.
 fn seed_choice(style: &str, seed: &str) -> Option<u64> {
     seed.strip_prefix(&format!("viptv-{style}-"))
         .and_then(|id| id.parse::<u64>().ok())
 }
-/// The seed a write stores for `style`. A choice the payload sends must be a
-/// position of that world; without one the stored seed keeps its choice, and a
-/// bundled character world with no usable choice shows its first character.
 pub(crate) fn selected_avatar_seed(
     value: &Value,
     style: &str,
@@ -61,19 +53,11 @@ pub(crate) fn selected_avatar_seed(
         .is_some();
     match seed_choice(style, &fallback) {
         Some(choice) if is_catalog_choice(style, choice) => Ok(format!("viptv-{style}-{choice}")),
-        // A stored choice outside the world is no catalog choice (direct DB
-        // edits, imports or older data): the read side projects it as none, so
-        // a write that picks no avatar leaves it alone instead of failing.
         Some(_) => Ok(fallback),
-        // No catalog choice at all: a bundled world shows its first character,
-        // a generated world keeps the random seed that makes its avatar.
         None if bundled => Ok(format!("viptv-{style}-1")),
         None => Ok(fallback),
     }
 }
-/// The 1-based catalog position encoded in a `viptv-{style}-{choice}` seed;
-/// `None` for a random seed, or for a position the world never had, which the
-/// engine's `is_catalog_avatar` rejects.
 pub(crate) fn avatar_choice(style: &str, seed: &str) -> Option<u64> {
     seed_choice(style, seed).filter(|id| is_catalog_choice(style, *id))
 }
@@ -87,9 +71,6 @@ pub(crate) fn profile_json(id: i64, name: &str, style: &str, seed: &str, complet
         "setup_complete":complete
     })
 }
-/// Validates a profile write. `current_style` is the world a choice without a
-/// payload `avatar_style` is measured in: the profile's stored world, or `None`
-/// when the profile is being created (the payload's world or the default one).
 pub(crate) fn validate_profile_payload(
     value: &Value,
     update: bool,

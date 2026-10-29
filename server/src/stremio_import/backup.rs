@@ -6,8 +6,6 @@ use std::{
 };
 const FAILED: &str = "stremio_backup_failed";
 
-// No in-memory production bypass. Tests supply an isolated directory and still perform
-// the actual SQLite online backup, integrity verification and durable file synchronization.
 pub(super) fn create(db: &Connection, service: &Service) -> Result<(), Error> {
     let database = db.path().filter(|p| !p.is_empty());
     let directory = database
@@ -73,8 +71,6 @@ fn private_directory(path: &Path) -> Result<(), Error> {
         builder.create(path).map_err(|_| FAILED)?;
         #[cfg(windows)]
         {
-            // Assign an owner-only protected DACL before any database bytes are written.
-            // Path is passed through the environment, never interpolated into shell code.
             let status = std::process::Command::new("powershell.exe")
                 .args(["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; $p=$env:VIPTV_IMPORT_BACKUP_DIRECTORY; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=New-Object System.Security.AccessControl.DirectorySecurity; $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $p -AclObject $acl"])
                 .env("VIPTV_IMPORT_BACKUP_DIRECTORY", path)

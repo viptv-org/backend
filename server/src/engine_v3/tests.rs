@@ -1,7 +1,5 @@
 use crate::{auth_integration_tests::fixture, test_support::request, *};
 
-/// backend#60: an IMDb episode id names its title for the metadata add-on, but
-/// an id that merely contains colons is the add-on's own business.
 #[test]
 fn an_imdb_episode_lookup_names_its_parent_title() {
     assert_eq!(
@@ -98,9 +96,6 @@ async fn bootstrap_has_prepared_home_without_per_card_requests() {
     assert!(body["identity"]["profiles"].is_array());
 }
 
-/// backend#23: catalog names repeat across types and add-ons, so add-on row
-/// titles say their type and name the add-on only on a clash. Failed rows
-/// (nothing answers here) keep the same titles; ids and fixed rows are unchanged.
 #[tokio::test]
 async fn home_add_on_rows_say_their_type_and_name_the_add_on_only_on_a_clash() {
     let mut app = fixture();
@@ -136,6 +131,58 @@ async fn home_add_on_rows_say_their_type_and_name_the_add_on_only_on_a_clash() {
         ("addon:2:movie:new", "New Movies"),
     ].map(|(id, title)| (id.to_owned(), title.to_owned()));
     assert_eq!(titles, expected);
+}
+
+#[tokio::test]
+async fn home_catalog_rows_carry_the_selector_their_catalog_requires() {
+    use axum::routing::get;
+    let mock = axum::Router::new()
+        .route("/catalog/movie/top.json", get(|| async {
+            axum::Json(json!({"metas":[{"id":"tt1","type":"movie","name":"Popular one"}]}))
+        }))
+        .route("/catalog/movie/year/:extras", get(
+            |axum::extract::Path(extras): axum::extract::Path<String>| async move {
+                if extras.trim_end_matches(".json") != "genre=2020" {
+                    return Err(StatusCode::BAD_REQUEST);
+                }
+                Ok(axum::Json(json!({"metas":[{"id":"tt2","type":"movie","name":"New one"}]})))
+            },
+        ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let mut app = fixture();
+    app.addons.allow_test_loopback = true;
+    let cinemeta = json!({"id":"cinemeta","name":"Cinemeta","version":"1","resources":["catalog"],"types":["movie","series"],
+        "catalogs":[
+            {"id":"top","name":"Popular","type":"movie"},
+            {"id":"year","name":"New","type":"movie","extra":[{"name":"genre","isRequired":true,"options":["2020","2019"]}]},
+            {"id":"last-videos","name":"Last videos","type":"series","extra":[{"name":"lastVideosIds","isRequired":true,"options":[]}]},
+            {"id":"calendar-videos","name":"Calendar videos","type":"series","extra":[{"name":"calendarVideosIds","isRequired":true,"optionsLimit":0}]}
+        ]});
+    app.db.lock().unwrap().execute(
+        "INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Cinemeta',?1,?2,1)",
+        params![format!("http://{address}/manifest.json"), cinemeta.to_string()],
+    ).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
+    let (status, saved) = request(&app, "member-token-1", "PUT", "/api/profiles/1/integrations",
+        json!({"revision":0,"browsing_plugin":"stremio","assignments":[
+            {"connection_id":"addon:1","enabled":["Discovery"]}]})).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, home) = request(&app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    server.abort();
+    assert_eq!(status, StatusCode::OK, "{home}");
+    let rows = home["rows"].as_array().unwrap();
+    let ids = rows.iter().map(|row| row["id"].as_str().unwrap()).collect::<Vec<_>>();
+    assert_eq!(ids, ["continue", "favorites", "addon:1:movie:top", "addon:1:movie:year"], "{home}");
+    assert!(rows.iter().all(|row| row["state"] != "Failed"), "a row that can never load must not exist: {home}");
+    let year = &rows[3];
+    assert_eq!(year["state"], "Ready", "{home}");
+    assert_eq!(year["cards"][0]["title"], "New one", "{home}");
+    let selection = year["browse"]["query"].as_array().unwrap().iter()
+        .find(|value| value["id"] == "genre")
+        .expect("the row's browse action carries the selector its catalog requires");
+    assert_eq!(selection["values"], json!(["2020"]));
 }
 
 #[tokio::test]
@@ -314,7 +361,6 @@ async fn delayed_metadata_is_cached_under_its_original_addon_revision() {
     .unwrap();
     let mut delayed = card.clone();
     delayed.logo = Some("https://images.example/stale.png".into());
-    // Metadata began under the old credentials and returned after they changed.
     app.db.lock().unwrap().execute("INSERT INTO addon_config_revisions(account_id,revision) VALUES(1,?1) ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision",["1".repeat(32)]).unwrap();
     super::source_integrations::cache_card_at(&app, &lease, 0, &original_revision, delayed);
     let mut cards = vec![card];

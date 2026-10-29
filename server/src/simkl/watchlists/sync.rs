@@ -1,4 +1,3 @@
-//! Activities-gated private reads. Delta merges never publish private memos.
 use super::*;
 #[derive(Clone)]
 pub(in crate::simkl) struct Snapshot {

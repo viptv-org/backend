@@ -60,9 +60,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !args.is_empty() {
         return Err("unknown command".into());
     }
-    // Empty values disable the mount: server-only images keep booting clean.
-    // The KMP viewing app is the only UI bundle; there is no legacy dashboard
-    // or TV-web dist.
     let tv_dashboard = std::env::var_os("VIPTV_TV_DIST")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);

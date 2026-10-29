@@ -1,5 +1,3 @@
-//! Native metainfo only: ten seconds across DNS, pinned connections, redirects and body.
-//! The HTTP/1 parser bounds its header buffer before allocation; no proxy or cookie jar.
 use crate::account_api::Error;
 use http_body_util::{BodyExt, Empty};
 use hyper::{body::Bytes, Request};
@@ -57,7 +55,6 @@ async fn fetch_with_policy(
             {
                 return Err(invalid());
             }
-            // Connection uses only the already vetted addresses; no second DNS resolution.
             let socket = tokio::net::TcpStream::connect(addresses.as_slice())
                 .await
                 .map_err(|_| invalid())?;

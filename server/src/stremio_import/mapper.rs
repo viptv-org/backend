@@ -4,10 +4,6 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use flate2::read::ZlibDecoder;
 use std::{collections::HashSet, io::Read};
 
-// Stremio stores {last_watched_video_id}:{one_based_index}:{zlib(base64(bitset))}.
-// Like Stremio, bits are aligned at the anchor: videos added before it shift the
-// stored bits forward, and bits after the anchor name the following videos.
-// Regular seasons must be complete and contiguous; specials may skip numbers.
 pub(super) fn verified_episodes(field: &str, title: &str, meta: &Value) -> Option<Vec<(String, i64, i64)>> {
     let (prefix, encoded) = field.rsplit_once(':')?;
     let (anchor, count) = prefix.rsplit_once(':')?;
@@ -53,8 +49,6 @@ pub(super) fn verified_episodes(field: &str, title: &str, meta: &Value) -> Optio
         ordered.push((id.to_owned(), season, episode_number));
     }
     let anchor_index = ordered.iter().position(|(id, _, _)| id == anchor)?;
-    // Fewer videos before the anchor than recorded means episodes vanished: the
-    // stored bits cannot be attributed. Added videos are an end-aligned shift.
     if count == 0 || count > 2000 || count > anchor_index + 1 {
         return None;
     }
@@ -102,9 +96,6 @@ fn imdb(id: &str) -> bool {
         (5..=12).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
     })
 }
-/// The public Cinemeta poster for a verified IMDb title: the same artwork a
-/// title saved from the Cinemeta catalog carries. The source library's own
-/// poster URL is never stored; it may name a private add-on host or token.
 pub(super) fn poster(title: &str) -> Option<String> {
     imdb(title).then(|| format!("https://images.metahub.space/poster/small/{title}/img"))
 }
@@ -127,13 +118,11 @@ fn milliseconds(v: &Value) -> Option<f64> {
         .map(|n| n as f64 / 1000.0)
 }
 fn timestamp(v: &Value, now: i64) -> Option<i64> {
-    // Stremio serializes lastWatched as an RFC3339 date, not array order or activity count.
     let date = chrono::DateTime::parse_from_rfc3339(v.as_str()?).ok()?;
     let seconds = date.timestamp();
     (seconds > 0 && date.timestamp_millis() <= now.checked_mul(1000)?).then_some(seconds)
 }
 
-/// A library entry the user removed and never watched: nothing to import or review.
 pub(super) fn removed_without_history(item: &Value) -> bool {
     let state = &item["state"];
     item["removed"].as_bool().unwrap_or(false)
@@ -194,7 +183,6 @@ pub(super) fn map_verified(
             summary.skipped_items += 1;
             continue;
         }
-        // Ambiguous duplicates are deferred, not resolved by response-array order.
         if !(imdb(id) || metadata.contains_key(&(kind.to_owned(), id.to_owned())))
             || identities.get(&(kind, id)).copied().unwrap_or(0) != 1
         {
@@ -245,8 +233,6 @@ pub(super) fn map_verified(
             let resume =
                 matches!((offset, duration), (Some(p), Some(d)) if p > 0.0 && d > 0.0 && p <= d);
             let time = timestamp(&state["lastWatched"], now);
-            // Stremio leaves a finished episode as the series' current video with
-            // its offset reset to 0: watched at lastWatched, a dated completion.
             let episode_completed = kind == "series"
                 && offset == Some(0.0)
                 && time.is_some()
@@ -279,7 +265,6 @@ pub(super) fn map_verified(
                     });
                 }
             }
-            // A rewatch resume wins over timesWatched. Counts alone never identify an episode.
             let movie_completed = kind == "movie" && watched && offset == Some(0.0);
             if resume || movie_completed || episode_completed {
                 let identity = if kind == "series" {
@@ -327,9 +312,6 @@ pub(super) fn map_verified(
                     {
                         context["stremio_import_watched"] = json!(true);
                     }
-                    // A watched imported offset may be stale, not evidence of a new rewatch.
-                    // Keep it intact, but anchor this import's queue at the last verified
-                    // watched episode in the same regular/special sequence.
                     if kind == "series" && resume {
                         if let Some(episodes) = &completed {
                             if let Some((_, season, episode_number)) =
@@ -355,7 +337,6 @@ pub(super) fn map_verified(
                         context["stremio_import_watched"] = json!(true);
                         d
                     };
-                    // Favorite identity is the series title; progress identity is an exact episode.
                     if favorite && progress_id != id {
                         result.push(candidate);
                         candidate = Candidate {
@@ -382,8 +363,6 @@ pub(super) fn map_verified(
                 summary.needs_review += 1;
             }
             if kind == "movie" && watched && candidate.progress.is_none() {
-                // The watched counter is a fact even when the rewatch activity cannot
-                // be placed on a timeline; lastWatched may belong to that failed resume.
                 let mut context = if imdb(id) {
                     json!({"imdb_id":id})
                 } else {
