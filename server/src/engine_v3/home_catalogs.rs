@@ -1,14 +1,5 @@
-//! Which add-on catalogs become Home rows, and the selectors those rows carry.
-//!
-//! A row shows the request its retry sends, so a catalog that needs a selection
-//! is browsed with one: every required extra takes its default or the first
-//! advertised option. A catalog whose required extra advertises no option, is
-//! disabled (`options_limit` 0), or requires a search term never becomes a row:
-//! no client can satisfy it, so the row could only ever fail.
 use viptv_provider::discovery_values::ExtraValues;
 
-/// The selections a row for this catalog carries, or `None` when the catalog
-/// cannot be browsed without a value a row cannot supply.
 pub(super) fn row_selections(extras: &serde_json::Value) -> Option<Vec<ExtraValues>> {
     let mut selections = Vec::new();
     for extra in extras.as_array().into_iter().flatten() {
@@ -28,8 +19,6 @@ pub(super) fn row_selections(extras: &serde_json::Value) -> Option<Vec<ExtraValu
             .filter_map(|option| option.as_str().map(str::to_owned))
             .collect::<Vec<_>>();
         if name == "search" {
-            // A search term belongs to the viewer, so only the catalog's own
-            // default can fill a required one.
             if extra["default"].as_str().is_some_and(|value| !value.trim().is_empty()) {
                 continue;
             }

@@ -138,9 +138,6 @@ async fn home_add_on_rows_say_their_type_and_name_the_add_on_only_on_a_clash() {
     assert_eq!(titles, expected);
 }
 
-/// backend#33: a row asks for the selector its catalog requires, so the row
-/// loads and its retry does too; a catalog whose required selector has no
-/// option or is disabled never becomes a row that could only fail.
 #[tokio::test]
 async fn home_catalog_rows_carry_the_selector_their_catalog_requires() {
     use axum::routing::get;
