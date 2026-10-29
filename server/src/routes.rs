@@ -414,6 +414,9 @@ async fn dashboard_entry(path: PathBuf) -> Response {
 mod tv_web_mount_tests {
     use super::*;
     use tower::ServiceExt;
+    async fn web_request(app:&Router,path:&str)->Response {
+        app.clone().oneshot(axum::http::Request::builder().uri(path).body(axum::body::Body::empty()).unwrap()).await.unwrap()
+    }
     #[tokio::test]
     async fn optional_tv_mount_preserves_root_dashboard_api_and_deep_links() {
         let root=tempfile::tempdir().unwrap();let tv=tempfile::tempdir().unwrap();let dashboard=tempfile::tempdir().unwrap();
@@ -425,6 +428,35 @@ mod tv_web_mount_tests {
             let bytes=axum::body::to_bytes(response.into_body(),1024).await.unwrap();assert_eq!(&bytes[..],expected.as_bytes(),"{path}");
         }
         let response=app.oneshot(axum::http::Request::builder().uri("/api/health").body(axum::body::Body::empty()).unwrap()).await.unwrap();assert_eq!(response.status(),StatusCode::OK);
+    }
+    #[tokio::test]
+    async fn tv_mount_answers_client_routes_with_the_shell_and_assets_with_themselves() {
+        const SHELL:&str="<!doctype html><div id=\"viptv-ui-layer\"></div>";
+        let web=tempfile::tempdir().unwrap();
+        std::fs::create_dir(web.path().join("composeResources")).unwrap();
+        std::fs::write(web.path().join("index.html"),SHELL).unwrap();
+        std::fs::write(web.path().join("composeApp.js"),"startApp()").unwrap();
+        std::fs::write(web.path().join("819d242a46ca39e513ca.wasm"),"wasm").unwrap();
+        std::fs::write(web.path().join("composeResources/avatar.png"),"png").unwrap();
+        let app=router_with_viewers(crate::auth_integration_tests::fixture(),Some(web.path().into()));
+        for path in ["/","/device","/device?code=12345678","/tv/show/123","/tv/show/123?season=2","/device/"] {
+            let response=web_request(&app,path).await;
+            assert_eq!(response.status(),StatusCode::OK,"{path}");
+            assert!(response.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"),"{path}");
+            let bytes=axum::body::to_bytes(response.into_body(),4096).await.unwrap();
+            assert_eq!(&bytes[..],SHELL.as_bytes(),"{path}");
+        }
+        for (path,content_type,body) in [
+            ("/composeApp.js","text/javascript","startApp()"),
+            ("/819d242a46ca39e513ca.wasm","application/wasm","wasm"),
+            ("/composeResources/avatar.png","image/png","png"),
+        ] {
+            let response=web_request(&app,path).await;
+            assert_eq!(response.status(),StatusCode::OK,"{path}");
+            assert_eq!(response.headers()[header::CONTENT_TYPE],content_type,"{path}");
+            let bytes=axum::body::to_bytes(response.into_body(),4096).await.unwrap();
+            assert_eq!(&bytes[..],body.as_bytes(),"{path}");
+        }
     }
     #[tokio::test]
     async fn tv_mount_revalidates_shell_files_and_immutably_caches_hashed_assets() {
