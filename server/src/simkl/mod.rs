@@ -56,6 +56,17 @@ fn unavailable() -> ApiError {
     )
 }
 
+/// Public Simkl metadata other modules read identities and episode coordinates from.
+#[allow(dead_code)]
+pub(crate) async fn public_document(app: &App, path: &str) -> Result<Arc<Value>, ApiError> {
+    tokio::time::timeout(
+        Duration::from_secs(4),
+        app.simkl.metadata_document(path, || Ok(())),
+    )
+    .await
+    .map_err(|_| ApiError(StatusCode::GATEWAY_TIMEOUT, "Simkl timed out".into()))?
+}
+
 fn require_edit(app: &App, lease: &ResourceLease, profile: i64) -> Result<(), ApiError> {
     let db = app
         .db
