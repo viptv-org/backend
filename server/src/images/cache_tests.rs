@@ -163,7 +163,7 @@ async fn gif_artwork_keeps_its_bytes_and_is_served_as_gif() {
     let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
     let service = Service::new();
     for path in ["gif", "legacy"] {
-        let image = descriptor::Image::parts("posters", &format!("11/abc_{path}.gif")).unwrap();
+        let image = descriptor::Image::parts("posters", "11/abc_m.gif").unwrap();
         let asset = service
             .fetch(
                 image,
@@ -174,7 +174,7 @@ async fn gif_artwork_keeps_its_bytes_and_is_served_as_gif() {
         assert_eq!(asset.content_type, "image/gif");
         assert!(asset.bytes.starts_with(b"GIF8"));
     }
-    let image = descriptor::Image::parts("posters", "11/abc_broken.gif").unwrap();
+    let image = descriptor::Image::parts("posters", "11/abc_w.gif").unwrap();
     assert!(service
         .fetch(
             image,
