@@ -12,8 +12,17 @@ pub(crate) async fn update(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path(profile): Path<i64>,
-    axum::Json(input): axum::Json<Visibility>,
+    axum::Json(mut input): axum::Json<Visibility>,
 ) -> ApiResult {
+    // One durable provider key: a legacy Simkl catalog prefix names the same
+    // title as the key this card carries (backend#29).
+    crate::simkl::key::identity(&mut input.identity);
+    if let Some(parent) = input.parent_identity.as_mut() {
+        crate::simkl::key::identity(parent);
+    }
+    if let Some(card) = input.card.as_mut() {
+        crate::simkl::key::card(card);
+    }
     validate(&input.identity, input.parent_identity.as_ref())?;
     let app = app.with_lease(lease.clone());
     let mut db = app
@@ -33,8 +42,9 @@ pub(crate) async fn update(
             return Err("Continuation selector does not match the stored title".into());
         }
         let tx = db.transaction().map_err(db_error)?;
-        let identity =
+        let mut identity =
             super::super::scoped_library::visibility_db(&tx, &app, profile, &card, input.hidden)?;
+        crate::simkl::key::identity(&mut identity);
         let revision =
             configuration_revision.saturating_add(super::super::history::revision(&tx, profile)?);
         tx.commit().map_err(db_error)?;
@@ -54,7 +64,13 @@ pub(crate) async fn update(
         &input.identity.kind,
         &input.identity.id,
     )?;
-    let context:Option<(String,String)>=db.query_row("SELECT title_id,context FROM progress WHERE profile_id=?1 AND type=?2 AND (id=?3 OR (?4=1 AND title_id=?3)) ORDER BY (id=?3) DESC,updated_at DESC,rowid DESC LIMIT 1",params![profile,input.identity.kind,input.identity.id,input.identity.episode.is_none()],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(db_error)?;
+    let mut context: Option<(String, String)> = None;
+    for id in crate::simkl::key::aliases(&input.identity.kind, &input.identity.id) {
+        context=db.query_row("SELECT title_id,context FROM progress WHERE profile_id=?1 AND type=?2 AND (id=?3 OR (?4=1 AND title_id=?3)) ORDER BY (id=?3) DESC,updated_at DESC,rowid DESC LIMIT 1",params![profile,input.identity.kind,id,input.identity.episode.is_none()],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(db_error)?;
+        if context.is_some() {
+            break;
+        }
+    }
     let (id, parent) = if let Some((title, raw)) = context {
         let context: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
         let stored =
@@ -123,15 +139,13 @@ pub(crate) async fn update(
         edition: None,
     });
     identity.id = id;
+    crate::simkl::key::identity(&mut identity);
     kids::require_item(&db, &lease.principal, &identity.kind, &identity.id)?;
     let tx = db.transaction().map_err(db_error)?;
     if input.hidden {
-        crate::continuation::hide(&tx, profile, &identity.kind, &identity.id).map(|_| 0)
+        crate::continuation::hide(&tx, profile, &identity.kind, &identity.id)
     } else {
-        tx.execute(
-            "DELETE FROM queue_hidden WHERE profile_id=?1 AND type=?2 AND title_id=?3",
-            params![profile, identity.kind, identity.id],
-        )
+        crate::continuation::show(&tx, profile, &identity.kind, &identity.id)
     }
     .map_err(db_error)?;
     let revision =

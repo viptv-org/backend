@@ -235,7 +235,14 @@ async fn resolve(
     let auth::Principal::Account { profile_id, .. } = &lease.principal;
     let profile = profile_id.ok_or_else(auth::forbidden)?;
     let app = app.with_lease(lease.clone());
-    let expected = super::origins::parse_card(page.card.as_deref())?;
+    // A provider `:` key has one durable spelling: a legacy Simkl catalog path
+    // (`simkl:movies:`, or an `simkl:anime:` movie) names the same title as the
+    // key the queue, history and library emit (backend#29).
+    let id = crate::simkl::key::media(&kind, &id).into_owned();
+    let mut expected = super::origins::parse_card(page.card.as_deref())?;
+    if let Some(card) = expected.as_mut() {
+        crate::simkl::key::card(card);
+    }
     if expected
         .as_ref()
         .is_some_and(|card| card.identity.kind != kind || card.identity.id != id)
@@ -319,6 +326,15 @@ async fn resolve(
         super::origins::stamp(&app, std::slice::from_mut(&mut detail.item), "simkl")?;
         super::origins::stamp(&app, &mut detail.episodes, "simkl")?;
         super::origins::stamp(&app, &mut detail.recommendations, "simkl")?;
+        // Emit the durable key, so Details opened from a queue, history or
+        // library card answers with the same identity (backend#29).
+        crate::simkl::key::card(&mut detail.item);
+        for episode in &mut detail.episodes {
+            crate::simkl::key::identity(&mut episode.identity);
+        }
+        for card in &mut detail.recommendations {
+            crate::simkl::key::card(card);
+        }
         super::origins::check_expected_at(&app, expected.as_ref(), &detail.item)?;
         result.0 =
             serde_json::to_value(detail).map_err(|_| ApiError::from("Metadata unavailable"))?;

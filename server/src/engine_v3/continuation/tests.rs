@@ -308,3 +308,62 @@ async fn continue_collapses_duplicate_movie_progress_to_one_card() {
     assert_eq!(entries.len(), 1, "{page}");
     assert_eq!(entries[0]["record"]["position_millis"], 40000);
 }
+
+#[tokio::test]
+async fn continue_and_history_emit_one_durable_simkl_movie_key() {
+    let app = fixture();
+    // The reported queue carried one anime film under the movie catalog, the
+    // anime catalog and the old store prefix, with two different progress
+    // values (backend#29).
+    {
+        let db = app.db.lock().unwrap();
+        for (id, provider, position, updated) in [
+            ("simkl:movies:250822", "simkl", 51.0, 100),
+            ("simkl:anime:250822", "library", 50.0, 200),
+            ("simkl:movie:250822", "simkl", 49.0, 300),
+        ] {
+            db.execute(
+                "INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at,context,title_id) VALUES(1,?1,'movie','Spider-Man: Brand New Day',?2,100.0,?3,?4,?1)",
+                params![id, position, updated, json!({"engine_provider_id":provider}).to_string()],
+            )
+            .unwrap();
+        }
+    }
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/continue",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let entries = page["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{page}");
+    assert_eq!(entries[0]["card"]["identity"]["id"], "simkl:movie:250822");
+    assert_eq!(
+        entries[0]["record"]["identity"]["id"],
+        "simkl:movie:250822"
+    );
+    // The most recently updated row is the one the card shows.
+    assert_eq!(entries[0]["record"]["position_millis"], 49000);
+    let body = page.to_string();
+    assert!(!body.contains("simkl:movies:"), "{page}");
+    assert!(!body.contains("simkl:anime:250822"), "{page}");
+    let (status, history) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/history",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    let items = history.as_array().unwrap();
+    assert_eq!(items.len(), 1, "{history}");
+    assert_eq!(items[0]["card"]["identity"]["id"], "simkl:movie:250822");
+    assert_eq!(items[0]["updated_at_millis"], 300000);
+    let body = history.to_string();
+    assert!(!body.contains("simkl:movies:"), "{history}");
+    assert!(!body.contains("simkl:anime:250822"), "{history}");
+}

@@ -109,32 +109,69 @@ pub(super) async fn title(
     category: &str,
     id: u64,
 ) -> Result<Card, ApiError> {
-    projection::category(category).map_err(|_| ApiError::from("Invalid Simkl category"))?;
+    Ok(title_in(app, profile, credential, category, id).await?.0)
+}
+
+/// The title card and the catalog path that served it. Simkl lists one movie
+/// under the movie catalog and, for an anime film, under the anime catalog;
+/// the durable `simkl:movie:` key must open either one (backend#29). The card
+/// keeps the identity of the document it came from; a caller that emits a
+/// durable key normalises it (`simkl::key`).
+pub(super) async fn title_in(
+    app: &App,
+    profile: i64,
+    credential: &store::Credential,
+    category: &str,
+    id: u64,
+) -> Result<(Card, &'static str), ApiError> {
+    let category = crate::simkl::key::category(category);
+    projection::category(category.as_ref())
+        .map_err(|_| ApiError::from("Invalid Simkl category"))?;
+    let category = match category.as_ref() {
+        "movie" => "movie",
+        "tv" => "tv",
+        _ => "anime",
+    };
     if id == 0 {
         return Err("Invalid Simkl title".into());
     }
-    let endpoint = if category == "movie" {
-        "movies"
-    } else {
-        category
+    let path = |category: &str| {
+        format!(
+            "/{}/{id}?extended=full",
+            if category == "movie" {
+                "movies"
+            } else {
+                category
+            }
+        )
     };
-    let value = cache::metadata(
-        app,
-        profile,
-        credential,
-        &format!("/{endpoint}/{id}?extended=full"),
-    )
-    .await?;
+    let (value, served) = match cache::metadata(app, profile, credential, &path(category)).await {
+        Ok(value) => (value, category),
+        // A canonical movie key may name a film only the anime catalog lists.
+        Err(primary) if category == "movie" => {
+            match cache::metadata(app, profile, credential, &path("anime")).await {
+                Ok(value) => (value, "anime"),
+                Err(_) => return Err(primary),
+            }
+        }
+        Err(other) => return Err(other),
+    };
     if projection::id(&value) != Some(id) {
         return Err(ApiError(
             StatusCode::BAD_GATEWAY,
             "Simkl returned a different title".into(),
         ));
     }
-    let card = projection::card(&value, category)
+    let card = projection::card(&value, served)
         .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "Simkl title was invalid".into()))?;
+    if category == "movie" && card.identity.kind != "movie" {
+        return Err(ApiError(
+            StatusCode::BAD_GATEWAY,
+            "Simkl title was invalid".into(),
+        ));
+    }
     store::validate(app, profile, credential)?;
-    Ok(card)
+    Ok((card, served))
 }
 
 pub(super) async fn episodes(
@@ -175,21 +212,18 @@ pub(crate) async fn detail(
     }
     let app = app.with_lease(lease);
     let credential = store::credential(&app, profile, Capability::Metadata)?;
-    let item = title(&app, profile, &credential, &category, id).await?;
+    let category = crate::simkl::key::category(&category).into_owned();
+    let (item, served) = title_in(&app, profile, &credential, &category, id).await?;
     let mut item = allowed(&app, vec![item])?
         .into_iter()
         .next()
         .ok_or_else(auth::forbidden)?;
-    let all = if category == "tv" || category == "anime" && item.identity.kind == "series" {
+    let all = if served == "tv" || served == "anime" && item.identity.kind == "series" {
         episodes(&app, profile, &credential, id, &item).await?
     } else {
         vec![]
     };
-    let endpoint = if category == "movie" {
-        "movies"
-    } else {
-        &category
-    };
+    let endpoint = if served == "movie" { "movies" } else { served };
     let document = cache::metadata(
         &app,
         profile,
@@ -199,7 +233,7 @@ pub(crate) async fn detail(
     .await?;
     let recommendations = allowed(
         &app,
-        projection::recommendations(&document, &category, &item.identity.id),
+        projection::recommendations(&document, served, &item.identity.id),
     )?;
     let all = viptv_engine::presentation::canonical_episodes(allowed(&app, all)?);
     let seasons = viptv_engine::presentation::episode_seasons(&all);

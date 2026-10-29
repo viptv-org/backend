@@ -1,4 +1,46 @@
 use super::*;
+/// The provider a card's row belongs to. A `simkl:` identity is Simkl's own,
+/// so the provider a row was stored under cannot split one title into two
+/// cards (backend#29).
+fn provider_key(card: &Card, id: &str) -> String {
+    if id.starts_with("simkl:") {
+        "simkl".to_owned()
+    } else {
+        card.provider_id.clone()
+    }
+}
+
+/// Every removed title for this profile, keyed by its durable identity, with
+/// the second it was removed. A release after that second brings it back.
+/// Matching by the normalised key hides a row stored under a legacy Simkl
+/// catalog prefix too (backend#29).
+fn hidden_titles(
+    db: &Connection,
+    profile: i64,
+) -> Result<std::collections::HashMap<(String, String), u64>, ApiError> {
+    let mut query = db.prepare("SELECT h.type,h.title_id,COALESCE(t.hidden_at,0) FROM queue_hidden h LEFT JOIN queue_hidden_times t ON t.profile_id=h.profile_id AND t.type=h.type AND t.title_id=h.title_id WHERE h.profile_id=?1").map_err(db_error)?;
+    let rows = query
+        .query_map([profile], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(db_error)?;
+    let mut hidden = std::collections::HashMap::new();
+    for row in rows {
+        let (kind, title, at) = row.map_err(db_error)?;
+        let at = u64::try_from(at).unwrap_or(0);
+        let key = (
+            kind.clone(),
+            crate::simkl::key::media(&kind, &title).into_owned(),
+        );
+        let slot = hidden.entry(key).or_insert(at);
+        *slot = (*slot).max(at);
+    }
+    Ok(hidden)
+}
 pub(crate) fn snapshot(
     app: &App,
     lease: &ResourceLease,
@@ -24,6 +66,9 @@ pub(crate) fn snapshot(
         &lease.principal,
         queue["items"].as_array().cloned().unwrap_or_default(),
     )?;
+    // Removed titles match by their durable key, so a canonical card still
+    // hides a row stored under a legacy Simkl catalog prefix (backend#29).
+    let hidden = hidden_titles(&db, profile)?;
     // Each entry with the time that orders it: its latest activity, or the
     // release that made its series new (see `releases`).
     let mut entries = Vec::new();
@@ -31,15 +76,21 @@ pub(crate) fn snapshot(
         let Some(rendered) = super::super::history::record(&item) else {
             continue;
         };
-        let hidden_at = item["queue_hidden_at"]
-            .as_u64()
+        let kind = item["type"].as_str().unwrap_or_default();
+        let hidden_at = hidden
+            .get(&(
+                kind.to_owned(),
+                crate::simkl::key::media(kind, item["queue_title_id"].as_str().unwrap_or_default())
+                    .into_owned(),
+            ))
+            .copied()
             .map(|seconds| seconds.saturating_mul(1000));
         let previous = item
             .get("previous_episode")
             .and_then(super::super::history::record);
         let status = state(&item, &rendered);
         let mut card = rendered.card();
-        let record = if status == ContinuationStatus::Next {
+        let mut record = if status == ContinuationStatus::Next {
             let Some(previous) = previous.as_ref() else {
                 continue;
             };
@@ -47,6 +98,13 @@ pub(crate) fn snapshot(
         } else {
             rendered
         };
+        // The durable provider key, not the catalog path the row was stored
+        // under (backend#29).
+        crate::simkl::key::card(&mut card);
+        crate::simkl::key::identity(&mut record.identity);
+        if let Some(parent) = record.parent_identity.as_mut() {
+            crate::simkl::key::identity(parent);
+        }
         if status == ContinuationStatus::Next {
             if let Ok(verified) =
                 serde_json::from_value::<Card>(item["engine_presentation"].clone())
@@ -63,7 +121,10 @@ pub(crate) fn snapshot(
             card.subtitle = None;
         }
         let mut status = status;
-        let mut previous_identity = previous.map(|record| record.identity);
+        let mut previous_identity = previous.map(|mut record| {
+            crate::simkl::key::identity(&mut record.identity);
+            record.identity
+        });
         let mut order = record.updated_at_millis;
         let found = match (&record.parent_identity, &status) {
             (Some(series), status) if *status != ContinuationStatus::Resume => {
@@ -148,10 +209,10 @@ pub(crate) fn snapshot(
         ));
     }
     // Progress can hold several rows for one title+episode from one provider
-    // (different positions or source ids). Emit one card per provider's
-    // series+episode, and one per provider's movie, keeping the most recently
-    // updated record (and its order). Scoped-library entries merge below and
-    // stay separate by scope.
+    // (different positions or source ids). Emit one card per title+episode and
+    // one per movie, keeping the most recently updated record (and its order).
+    // A `simkl:` identity has one owner, so the legacy catalog prefix a row was
+    // stored under cannot add a second card (backend#29).
     let mut best: std::collections::HashMap<String, (u64, ContinuationEntry)> =
         std::collections::HashMap::new();
     for (order, entry) in std::mem::take(&mut entries) {
@@ -160,13 +221,17 @@ pub(crate) fn snapshot(
                 let episode = entry.card.identity.episode.as_ref();
                 format!(
                     "series:{}:{}:{}:{}",
-                    entry.card.provider_id,
+                    provider_key(&entry.card, &series.id),
                     series.id,
                     episode.and_then(|e| e.season).map(|s| s.to_string()).unwrap_or_default(),
                     episode.map(|e| e.episode).unwrap_or(0)
                 )
             }
-            None => format!("title:{}:{}", entry.card.provider_id, entry.card.identity.id),
+            None => format!(
+                "title:{}:{}",
+                provider_key(&entry.card, &entry.card.identity.id),
+                entry.card.identity.id
+            ),
         };
         match best.get(&key) {
             Some((_, old)) if old.record.updated_at_millis > entry.record.updated_at_millis => {}

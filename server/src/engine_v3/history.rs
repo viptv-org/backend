@@ -137,6 +137,27 @@ pub(crate) struct Page {
 fn history_limit() -> u32 {
     20
 }
+
+/// Keep one row per durable title key: a legacy Simkl catalog prefix
+/// normalises onto the canonical key, so the newest row for that title wins
+/// instead of the title being listed twice (backend#29).
+fn keep_newest(
+    records: &mut std::collections::BTreeMap<scoped_library::Key, PlaybackRecord>,
+    mut record: PlaybackRecord,
+) -> Result<(), ApiError> {
+    crate::simkl::key::identity(&mut record.identity);
+    if let Some(parent) = record.parent_identity.as_mut() {
+        crate::simkl::key::identity(parent);
+    }
+    let key = scoped_library::raw_key(&record.card())?;
+    if records
+        .get(&key)
+        .is_none_or(|old| old.updated_at_millis < record.updated_at_millis)
+    {
+        records.insert(key, record);
+    }
+    Ok(())
+}
 pub(crate) async fn list(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -162,16 +183,11 @@ pub(crate) async fn list(
     let mut records = std::collections::BTreeMap::new();
     for item in kids::filter_items(&db, &app.identity(), items)? {
         if let Some(record) = record(&item) {
-            records.insert(scoped_library::raw_key(&record.card())?, record);
+            keep_newest(&mut records, record)?;
         }
     }
     for saved in scoped_library::playback_db(&db, &app, profile)? {
-        if records
-            .get(&saved.key)
-            .is_none_or(|r| r.updated_at_millis <= saved.updated)
-        {
-            records.insert(saved.key, saved.value);
-        }
+        keep_newest(&mut records, saved.value)?;
     }
     let mut records = records.into_values().collect::<Vec<_>>();
     records.sort_by(|a, b| {
