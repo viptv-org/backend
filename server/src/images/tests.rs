@@ -28,6 +28,10 @@ fn descriptors_accept_only_public_provider_images_and_rewrite_asset_fields_only(
         ("episodes", "a_d.jpg"),
         ("episodes", "../../secret_w.webp"),
         ("fanart", "a_d.webp"),
+        ("posters", "a_xl.webp"),
+        ("episodes", "a_s.webp"),
+        ("fanart", "a_s192.webp"),
+        ("posters", "a_m.html"),
     ] {
         assert!(descriptor::Image::parts(folder, asset).is_none());
     }
@@ -50,6 +54,36 @@ fn descriptors_accept_only_public_provider_images_and_rewrite_asset_fields_only(
     assert_eq!(
         value["credentials"]["url"],
         "https://simkl.in/episodes/12/abcdef_w.webp"
+    );
+}
+#[test]
+fn descriptors_accept_every_size_and_extension_simkl_serves() {
+    for (folder, asset) in [
+        ("posters", "11/abc_s.webp"),
+        ("posters", "11/abc_cm.webp"),
+        ("posters", "11/abc_c.webp"),
+        ("posters", "11/abc_ca.jpg"),
+        ("posters", "11/abc_m.webp"),
+        ("episodes", "12/abc_c.webp"),
+        ("episodes", "12/abc_m.jpg"),
+        ("fanart", "11/abc_mobile.webp"),
+        ("fanart", "11/abc_s48.webp"),
+        ("fanart", "11/abc_d.jpg"),
+        ("posters", "11/abc_m.gif"),
+        ("episodes", "12/abc_c.gif"),
+    ] {
+        assert_eq!(
+            descriptor::Image::parts(folder, asset)
+                .unwrap_or_else(|| panic!("{asset}"))
+                .proxy(),
+            format!("/api/images/simkl/{folder}/{asset}")
+        );
+    }
+    assert_eq!(
+        descriptor::Image::href("https://simkl.in/fanart/11/abc_w.gif")
+            .unwrap()
+            .direct(),
+        "https://simkl.in/fanart/11/abc_medium.gif"
     );
 }
 #[tokio::test]

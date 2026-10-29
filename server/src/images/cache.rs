@@ -155,6 +155,8 @@ fn signature(bytes: &[u8]) -> Option<&'static str> {
         Some("image/jpeg")
     } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         Some("image/webp")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
     } else {
         None
     }
