@@ -1,5 +1,29 @@
 use super::*;
 
+pub(crate) async fn web_asset_cache(req: Request, next: Next) -> Response {
+    let name = req.uri().path().rsplit('/').next().unwrap_or_default();
+    let hashed = content_hashed(name);
+    let mut response = next.run(req).await;
+    let served = response.status().is_success();
+    if !served || response.headers().contains_key(header::CACHE_CONTROL) {
+        return response;
+    }
+    let value = if hashed {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, value.parse().unwrap());
+    response
+}
+
+fn content_hashed(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(stem, _)| stem.len() == 20 && stem.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 pub(crate) async fn private_api_response(mut response: Response) -> Response {
     let private = response
         .headers()
