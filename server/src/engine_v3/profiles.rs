@@ -1,4 +1,3 @@
-//! Typed server profiles. Parent account PINs never become per-profile locks.
 use super::*;
 use viptv_engine::{
     capabilities::Availability,
@@ -7,22 +6,12 @@ use viptv_engine::{
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_profile_presentation(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,avatar_id TEXT);")
 }
-/// A profile's avatar as the account record holds it.
-/// Legacy ids (the engine's `LEGACY_AVATAR_IDS`, from KMP builds before the
-/// catalog) stay accepted and projected as `avatar_id` while the account record
-/// holds no catalog choice.
 pub(super) struct Avatar {
-    /// The legacy id, hidden once the account record holds a catalog choice
-    /// so the catalog takes precedence on every client.
     pub(super) id: Option<String>,
-    /// The account's catalog world (`critters` until one is chosen).
     pub(super) style: String,
-    /// The 1-based catalog position, `None` while no catalog avatar is chosen.
     pub(super) choice: Option<u16>,
 }
 impl Avatar {
-    /// Overwrites the configuration's avatar with the account's; the account
-    /// record owns it, so a stored copy is never trusted.
     pub(super) fn project_into(self, configuration: &mut ProfileConfiguration) {
         configuration.avatar_id = self.id;
         configuration.avatar_style = Some(self.style);
@@ -44,7 +33,6 @@ pub(super) fn avatar_record(db: &Connection, profile: i64) -> Result<Option<Avat
         })
     })
 }
-/// The legacy `avatar_id` the engine profile card shows.
 pub(super) fn avatar(db: &Connection, profile: i64) -> Result<Option<String>, ApiError> {
     Ok(avatar_record(db, profile)?.and_then(|avatar| avatar.id))
 }
@@ -75,13 +63,8 @@ fn project(db: &Connection, value: &Value) -> Result<Value, ApiError> {
         json!({"id":value["id"],"name":value["name"],"avatar_id":avatar(db,id)?,"avatar_style":value["avatar_style"],"avatar_choice":value["avatar_choice"],"avatar_url":value["avatar_url"],"locked":false,"selection_requires_parent":false,"lock_kind":null,"is_primary":value["is_primary"],"can_delete":value["is_primary"]!=true,"kids":value["kids"],"max_age":value["max_age"],"setup_complete":value["setup_complete"]}),
     )
 }
-/// A validated engine profile write.
 struct Payload {
-    /// Legacy id change: `None` leaves it, `Some(None)` clears it.
     legacy: Option<Option<String>>,
-    /// `avatar_style`/`avatar_choice`, forwarded verbatim to the account layer,
-    /// which owns their validation (style in `AVATAR_STYLES`, choice within the
-    /// world's size).
     catalog: serde_json::Map<String, Value>,
 }
 impl Payload {
@@ -128,7 +111,6 @@ fn payload(value: &Value, create: bool) -> Result<Payload, ApiError> {
     }
     Ok(Payload { legacy, catalog })
 }
-/// Persists the legacy half of a write; a catalog write retires the legacy id.
 fn save_avatar(db: &Connection, id: i64, payload: &Payload) -> Result<(), ApiError> {
     let legacy = match (&payload.legacy, payload.catalog.is_empty()) {
         (_, false) => None,
@@ -211,7 +193,6 @@ pub(crate) async fn update(
             "name".into(),
             value.get("name").unwrap_or(&current["name"]).clone(),
         );
-        // Naming a fresh imported profile and picking any avatar completes setup.
         if current["setup_complete"] == false
             && value.get("name").is_some()
             && payload.touches_avatar()

@@ -12,7 +12,6 @@ pub(super) fn card(item: &Value, provider: &str) -> Option<Card> {
     if normalized["releaseInfo"].is_null() {
         normalized["releaseInfo"] = normalized["episodeTitle"].clone();
     }
-    // Use the same bounded identity and presentation projection as local hosts.
     // Truncating provider identifiers would silently identify another title.
     let mut card = stremio::cards(&json!({"metas":[normalized]}).to_string(), provider)
         .ok()?
@@ -27,7 +26,6 @@ pub(super) fn card(item: &Value, provider: &str) -> Option<Card> {
             });
         }
     }
-    // Watch progress is private library state, never provider-supplied metadata.
     if provider == "library" {
         card.progress = item["position"]
             .as_f64()

@@ -1,4 +1,3 @@
-//! Typed views over the existing personal library; no second history store.
 use super::*;
 use viptv_engine::{
     identity::MediaIdentity,
@@ -214,7 +213,6 @@ pub(super) fn revision(db: &Connection, profile: i64) -> Result<u64, ApiError> {
     .map(|r| r.unwrap_or(0))
 }
 
-/// Clears this selected profile's local progress; never calls a provider history API.
 pub(crate) async fn clear(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,

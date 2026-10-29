@@ -1,20 +1,6 @@
-//! The selected profile's own watch state on a Details episode window.
-//!
-//! Episode cards come from a provider document; whether the viewer finished an
-//! episode or is part-way through it is private profile state. Each response
-//! reads it from the two stores playback writes, by the same keys:
-//! origin-scoped playback records, and legacy progress rows (which also hold
-//! Stremio/Simkl imports and "Mark watched" corrections).
-//!
-//! - Part-way (resumable) → `progress` is the fraction; no `Watched` badge.
-//! - Completed → a `Watched` badge and no partial bar. A completion-only import
-//!   has no clock, so the badge is its only trace; no duration is invented.
-//! - Otherwise neither. Failed reads leave the card unmarked; they never fail
-//!   the page.
 use super::*;
 use viptv_engine::{playback::PlaybackRecord, presentation::Card};
 
-// The same badge `watched` puts on finished titles.
 use super::watched::BADGE as WATCHED;
 
 struct State {
@@ -23,7 +9,6 @@ struct State {
     updated_millis: u64,
 }
 
-/// Mark the `episodes` of a serialized `DetailSnapshot` in place.
 pub(super) fn mark(app: &App, profile: i64, detail: &mut Value) {
     let Some(episodes) = detail["episodes"].as_array_mut() else {
         return;
@@ -35,7 +20,7 @@ pub(super) fn mark(app: &App, profile: i64, detail: &mut Value) {
         let Ok(mut card) = serde_json::from_value::<Card>(slot.clone()) else {
             continue;
         };
-        // Never trust a provider/cached copy of private state.
+        // Never trust a provider or cached copy of private watch state.
         card.badges.retain(|badge| badge != WATCHED);
         card.progress = None;
         if card.identity.kind == "series" && card.identity.episode.is_some() {
@@ -53,8 +38,6 @@ pub(super) fn mark(app: &App, profile: i64, detail: &mut Value) {
     }
 }
 
-/// The newest of the episode's scoped record and legacy row; scoped wins a tie
-/// (the History merge rule).
 fn state(db: &Connection, profile: i64, card: &Card) -> Option<State> {
     let mut newest: Option<State> = None;
     let mut legacy_ids = Vec::new();

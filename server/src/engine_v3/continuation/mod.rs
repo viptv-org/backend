@@ -1,4 +1,3 @@
-//! Typed viewing operations over existing profile-owned state; no second queue/history.
 use super::*;
 use viptv_engine::{continuation::*, identity::MediaIdentity, presentation::Card};
 mod art;

@@ -1,7 +1,5 @@
 use crate::{auth_integration_tests::fixture, test_support::request, *};
 
-/// backend#60: an IMDb episode id names its title for the metadata add-on, but
-/// an id that merely contains colons is the add-on's own business.
 #[test]
 fn an_imdb_episode_lookup_names_its_parent_title() {
     assert_eq!(
@@ -98,9 +96,6 @@ async fn bootstrap_has_prepared_home_without_per_card_requests() {
     assert!(body["identity"]["profiles"].is_array());
 }
 
-/// backend#23: catalog names repeat across types and add-ons, so add-on row
-/// titles say their type and name the add-on only on a clash. Failed rows
-/// (nothing answers here) keep the same titles; ids and fixed rows are unchanged.
 #[tokio::test]
 async fn home_add_on_rows_say_their_type_and_name_the_add_on_only_on_a_clash() {
     let mut app = fixture();
@@ -366,7 +361,6 @@ async fn delayed_metadata_is_cached_under_its_original_addon_revision() {
     .unwrap();
     let mut delayed = card.clone();
     delayed.logo = Some("https://images.example/stale.png".into());
-    // Metadata began under the old credentials and returned after they changed.
     app.db.lock().unwrap().execute("INSERT INTO addon_config_revisions(account_id,revision) VALUES(1,?1) ON CONFLICT(account_id) DO UPDATE SET revision=excluded.revision",["1".repeat(32)]).unwrap();
     super::source_integrations::cache_card_at(&app, &lease, 0, &original_revision, delayed);
     let mut cards = vec![card];

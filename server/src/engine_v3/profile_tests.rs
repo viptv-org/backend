@@ -323,8 +323,6 @@ async fn display_preferences_project_controls_persist_and_validate() {
     assert_eq!(inset["kind"], "calibration");
     assert_eq!(inset["max"], 20);
 
-    // A display-only update persists, bumps the shared revision and keeps the
-    // playback preferences untouched.
     let mut display = display.clone();
     display["accent_color"] = json!("#62D9BC");
     display["screen_saver_minutes"] = json!(10);
@@ -356,8 +354,6 @@ async fn display_preferences_project_controls_persist_and_validate() {
     assert_eq!(reread["display"]["screen_saver_minutes"], 10);
     assert_eq!(reread["display"]["screen_inset"], 4);
 
-    // The revisions channel moves on a display-only update so other devices
-    // refresh their display settings without a playback-preference change.
     let (_, revisions) = request(
         &app,
         "member-token-1",
@@ -368,7 +364,6 @@ async fn display_preferences_project_controls_persist_and_validate() {
     .await;
     assert_eq!(revisions["preferences"], "1");
 
-    // A playback-only update keeps the saved display values.
     let mut prefs = reread["preferences"].clone();
     prefs["subtitle_mode"] = json!("never");
     prefs["subtitles_enabled"] = json!(false);
@@ -383,7 +378,6 @@ async fn display_preferences_project_controls_persist_and_validate() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(saved["display"]["accent_color"], "#62D9BC");
 
-    // Stale revisions conflict on display updates too.
     assert_eq!(
         request(
             &app,
@@ -410,7 +404,6 @@ async fn display_preferences_reject_invalid_values_and_empty_updates() {
     )
     .await;
     let display = defaults["display"].clone();
-    // Values outside the projected inventories are rejected.
     for change in [
         json!({"accent_color":"#123456"}),
         json!({"screen_saver_minutes":7}),
@@ -433,7 +426,6 @@ async fn display_preferences_reject_invalid_values_and_empty_updates() {
             StatusCode::BAD_REQUEST
         );
     }
-    // Unknown display fields and empty updates are shape errors.
     let mut unknown = display.clone();
     unknown["theme"] = json!("dark");
     assert_eq!(
@@ -460,7 +452,6 @@ async fn display_preferences_reject_invalid_values_and_empty_updates() {
         .0,
         StatusCode::UNPROCESSABLE_ENTITY
     );
-    // Lowercase accent hex normalizes to the palette casing.
     let mut lower = display.clone();
     lower["accent_color"] = json!("#ff8b5c");
     let (status, saved) = request(
@@ -522,21 +513,17 @@ async fn playback_controls_match_the_board_order_and_toggle_copy() {
     assert_eq!(start_subtitles["label"], "Start with subtitles");
     assert_eq!(start_subtitles["choices"][0]["value"], "always");
     assert_eq!(start_subtitles["choices"][1]["value"], "never");
-    // Subtitle mode lives with playback on the boards; the subtitles section
-    // keeps language and style controls only.
     assert!(
         !controls
             .iter()
             .any(|control| control["group"] == "subtitles" && control["id"] == "subtitle_mode")
     );
-    // The persisted defaults match the board's toggle states.
     let prefs = &snapshot["preferences"];
     assert_eq!(prefs["next_episode_button"], true);
     assert_eq!(prefs["skip_intros"], false);
     assert_eq!(prefs["match_frame_rate"], true);
 }
 
-/// The card for `id` in any value carrying a `profiles` array.
 fn profile_card(list: &Value, id: &str) -> Value {
     list["profiles"]
         .as_array()
@@ -585,7 +572,6 @@ async fn engine_catalog_choice_round_trips_to_the_account_api() {
     assert_eq!(updated["avatar_choice"], 48);
     let moods = "https://api.dicebear.com/10.x/moods/png?seed=viptv-moods-48&size=256";
     assert_eq!(updated["avatar_url"], moods);
-    // Choice alone keeps the current world.
     let (status, updated) = request(
         &app,
         "member-token-1",
@@ -649,8 +635,6 @@ async fn account_catalog_choice_projects_on_the_engine_route_and_outranks_legacy
     .await;
     assert_eq!(config["configuration"]["avatar_id"], Value::Null);
 
-    // An older app build can still store a legacy id, but the catalog choice
-    // keeps precedence, also after a rename.
     for body in [json!({"avatar_id":"zayne"}), json!({"name":"Renamed"})] {
         let (status, card) =
             request(&app, "member-token-1", "PATCH", "/api/profiles/1", body.clone()).await;
@@ -673,7 +657,6 @@ async fn account_catalog_choice_projects_on_the_engine_route_and_outranks_legacy
     };
     assert_eq!(stored().as_deref(), Some("zayne"));
 
-    // An engine catalog pick then retires the legacy id.
     let (status, catalog) = request(
         &app,
         "member-token-1",
@@ -700,7 +683,6 @@ async fn engine_profile_route_rejects_invalid_catalog_choices() {
         json!({"avatar_choice":49}),
         json!({"avatar_choice":"3"}),
         json!({"avatar_choice":null}),
-        // Princesses has ten characters.
         json!({"avatar_style":"princesses","avatar_choice":11}),
         json!({"avatar_id":"vynxc","avatar_style":"moods","avatar_choice":1}),
         json!({"name":"Extra","avatar_style":"moods","avatar_choice":1,"setup_complete":true}),
@@ -740,13 +722,11 @@ async fn profile_configuration_projects_the_account_catalog_avatar() {
             config["avatar_choice"].clone(),
         )
     };
-    // No catalog choice yet: the account default world, no choice.
     assert_eq!(
         avatar(&configuration().await),
         (Value::Null, json!("critters"), Value::Null)
     );
 
-    // A legacy id shows only while there is no catalog choice.
     let (status, body) = request(
         &app,
         "member-token-1",
@@ -761,7 +741,6 @@ async fn profile_configuration_projects_the_account_catalog_avatar() {
         (json!("vynxc"), json!("critters"), Value::Null)
     );
 
-    // The unsaved default configuration follows the account record.
     auth::update_profile(
         &app.db.lock().unwrap(),
         1,
@@ -774,8 +753,6 @@ async fn profile_configuration_projects_the_account_catalog_avatar() {
         (Value::Null, json!("princesses"), json!(2))
     );
 
-    // A saved configuration still projects the account's current avatar, not
-    // the one it was saved with.
     let (status, body) = request(
         &app,
         "member-token-1",
@@ -812,7 +789,6 @@ async fn configurations_stored_before_the_avatar_catalog_keep_loading() {
         &json!({"avatar_style":"villains","avatar_choice":12}),
     )
     .unwrap();
-    // The shape saved by builds whose engine had no avatar_style/avatar_choice.
     let legacy = json!({
         "scope":{"connection_id":"server","account_id":"1","profile_id":"1","revision":1},
         "mode":"Server",

@@ -62,7 +62,6 @@ fn active_heartbeat_keeps_exact_id_and_cached_text_for_a_long_movie_then_expires
     assert!(store
         .get_at("selected", &lease(1, "foreign"), long)
         .is_err());
-    // Refreshing addon discovery does not remove an actively retained selection.
     store
         .insert(
             &owner,

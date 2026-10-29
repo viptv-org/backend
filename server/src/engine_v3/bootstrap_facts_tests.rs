@@ -22,9 +22,6 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
         (1, json!(["meta"])),
         (2, json!([{"name":"subtitles","types":["movie"]}])),
     ];
-    // The fake add-ons are mounted at `http://{address}/{id}/manifest.json` and
-    // every endpoint the backend derives from one stays under its id. No other
-    // provider is configured here, so only those paths can be provider egress.
     let addon_roots: Vec<String> = addons.iter().map(|(id, _)| format!("/{id}/")).collect();
     let roots = addon_roots.clone();
     let server = tokio::spawn(async move {
@@ -45,11 +42,8 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
                                 "{method} {path} host={:?}",
                                 headers.get(axum::http::header::HOST)
                             ));
-                            // Nothing in the fixture serves a provider read.
                             return StatusCode::BAD_GATEWAY;
                         }
-                        // The host's port probe and a preview page load answer
-                        // normally; they are not add-on traffic.
                         StatusCode::OK
                     }
                 },
@@ -104,11 +98,7 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
         .execute("UPDATE auth_sessions SET profile_id=NULL WHERE id='s1'", [])
         .unwrap();
     assert!(fact(&app, "member-token-1").await.is_null());
-    // The dev host reaches this listener too: its engine probes every new
-    // loopback listener with `HEAD /` and catalogues an HTTP answer as a dev
-    // server, so a preview of it can load the page later (backend#48,
-    // backend#58). Neither is provider egress, so the fake counts add-on paths
-    // only and the test sends both host requests.
+    // The host probes every new loopback listener with `HEAD /`; count add-on paths only.
     crate::test_support::send_port_probe(address).await;
     let page = reqwest::Client::new()
         .get(format!("http://{address}/"))
@@ -122,8 +112,6 @@ async fn subtitle_bootstrap_fact_requires_enabled_scoped_assignment_and_performs
         0,
         "provider requests: {provider_requests:?}"
     );
-    // Reads of the fixture add-ons are still counted, so the assertion above is
-    // not vacuous.
     for root in &addon_roots {
         let read = reqwest::Client::new()
             .get(format!("http://{address}{root}manifest.json"))

@@ -230,8 +230,6 @@ pub(crate) async fn remove(
         ));
     }
     let (kind, id) = connection.split_once(':').ok_or_else(auth::forbidden)?;
-    // Paired devices manage profile-private inputs; account-shared providers
-    // retain the same account-session boundary as provider management v2.
     if kind == "iptv" && matches!(&lease.principal, auth::Principal::Account { role, .. } if role == "device") {
         return Err(auth::forbidden());
     }

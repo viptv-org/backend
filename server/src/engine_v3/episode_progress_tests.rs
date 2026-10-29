@@ -1,9 +1,7 @@
-//! Details episode windows carry the selected profile's own watch state.
 use crate::{auth_integration_tests::fixture, test_support::request, *};
 
 const SERIES: &str = "tt38262097";
 
-/// One metadata add-on (id 101) serving a six-episode season of `SERIES`.
 async fn stack() -> (App, tokio::task::JoinHandle<()>) {
     let videos = (1..=6)
         .map(|episode| json!({"id":format!("{SERIES}:1:{episode}"),"season":1,"episode":episode,"title":format!("Episode {episode}")}))
@@ -46,8 +44,6 @@ fn watched(card: &Value) -> bool {
         .is_some_and(|badges| badges.iter().any(|badge| badge == "Watched"))
 }
 
-/// The owner's live rows: E1/E2 imported from Stremio as completion only
-/// (no clock, no date), E3 part-way through, E4 finished by normal playback.
 fn seed_owner_rows(app: &App) {
     let db = app.db.lock().unwrap();
     for number in [1, 2] {

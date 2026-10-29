@@ -24,8 +24,6 @@ pub(crate) fn snapshot(
         &lease.principal,
         queue["items"].as_array().cloned().unwrap_or_default(),
     )?;
-    // Each entry with the time that orders it: its latest activity, or the
-    // release that made its series new (see `releases`).
     let mut entries = Vec::new();
     for item in items {
         let Some(rendered) = super::super::history::record(&item) else {
@@ -75,9 +73,6 @@ pub(crate) fn snapshot(
             }
             _ => None,
         };
-        // A removed title stays removed, through replays too, until an episode
-        // is released after its removal; it then returns at that release (and
-        // the next Home load un-hides it, see `releases::schedule`).
         if let Some(hidden) = hidden_at {
             match found
                 .as_ref()
@@ -87,9 +82,6 @@ pub(crate) fn snapshot(
                 None => continue,
             }
         } else if let Some(found) = &found {
-            // Only a release that came out after the finish is new: it earns the
-            // badge and the move up. A backlog episode the profile has not
-            // reached yet is up next at the finish's own place in the queue.
             if let Some(at) = found.new_release_at_millis {
                 order = order.max(at);
             }
@@ -100,9 +92,6 @@ pub(crate) fn snapshot(
             previous_identity = Some(record.identity.clone());
             status = ContinuationStatus::Next;
         } else if status == ContinuationStatus::Next {
-            // The stored document cannot project this prepared target; the card
-            // `continue/next` stored still names the episode it opened, so the
-            // entry keeps its caption (backend#63).
             if let Ok(prepared) =
                 serde_json::from_value::<Card>(item["engine_presentation"].clone())
             {
@@ -114,9 +103,6 @@ pub(crate) fn snapshot(
                 }
             }
         }
-        // An entry that is not up next still names the episode the viewer is
-        // waiting for, when the stored facts list one that is not out yet
-        // (backend#78).
         let next_episode = match (&record.parent_identity, &found) {
             (Some(series), None) if status != ContinuationStatus::Resume => {
                 super::releases::upcoming_db(&db, app, lease, profile, &series.id, &record, now)?
@@ -147,11 +133,6 @@ pub(crate) fn snapshot(
             },
         ));
     }
-    // Progress can hold several rows for one title+episode from one provider
-    // (different positions or source ids). Emit one card per provider's
-    // series+episode, and one per provider's movie, keeping the most recently
-    // updated record (and its order). Scoped-library entries merge below and
-    // stay separate by scope.
     let mut best: std::collections::HashMap<String, (u64, ContinuationEntry)> =
         std::collections::HashMap::new();
     for (order, entry) in std::mem::take(&mut entries) {
@@ -209,8 +190,7 @@ pub(crate) fn snapshot(
         .take(limit as usize)
         .map(|(_, entry)| entry)
         .collect::<Vec<_>>();
-    // Attribution reads the add-on store, which decrypts manifests through the
-    // vault and the database, so release the queue read first.
+    // Release the queue read first: attribution decrypts manifests through the vault and the database.
     drop(db);
     let serving = super::super::origins::Serving::read(app, lease, profile)?;
     {
@@ -230,10 +210,6 @@ pub(crate) fn snapshot(
         next_cursor,
     })
 }
-/// A row the Stremio import wrote carries no provider provenance, so the app
-/// had to load Details before it could start finding sources. Name the scope
-/// that serves the row, so the tap starts discovery at once (backend#72). A row
-/// nothing serves keeps its shape and the app falls back as before.
 fn attribute(
     db: &Connection,
     serving: &super::super::origins::Serving,
@@ -254,11 +230,6 @@ fn attribute(
     Ok(())
 }
 
-/// A series whose newest finished episode has no released next one (caught
-/// up, upcoming, or not resolved yet) keeps that episode on its card. Without
-/// a progress bar it would read as an episode still to watch, so it carries
-/// the Watched check. In-progress titles (a movie rewatch included) and the
-/// next episode to play never do; any other `Watched` (cached cards) goes.
 fn mark_finished(entry: &mut ContinuationEntry) {
     super::super::watched::strip(&mut entry.card);
     if !matches!(entry.status, ContinuationStatus::Resume | ContinuationStatus::Next)

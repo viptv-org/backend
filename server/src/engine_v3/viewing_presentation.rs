@@ -1,10 +1,6 @@
-//! Additive rendering facts for thin clients. Membership policy stays here;
-//! renderers never reconstruct canonical aliases or connector scope.
 use super::*;
 use viptv_engine::{library::LibraryMembershipSnapshot, presentation::Card};
 
-/// Ordered display facts shared by all remote renderers. Raw metadata remains
-/// intact for older consumers; no client needs to normalize chips or truncate genres.
 pub(crate) fn card_view(card: &Card, saved: bool, show_ratings: bool) -> Value {
     let mut metadata = vec![match card.identity.kind.as_str() {
         "movie" => "Movie".to_owned(),
@@ -215,8 +211,6 @@ mod tests {
     }
 }
 
-/// Server-advertised choices for preferences implemented by this server.
-/// Unknown preferences never turn into placeholder TV controls.
 pub(crate) fn preference_controls(value: &mut Value) {
     let choices = |items: Vec<(&str, Value)>| {
         items

@@ -1,4 +1,3 @@
-//! Host-authored transport context from the native SDK, never client hints.
 use serde_json::{json, Value};
 use viptv_engine::vsources_runtime::SdkStream;
 

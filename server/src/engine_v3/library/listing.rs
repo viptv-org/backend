@@ -37,7 +37,6 @@ pub(crate) async fn list(
         } else {
             (Availability::Available, None)
         };
-    // The old selector remains a request alias; all imported and saved titles share one collection.
     let legacy = page.source == "simkl";
     let unavailable = legacy && simkl_availability != Availability::Available;
     let sources = vec![LibrarySource {
@@ -51,7 +50,6 @@ pub(crate) async fn list(
     } else {
         None
     };
-    // A Stremio import's background fill is still writing cards: look again soon.
     let hydrating = super::hydration::running(&app, profile);
     let (mut known_genres, mut genre_total, mut genre_running) = (0, 0, false);
     if !unavailable && simkl_availability == Availability::Available {
@@ -144,9 +142,6 @@ pub(crate) async fn list(
             .map_err(|_| ApiError::from("Database unavailable"))?,
     )?;
     let mut value=serde_json::to_value(snapshot).map_err(|_|ApiError::from("Library unavailable"))?;
-    // Clear/reset previews consume the same defaults as an omitted query.
-    // Keep this projection tied to the shared query type rather than a client
-    // inventory of sort/filter defaults.
     value["default_query"] = serde_json::to_value(Page::default())
         .map_err(|_| ApiError::from("Library defaults unavailable"))?;
     let show_ratings = {

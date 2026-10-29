@@ -47,8 +47,6 @@ async fn private_xtream_server_egress_rejects_loopback_before_sending_credential
     let router = Router::new().fallback(move |method: axum::http::Method| {
         let count = count.clone();
         async move {
-            // Count backend egress only: the host probes every new loopback
-            // listener with a safe `HEAD /` (backend#48).
             if method != axum::http::Method::HEAD {
                 count.fetch_add(1, Ordering::SeqCst);
             }

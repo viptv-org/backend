@@ -1,4 +1,3 @@
-//! Route the selected browsing integration without mixing metadata providers.
 use super::*;
 
 pub(super) async fn discover(

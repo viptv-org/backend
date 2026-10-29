@@ -1,4 +1,3 @@
-//! Advertise scoped provider controls using the shared QueryControl shape.
 use super::*;
 use viptv_engine::{
     capabilities::{Availability, Capability},

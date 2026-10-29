@@ -253,8 +253,6 @@ async fn queue_visibility_rejects_unknown_and_restricted_identities_without_writ
 #[tokio::test]
 async fn continue_collapses_duplicate_episode_progress_to_the_most_recent() {
     let app = fixture();
-    // Two progress rows for the same series+episode (different positions and
-    // update times) must collapse to one card keeping the most recent record.
     for (position, updated) in [(30000, 100), (50000, 200)] {
         let (status, value) = request(
             &app,

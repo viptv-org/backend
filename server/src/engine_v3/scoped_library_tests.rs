@@ -286,7 +286,6 @@ async fn stale_install_selector_cannot_delete_legacy_or_reinstalled_private_reco
             .len(),
         1
     );
-    // A repeated exact delete has no fallback to the legacy row.
     call(&app, "DELETE", &removal(&a), Value::Null).await;
     assert_eq!(
         app.db
@@ -756,7 +755,6 @@ async fn canonical_unsave_removes_shared_backing_but_preserves_private_legacy_co
             .unwrap(),
         1
     );
-    // A new public-origin card can unsave an intrinsically shared legacy-only title.
     app.db.lock().unwrap().execute("INSERT INTO favorites(profile_id,id,type,name,context)VALUES(1,'tt456','movie','Canonical only','{}')",[]).unwrap();
     let public = detail(&app, 101, "tt456").await;
     call(&app, "DELETE", &removal(&public), Value::Null).await;

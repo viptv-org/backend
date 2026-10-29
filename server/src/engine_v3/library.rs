@@ -1,4 +1,3 @@
-//! Typed personal favorites over the existing profile-owned library rows.
 use super::*;
 use viptv_engine::presentation::Card;
 
@@ -17,9 +16,7 @@ pub(super) fn card(item: &Value) -> Option<Card> {
             c.identity.id == projected.identity.id && c.identity.kind == projected.identity.kind
         })
         .unwrap_or(projected);
-    // A historical context cannot confer the current connector incarnation.
     saved.metadata_origin = None;
-    // Legacy updates to these shared columns remain visible in typed reads.
     saved.title = item["name"].as_str().unwrap_or(&saved.title).to_owned();
     saved.poster = item["poster"].as_str().map(str::to_owned);
     saved.progress = None;
@@ -83,7 +80,6 @@ pub(crate) async fn save(
         card.progress = None;
         card.added_at_millis=None;
         if kids::restricted(&db, &app.identity())? {
-            // Restricted profiles persist only authoritative approved metadata.
             let item = json!({"type":card.identity.kind,"id":card.identity.id});
             let approved = kids::filter_items(&db, &app.identity(), vec![item])?;
             card = approved.first().and_then(|item| projection::card(item, "library")).ok_or_else(auth::forbidden)?;

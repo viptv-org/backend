@@ -21,29 +21,22 @@ async fn watched_titles_follow_existing_completion_and_caught_up_facts() {
     let app = fixture();
     let db = app.db.lock().unwrap();
     db.execute("INSERT INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Other','fixture-two',1)", []).unwrap();
-    // Movies: the History rule (95 %, explicit correction, imported completion).
     progress(&db, 1, "movie", "tt0000001", "tt0000001", 96.0, 100.0, 1, json!({}));
     progress(&db, 1, "movie", "tt0000002", "tt0000002", 50.0, 100.0, 2, json!({}));
     progress(&db, 1, "movie", "tt0000003", "tt0000003", 10.0, 100.0, 3, json!({"watched_override":true,"progress_corrected":true}));
     progress(&db, 1, "movie", "tt0000004", "tt0000004", 0.0, 0.0, 4, json!({"stremio_import_watched":true,"imdb_id":"tt0000004"}));
     progress(&db, 1, "movie", "tt0000005", "tt0000005", 99.0, 100.0, 5, json!({"watched_override":false,"progress_corrected":true}));
-    // Series: newest episode complete and nothing aired after it.
     progress(&db, 1, "series", "tt0000010:1:1", "tt0000010", 100.0, 100.0, 10, json!({}));
     progress(&db, 1, "series", "tt0000010:1:2", "tt0000010", 100.0, 100.0, 11, json!({}));
     verdict(&db, 1, "tt0000010", "tt0000010:1:2", "caught_up");
-    // Next episode announced but not aired: still caught up on aired episodes.
     progress(&db, 1, "series", "tt0000011:1:5", "tt0000011", 100.0, 100.0, 12, json!({}));
     verdict(&db, 1, "tt0000011", "tt0000011:1:5", "upcoming");
-    // A newly aired episode is waiting.
     progress(&db, 1, "series", "tt0000012:1:5", "tt0000012", 100.0, 100.0, 13, json!({}));
     verdict(&db, 1, "tt0000012", "tt0000012:1:5", "next");
-    // Completed episodes without a verdict prove nothing about the rest.
     progress(&db, 1, "series", "tt0000013:1:1", "tt0000013", 100.0, 100.0, 14, json!({"stremio_import_watched":true}));
-    // A rewatch in progress outranks an older caught-up verdict.
     progress(&db, 1, "series", "tt0000014:1:9", "tt0000014", 100.0, 100.0, 15, json!({}));
     verdict(&db, 1, "tt0000014", "tt0000014:1:9", "caught_up");
     progress(&db, 1, "series", "tt0000014:1:1", "tt0000014", 30.0, 100.0, 16, json!({}));
-    // Simkl's "completed" list counts unless an aired episode is unwatched.
     for (remote, local, unwatched) in [("simkl:tv:1", "tt0000020", false), ("simkl:tv:2", "tt0000021", true)] {
         let mut statistics = viptv_engine::library::LibraryStatistics::empty(card("series", local).identity);
         statistics.watched = true;
@@ -52,7 +45,6 @@ async fn watched_titles_follow_existing_completion_and_caught_up_facts() {
         db.execute("INSERT INTO simkl_import_entries VALUES(1,?1,'series',?2,'series','{}',?3,1)",
             params![remote, local, serde_json::to_string(&statistics).unwrap()]).unwrap();
     }
-    // Another profile's history never marks this profile's cards.
     progress(&db, 2, "movie", "tt0000030", "tt0000030", 100.0, 100.0, 20, json!({}));
 
     let watched = Watched::load(&db, 1).unwrap();
@@ -68,16 +60,13 @@ async fn watched_titles_follow_existing_completion_and_caught_up_facts() {
     }
     assert!(Watched::load(&db, 2).unwrap().contains(&card("movie", "tt0000030")));
 
-    // An add-on ID with an IMDb external ID matches through that public ID.
     let mut hinted = card("movie", "tmdb:42");
     hinted.identity.ids = serde_json::from_value(json!([{"namespace":"imdb","value":"tt0000004"}])).unwrap();
     assert!(watched.contains(&hinted));
-    // Episode cards are not title cards.
     let mut episode = card("series", "tt0000010:1:2");
     episode.identity.episode = serde_json::from_value(json!({"order":"aired","season":1,"episode":2})).unwrap();
     assert!(!watched.contains(&episode));
 
-    // The badge is recomputed: a stale one is removed, a duplicate is never added.
     let mut stale = card("movie", "tt0000002");
     stale.badges = vec!["4K".into(), "watched".into()];
     watched.mark(&mut stale);
@@ -113,7 +102,6 @@ async fn catalog_home_search_and_library_cards_carry_the_profile_watched_badge()
             params![format!("http://{address}/manifest.json"), manifest.to_string()]).unwrap();
         progress(&db, 1, "movie", "tt1000001", "tt1000001", 100.0, 100.0, 1, json!({}));
         progress(&db, 1, "movie", "tt1000002", "tt1000002", 40.0, 100.0, 2, json!({}));
-        // Finished before, now rewatching: watched, but in Continue Watching.
         progress(&db, 1, "movie", "tt1000004", "tt1000004", 40.0, 100.0, 3, json!({"stremio_import_watched":true}));
     }
     crate::test_support::encrypt_fixture_sources(&app);
@@ -147,7 +135,6 @@ async fn catalog_home_search_and_library_cards_carry_the_profile_watched_badge()
     assert_eq!(badges(cards, "tt1000001"), watched);
     assert!(badges(cards, "tt1000002").is_empty());
 
-    // A client-sent badge is not stored; My List computes its own.
     for id in ["tt1000001", "tt1000003"] {
         let mut saved = serde_json::to_value(card("movie", id)).unwrap();
         saved["badges"] = json!([BADGE]);
@@ -159,7 +146,6 @@ async fn catalog_home_search_and_library_cards_carry_the_profile_watched_badge()
     assert_eq!(badges(&library["cards"], "tt1000001"), watched);
     assert!(badges(&library["cards"], "tt1000003").is_empty());
 
-    // Unmarking removes the badge on the next read.
     let (status, body) = request(&app, "member-token-1", "PUT", "/api/profiles/1/progress/correct",
         json!({"id":"tt1000001","type":"movie","name":"Finished film","action":"unwatched"})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
