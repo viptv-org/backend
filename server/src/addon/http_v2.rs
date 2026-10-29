@@ -67,21 +67,36 @@ fn manifest(
         .map_err(|raw| crate::service_errors::provider(raw).unwrap_or("addon_protocol_invalid"));
     Ok((value, manifest))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Revision {
+    v: Option<String>,
+}
 pub(crate) async fn logo(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<i64>,
+    query: Result<Query<Revision>, QueryRejection>,
 ) -> Result<axum::response::Response, Error> {
     use axum::{http::header, response::IntoResponse};
     let vault = app.secret_vault.clone();
     let fixture = app.addons.fixture_transport();
     let cache = app.addons.logos.clone();
-    let (account, source) = account_api::shared(app, lease, move |db, account| {
+    let named = query
+        .map_err(|_| Error::Code("addon_logo_unavailable"))?
+        .0
+        .v
+        .filter(|v| !v.is_empty());
+    let (account, current) = account_api::shared(app, lease, move |db, account| {
         let (_, manifest) = manifest(db, vault.as_deref(), account, id)?;
-        Ok((account, manifest.ok().and_then(|m| super::logo::source(&m, fixture))))
+        let source = manifest.ok().and_then(|m| super::logo::source(&m, fixture));
+        Ok((account, source.map(|url| (super::logo::revision(id, &url), url))))
     })
     .await?;
-    let source = source.ok_or(Error::Code("addon_logo_unavailable"))?;
+    let (revision, source) = current.ok_or(Error::Code("addon_logo_unavailable"))?;
+    if named.is_some_and(|named| named != revision) {
+        return Err(Error::Code("addon_logo_unavailable"));
+    }
     let asset = cache
         .load(account, id, source, fixture)
         .await

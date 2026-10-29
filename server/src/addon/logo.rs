@@ -17,14 +17,13 @@ pub(crate) fn source(manifest: &Value, fixture: bool) -> Option<url::Url> {
     crate::source_http::validate(&url, fixture).ok()?;
     Some(url)
 }
-
-fn version(id: i64, url: &url::Url) -> String {
+pub(crate) fn revision(id: i64, url: &url::Url) -> String {
     let digest = Sha256::digest(format!("viptv-addon-logo\0{id}\0{url}").as_bytes());
     digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub(crate) fn path(id: i64, manifest: &Value, fixture: bool) -> Option<String> {
-    source(manifest, fixture).map(|url| format!("/api/addons/{id}/logo?v={}", version(id, &url)))
+    source(manifest, fixture).map(|url| format!("/api/addons/{id}/logo?v={}", revision(id, &url)))
 }
 
 #[derive(Clone)]
@@ -93,7 +92,7 @@ impl Cache {
         url: url::Url,
         fixture: bool,
     ) -> Option<Asset> {
-        let key = (account, id, version(id, &url));
+        let key = (account, id, revision(id, &url));
         if let Some(hit) = self.cached(&key) {
             return hit;
         }
