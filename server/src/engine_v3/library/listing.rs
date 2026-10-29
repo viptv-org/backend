@@ -172,4 +172,33 @@ mod tests {
         assert_eq!(filtered["default_query"],defaults["query"]);
         assert_eq!(defaults["default_query"],defaults["query"]);
     }
+
+    #[tokio::test]
+    async fn the_library_emits_the_durable_simkl_movie_key() {
+        let app=fixture();
+        {
+            let db=app.db.lock().unwrap();
+            let card=serde_json::json!({
+                "identity":{"id":"simkl:anime:250822","kind":"movie","ids":[]},
+                "provider_id":"simkl",
+                "title":"Spider-Man: Brand New Day",
+                "badges":[]
+            });
+            db.execute(
+                "INSERT INTO favorites(profile_id,id,type,name,poster,context,added_at_millis) VALUES(1,?1,'movie','Spider-Man: Brand New Day',NULL,?2,1)",
+                rusqlite::params![card["identity"]["id"].as_str().unwrap(),card.to_string()],
+            ).unwrap();
+            db.execute(
+                "INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at,context,title_id) VALUES(1,'simkl:movies:250822','movie','Spider-Man: Brand New Day',51.0,100.0,100,'{\"engine_provider_id\":\"library\"}','simkl:movies:250822')",
+                [],
+            ).unwrap();
+        }
+        let (status,library)=request(&app,"member-token-1","GET","/api/profiles/1/library",Value::Null).await;
+        assert_eq!(status,StatusCode::OK,"{library}");
+        let cards=library["cards"].as_array().unwrap();
+        assert_eq!(cards.len(),1,"{library}");
+        assert_eq!(cards[0]["identity"]["id"],"simkl:movie:250822");
+        assert_eq!(library["statistics"][0]["identity"]["id"],"simkl:movie:250822");
+        assert!(!library.to_string().contains("simkl:movies:"),"{library}");
+    }
 }

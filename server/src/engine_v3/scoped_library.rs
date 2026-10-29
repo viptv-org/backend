@@ -992,6 +992,20 @@ pub(crate) fn visibility_db(
         .map_err(|_| invalid())?;
     let mut saved = lookup::<PlaybackRecord>(db, profile, "playback", card)?;
     if saved.is_none() {
+        for alias in crate::simkl::key::aliases(&card.identity.kind, &card.identity.id) {
+            if alias == card.identity.id {
+                continue;
+            }
+            let mut legacy = card.clone();
+            legacy.identity.id = alias;
+            if let Some(found) = lookup::<PlaybackRecord>(db, profile, "playback", &legacy)? {
+                if saved.replace(found).is_some() {
+                    return Err(conflict());
+                }
+            }
+        }
+    }
+    if saved.is_none() {
         let mut q=db.prepare("SELECT selector,result FROM engine_scoped_next WHERE profile_id=?1 AND configuration=?2 AND updated_at_millis>=?3 ORDER BY updated_at_millis DESC LIMIT 201").map_err(db_error)?;
         for row in q
             .query_map(

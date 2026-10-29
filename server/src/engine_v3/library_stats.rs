@@ -61,14 +61,17 @@ pub(crate) fn entries(
     let mut progress=db.prepare("SELECT p.id,p.type,p.position,p.duration,p.updated_at,p.context,p.title_id,w.count FROM progress p LEFT JOIN engine_watch_counts w ON w.profile_id=p.profile_id AND w.type=p.type AND w.id=p.id WHERE p.profile_id=?1 AND p.type IN ('movie','series') LIMIT 50001").map_err(db_error)?;
     let history = progress
         .query_map([profile], |r| {
+            let kind = r.get::<_, String>(1)?;
+            let id = r.get::<_, String>(0)?;
+            let parent = r.get::<_, Option<String>>(6)?;
             Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
+                crate::simkl::key::media(&kind, &id).into_owned(),
+                kind,
                 r.get::<_, f64>(2)?,
                 r.get::<_, f64>(3)?,
                 r.get::<_, u64>(4)?,
                 r.get::<_, String>(5)?,
-                r.get::<_, Option<String>>(6)?,
+                parent.map(|parent| crate::simkl::key::media("series", &parent).into_owned()),
                 r.get::<_, Option<u64>>(7)?,
             ))
         })
@@ -82,6 +85,7 @@ pub(crate) fn entries(
         .into_iter()
         .map(|mut card| {
             crate::simkl::imports::enrich(&db, profile, &mut card)?;
+            crate::simkl::key::card(&mut card);
             let mut statistics = LibraryStatistics::empty(card.identity.clone());
             let matched = history
                 .iter()
@@ -153,8 +157,14 @@ pub(crate) fn entries(
             Ok(Entry { card, statistics })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
-    for (key, mut entry) in super::scoped_library::entries_db(&db, app, profile)? {
+    for (mut key, mut entry) in super::scoped_library::entries_db(&db, app, profile)? {
         let observed = entry.statistics.clone();
+        let before = entry.card.identity.id.clone();
+        crate::simkl::key::card(&mut entry.card);
+        crate::simkl::key::identity(&mut entry.statistics.identity);
+        if entry.card.identity.id != before {
+            key = super::scoped_library::raw_key(&entry.card)?;
+        }
         if let Some(old) = entries
             .iter()
             .find(|old| super::scoped_library::raw_key(&old.card).is_ok_and(|old| old == key))

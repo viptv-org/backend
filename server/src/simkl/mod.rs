@@ -23,6 +23,7 @@ pub(crate) use continuation::{episodes as continuation_document, identifies as c
 pub(crate) use parent::{metadata as parent_metadata, search as parent_search};
 mod artwork;
 pub(crate) use artwork::enrich as enrich_artwork;
+pub(crate) mod key;
 pub(crate) use discovery::{home_cards, page};
 pub(crate) use metadata::home_metadata;
 pub(crate) mod imports;

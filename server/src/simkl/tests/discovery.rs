@@ -84,6 +84,16 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
         1,
         "warm discovery reuses public metadata"
     );
+    let (status, legacy) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/meta/movie/simkl:movies:10",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert_eq!(legacy["item"]["identity"]["id"], "simkl:movie:10");
     let (_, config) = request(
         &app,
         "member-token-1",

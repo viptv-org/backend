@@ -32,7 +32,7 @@ pub fn release_group(filename: &str) -> Option<String> {
 
 pub fn title_id(item: &Value) -> String {
     let id = item["id"].as_str().unwrap_or("");
-    if item["type"] == "series" {
+    let title = if item["type"] == "series" {
         item["series_id"]
             .as_str()
             .filter(|s| !s.is_empty())
@@ -40,7 +40,8 @@ pub fn title_id(item: &Value) -> String {
             .to_owned()
     } else {
         id.to_owned()
-    }
+    };
+    crate::simkl::key::media(item["type"].as_str().unwrap_or(""), &title).into_owned()
 }
 pub fn init(db: &Connection) -> rusqlite::Result<()> {
     let exists = db
@@ -88,11 +89,22 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
 
 /// Hide a queue title now. Re-hiding a title a release brought back restarts its clock.
 pub(crate) fn hide(db: &Connection, profile: i64, kind: &str, title: &str) -> rusqlite::Result<()> {
+    let title = crate::simkl::key::media(kind, title);
     db.execute(
         "INSERT OR IGNORE INTO queue_hidden(profile_id,type,title_id) VALUES(?1,?2,?3)",
-        params![profile, kind, title],
+        params![profile, kind, title.as_ref()],
     )?;
-    db.execute("INSERT INTO queue_hidden_times(profile_id,type,title_id,hidden_at) VALUES(?1,?2,?3,?4) ON CONFLICT(profile_id,type,title_id) DO UPDATE SET hidden_at=excluded.hidden_at",params![profile,kind,title,util::now()])?;
+    db.execute("INSERT INTO queue_hidden_times(profile_id,type,title_id,hidden_at) VALUES(?1,?2,?3,?4) ON CONFLICT(profile_id,type,title_id) DO UPDATE SET hidden_at=excluded.hidden_at",params![profile,kind,title.as_ref(),util::now()])?;
+    Ok(())
+}
+
+pub(crate) fn show(db: &Connection, profile: i64, kind: &str, title: &str) -> rusqlite::Result<()> {
+    for title in crate::simkl::key::aliases(kind, title) {
+        db.execute(
+            "DELETE FROM queue_hidden WHERE profile_id=?1 AND type=?2 AND title_id=?3",
+            params![profile, kind, title],
+        )?;
+    }
     Ok(())
 }
 
@@ -482,10 +494,7 @@ pub async fn visibility(
         if hidden {
             hide(&db, profile, kind, &title_id(&item)).map(|_| 0)
         } else {
-            db.execute(
-                "DELETE FROM queue_hidden WHERE profile_id=?1 AND type=?2 AND title_id=?3",
-                params![profile, kind, title_id(&item)],
-            )
+            show(&db, profile, kind, &title_id(&item)).map(|_| 0)
         }
         .map_err(db_error)?;
         Ok(axum::Json(json!({"ok":true})))
