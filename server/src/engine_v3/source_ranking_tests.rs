@@ -115,6 +115,6 @@ async fn the_quality_filter_hides_rows_without_changing_group_membership() {
     assert_eq!(status,StatusCode::OK,"{body}");
     assert_eq!(body["streams"].as_array().unwrap().len(),1);
     assert_eq!(body["streams"][0]["id"],ids[1]);
-    assert_eq!(body["best_match_ids"],json!([ids[0].clone()]));
+    assert_eq!(body["best_match_ids"],json!([ids[0].clone(),ids[1].clone()]));
     assert_eq!(body["best_match_id"],ids[0]);
 }
