@@ -2505,7 +2505,9 @@ async fn parent_title_search_uses_server_ids_and_requires_parent_authority() {
         .0,
         StatusCode::BAD_REQUEST
     );
-    request(
+    // The setup arms the authority the last call must observe: a refused setup
+    // would otherwise report a missing `parent_required` (#73).
+    let (status, pin) = request(
         &a,
         "parent-token",
         "PUT",
@@ -2513,7 +2515,8 @@ async fn parent_title_search_uses_server_ids_and_requires_parent_authority() {
         json!({"pin":"7248"}),
     )
     .await;
-    request(
+    assert_eq!(status, StatusCode::OK, "set parent PIN: {pin}");
+    let (status, kids) = request(
         &a,
         "parent-token",
         "PUT",
@@ -2521,6 +2524,7 @@ async fn parent_title_search_uses_server_ids_and_requires_parent_authority() {
         json!({"enabled":true,"max_age":7}),
     )
     .await;
+    assert_eq!(status, StatusCode::OK, "enable kids profile: {kids}");
     assert_eq!(
         request(
             &a,
