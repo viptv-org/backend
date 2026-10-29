@@ -12,12 +12,27 @@ pub enum ContinuationStatus {
     Upcoming,
     Unavailable,
 }
+/// The episode a caught-up entry is waiting for, before anyone can play it:
+/// the coordinates clients name and, when the metadata gave one, its release
+/// date. A viewer that finished the newest released episode sees what is next
+/// and when, instead of only the episode it just finished.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Facet)]
+pub struct NextEpisode {
+    pub identity: MediaIdentity,
+    pub released_at_millis: Option<u64>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct ContinuationEntry {
     pub card: Card,
     pub record: crate::playback::PlaybackRecord,
     pub status: ContinuationStatus,
     pub previous_identity: Option<MediaIdentity>,
+    /// The next episode when the metadata lists one that is not out yet (see
+    /// [`upcoming_episode`]); absent when the show is over, when the next one
+    /// is already released (it is `card` then, status `Next`) and from payloads
+    /// written before the field existed.
+    #[serde(default)]
+    pub next_episode: Option<NextEpisode>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct ContinuationPage {
@@ -166,6 +181,29 @@ pub fn next_episode(
     card.progress = None;
     card.added_at_millis = None;
     result(ContinuationStatus::Next, Some(card))
+}
+
+/// The episode a caught-up entry is waiting for: the first episode after
+/// `current` in its own order and season family when it is not released yet,
+/// with the date the metadata gave it if any. `None` when the metadata lists no
+/// later episode (the show is over) or the next one is already out (that one is
+/// the entry's `card`, not a date to announce). The verdict is [`next_episode`]'s
+/// own `Upcoming`, so the coordinates are as strictly verified as the up-next
+/// card's: ambiguous metadata announces nothing.
+pub fn upcoming_episode(
+    current: &MediaIdentity,
+    episodes: &[EpisodeAvailability],
+    now: u64,
+) -> Option<NextEpisode> {
+    if next_episode(current, episodes, now).status != ContinuationStatus::Upcoming {
+        return None;
+    }
+    let (_, later) = sequence(current, episodes).ok()?;
+    let (_, _, next) = *later.first()?;
+    Some(NextEpisode {
+        identity: next.card.identity.clone(),
+        released_at_millis: next.released_at_millis,
+    })
 }
 
 /// Episodes that aired after the profile last finished an episode of a series.
