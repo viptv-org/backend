@@ -339,13 +339,15 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
         .route("/terms", get(terms_page));
     if let Some(path) = tv_dashboard {
         let root_index = path.join("index.html");
+        let web: Router = Router::new()
+            .fallback_service(
+                tower_http::services::ServeDir::new(&path)
+                    .fallback(tower_http::services::ServeFile::new(path.join("index.html"))),
+            )
+            .layer(middleware::from_fn(web_asset_cache));
         r = r
             .route("/", get(move || dashboard_entry(root_index.clone())))
-            .fallback_service(
-                tower_http::services::ServeDir::new(&path).fallback(
-                    tower_http::services::ServeFile::new(path.join("index.html")),
-                ),
-            );
+            .fallback_service(web);
     } else {
         r = r.route(
             "/",
@@ -423,5 +425,25 @@ mod tv_web_mount_tests {
             let bytes=axum::body::to_bytes(response.into_body(),1024).await.unwrap();assert_eq!(&bytes[..],expected.as_bytes(),"{path}");
         }
         let response=app.oneshot(axum::http::Request::builder().uri("/api/health").body(axum::body::Body::empty()).unwrap()).await.unwrap();assert_eq!(response.status(),StatusCode::OK);
+    }
+    #[tokio::test]
+    async fn tv_mount_revalidates_shell_files_and_immutably_caches_hashed_assets() {
+        let web=tempfile::tempdir().unwrap();
+        for name in ["index.html","composeApp.js","composeApp.js.map","819d242a46ca39e513ca.wasm","819d242a46ca39e513c.js"] {
+            std::fs::write(web.path().join(name),name).unwrap();
+        }
+        let app=router_with_viewers(crate::auth_integration_tests::fixture(),Some(web.path().into()));
+        for (path,cache) in [
+            ("/","no-store"),
+            ("/composeApp.js","no-cache"),
+            ("/composeApp.js.map","no-cache"),
+            ("/device","no-cache"),
+            ("/819d242a46ca39e513c.js","no-cache"),
+            ("/819d242a46ca39e513ca.wasm","public, max-age=31536000, immutable"),
+        ] {
+            let response=app.clone().oneshot(axum::http::Request::builder().uri(path).body(axum::body::Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(response.status(),StatusCode::OK,"{path}");
+            assert_eq!(response.headers()[header::CACHE_CONTROL],cache,"{path}");
+        }
     }
 }
