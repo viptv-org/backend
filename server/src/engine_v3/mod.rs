@@ -15,6 +15,10 @@ pub(crate) mod search;
 pub(crate) mod source_integrations;
 pub(crate) use controls::get as discovery_controls;
 pub(crate) mod configuration;
+#[allow(dead_code)]
+pub(crate) mod anime_show;
+#[cfg(test)]
+mod anime_show_tests;
 pub(crate) mod continuation;
 pub(crate) mod history;
 mod home;

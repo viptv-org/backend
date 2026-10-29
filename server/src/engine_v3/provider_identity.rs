@@ -4,7 +4,7 @@ use viptv_engine::identity::{ExternalId, MediaIdentity};
 const FIELDS: [(&str, &[&str]); 7] = [
     ("imdb", &["imdb_id", "imdbId", "imdbID", "_imdbId"]),
     ("tmdb", &["tmdb_id", "tmdbId", "moviedb_id", "_tmdbId"]),
-    ("tvdb", &["tvdb_id", "tvdbId", "_tvdbId"]),
+    ("tvdb", &["tvdb_id", "tvdbId", "_tvdbId", "tvdb"]),
     ("mal", &["mal_id", "malId", "_malId"]),
     ("kitsu", &["kitsu_id", "kitsuId", "_kitsuId"]),
     ("anilist", &["anilist_id", "anilistId", "_anilistId"]),
