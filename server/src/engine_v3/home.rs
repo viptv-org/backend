@@ -119,33 +119,47 @@ pub(super) async fn load(
         .as_array()
         .into_iter()
         .flatten()
+        .filter_map(|c| {
+            Some((
+                c,
+                c["id"].as_str()?,
+                c["type"].as_str()?,
+                c["addon_id"].as_i64()?,
+                super::home_catalogs::row_selections(&c["extra"])?,
+            ))
+        })
         .take(10)
-        .filter_map(|c| Some((c, c["id"].as_str()?, c["type"].as_str()?, c["addon_id"].as_i64()?)))
         .collect::<Vec<_>>();
     // Titles are decided before any row loads (see `catalog_row_titles`).
     let titles = super::home_titles::catalog_row_titles(
         &catalogs
             .iter()
-            .map(|(c, catalog, kind, _)| super::home_titles::CatalogRow {
+            .map(|(c, catalog, kind, _, _)| super::home_titles::CatalogRow {
                 name: c["name"].as_str().unwrap_or(catalog),
                 kind,
                 addon: c["addon_name"].as_str().unwrap_or_default(),
             })
             .collect::<Vec<_>>(),
     );
-    for ((_, catalog, kind, addon), title) in catalogs.into_iter().zip(titles) {
+    for ((_, catalog, kind, addon, selections), title) in catalogs.into_iter().zip(titles) {
         let (catalog, kind) = (catalog.to_owned(), kind.to_owned());
         let provider = format!("addon:{addon}");
         let task_app = app.clone();
         let row_id = format!("{provider}:{kind}:{catalog}");
-        browse_actions.insert(
-            row_id.clone(),
-            viptv_engine::home_browse::HomeBrowseAction::discover(
-                &kind,
-                &catalog,
-                Some(("addon_id", addon.to_string())),
-            ),
+        let mut browse = viptv_engine::home_browse::HomeBrowseAction::discover(
+            &kind,
+            &catalog,
+            Some(("addon_id", addon.to_string())),
         );
+        for selection in &selections {
+            browse
+                .query
+                .push(viptv_engine::query::QueryValue {
+                    id: selection.id.clone(),
+                    values: selection.values.clone(),
+                });
+        }
+        browse_actions.insert(row_id.clone(), browse);
         requests.push(RowRequest {
             id: row_id,
             title,
@@ -153,7 +167,16 @@ pub(super) async fn load(
             load: Box::pin(async move {
                 let result = task_app
                     .addons
-                    .discover(kind, Some(catalog), Some(addon), 0, None, None)
+                    .discover_with_options(crate::addon::DiscoverOptions {
+                        kind,
+                        catalog: Some(catalog),
+                        addon: Some(addon),
+                        skip: 0,
+                        search: None,
+                        genre: None,
+                        extras: HashMap::new(),
+                        values: selections,
+                    })
                     .await?;
                 projection::cards(
                     &task_app,

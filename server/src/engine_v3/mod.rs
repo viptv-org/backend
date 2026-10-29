@@ -18,6 +18,7 @@ pub(crate) mod configuration;
 pub(crate) mod continuation;
 pub(crate) mod history;
 mod home;
+mod home_catalogs;
 mod home_titles;
 pub(crate) mod library;
 pub(crate) mod library_stats;

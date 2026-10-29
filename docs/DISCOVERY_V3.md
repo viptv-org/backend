@@ -16,6 +16,8 @@ Arrays require an explicit catalog and connection owner. Hosts reject duplicate 
 
 The shared planner emits one catalog request with repeated individually escaped keys, e.g. `genre=Action%20%26%20Adventure&genre=Drama%2C%20Crime`. Commas and ampersands inside values are preserved. There is no CSV joining or per-selection request fanout; combined-choice matching semantics belong to the addon. Aggregated text search remains its existing bounded contract.
 
+Home catalog rows submit the selections their catalog requires. A row for a catalog with a required extra carries that extra's advertised default, or else its first advertised option, in the row's browse action and in the row request itself, so the row and its retry issue the same satisfiable call. A catalog whose required extra is not selectable (`optionsLimit` 0), advertises no option, or requires a search term never becomes a row: no client can satisfy it, so no permanently failing row is published.
+
 Legacy type-only defaults remain: remote chooses the first satisfiable catalog; native can merge the first satisfiable catalog from each assigned connection. A single explicit catalog/owner gives consistent one-request pageable behavior on both hosts.
 
 Simkl currently advertises scalar genre/timeframe controls over its bounded public trending feeds. Nonempty array selections are rejected; no undocumented network, exclusion or advanced discovery parameters are sent. Its official V1 genre API documents single-value path segments and asks TV/console clients to await richer V2 results. Library/watchlist filters are a separate contract.
