@@ -121,7 +121,7 @@ pub(crate) async fn rank(
     }
     drop(grants);
     drop(db);
-    viptv_engine::preferences::rank_sources(
+    let ranking = viptv_engine::preferences::rank_sources(
         &mut candidates,
         &preferences.preferences,
         None,
@@ -147,13 +147,8 @@ pub(crate) async fn rank(
         }
     }
     let filters=heights.into_iter().rev().map(|(height,count)|json!({"height":height,"label":if height==2160{"4K".into()}else{format!("{height}p")},"count":count})).collect::<Vec<_>>();
-    let best_match_ids = ranked
-        .iter()
-        .filter(|card| !fails_hard_filter(*card))
-        .take(BEST_MATCHES_LIMIT)
-        .filter_map(|card| card["id"].as_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    let best_match_id = best_match_ids.first().cloned();
+    let best_match_ids = ranking.best_match_ids;
+    let best_match_id = ranking.best_match_id;
     let total = ranked.len();
     let selection_note = if preferences.preferences.source_selection
         == viptv_engine::preferences::SourceSelection::Best
@@ -173,15 +168,6 @@ pub(crate) async fn rank(
     Ok(axum::Json(
         json!({"streams":streams,"best_match_id":best_match_id,"best_match_ids":best_match_ids,"quality_filters":filters,"total":total,"selection_note":selection_note}),
     ))
-}
-
-const BEST_MATCHES_LIMIT: usize = 5;
-
-fn fails_hard_filter(card: &Value) -> bool {
-    card["release_type"].as_str() == Some("cam")
-        || card["three_d"].as_bool() == Some(true)
-        || (card["delivery"].as_str() == Some("torrent")
-            && card["seeders"].as_u64().is_some_and(|seeders| seeders < 5))
 }
 
 fn display(candidate: &SourceCandidate, addon: Option<&str>) -> Value {
