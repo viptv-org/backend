@@ -1,8 +1,10 @@
 use super::*;
+const RETRY: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 pub(super) struct Asset {
     pub bytes: Arc<[u8]>,
     pub content_type: &'static str,
+    pub etag: String,
 }
 #[derive(Default)]
 struct Cached {
@@ -17,16 +19,47 @@ struct Records {
 pub(crate) struct Service {
     records: tokio::sync::Mutex<Records>,
     limit: tokio::sync::Semaphore,
+    #[cfg(test)]
+    upstream: std::sync::Mutex<Option<url::Url>>,
 }
 impl Service {
     pub(crate) fn new() -> Self {
         Self {
             records: Default::default(),
             limit: tokio::sync::Semaphore::new(6),
+            #[cfg(test)]
+            upstream: Default::default(),
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn deliver_from(&self, base: url::Url) {
+        *self.upstream.lock().unwrap() = Some(base);
+    }
+    #[cfg(test)]
+    pub(super) async fn expire(&self) {
+        let entries = self
+            .records
+            .lock()
+            .await
+            .entries
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for entry in entries {
+            entry.lock().await.at = None;
         }
     }
     pub(super) async fn load(&self, image: descriptor::Image) -> Result<Asset, ApiError> {
-        self.fetch(image, None).await
+        #[cfg(test)]
+        let fixture = self
+            .upstream
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|base| base.join(&format!("{}/{}", image.folder, image.asset)).unwrap());
+        #[cfg(not(test))]
+        let fixture = None;
+        self.fetch(image, fixture).await
     }
     async fn fetch(
         &self,
@@ -63,7 +96,7 @@ impl Service {
         let mut cached = entry.lock().await;
         if let Some(value) = cached.value.as_ref().filter(|value| {
             cached.at.is_some_and(|at| {
-                at.elapsed() < Duration::from_secs(if value.is_ok() { 3600 } else { 10 })
+                at.elapsed() < if value.is_ok() { MAX_AGE } else { RETRY }
             })
         }) {
             return value
@@ -98,6 +131,7 @@ impl Service {
             Ok(Asset {
                 bytes: Arc::from(bytes.as_slice()),
                 content_type,
+                etag: format!("\"{:x}\"", Sha256::digest(&bytes)),
             })
         }
         .await;

@@ -3,23 +3,49 @@ use std::time::Instant;
 mod cache;
 mod descriptor;
 pub(crate) use cache::Service;
+const MAX_AGE: Duration = Duration::from_secs(300);
+fn cache_control() -> String {
+    format!("public, max-age={}", MAX_AGE.as_secs())
+}
 pub(crate) async fn get(
     State(app): State<App>,
     Path((folder, asset)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
     let image = descriptor::Image::parts(&folder, &asset)
         .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "Invalid image reference".into()))?;
     let asset = app.images.load(image).await?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, asset.content_type),
-            (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
-            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-        ],
-        axum::body::Bytes::copy_from_slice(&asset.bytes),
-    )
-        .into_response())
+    let mut response = if matches_etag(&headers, &asset.etag) {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        (
+            [
+                (header::CONTENT_TYPE, asset.content_type),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            axum::body::Bytes::copy_from_slice(&asset.bytes),
+        )
+            .into_response()
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::ETAG, asset.etag.parse().unwrap());
+    headers.insert(header::CACHE_CONTROL, cache_control().parse().unwrap());
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        axum::http::HeaderValue::from_static("*"),
+    );
+    Ok(response)
+}
+fn matches_etag(headers: &axum::http::HeaderMap, etag: &str) -> bool {
+    headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .any(|candidate| candidate == "*" || candidate.trim_start_matches("W/") == etag)
+        })
 }
 pub(crate) async fn options() -> Response {
     (
