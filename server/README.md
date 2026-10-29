@@ -20,6 +20,12 @@ See ../tests/README.md for disposable network-none gateway acceptance.
 | VIPTV_TV_DIST | The KMP viewing app dist (owns / and every UI route, including /device) |
 | VIPTV_SECRETS_KEYRING | Operator-managed encrypted source/gateway storage; no insecure default |
 
+The server refuses to start when `VIPTV_TV_DIST` is set but its `index.html` or
+one of the local assets referenced by it is missing or empty. A request for a
+missing path that looks like an asset (a file extension, a content-hashed name,
+or a path under an asset directory) returns `404`; extension-less paths keep the
+single-page fallback.
+
 The viewing mount sends `Cache-Control: no-cache` for unhashed files and
 `public, max-age=31536000, immutable` for content-hashed names.
 
