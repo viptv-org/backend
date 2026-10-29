@@ -63,6 +63,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tv_dashboard = std::env::var_os("VIPTV_TV_DIST")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
+    if let Some(path) = &tv_dashboard {
+        if let Err(problem) = viptv_server::validate_tv_dist(path) {
+            return Err(
+                format!("VIPTV_TV_DIST is not a complete viewing bundle: {problem}").into(),
+            );
+        }
+    }
     let bind = std::env::var("VIPTV_BIND").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let budget_path = std::path::Path::new(&database)
