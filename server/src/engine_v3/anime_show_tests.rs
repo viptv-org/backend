@@ -93,6 +93,8 @@ fn meta_of(addon: i64, id: &str) -> Value {
             "videos":tvdb_videos("tt2560140", &ATTACK_ON_TITAN_SEASONS)}}),
         (15, "mal:20") => json!({"meta":{"id":"mal:20","type":"series","name":"Naruto","imdb_id":"tt0409591","_tmdbId":"46260","_tvdbId":"78857","_malId":"20","_kitsuId":"11",
             "videos":videos("kitsu:11", &[1,2,3])}}),
+        (15, "mal:16498") => json!({"meta":{"id":"mal:16498","type":"series","name":"Attack on Titan","imdb_id":"tt2560140","_tvdbId":"267440","_tmdbId":"1429","_malId":"16498",
+            "videos":videos("kitsu:16498", &[1,2,3])}}),
         (15, "mal:38524") => json!({"meta":{"id":"mal:38524","type":"series","name":"Attack on Titan Season 3 Part 2","imdb_id":"tt2560140","_tvdbId":"267440","_malId":"38524",
             "videos":videos("kitsu:38524", &[1,2,3,4,5,6,7,8,9,10])}}),
         (15, "mal:21") => json!({"meta":{"id":"mal:21","type":"series","name":"One Piece","imdb_id":"tt0388629","_tvdbId":"81797","_malId":"21",
@@ -116,6 +118,7 @@ async fn simkl_search(Query(query): Query<HashMap<String, String>>) -> axum::Jso
         query.get("kitsu").map(String::as_str),
     ) {
         (Some("38524"), _) => Some(5000),
+        (Some("16498"), _) => Some(5001),
         (Some("21"), _) => Some(402),
         (Some("31"), _) => Some(403),
         (Some("20"), _) | (_, Some("11")) => Some(401),
@@ -133,6 +136,7 @@ async fn simkl_title(Path(id): Path<String>) -> axum::Json<Value> {
         "402" => json!({"title":"One Piece","ids":{"simkl":402,"mal":21,"imdb":"tt0388629","tvdb":81797}}),
         "403" => json!({"title":"Coordinates missing","ids":{"simkl":403,"mal":31,"tvdb":999}}),
         "5000" => json!({"title":"Attack on Titan Season 3 Part 2","type":"anime","anime_type":"tv","ids":{"simkl":5000,"mal":38524,"imdb":"tt2560140","tmdb":1429,"tvdb":267440}}),
+        "5001" => json!({"title":"Attack on Titan","type":"anime","anime_type":"tv","ids":{"simkl":5001,"mal":16498,"imdb":"tt2560140","tmdb":1429,"tvdb":267440}}),
         _ => Value::Null,
     })
 }
@@ -154,12 +158,15 @@ async fn simkl_episodes(Path(id): Path<String>) -> axum::Json<Value> {
         "5000" => (1..=10)
             .map(|n| json!({"type":"episode","episode":n,"aired":true,"tvdb":{"season":3,"episode":12+n},"ids":{"simkl_id":5000+n}}))
             .collect::<Vec<_>>(),
+        "5001" => (1..=3)
+            .map(|n| json!({"type":"episode","episode":n,"aired":true,"tvdb":{"season":1,"episode":n},"ids":{"simkl_id":5100+n}}))
+            .collect::<Vec<_>>(),
         _ => Vec::new(),
     };
     axum::Json(Value::Array(rows))
 }
 
-async fn stack() -> (App, tokio::task::JoinHandle<()>) {
+pub(super) async fn stack() -> (App, tokio::task::JoinHandle<()>) {
     let routes = Router::new()
         .route("/a/:addon/meta/:kind/:id", get(addons_meta))
         .route("/search/id", get(simkl_search))

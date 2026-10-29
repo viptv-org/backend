@@ -94,6 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Optional observability configured"
     );
     tracing::info!("VIPTV server listening");
+    viptv_server::start_anime_show_migration(app.clone());
     let router =
         router_with_viewers(app, tv_dashboard).layer(axum::middleware::from_fn_with_state(
             telemetry.clone(),
