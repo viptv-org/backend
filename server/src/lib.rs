@@ -67,7 +67,7 @@ pub(crate) use handlers_media::*;
 pub(crate) use handlers_profiles::*;
 pub(crate) use http_middleware::*;
 pub(crate) use matching_context::*;
-pub use routes::{router, router_with_viewers};
+pub use routes::{router, router_with_viewers, validate_tv_dist};
 
 #[cfg(test)]
 mod remote_qa_fixture;
