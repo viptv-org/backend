@@ -1,4 +1,3 @@
-//! Durable, account-owned background catalog work; old snapshots stay readable.
 use super::*;
 use crate::{
     account_api::{self, Error},
@@ -43,7 +42,6 @@ pub(super) fn enqueue(
     Ok(())
 }
 pub(crate) fn prepare(db: &Connection) -> Result<(), &'static str> {
-    // Newly migrated encrypted sources need their first refresh after restart.
     db.execute("INSERT OR IGNORE INTO provider_refresh_v2(provider_id,account_id,token,state,requested_at)
       SELECT p.id,o.account_id,'initial','queued',?1 FROM providers p JOIN provider_ownership o ON o.provider_id=p.id JOIN auth_accounts a ON a.id=o.account_id WHERE p.credentials_version=1 AND p.enabled=1 AND a.disabled=0 AND (p.enable_live=1 OR p.enable_movies=1 OR p.enable_series=1)",[crate::util::now()]).map_err(storage)?;
     Ok(())
@@ -87,8 +85,6 @@ impl Guard {
 fn claim(db: &Connection) -> Result<Option<Guard>, &'static str> {
     let tx = db.unchecked_transaction().map_err(storage)?;
     let now = crate::util::now();
-    // A crashed process cannot hold a catalog indefinitely. Expired jobs get a
-    // new token on claim, so a late old worker cannot publish into the new run.
     tx.execute("UPDATE provider_refresh_v2 SET state='queued',error_code='provider_refresh_interrupted' WHERE state='running' AND started_at<=?1-125",[now]).map_err(storage)?;
     tx.execute("UPDATE provider_refresh_v2 SET state='queued' WHERE state IN ('succeeded','failed') AND next_at IS NOT NULL AND next_at<=?1",[now]).map_err(storage)?;
     let active: i64 = tx
@@ -158,8 +154,6 @@ async fn run(service: ProviderService, guard: Guard) {
         Ok(())
     }).await;
 }
-/// The driver holds no strong application DB reference while idle. Work is
-/// bounded to two catalogs globally and four HTTP requests by the shared gate.
 pub(crate) fn start(service: &ProviderService) {
     if service.vault.is_none() {
         if let Ok(db) = service.db.lock() {

@@ -1,4 +1,3 @@
-//! Shared authorization boundary for account-owned settings, not viewing media.
 use crate::{
     app_state::{App, ResourceLease},
     auth, kids, ApiError,
@@ -91,8 +90,6 @@ async fn authorized<T: Send + 'static>(
     .map_err(|_| Error::Code("provider_storage_unavailable"))?
 }
 
-/// Account-shared viewing settings (addons) that paired devices with a selected
-/// profile may also change, as TV settings require. Parent restrictions apply.
 pub(crate) async fn shared<T: Send + 'static>(
     app: App,
     lease: ResourceLease,
@@ -101,10 +98,6 @@ pub(crate) async fn shared<T: Send + 'static>(
     authorized(app, lease, true, action).await
 }
 
-/// Profile-owned history imports (Stremio history and My List) that a paired
-/// device may run into its own selected profile. Only the import handlers use
-/// this. Adopting add-ons during an import is allowed exactly as `shared`
-/// allows add-on management. Parent restrictions apply.
 pub(crate) async fn profile_import<T: Send + 'static>(
     app: App,
     lease: ResourceLease,
@@ -113,13 +106,10 @@ pub(crate) async fn profile_import<T: Send + 'static>(
     authorized(app, lease, true, action).await
 }
 
-/// Whether the request was made by a paired device rather than an account session.
 fn device_session(lease: &ResourceLease) -> bool {
     matches!(&lease.principal, auth::Principal::Account { role, .. } if role == "device")
 }
 
-/// Read-only settings metadata for viewing devices with a selected profile.
-/// Other mutations must use work/run; parent restrictions still apply to this view.
 pub(crate) async fn view(
     app: App,
     lease: ResourceLease,

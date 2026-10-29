@@ -1,6 +1,5 @@
 use super::*;
 
-// Authenticated wrappers attach the validated request lease to handler state.
 pub(crate) async fn profiles_authenticated(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -61,8 +60,6 @@ pub(crate) async fn delete_profile_authenticated(
         Ok(())
     })
     .await?;
-    // Gateway leases independently revalidate deleted-profile authority and expire
-    // within their bounded sweeper interval. Cancel this profile's discovery data.
     let resources: Vec<String> = app
         .resource_owners
         .lock()

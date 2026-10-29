@@ -125,11 +125,6 @@ impl Service {
                 {
                     return Err("Invalid Simkl application configuration".into());
                 }
-                // In-process integration tests build the shared App without
-                // a pinned origin and inject `Service::fixture` where Simkl
-                // is under test; without an origin the service stays
-                // unconfigured in debug test builds. Release builds and
-                // standalone debug builds still require a pinned origin.
                 let Some(origin) = auth::canonical_origin()
                     .map_err(|_| "Invalid Simkl callback origin")?
                 else {

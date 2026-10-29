@@ -57,8 +57,6 @@ impl Image {
                 let target = url.query_pairs().find(|(k, _)| k == "url")?.1.into_owned();
                 url = Url::parse(&target).ok()?;
             }
-            // Saved cards may contain a resolved API alias. Only its public
-            // descriptor path is retained; its host can never become egress.
             if url.query().is_none()
                 && url.fragment().is_none()
                 && url.username().is_empty()

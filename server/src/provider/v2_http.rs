@@ -1,5 +1,3 @@
-//! Account settings and selected-profile viewing endpoints with separate guards.
-//! Unassigned legacy sources are never inferred to belong to the caller.
 use super::catalog_v2::{self, Filter, Kind};
 use super::v2;
 use crate::{
@@ -125,8 +123,6 @@ async fn catalog_page(
             .lock()
             .map_err(|_| Error::Code("provider_storage_unavailable"))?;
         app.require_media(&db)?;
-        // Raw provider categories are not evidence of child suitability. Keep
-        // existing restricted-profile protection until its v2 policy is migrated.
         crate::kids::require_parent(&db, &app.identity())?;
         let account = app
             .identity()

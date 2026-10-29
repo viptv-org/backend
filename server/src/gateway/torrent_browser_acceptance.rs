@@ -1,5 +1,3 @@
-//! Real product API fixture for the isolated gateway/browser torrent qualification.
-//! Generated media and ephemeral accounts only; never compiled into production.
 use serde_json::{json, Value};
 use std::time::Duration;
 

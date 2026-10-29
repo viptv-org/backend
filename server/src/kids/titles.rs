@@ -1,4 +1,3 @@
-//! Parent-only typed title selection. Opaque provider identities remain unsupported.
 use super::*;
 
 pub(crate) fn canonical(provider: &str, kind: &str, id: &str) -> bool {
@@ -187,7 +186,6 @@ pub(crate) async fn approve(
         None
     };
     parent_scope.recheck(&app)?;
-    // A provider result may never be reauthorized under a newer connector revision.
     if app.addons.revision()? != addon_revision {
         return Err(ApiError(
             StatusCode::CONFLICT,

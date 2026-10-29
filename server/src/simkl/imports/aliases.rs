@@ -1,5 +1,4 @@
 use super::*;
-/// Resolve only persisted provider-verified equivalence, never caller-supplied IDs or titles.
 pub(crate) fn remote(
     app: &App,
     profile: i64,

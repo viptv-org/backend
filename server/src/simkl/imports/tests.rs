@@ -325,7 +325,6 @@ async fn origin_bearing_simkl_save_and_unsave_keep_verified_import_alias_canonic
     );
     let (status, _) = request(&app, "member-token-1", "DELETE", &path, Value::Null).await;
     assert_eq!(status, StatusCode::OK);
-    // Public alias removal also works when only the verified canonical legacy backing exists.
     app.db.lock().unwrap().execute("INSERT INTO favorites(profile_id,id,type,name,context)VALUES(1,'tt1234567','movie','Local again','{}')",[]).unwrap();
     let (status, removed) = request(&app, "member-token-1", "DELETE", &path, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{removed}");

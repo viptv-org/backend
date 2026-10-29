@@ -236,7 +236,6 @@ async fn grant_recipient_pages_require_operator_and_own_registration() {
     }
     let mut other = registration();
     other["namespace"] = json!("other");
-    // Register directly because this fixture peer only validates fixture namespace.
     let other: registry::Registration = serde_json::from_value(other).unwrap();
     let other = registry::register(
         &app.db.lock().unwrap(),

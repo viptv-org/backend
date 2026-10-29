@@ -1,4 +1,3 @@
-//! Disposable real backend for the HTTPS media campaign. No playback mocks.
 use serde_json::{json, Value};
 
 #[tokio::test]
@@ -30,7 +29,6 @@ async fn media_lab_backend() {
     }
     app.addons.allow_test_loopback = true;
     app.gateway_client = super::client::Client::fixture(target);
-    // The eight-hour soak must exercise leases, not expire a one-hour fixture login.
     app.db
         .lock()
         .unwrap()
@@ -112,8 +110,6 @@ async fn media_lab_backend() {
                 &connection,
             )
             .unwrap();
-            // Only external catalog data is seeded. Source grants, account/profile
-            // checks, ranking, playback admission and lease handlers remain real.
             app.live_cache.lock().await.insert(
                 connection,
                 crate::engine_v3::live::Cache {

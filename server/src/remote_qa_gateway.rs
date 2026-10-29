@@ -1,4 +1,3 @@
-//! Test-only control peer with real FFmpeg output; not a production gateway implementation.
 use axum::{
     body::Body,
     extract::State,
@@ -71,7 +70,6 @@ async fn handle(State(peer): State<Peer>, request: axum::extract::Request) -> Re
             .await
             .unwrap();
         let body: Value = serde_json::from_slice(&bytes).unwrap();
-        // This peer accepts exactly the disposable clip, not arbitrary caller input.
         if body["namespace"] != "browser-qa"
             || body["input"]["url"] != peer.source
             || body["input"]["live"] != false

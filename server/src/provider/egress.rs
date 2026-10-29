@@ -1,5 +1,3 @@
-//! Read-only migration fence for archived routing. V2 never applies a legacy
-//! WARP/proxy policy or silently changes it before reviewed export.
 use super::*;
 pub(crate) fn table_exists(db: &Connection) -> Result<bool, String> {
     db.query_row(

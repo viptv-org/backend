@@ -1,5 +1,3 @@
-//! Explicit local qualification host. Real gateway control/media are unchanged;
-//! only the control DNS/TLS mapping is injected, and absent from production.
 use crate::*;
 
 #[tokio::test]
@@ -29,8 +27,6 @@ async fn real_provider_gateway_backend() {
         .unwrap();
     let mut app = App::new(Connection::open(path).unwrap(), client).unwrap();
     app.gateway_client = gateway::client::Client::fixture(target);
-    // An opt-in local add-on fixture supplies metadata/streams/captions only.
-    // Gateway upstream egress still uses its ordinary production policy.
     if std::env::var("VIPTV_QA_ALLOW_LOOPBACK_ADDONS").as_deref() == Ok("true") {
         app.addons.allow_test_loopback = true;
     }

@@ -1,4 +1,3 @@
-//! Authorization regression tests, entirely in process with synthetic credentials.
 use super::*;
 use axum::{
     body::{to_bytes, Body},
@@ -372,7 +371,6 @@ async fn favorites_and_progress_require_the_exact_selected_profile() {
             .unwrap();
     }
 
-    // Profile selection and profile CRUD remain account-wide.
     let (status, profiles) =
         request(&a, "member-token-1", "GET", "/api/profiles", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
@@ -609,7 +607,6 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
                 .await
                 .0,
             if method == "DELETE" {
-                // Bodyless release is idempotent and does not disclose another scope.
                 StatusCode::OK
             } else {
                 StatusCode::NOT_FOUND
@@ -824,7 +821,6 @@ async fn playback_ownership_cleanup_preserves_live_and_concurrently_created_sess
         .resource_lease("playback", "created-during-snapshot")
         .is_some());
     assert!(a.resource_lease("job", "unrelated-job").is_some());
-    // The next snapshot can remove a session which never became active.
     a.retain_playback_owners(&HashSet::from(["still-live".to_owned()]), Instant::now());
     assert!(a
         .resource_lease("playback", "created-during-snapshot")
@@ -851,7 +847,6 @@ async fn stale_authenticated_profile_handlers_recheck_grants_before_db_access() 
     let _ = save_progress(State(request.clone()), Path(1), axum::Json(item.clone()))
         .await
         .unwrap();
-    // Simulate revocation after authentication/middleware but before the worker acquires DB.
     a.db.lock()
         .unwrap()
         .execute("DELETE FROM profile_owners WHERE account_id=1", [])
@@ -934,7 +929,6 @@ async fn same_account_and_profile_other_session_cannot_reuse_owned_resources() {
                 .await
                 .0,
             if method == "DELETE" {
-                // Bodyless release is idempotent and does not disclose another scope.
                 StatusCode::OK
             } else {
                 StatusCode::NOT_FOUND
@@ -1291,19 +1285,16 @@ async fn playback_preferences_are_scoped_validated_and_share_autoplay_setting() 
     assert_eq!(saved["preferences"]["preferred_audio_language"], "ja");
     assert_eq!(saved["preferences"]["max_quality_height"], 720);
     assert_eq!(saved["revision"], 1);
-    // A stale revision is rejected with a conflict.
     assert_eq!(
         request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":0,"preferences":updated})).await.0,
         StatusCode::CONFLICT
     );
-    // Values that fail validation are rejected.
     let mut invalid = updated.clone();
     invalid["max_quality_height"] = json!(123);
     assert_eq!(
         request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":1,"preferences":invalid})).await.0,
         StatusCode::BAD_REQUEST
     );
-    // Unknown fields are rejected.
     assert_eq!(
         request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":1,"preferences":{"subtitles_enabled":true,"source_selection":"ask","autoplay":false}})).await.0,
         StatusCode::UNPROCESSABLE_ENTITY
@@ -1320,8 +1311,6 @@ async fn playback_preferences_are_scoped_validated_and_share_autoplay_setting() 
         .1,
         saved
     );
-    // Subtitle mode and HDR preference round-trip; a sent mode decides
-    // subtitles_enabled, and unknown values are rejected.
     assert_eq!(defaults["preferences"]["subtitle_mode"], "always");
     assert_eq!(defaults["preferences"]["hdr_preference"], "any");
     let mut modes = saved["preferences"].clone();
@@ -1335,7 +1324,6 @@ async fn playback_preferences_are_scoped_validated_and_share_autoplay_setting() 
     assert_eq!(foreign["preferences"]["hdr_preference"], "prefer");
     let (_, read_back) = request(&a,"member-token-1","GET","/api/profiles/1/preferences",Value::Null).await;
     assert_eq!(read_back, foreign);
-    // An on/off-only client keeps foreign while subtitles stay on.
     let mut legacy_client = foreign["preferences"].clone();
     legacy_client.as_object_mut().unwrap().remove("subtitle_mode");
     let (status, kept) = request(&a,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":2,"preferences":legacy_client})).await;
@@ -1350,7 +1338,6 @@ async fn playback_preferences_are_scoped_validated_and_share_autoplay_setting() 
             "{key}"
         );
     }
-    // Rows stored before subtitle_mode derive it from subtitles_enabled.
     for (enabled, mode) in [(true, "always"), (false, "never")] {
         a.db.lock().unwrap().execute(
             "UPDATE engine_profile_preferences SET value=?1 WHERE profile_id=1",
@@ -1901,7 +1888,6 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
         json!({"profile_id":id}),
     )
     .await;
-    // The parent's own browsing seeds the trust store with the catalog items.
     let (_, parent_discover) = request(
         &a,
         "parent-token",
@@ -1911,9 +1897,6 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
     )
     .await;
     assert_eq!(parent_discover["cards"].as_array().unwrap().len(), 3);
-    // Origin-scoped detail fetches seed the trust store for the child's
-    // restricted catalog lookups: each card carries the stamped origin and is
-    // replayed as the lookup expectation.
     for card in parent_discover["cards"].as_array().unwrap() {
         let id = card["identity"]["id"].as_str().unwrap();
         let mut query = url::form_urlencoded::Serializer::new(String::new());
@@ -2073,7 +2056,6 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
     )
     .await;
     assert_eq!(member_unknown["item"]["title"], "Trusted unknown");
-    // A known episode's client-supplied parent/label is replaced, not trusted.
     assert_eq!(request(&a,"member-token-1","PUT",&format!("/api/profiles/{id}/progress/correct"),json!({"id":"episode-one","type":"series","series_id":"adultseries","name":"Adult spoof","action":"watched"})).await.0,StatusCode::OK);
     let (_, history) = request(
         &a,
@@ -2113,7 +2095,6 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    // Same episode ID under a contradictory adult series is quarantined even if the old root was approved.
     assert_eq!(
         request(
             &a,
@@ -2343,8 +2324,6 @@ async fn kids_large_series_preserves_parent_response_and_exact_bounded_episode_m
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    // Detail episodes are served page-by-page; the full membership bound is
-    // enforced by the progress checks below.
     assert_eq!(original["episodes"].as_array().unwrap().len(), 24);
     assert_eq!(
         original["episodes"][23]["description"]
@@ -2353,7 +2332,6 @@ async fn kids_large_series_preserves_parent_response_and_exact_bounded_episode_m
             .len(),
         512
     );
-    // Replay the parent's card so the scoped trust store observes the series.
     let mut scoped_query = url::form_urlencoded::Serializer::new(String::new());
     scoped_query.append_pair("card", &original["item"].to_string());
     let (status, _) = request(
@@ -2402,8 +2380,6 @@ async fn kids_large_series_preserves_parent_response_and_exact_bounded_episode_m
         json!({"profile_id":id}),
     )
     .await;
-    // The parent's series browsing seeds the scoped trust store before
-    // restriction: each discovered card is replayed as a detail lookup.
     let (status, parent_series) = request(
         &a,
         "parent-token",
@@ -2456,11 +2432,7 @@ async fn kids_large_series_preserves_parent_response_and_exact_bounded_episode_m
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(meta["episodes"].as_array().unwrap().len(), 24);
-    // Restricted detail keeps the provider descriptions; per-episode safety
-    // is enforced by the scoped approval checks, not by content stripping.
     assert!(meta["episodes"][0]["description"].is_string());
-    // A missing episode no longer exists in any scoped catalog: the lookup
-    // ends in a metadata conflict instead of a kids rejection.
     for (episode, expected) in [
         ("large-1999", StatusCode::OK),
         ("large-2000", StatusCode::CONFLICT),
@@ -2490,9 +2462,7 @@ async fn parent_title_search_uses_server_ids_and_requires_parent_authority() {
     let items = addon_row["items"].as_array().unwrap();
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["card"]["identity"]["id"], "safe");
-    // Every row flags whether the result can be approved by the parent.
     assert!(items[0]["approval_supported"].is_boolean());
-    // An empty query is rejected.
     assert_eq!(
         request(
             &a,
@@ -2505,8 +2475,6 @@ async fn parent_title_search_uses_server_ids_and_requires_parent_authority() {
         .0,
         StatusCode::BAD_REQUEST
     );
-    // The setup arms the authority the last call must observe: a refused setup
-    // would otherwise report a missing `parent_required` (#73).
     let (status, pin) = request(
         &a,
         "parent-token",
@@ -2593,8 +2561,6 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "select child profile: {selected}");
-    // The parent's own scoped lookups seed the per-origin observations the
-    // restricted detail lookup requires.
     for title in ["series", "mixed"] {
         let card = parent_cards.get(title).unwrap();
         let mut query = url::form_urlencoded::Serializer::new(String::new());
@@ -2652,8 +2618,6 @@ async fn kids_mixed_series_details_omit_every_episode_disallowed_by_sources() {
             StatusCode::FORBIDDEN
         );
     }
-    // A conflicting provider certification is resolved to the content rating
-    // when the card is projected, so that episode is no longer withheld.
     assert_eq!(
         request(
             &a,
@@ -2730,16 +2694,12 @@ async fn parent_approval_cap_is_idempotent_and_legacy_overflow_remains_revocable
             "parent-token",
             "POST",
             "/api/profiles/1/approvals",
-            // Opaque provider titles now require a scoped selection, so the
-            // legacy cap overflow surfaces as an unscoped rejection.
             json!({"id":"new-title","type":"movie","approved":true})
         )
         .await
         .0,
         StatusCode::UNPROCESSABLE_ENTITY
     );
-    // Re-granting a legacy unscoped approval is no longer possible without a
-    // scoped title selection; only revocation stays available for old rows.
     assert_eq!(
         request(
             &a,
@@ -3024,7 +2984,6 @@ async fn device_profile_mutations_require_live_parent_grant_and_lease() {
         .0,
         StatusCode::OK
     );
-    // Capture a valid request before the PIN expires; the handler must recheck it.
     let mut scoped = a.clone();
     scoped.principal = Some(auth::Principal::Account {
         account_id: 1,
@@ -3158,22 +3117,16 @@ async fn device_token_poll_reports_denied_and_expired_codes_on_the_wire() {
     assert_eq!(body["error_code"], "expired_token");
 }
 
-/// The parent-PIN hashing budget belongs to one app instance. A saturated
-/// budget in one app must not answer 429 for another app in the same process
-/// (#68: parallel fixtures used to queue on one process-wide gate and start
-/// failing setup calls, which left kids policy disabled).
 #[tokio::test]
 async fn parent_pin_cpu_budget_is_scoped_to_each_app() {
     let busy = fixture();
     let other = fixture();
-    // Hold every permit of the first app's budget: its own PIN work now waits.
     let held = busy
         .pin_cpu_gate
         .clone()
         .acquire_many_owned(kids::PIN_CPU_PERMITS as u32)
         .await
         .expect("PIN budget permits");
-    // An exhausted budget refuses further PIN work instead of queueing it.
     let (status, body) = request(
         &busy,
         "member-token-1",
@@ -3187,8 +3140,6 @@ async fn parent_pin_cpu_budget_is_scoped_to_each_app() {
         StatusCode::TOO_MANY_REQUESTS,
         "exhausted PIN budget must refuse: {body}"
     );
-    // That budget is the first app's own: an app never refuses another app's
-    // PIN work, however busy its fixtures are (#68).
     let (status, body) = request(
         &other,
         "member-token-1",
@@ -3201,10 +3152,6 @@ async fn parent_pin_cpu_budget_is_scoped_to_each_app() {
     drop(held);
 }
 
-/// A profile row written outside these handlers (an import, older data or a
-/// direct edit) can hold a catalog position its world never had. Every read
-/// path then projects no choice, and a write that picks no avatar keeps
-/// working instead of rejecting the row forever (#45).
 #[tokio::test]
 async fn profile_rows_outside_the_world_size_project_no_choice() {
     let a = fixture();
@@ -3268,7 +3215,6 @@ async fn profile_rows_outside_the_world_size_project_no_choice() {
         "{configuration}"
     );
 
-    // A rename picks no avatar, so it must leave the row usable.
     let (status, renamed) = request(
         &a,
         "member-token-1",

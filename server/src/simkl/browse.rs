@@ -1,4 +1,3 @@
-//! Bounded public CDN browsing with provider-supplied genre choices.
 use super::*;
 use viptv_engine::{
     presentation::CatalogPage,
@@ -14,8 +13,6 @@ impl Service {
         if !path.starts_with('/') || path.starts_with("//") || path.contains("..") {
             return Err("Invalid Simkl document".into());
         }
-        // Only identical documents share a fetch gate. A cold calendar must not
-        // block an unrelated genre index (including already cached documents).
         let entry = {
             let mut documents = self.public_documents.lock().await;
             if !documents.contains_key(path) && documents.len() >= 64 {

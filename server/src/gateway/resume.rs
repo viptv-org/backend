@@ -1,4 +1,3 @@
-//! Resume uses the source grant's original canonical ID, never its mapped transport ID.
 use crate::{account_api::Error, Connection, OptionalExtension};
 
 pub(super) fn position(

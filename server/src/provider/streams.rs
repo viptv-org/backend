@@ -1,7 +1,6 @@
 use super::*;
 
 impl ProviderService {
-    /// Compatibility collector; production discovery publishes each bounded batch immediately.
     pub async fn streams(&self, request: Value) -> Result<Vec<Value>, String> {
         let mut streams = Vec::new();
         let mut error = None;
@@ -20,8 +19,6 @@ impl ProviderService {
         Ok(streams)
     }
 
-    /// At most 100 candidates, eight concurrent candidate lookups, four network requests.
-    /// Each timeout covers its own candidate including queued permits, never earlier results.
     pub async fn stream_batches(
         &self,
         request: Value,
@@ -69,7 +66,6 @@ impl ProviderService {
                     .into_iter()
                     .filter(|c| only_provider.is_none_or(|id| c.provider_id == id))
                     .collect();
-                // Round robin providers so duplicates from one cannot occupy every work slot.
                 let mut groups =
                     std::collections::BTreeMap::<i64, std::collections::VecDeque<Candidate>>::new();
                 for c in select_candidates(&candidates, &parsed) {

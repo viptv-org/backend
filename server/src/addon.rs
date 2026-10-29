@@ -56,8 +56,6 @@ impl Addons {
             let tx = db
                 .transaction()
                 .map_err(|_| "Database initialization failed")?;
-            // The table itself is the persistent initialization marker, including for
-            // legacy databases whose user deliberately removed every addon.
             let existed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='addons')", [], |r| r.get(0)).map_err(|_| "Database initialization failed")?;
             tx.execute_batch("CREATE TABLE IF NOT EXISTS addons(id INTEGER PRIMARY KEY,name TEXT NOT NULL,manifest_url TEXT UNIQUE NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,manifest TEXT NOT NULL,priority INTEGER NOT NULL DEFAULT 0);").map_err(|_| "Database initialization failed")?;
             let has_priority = {
@@ -83,7 +81,6 @@ impl Addons {
                 let manifest = json!({"id":"com.linvo.cinemeta","name":"Cinemeta","resources":["catalog","meta"],"types":["movie","series"],"catalogs":[{"type":"movie","id":"top","name":"Popular movies","extra":[{"name":"search"},{"name":"skip"}]},{"type":"series","id":"top","name":"Popular series","extra":[{"name":"search"},{"name":"skip"}]}]});
                 tx.execute("INSERT INTO addons(name,manifest_url,manifest) VALUES('Cinemeta','https://v3-cinemeta.strem.io/manifest.json',?1)", [manifest.to_string()]).map_err(|_| "Database initialization failed")?;
             }
-            // Preserve legacy IDs/configuration without inferring an owner.
             let scoped: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('addons') WHERE name='account_id')", [], |r| r.get(0)).map_err(|_| "Database initialization failed")?;
             if !scoped {
                 credentials_v2::scope_legacy(&tx)?;
@@ -129,7 +126,6 @@ impl Addons {
             false
         }
     }
-    /// Lets a test serve changed add-on documents without waiting out their TTL.
     #[cfg(test)]
     pub(crate) fn forget_responses(&self) {
         self.cache.lock().unwrap().clear();
@@ -180,7 +176,6 @@ impl Addons {
     }
     pub(crate) async fn prepare_manifest(&self, url: &str) -> Result<(String, Value), String> {
         let url = self.manifest_url(url)?;
-        // Management refresh must not share an older manifest flight/cache result.
         let _permit = self
             .manifest_gate
             .clone()
@@ -188,8 +183,6 @@ impl Addons {
             .map_err(|_| "addon_checks_busy")?;
         self.fetch_manifest(url).await
     }
-    /// Like `prepare_manifest`, but waits for a free manifest check until `deadline`
-    /// instead of failing at once, and bounds the fetch by the same deadline.
     pub(crate) async fn prepare_manifest_within(
         &self,
         url: &str,
@@ -350,9 +343,6 @@ impl Addons {
                 return Ok(v.clone());
             }
         }
-        // Share identical in-flight requests before taking an upstream slot.
-        // Weak entries disappear when all waiters cancel; OnceCell lets another
-        // waiter take over if the initializing request is cancelled.
         let flight = {
             let mut flights = self.flights.lock().unwrap();
             flights.retain(|_, flight| flight.strong_count() > 0);
@@ -372,8 +362,6 @@ impl Addons {
     }
     async fn fetch_uncached(&self, url: &str, ttl: i64, key: &str) -> Result<Value, String> {
         let _permit = self.gate.acquire().await.map_err(|_| "Service stopping")?;
-        // A previous flight may have populated the cache while this request
-        // waited for a slot (or between its initial lookup and flight creation).
         if let Some((expiry, value, _)) = self.cache.lock().unwrap().get(key) {
             if *expiry > now() {
                 return Ok(value.clone());

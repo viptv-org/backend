@@ -1,6 +1,5 @@
 use super::*;
 
-// Additive migration: existing progress rows and old clients remain valid.
 pub(crate) fn init_progress_context(db: &Connection) -> rusqlite::Result<()> {
     let mut query = db.prepare("PRAGMA table_info(progress)")?;
     let columns = query
@@ -145,7 +144,6 @@ pub(crate) fn enrich_matching(request: &mut Value, meta: &Value) {
             request["name"] = json!(name);
         }
     }
-    // Supplied context wins. Ignore malformed optional addon fields independently.
     if request["year"].is_null() {
         if let Some(year) = release_year(&request["releaseInfo"]) {
             request["year"] = year;
@@ -165,10 +163,7 @@ pub(crate) fn enrich_matching(request: &mut Value, meta: &Value) {
     }
 }
 
-// Summarize newest activity per title before filtering completion. An older
-// unfinished episode must not resurrect a show whose newest episode is finished.
 pub(crate) fn legacy_series_id(id: &str) -> &str {
-    // Only the documented IMDb episode shape is safe to infer. Addon IDs are opaque.
     let parts: Vec<_> = id.split(':').collect();
     if parts.len() == 3
         && parts[0]

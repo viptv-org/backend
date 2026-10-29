@@ -1,4 +1,3 @@
-//! Deliberately separate from server startup; production execution needs approval.
 use std::{io::Read, path::Path};
 use viptv_server::migration_v2;
 

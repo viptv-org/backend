@@ -24,8 +24,6 @@ impl ProviderService {
         Ok((self.provider_for_kind(provider_id, "live")?, stream))
     }
 
-    /// Admit a stored source using its trusted discovery kind, not caller-supplied media hints.
-    /// Rechecks current scopes even if the opaque source was registered before an admin update.
     pub async fn acquire_playback_for_kind(
         &self,
         id: i64,
@@ -44,13 +42,10 @@ impl ProviderService {
         kind: Option<String>,
     ) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
         self.blocking(move |s| {
-            // Check after the blocking-worker queue, under the same DB lock as admission.
-            // Shared lock order with update: DB then limiter. No stale-limit/scope race.
             let db = s.lock()?;
             let allowed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND enabled=1 AND (?2 IS NULL OR CASE ?2 WHEN 'live' THEN enable_live WHEN 'movie' THEN enable_movies WHEN 'series' THEN enable_series ELSE 0 END=1))",params![provider_id,kind],|r|r.get(0)).map_err(db_error)?;
             if !allowed {return Err("Provider not found or disabled".into());}
             s.require_owner(&db,provider_id)?;
-                // Each authorized connection has its own stable admission gate.
                 let limit:usize=db.query_row("SELECT max_connections FROM providers WHERE id=?1",[provider_id],|r|r.get(0)).map_err(db_error)?;
                 if limit>1_000_000 {return Err("Invalid provider connection limit".into());}
                 let mut gates=s.playback_gates.lock().map_err(|_|"Provider limiter unavailable")?;

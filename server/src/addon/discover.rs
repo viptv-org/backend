@@ -1,7 +1,5 @@
 use super::*;
 
-// Discovery negotiation and aggregation now live in the shared `viptv-provider`
-// crate; this module keeps the network fetch, cache, and episode-art merging.
 pub(super) use viptv_provider::discover::{enrich_episode_art, episode_art_url};
 
 fn needs_episode_art(meta: &Value) -> bool {
@@ -14,10 +12,6 @@ fn needs_episode_art(meta: &Value) -> bool {
 }
 
 impl Addons {
-    /// Browse the first applicable enabled catalog in installation order, or
-    /// aggregate a single bounded search across at most 32 matching catalogs.
-    /// Search never paginates. Browsing advances by the raw upstream page length,
-    /// not by the deduplicated/capped (200 item) response length.
     pub async fn discover(
         &self,
         kind: String,
@@ -76,11 +70,6 @@ impl Addons {
         viptv_provider::discover::aggregate_discovery(&results, &plan, request.skip)
             .map(|value| (value, owner))
     }
-    /// Grouped search retains successes and failures by endpoint until one
-    /// absolute deadline. Unlike legacy aggregation, a slow sibling catalog
-    /// cannot erase cards that already arrived from this add-on. `catalog`
-    /// restricts the search to a single catalog so each searchable catalog of
-    /// the add-on becomes its own result row.
     pub(crate) async fn search_results(
         &self,
         addon: i64,
@@ -169,8 +158,6 @@ impl Addons {
         Ok((items, failed))
     }
 
-    /// Drops this title's cached `meta` responses, so the next `meta` asks the
-    /// add-ons again (a known air date passed; the cache may predate it).
     pub(crate) async fn forget_meta(&self, kind: &str, id: &str) -> Result<(), String> {
         let entries = self.async_entries().await?;
         let mut cache = self.cache.lock().map_err(|_| "Add-on cache unavailable")?;
@@ -216,8 +203,6 @@ impl Addons {
                 if v["meta"].is_object() {
                     let mut primary = v;
                     if kind == "series" && primary["meta"]["videos"].is_array() {
-                        // Alternate addons may have working stills where the preferred
-                        // metadata uses broken generated URLs. Keep playback identities.
                         let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
                         while needs_episode_art(&primary["meta"]) {
                             let Ok(Some((_, next))) =

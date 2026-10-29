@@ -62,7 +62,6 @@ pub(super) async fn run(
         .as_array()
         .filter(|p| p.len() <= 10000)
         .ok_or_else(|| ApiError::from("Invalid paused playback"))?;
-    // Bound the active metadata work; unresolved entries remain explicit, never guessed.
     status.unresolved += playback.len().saturating_sub(100);
     let mut reads = futures::stream::iter(playback.iter().take(100).cloned().collect::<Vec<_>>())
         .map(|value| {
@@ -85,7 +84,6 @@ pub(super) async fn run(
         let mut statistics =
             viptv_engine::library::LibraryStatistics::empty(pause.library_card.identity.clone());
         statistics.last_watched_millis = Some(pause.updated);
-        // Already imported watchlist facts remain authoritative; a pause is not a new status/rating.
         let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM simkl_import_entries WHERE profile_id=?1 AND remote_kind=?2 AND remote_id=?3)",params![profile,pause.library_card.identity.kind,pause.library_card.identity.id],|r|r.get(0)).map_err(db_error)?;
         if !exists {
             status.added += membership::apply(

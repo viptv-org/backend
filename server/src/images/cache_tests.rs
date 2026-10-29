@@ -49,7 +49,6 @@ async fn fetches_are_bounded_coalesced_cached_and_never_forward_inbound_credenti
     assert_eq!(a.unwrap().content_type, "image/webp");
     assert_eq!(b.unwrap().bytes.len(), 16);
     assert_eq!(reads.load(Ordering::SeqCst), 1);
-    // An active saturated cache cannot exceed its strict byte budget.
     let full = Service::new();
     full.records.lock().await.bytes = 32 * 1024 * 1024;
     let bounded = full

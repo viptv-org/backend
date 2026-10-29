@@ -1,6 +1,3 @@
-//! Issuing a new pairing code invalidates the same device's earlier pending
-//! code (backend#42): the superseded code reads as expired on both approve and
-//! the token poll, while other devices' codes stay untouched.
 use super::*;
 
 fn new_code(db: &Connection) -> Value {
@@ -86,13 +83,10 @@ fn a_second_code_for_the_same_device_expires_the_first() {
     let first = new_code(&db);
     assert_pending(&db, &first);
     let second = new_code_for_device(&db, first["device_code"].as_str().unwrap());
-    // The superseded code is unusable: approve and the token poll both answer
-    // as expired, and lookup refuses it with the existing wording.
     assert_expired(&db, &first);
     assert_invalid_code(&db, &first, "/auth/device/approve");
     assert_invalid_code(&db, &first, "/auth/device/deny");
     assert_invalid_code(&db, &first, "/auth/device/lookup");
-    // The new code is still live and redeemable end to end.
     assert_pending(&db, &second);
     approve(&db, &second).unwrap();
     let grant = poll(&db, &second).unwrap();
@@ -106,7 +100,6 @@ fn issuing_a_code_for_one_device_leaves_another_devices_code_alone() {
     let other = new_code(&db);
     let first = new_code(&db);
     let _second = new_code_for_device(&db, first["device_code"].as_str().unwrap());
-    // The unrelated device's pending code is still pending and approvable.
     assert_pending(&db, &other);
     approve(&db, &other).unwrap();
     let grant = poll(&db, &other).unwrap();

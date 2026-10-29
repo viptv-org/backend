@@ -13,7 +13,6 @@ impl SyncGuard {
 }
 
 impl ProviderService {
-    /// Fetch everything before starting a transaction: failed syncs preserve the old index.
     #[cfg(test)]
     pub async fn sync(&self, id: i64) -> Result<Value, String> {
         self.sync_with_guard(id, None).await
@@ -83,7 +82,6 @@ impl ProviderService {
             }
         };
         let index = if automated {
-            // Bound simultaneous response buffers within each automated account.
             [
                 fetch(0).await?,
                 fetch(1).await?,
@@ -106,7 +104,6 @@ impl ProviderService {
         guard: Option<&SyncGuard>,
     ) -> Result<Value, String> {
         let [categories, live, movies, series] = index;
-        // Null means deliberately not fetched, not an empty index. Preserve that scope.
         let fetched = [!live.is_null(), !movies.is_null(), !series.is_null()];
         let empty = json!([]);
         let categories = array(if categories.is_null() {
@@ -129,7 +126,6 @@ impl ProviderService {
                 }
             }
         }
-        // An authenticated-looking error object or malformed rows must not erase good data.
         if candidates.len() != movies.len() + series.len()
             || live
                 .iter()
@@ -196,7 +192,6 @@ impl ProviderService {
             catalog_v2::replace_categories(&tx, id, categories).map_err(db_error)?;
             tx.execute("INSERT INTO provider_live_generations(provider_id,generation) VALUES(?1,1) ON CONFLICT(provider_id) DO UPDATE SET generation=generation+1", [id]).map_err(db_error)?;
         }
-        // UPSERT instead of REPLACE preserves manual overrides for stable candidate IDs.
         let mut current = HashSet::new();
         {
             let mut stmt = tx.prepare("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,imdb_id,tmdb_id,extension,poster)

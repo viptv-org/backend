@@ -1,4 +1,3 @@
-//! Prepare only a provider-declared next episode; never add fake zero-position history.
 use super::*;
 use viptv_engine::library::Entry;
 fn aired(value: &Value, next_air: Option<u64>) -> bool {
@@ -106,7 +105,6 @@ pub(super) async fn prepare(
     let db = app.db.lock().ok()?;
     schema::validate_db(&db, app, profile, access, lease).ok()?;
     kids::require_item(&db, &lease.principal, "series", item["id"].as_str()?).ok()?;
-    // A real local playback/correction after the read retires this prepared transition.
     let current:Option<String>=db.query_row("SELECT context FROM progress WHERE profile_id=?1 AND type='series' AND id=?2 AND id=(SELECT id FROM progress WHERE profile_id=?1 AND type='series' AND title_id=?3 ORDER BY updated_at DESC,rowid DESC LIMIT 1)",params![profile,from_id,local],|r|r.get(0)).optional().ok()?;
     if current
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())

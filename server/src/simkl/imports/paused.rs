@@ -24,7 +24,6 @@ pub(super) async fn pause(
         .filter(|p| p.is_finite() && *p > 0.0 && *p < 100.0)?;
     let updated =
         progress::millis(&value["paused_at"]).or_else(|| progress::millis(&value["watched_at"]))?;
-    // The payload's category is identity evidence; a numeric ID alone is not.
     let mut titles = [("movie", "movie"), ("show", "tv"), ("anime", "anime")]
         .into_iter()
         .filter_map(|(key, category)| value[key].is_object().then_some((&value[key], category)));

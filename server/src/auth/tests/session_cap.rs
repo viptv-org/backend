@@ -1,6 +1,3 @@
-//! The per-account session cap bounds stored grants without ever refusing a
-//! sign-in for the account itself (backend#34), and expired credentials never
-//! count toward it (app#97).
 use super::*;
 
 fn pair_device(db: &Connection, name: &str) -> Result<Value, ApiError> {
@@ -98,10 +95,7 @@ fn repeated_device_pairings_never_lock_the_account_out_of_sign_in() {
         "stored {} sessions",
         account_sessions(&db)
     );
-    // The newest grant is the surviving one; only the oldest went.
     assert!(exists(&db, last["session_id"].as_str().unwrap()));
-    // The account can still sign in on a browser, which is the only way to
-    // list and revoke the stored TVs once the TV itself is gone.
     let (_, cookies) = login(&db).unwrap();
     assert!(cookies.is_some());
     assert!(account_sessions(&db) <= MAX_SESSIONS_PER_ACCOUNT);
@@ -129,8 +123,6 @@ fn expired_sessions_never_count_against_the_account_cap() {
             now() - 1,
         );
     }
-    // Both kinds of sign-in are admitted: expired rows are not sessions any
-    // more, whichever kind left them behind.
     session(&db, 1, None, "device", "New TV").unwrap();
     session(&db, 1, None, "browser", "").unwrap();
     assert_eq!(account_sessions(&db), 2);
@@ -155,7 +147,6 @@ fn a_sign_in_at_the_cap_evicts_the_oldest_session_of_its_own_kind_first() {
     }
     session(&db, 1, None, "browser", "").unwrap();
     assert_eq!(account_sessions(&db), MAX_SESSIONS_PER_ACCOUNT);
-    // A browser sign-in prunes browser history, never a paired TV.
     assert!(!exists(&db, "browser-00"));
     assert!(exists(&db, "browser-01"));
     for index in 0..20 {

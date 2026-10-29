@@ -12,7 +12,6 @@ impl Service {
         let entry = {
             let mut cache = self.metadata.lock().await;
             if cache.len() >= 256 && !cache.contains_key(path) {
-                // Keep active requests coalesced; idle public records can be fetched again.
                 cache.retain(|_, entry| Arc::strong_count(entry) > 1);
                 if cache.len() >= 256 {
                     return Err(ApiError(
@@ -49,7 +48,6 @@ pub(super) async fn metadata(
         .await;
     let value = match value {
         Err(error) if error.1 == "Simkl authorization is required" && access.token.is_some() => {
-            // OAuth-backed responses never enter the shared public metadata cache.
             Arc::new(store::request(app, profile, access, path, None).await?)
         }
         result => result?,
@@ -58,7 +56,6 @@ pub(super) async fn metadata(
     Ok(value)
 }
 
-/// Public detail snapshots can seed a new private projection without egress.
 pub(super) async fn cached_title(
     app: &App,
     category: &str,

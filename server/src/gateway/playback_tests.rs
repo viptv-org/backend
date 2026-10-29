@@ -514,7 +514,6 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
             json!(["https://tracker.example/announce"])
         );
     }
-    // Removing capability/scope support cannot be bypassed by a ready source's affinity.
     for (mode, expected) in [(5, "delivery_unsupported"), (6, "gateway_scope_missing")] {
         peer.mode.store(mode, Ordering::SeqCst);
         let before = peer.inputs.lock().unwrap().len();
@@ -530,7 +529,6 @@ async fn addon_torrent_playback_forwards_file_selection_and_rechecks_gateway_aff
         assert_eq!(refused["error_code"], expected);
         assert_eq!(peer.inputs.lock().unwrap().len(), before);
     }
-    // A distinct selected file is a distinct affinity identity.
     peer.mode.store(4, Ordering::SeqCst);
     gateway(&app, "second", 2);
     let (_, start) = request(
@@ -1072,8 +1070,6 @@ async fn source_replacement_uses_observed_position_after_release_and_rejects_oth
     request(&app,"member-token-1","DELETE",&format!("/api/playback/{previous}"),Value::Null).await;
     let mut change = body(&second,"replacement-current","roku");
     change["replace_source"] = json!({"playback_id":previous,"observed_position":63.25});
-    // An explicit replacement must not depend on the profile's resume threshold
-    // or a periodic progress write catching up with the actual decoder clock.
     change["resume"] = json!(true);
     let (status, admitted) = request(&app,"member-token-1","POST","/api/playback",change.clone()).await;
     assert_eq!(status,StatusCode::ACCEPTED,"{admitted}");
@@ -1302,7 +1298,6 @@ async fn fresh_playback_skips_full_gateways_and_unassigned_provider_sources_fail
             [],
         )
         .unwrap();
-        // Deliberately no ownership: admission must still reject this fixture.
     }
     let scoped = app.clone().with_lease(lease());
     let (items, _) = scoped.register(
@@ -1341,8 +1336,6 @@ fn isolated_public_fixture_address() {
         vec![std::ffi::OsString::from("lo")],
         "run with Docker --network none"
     );
-    // A globally classified address exists only on this disposable container's
-    // isolated loopback. Production egress validation remains unchanged.
     unsafe {
         let raw = libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
         assert!(raw >= 0);
@@ -1580,7 +1573,6 @@ async fn isolated_backend_gateway_real_media_lifecycle() {
     );
     let pid = i32::try_from(child.id().unwrap()).unwrap();
     assert!(pid > 0);
-    // Signal only the child process created by this fixture.
     assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
     assert!(tokio::time::timeout(Duration::from_secs(10), child.wait())
         .await
@@ -1796,7 +1788,6 @@ async fn next_episode_action_follows_the_profile_preference() {
     )
     .await;
     let ready = settled(&app, admission["id"].as_str().unwrap_or_else(|| panic!("admission: {admission}"))).await;
-    // The default profile preference shows the Next episode action.
     assert_eq!(ready["actions"]["next_episode"], true, "{ready}");
 
     let (_, mut prefs) = request(
@@ -1831,6 +1822,5 @@ async fn next_episode_action_follows_the_profile_preference() {
     .await;
     let ready = settled(&app, admission["id"].as_str().unwrap()).await;
     assert_eq!(ready["actions"]["next_episode"], false, "{ready}");
-    // Episodes browsing stays available; only the credits action is gated.
     assert_eq!(ready["actions"]["episodes"], true, "{ready}");
 }

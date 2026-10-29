@@ -28,7 +28,6 @@ impl Principal {
             Self::Account { session_id, .. } => session_id.as_deref(),
         }
     }
-    /// Revalidate the captured credential family and exact selected profile for media/resources.
     pub fn validate_scope(&self, db: &Connection) -> Result<(), ApiError> {
         let Self::Account {
             account_id,

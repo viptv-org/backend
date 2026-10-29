@@ -27,7 +27,6 @@ async fn paused_episode_import_requires_episode_id_and_aired_mapping_to_agree() 
                 {"title":"First","type":"episode","episode":1,"season":1,"aired":true,"ids":{"simkl":301},"tvdb":{"season":1,"episode":1}},
                 {"title":"Second","type":"episode","episode":2,"season":1,"aired":true,"ids":{"simkl":302},"tvdb":{"season":1,"episode":2}}
             ]))}))
-            // Count Simkl writes only: host port probes send safe HEAD requests to new listeners.
             .fallback(move|method:axum::http::Method|{let count=count.clone();async move{
                 if !method.is_safe(){count.fetch_add(1,Ordering::SeqCst);}StatusCode::NOT_FOUND
             }});

@@ -1,4 +1,3 @@
-//! Closed public classifications. Never return an upstream diagnostic as copy.
 pub(crate) fn provider(raw: &str) -> Option<&'static str> {
     Some(match raw {
         "Series streams require season and episode" => "invalid_episode_selection",

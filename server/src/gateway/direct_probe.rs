@@ -1,4 +1,3 @@
-//! Bounded, pinned secure direct-media inspection; failure selects a real gateway.
 use crate::{account_api::Error, source_http};
 use std::{collections::BTreeMap, future::Future, time::Duration};
 use url::Url;
@@ -9,7 +8,6 @@ pub(crate) struct Destination {
 }
 pub(crate) struct Probe {
     slots: tokio::sync::Semaphore,
-    /// Generic protocol fixtures have no media origin. Real App::new never sets this.
     #[cfg(test)]
     pub fixture_stub: bool,
 }
@@ -69,7 +67,6 @@ impl Probe {
     }
 }
 
-/// A downgrade is classified before any HTTP connection. No URL is rewritten.
 fn next(current: &Url, location: &str, fixture: bool) -> Option<Url> {
     if location.len() > 16384 || location.chars().any(char::is_control) {
         return None;
@@ -182,7 +179,6 @@ where
                 let Some(destination) = next(&target, location, fixture) else {
                     return Ok(None);
                 };
-                // All arbitrary addon headers are recipient-bound credentials.
                 if destination.origin() != target.origin() {
                     headers.clear();
                 }

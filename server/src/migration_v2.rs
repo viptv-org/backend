@@ -1,5 +1,3 @@
-//! Explicit, backup-first legacy ownership migration. No production invocation
-//! is automatic. The export contains secrets and must remain private.
 use crate::provider::v2;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{
@@ -101,8 +99,6 @@ const ADVANCED_TABLES: &[&str] = &[
     "automation_pause",
 ];
 
-/// Static, reviewed deletion set. Auth, profiles, favorites, progress, queue,
-/// addons, provider identities, raw catalogs and manual matches are excluded.
 const RETIRED_TABLES: &[&str] = &[
     "family_programmes",
     "guide_rejections",
@@ -140,7 +136,6 @@ const RETIRED_TABLES: &[&str] = &[
     "automation_pause",
 ];
 
-/// Separately confirmed offline cutover; normal startup never calls this.
 pub fn retire(database: &Path, backup: &Path, export: &Path, revision: &str) -> Result<Value> {
     let vault =
         crate::secret_store::Vault::from_environment()?.ok_or("secret_store_not_configured")?;
@@ -161,13 +156,9 @@ fn retire_with_vault(
         if plaintext {
             return Err("retirement_encryption_required");
         }
-        // Every ciphertext must still unlock under its explicitly assigned owner.
-        // This path cannot assign owners or encrypt previously plaintext rows.
         if crate::provider::credentials_v2::encrypt_legacy(tx, vault)? != 0 {
             return Err("retirement_encryption_required");
         }
-        // Removing this table must never turn an active required legacy route
-        // into ordinary network delivery. Only archived disabled rows may retire.
         let routes:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='provider_routes')",[],|row|row.get(0)).map_err(|_|"retirement_failed")?;
         if routes {
             let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM providers p JOIN provider_routes r ON r.provider_id=p.id WHERE p.enabled=1 AND r.warp!=0)",[],|row|row.get(0)).map_err(|_|"retirement_failed")?;
@@ -208,10 +199,6 @@ fn retire_with_vault(
     })
 }
 
-/// DROP TABLE may cascade or null preserved child rows without failing a final
-/// integrity check. Refuse incoming dependencies before any destructive DDL,
-/// even for empty children. Only statically reviewed retired children may refer
-/// to retired parents. SQLite identifier matching is ASCII case-insensitive.
 fn refuse_preserved_foreign_dependencies(tx: &Connection) -> Result<()> {
     let retired = |name: &str| {
         RETIRED_TABLES
@@ -229,8 +216,6 @@ fn refuse_preserved_foreign_dependencies(tx: &Connection) -> Result<()> {
         if retired(&name) {
             continue;
         }
-        // Table-valued PRAGMA binds the child name as data; no identifier or SQL
-        // interpolation, including quoted or otherwise unusual extension names.
         let mut dependencies = tx
             .prepare("SELECT \"table\" FROM pragma_foreign_key_list(?1)")
             .map_err(|_| "retirement_dependency_requires_review")?;
@@ -292,8 +277,6 @@ fn private_file(path: &Path) -> Result<File> {
                 .unwrap_or_else(|| Path::new(".")),
         )
         .map_err(|_| "artifact_directory_unavailable")?;
-        // Prevent another local user replacing the inode between create_new
-        // and SQLite opening the destination by path.
         if parent.permissions().mode() & 0o077 != 0 || parent.uid() != unsafe { libc::geteuid() } {
             return Err("artifact_directory_must_be_private_and_owned");
         }
@@ -368,7 +351,6 @@ fn export(db: &Connection, file: &mut File, revision: &str, backup_hash: &str) -
         first_table = false;
         write_json(&mut writer, &table)?;
         bytes(&mut writer, b":[")?;
-        // The identifier comes exclusively from the static table allowlist.
         let mut statement = db
             .prepare(&format!("SELECT * FROM \"{table}\" ORDER BY rowid"))
             .map_err(|_| "export_read_failed")?;
@@ -411,9 +393,6 @@ fn export(db: &Connection, file: &mut File, revision: &str, backup_hash: &str) -
     writer.flush().map_err(|_| "export_write_failed")
 }
 
-/// Caller must explicitly approve the owner map and stop normal writers first.
-/// BEGIN IMMEDIATE additionally excludes racing writers across snapshot/export/
-/// assignment. The SQLite backup API captures WAL contents; no raw DB copy.
 pub fn apply(
     database: &Path,
     owners: &BTreeMap<i64, i64>,
@@ -439,7 +418,6 @@ pub fn apply(
     )
 }
 
-/// Offline only. Artifacts retain old plaintext and must stay private.
 pub fn encrypt(
     database: &Path,
     backup_path: &Path,
@@ -495,8 +473,6 @@ fn encrypt_addons_with_vault(
     Ok(report)
 }
 fn compact_encrypted(database: &Path) -> Result<()> {
-    // Logical updates alone leave old credentials in SQLite pages/WAL. Require
-    // offline checkpoint and compaction before reporting encryption success.
     let db = open(database, true).map_err(|_| "encryption_committed_cleanup_required")?;
     for vacuum in [true, false] {
         let busy: i64 = db
@@ -508,8 +484,6 @@ fn compact_encrypted(database: &Path) -> Result<()> {
         if vacuum {
             db.execute_batch("PRAGMA secure_delete=ON; VACUUM;")
                 .map_err(|_| "encryption_committed_cleanup_required")?;
-            // VACUUM may renumber implicit rowids. FTS uses provider_vod.rowid,
-            // not its stable public TEXT id, so regenerate the derived index.
             let indexed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='provider_vod_search_v2')",[],|r|r.get(0)).map_err(|_|"encryption_committed_cleanup_required")?;
             if indexed {
                 db.execute(
@@ -574,7 +548,6 @@ fn migrate(
     exported.sync_all().map_err(|_| "export_sync_failed")?;
     sync_parent(backup_path)?;
     sync_parent(export_path)?;
-    // No source mutation occurs until both private artifacts are durable.
     let mut report = action(&transaction)?;
     transaction
         .commit()
@@ -628,7 +601,6 @@ mod tests {
         )
         .unwrap();
         v2::init(&source).unwrap();
-        // Model a stale derived index; cleanup must rebuild from authoritative IDs.
         source
             .execute(
                 "INSERT INTO provider_vod_search_v2(provider_vod_search_v2) VALUES('delete-all')",
@@ -776,7 +748,6 @@ mod tests {
             &json!({"active":"test","keys":{"test":STANDARD.encode([7u8;32])}}).to_string(),
         )
         .unwrap();
-        // A genuine old WAL reader prevents truncation after logical commit.
         let reader = open(&database, false).unwrap();
         reader.execute_batch("BEGIN;").unwrap();
         assert_eq!(
@@ -818,7 +789,6 @@ mod tests {
         assert!(std::fs::read_to_string(&exported)
             .unwrap()
             .contains("fixture-password"));
-        // An operator must not restore this older snapshot over subsequent data.
         source.execute_batch("UPDATE progress SET position=456.75 WHERE profile_id=71; INSERT INTO progress VALUES(71,'tt7654321',99);").unwrap();
         reader.execute_batch("ROLLBACK;").unwrap();
         drop(reader);

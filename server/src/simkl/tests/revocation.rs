@@ -37,7 +37,6 @@ async fn profile_switch_while_metadata_is_queued_prevents_upstream_request() {
         )
         .await
     });
-    // The cache clone proves the request acquired its profile lease and is queued.
     tokio::time::timeout(Duration::from_secs(3), async {
         while Arc::strong_count(&entry) < 3 {
             tokio::task::yield_now().await;

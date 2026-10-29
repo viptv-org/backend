@@ -1,5 +1,3 @@
-//! The Calendar: the profile's library episodes merged with Simkl's public v2
-//! release schedule. Calendar identity is not playback authority.
 use super::*;
 use chrono::{DateTime, NaiveDate};
 use serde::Serialize;
@@ -27,20 +25,13 @@ pub(crate) struct Entry {
     episode_title: Option<String>,
     season: Option<u32>,
     episode: Option<u32>,
-    /// `"library"`: an episode of a series in the profile's library;
-    /// `"public"`: the provider's public release schedule.
     source: &'static str,
-    /// Library entries only: the typed, playable episode card.
     #[serde(skip_serializing_if = "Option::is_none")]
     episode_card: Option<Card>,
     #[serde(skip)]
     keys: Vec<String>,
 }
 
-/// One merged Calendar: episodes of the profile's library series (any
-/// browsing integration, including Stremio imports) and, when Simkl is the
-/// browsing integration, Simkl's public schedule. An episode in both appears
-/// once, as `library`.
 pub(crate) async fn get(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -57,8 +48,6 @@ pub(crate) async fn get(
     let app = app.with_lease(lease.clone());
     let (configuration, _) = crate::engine_v3::configuration::read(&app, &lease, profile)?;
     let public = configuration.browsing_plugin == "simkl";
-    // Kids sessions keep the public schedule's own approval filter and never
-    // start library metadata lookups (as Continue Watching's refresh).
     let library_series = {
         let db = app
             .db
@@ -102,9 +91,6 @@ pub(crate) async fn get(
     let mut entries = Vec::new();
     let mut sources = Vec::new();
     let mut pending = false;
-    // Library episodes of every tab: a public episode is dropped when the
-    // library shows it, also when the library shows it under another type
-    // (a `tt…` anime series is in the series calendar).
     let mut own = Vec::new();
     if library_series && category != "movie" {
         match your_shows::episodes(&app, &lease, profile, public).await {
@@ -114,8 +100,6 @@ pub(crate) async fn get(
                     let Some(entry) = library_entry(episode, start, end)? else {
                         continue;
                     };
-                    // Simkl anime series belong to the anime calendar; every
-                    // other library series to the series calendar.
                     if episode.series.identity.id.starts_with("simkl:anime:") == (category == "anime") {
                         entries.push(entry);
                     } else {
@@ -124,7 +108,6 @@ pub(crate) async fn get(
                 }
                 sources.push("library");
             }
-            // The public schedule still answers when only the library failed.
             Err(error) if public && !fatal(&error) => {}
             Err(error) => return Err(error),
         }
@@ -144,7 +127,6 @@ pub(crate) async fn get(
                 }
                 sources.push("public");
             }
-            // The library still answers when only the public schedule failed.
             Err(error) if !sources.is_empty() && !fatal(&error) => {}
             Err(error) => return Err(error),
         }
@@ -164,15 +146,11 @@ pub(crate) async fn get(
     )?;
     let mut page = json!({"entries":entries,"next_cursor":(next<total).then(||next.to_string()),"complete":next>=total,"sources":sources});
     if pending {
-        // Some library series are still being looked up: the list can still
-        // grow, so clients read it again from the first page after this.
         page["refresh_after_millis"] = json!(your_shows::PARTIAL_TTL.as_millis() as u64);
     }
     Ok(axum::Json(page))
 }
 
-/// Session, permission and configuration changes always fail the request;
-/// other failures of one source leave the other source's entries.
 fn fatal(error: &ApiError) -> bool {
     matches!(
         error.0,
@@ -227,8 +205,6 @@ fn library_entry(
     }))
 }
 
-/// The same series (any shared identity) and the same episode: matching
-/// coordinates, or the same air day when either side has none.
 fn same_episode(library: &Entry, public: &Entry) -> bool {
     library.keys.iter().any(|key| public.keys.contains(key))
         && match (library.season.zip(library.episode), public.season.zip(public.episode)) {
@@ -237,7 +213,6 @@ fn same_episode(library: &Entry, public: &Entry) -> bool {
         }
 }
 
-/// Simkl's public v2 schedule for `category` within the window.
 async fn public_entries(
     app: &App,
     profile: i64,

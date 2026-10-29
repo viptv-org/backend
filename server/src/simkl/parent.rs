@@ -1,4 +1,3 @@
-//! Explicit parent selection uses authoritative provider documents, never client card claims.
 use super::*;
 use viptv_engine::{presentation::Card, simkl as projection};
 pub(crate) async fn search(

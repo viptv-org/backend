@@ -1,4 +1,3 @@
-//! Private transport normalization; discovery never fetches media or publishes it.
 use crate::util;
 use serde_json::Value;
 use url::Url;
@@ -9,7 +8,6 @@ pub(super) struct Input {
     pub file_index: Option<u32>,
     pub trackers: Vec<String>,
     pub requires_gateway: bool,
-    /// BitTorrent transport (infoHash, magnet or `.torrent`), never text.
     pub torrent: bool,
     pub private_values: Vec<String>,
 }

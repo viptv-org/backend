@@ -1,4 +1,3 @@
-//! Explicit, disposable browser-QA host. This module is absent from production builds.
 use crate::*;
 #[path = "remote_qa_gateway.rs"]
 mod qa_gateway;

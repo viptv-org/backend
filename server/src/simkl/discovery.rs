@@ -16,7 +16,6 @@ impl Service {
             return Ok(value.clone());
         }
         check()?;
-        // One bounded public document for all Home rows; never send profile tokens to the data CDN.
         let url = url::Url::parse(&format!(
             "{}/discover/trending/today_100.json",
             self.data_base

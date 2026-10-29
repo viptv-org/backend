@@ -1,4 +1,3 @@
-//! Attach only an already scoped subtitle selection to its exact playback viewer.
 use super::*;
 use crate::auth;
 #[derive(Deserialize)]

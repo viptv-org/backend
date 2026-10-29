@@ -1,5 +1,3 @@
-//! RFC 8628 section 3.5 errors on the device token poll (backend#44): the
-//! polling device must tell "declined" and "expired" apart from "waiting".
 use super::*;
 
 fn new_code(db: &Connection) -> Value {
@@ -82,9 +80,7 @@ fn denied_code_answers_access_denied_on_every_poll_until_cleanup() {
     assert_poll_error(&db, &code, "authorization_pending");
     deny(&db, &code);
     assert_poll_error(&db, &code, "access_denied");
-    // A lost response must not turn the denial back into "waiting".
     assert_poll_error(&db, &code, "access_denied");
-    // Still a denial after the code's original expiry, within the window.
     expire(&db, &code, now() - 1);
     assert_poll_error(&db, &code, "access_denied");
 }
@@ -132,8 +128,6 @@ fn expired_code_answers_expired_token_even_after_another_device_sweeps() {
     let code = new_code(&db);
     expire(&db, &code, now() - 1);
     assert_poll_error(&db, &code, "expired_token");
-    // Another TV asking for a code sweeps the table; the expired row must
-    // survive long enough for this TV's next poll.
     new_code(&db);
     assert_poll_error(&db, &code, "expired_token");
 }
@@ -169,7 +163,6 @@ fn tombstones_are_cleaned_up_after_the_window() {
         )
         .unwrap();
     assert_eq!(remaining, 0);
-    // Gone entirely: an unknown device_code never claims a denial.
     assert_poll_error(&db, &denied, "authorization_pending");
     assert_poll_error(&db, &expired, "authorization_pending");
 }
@@ -219,7 +212,6 @@ fn approve_still_issues_a_device_session() {
     approve(&db, &code);
     let grant = poll(&db, &code).unwrap();
     assert_eq!(identifier(&grant, "account_id").unwrap(), 1);
-    // Consumed: the row is gone, so a replay reads as an unknown code.
     assert_poll_error(&db, &code, "authorization_pending");
 }
 
