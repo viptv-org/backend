@@ -75,7 +75,11 @@ async fn an_aiometadata_title_with_kitsu_episodes_and_underscore_cross_ids_is_th
     .await;
     task.abort();
     assert_eq!(status, StatusCode::OK, "{value}");
-    assert_eq!(served(&asked), vec![15]);
+    let mut asked = served(&asked);
+    assert_eq!(asked.first(), Some(&15), "{asked:?}");
+    asked.remove(0);
+    asked.sort();
+    assert_eq!(asked, vec![4, 15], "the show layout is looked up among the metadata add-ons");
     let item = &value["item"];
     assert_eq!(item["identity"]["id"], "mal:20");
     assert_eq!(item["metadata_origin"]["connection_id"], "addon:15");
@@ -119,7 +123,11 @@ async fn an_explicit_addon_is_asked_for_a_title_its_manifest_does_not_advertise(
     .await;
     task.abort();
     assert_eq!(status, StatusCode::OK, "{value}");
-    assert_eq!(served(&asked), vec![15]);
+    let mut asked = served(&asked);
+    assert_eq!(asked.first(), Some(&15), "{asked:?}");
+    asked.remove(0);
+    asked.sort();
+    assert_eq!(asked, vec![4, 15], "the show layout is looked up among the metadata add-ons");
     assert_eq!(value["item"]["metadata_origin"]["connection_id"], "addon:15");
     assert_eq!(value["item"]["title"], "Naruto");
 }

@@ -1,15 +1,17 @@
 use super::*;
 use viptv_engine::identity::{EpisodeCoordinates, MediaIdentity};
+use viptv_engine::presentation::{Card, DetailSnapshot};
 
 const ANIME_ADDONS: [&str; 4] = ["mal:", "kitsu:", "anilist:", "anidb:"];
 const ANIME_SOURCES: [&str; 4] = ["mal", "kitsu", "anilist", "anidb"];
 const MAX_EPISODES: u32 = 10_000;
 const MAX_ROWS: usize = 10_000;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct AnimeShow {
     identity: MediaIdentity,
     layout: Layout,
+    document: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +72,7 @@ impl AnimeShow {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn release_episode(&self, tvdb: TvdbEpisode) -> Option<ReleaseEpisode> {
         if tvdb.episode == 0 {
             return None;
@@ -94,9 +97,201 @@ impl AnimeShow {
         };
         Some(ReleaseEpisode { season, episode })
     }
+
+    /// The show's own TVDB-ordered Details document under the identity that was opened.
+    /// The release's own episodes keep their ids so their watch state still matches.
+    fn details_document(&self, release: &Value) -> Value {
+        if let Some(document) = &self.document {
+            let mut document = document.clone();
+            document["id"] = release["id"].clone();
+            document["type"] = release["type"].clone();
+            let ids = release["videos"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .take(MAX_ROWS)
+                .filter_map(|video| {
+                    let tvdb = self.tvdb_episode(&video_coordinates(video)?)?;
+                    Some(((tvdb.season, tvdb.episode), video["id"].as_str()?.to_owned()))
+                })
+                .collect();
+            keep_release_ids(&mut document, ids);
+            return document;
+        }
+        let mut release = release.clone();
+        if let Some(videos) = release["videos"].as_array_mut() {
+            for video in videos.iter_mut().take(MAX_ROWS) {
+                let Some(release_episode) = video_coordinates(video) else {
+                    continue;
+                };
+                let Some(tvdb) = self.tvdb_episode(&release_episode) else {
+                    continue;
+                };
+                video["season"] = json!(tvdb.season);
+                video["episode"] = json!(tvdb.episode);
+            }
+        }
+        release
+    }
+}
+
+/// The show's TVDB-ordered metadata document for a Details page, keyed to the release that
+/// was opened. `None` when the release is not an anime show this server can map.
+pub(crate) async fn tvdb_document(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    release: &Value,
+) -> Option<Value> {
+    let release_identity = MediaIdentity {
+        id: release["id"].as_str()?.to_owned(),
+        kind: release["type"].as_str()?.to_owned(),
+        ids: provider_identity::ids(release),
+        episode: None,
+        edition: None,
+    };
+    let addons = metadata_addons(app, lease, profile)?;
+    let show = resolve_with(&addons, &release_identity, Some(release.clone())).await?;
+    Some(show.details_document(release))
+}
+
+/// The Details page of an anime show whose whole episode list comes from the show itself.
+pub(crate) async fn detail(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    item: &Card,
+    provider: &str,
+    offset: usize,
+    limit: usize,
+) -> Option<DetailSnapshot> {
+    let addons = metadata_addons(app, lease, profile)?;
+    let release = MediaIdentity {
+        id: item.identity.id.clone(),
+        kind: item.identity.kind.clone(),
+        ids: item.identity.ids.clone(),
+        episode: None,
+        edition: None,
+    };
+    let show = resolve(&addons, &release).await?;
+    let mut parent = show.document.as_ref()?.clone();
+    parent["id"] = json!(item.identity.id);
+    parent["type"] = json!(item.identity.kind);
+    let ids = simkl_episode_coordinates(app, &item.identity.id)
+        .await
+        .into_iter()
+        .map(|(season, episode)| {
+            (
+                (season, episode),
+                format!("{}:{season}:{episode}", item.identity.id),
+            )
+        })
+        .collect();
+    keep_release_ids(&mut parent, ids);
+    let videos = {
+        let db = app.db.lock().ok()?;
+        kids::filter_items(
+            &db,
+            &app.identity(),
+            parent["videos"].as_array().cloned().unwrap_or_default(),
+        )
+        .ok()?
+    };
+    parent["videos"] = json!(videos);
+    let mut page = viptv_engine::stremio::detail_page(
+        &json!({"meta":parent}).to_string(),
+        provider,
+        &item.identity.kind,
+        &item.identity.id,
+        offset,
+        limit,
+    )
+    .ok()?;
+    for id in show.identity().ids.iter().chain(item.identity.ids.iter()) {
+        if page.item.identity.ids.len() == 32 {
+            break;
+        }
+        if !page.item.identity.ids.contains(id) {
+            page.item.identity.ids.push(id.clone());
+        }
+    }
+    for episode in &mut page.episodes {
+        episode.parent_identity = Some(page.item.identity.clone());
+    }
+    Some(page)
+}
+
+fn metadata_addons(app: &App, lease: &ResourceLease, profile: i64) -> Option<App> {
+    super::search::metadata_scope(app.clone(), lease, profile, "stremio", None)
+        .ok()
+        .map(|(app, _, _)| app)
+}
+
+fn keep_release_ids(document: &mut Value, ids: std::collections::BTreeMap<(u32, u32), String>) {
+    if ids.is_empty() {
+        return;
+    }
+    let Some(videos) = document["videos"].as_array_mut() else {
+        return;
+    };
+    for video in videos.iter_mut().take(MAX_ROWS) {
+        let Some(coordinates) = video_coordinates(video) else {
+            continue;
+        };
+        let Some(season) = coordinates.season else {
+            continue;
+        };
+        if let Some(id) = ids.get(&(season, coordinates.episode)) {
+            video["id"] = json!(id);
+        }
+    }
+}
+
+/// The TVDB coordinates of the episodes the opened Simkl title itself lists.
+async fn simkl_episode_coordinates(app: &App, title: &str) -> Vec<(u32, u32)> {
+    let Some(id) = simkl_anime(title) else {
+        return Vec::new();
+    };
+    let Some(rows) = simkl_episodes(app, id).await else {
+        return Vec::new();
+    };
+    rows.iter()
+        .take(MAX_ROWS)
+        .filter_map(|row| {
+            Some((
+                u32::try_from(row["tvdb"]["season"].as_u64()?).ok()?,
+                u32::try_from(row["tvdb"]["episode"].as_u64()?).ok()?,
+            ))
+        })
+        .collect()
+}
+
+fn video_coordinates(video: &Value) -> Option<EpisodeCoordinates> {
+    let episode = video["episode"].as_u64().or_else(|| video["number"].as_u64()).or_else(|| {
+        let id = video["id"].as_str()?;
+        let parts = id.split(':').collect::<Vec<_>>();
+        (parts.len() == 3)
+            .then_some(parts[2])
+            .and_then(|part| part.parse().ok())
+    })?;
+    Some(EpisodeCoordinates {
+        order: "aired".into(),
+        season: video["season"]
+            .as_u64()
+            .and_then(|season| u32::try_from(season).ok()),
+        episode: u32::try_from(episode).ok()?,
+    })
 }
 
 pub(crate) async fn resolve(app: &App, release: &MediaIdentity) -> Option<AnimeShow> {
+    resolve_with(app, release, None).await
+}
+
+async fn resolve_with(
+    app: &App,
+    release: &MediaIdentity,
+    mut release_document: Option<Value>,
+) -> Option<AnimeShow> {
     let simkl_identity = simkl_anime(&release.id);
     let anime_addon = ANIME_ADDONS
         .iter()
@@ -119,16 +314,18 @@ pub(crate) async fn resolve(app: &App, release: &MediaIdentity) -> Option<AnimeS
             Some(record) => provider_identity::merge(&mut identity, &record),
             None => simkl = None,
         }
-    } else if let Ok(document) = app.addons.meta(&release.kind, &release.id).await {
-        let meta = meta_of(document);
-        provider_identity::merge(&mut identity, &meta);
-        videos = meta["videos"].as_array().cloned().unwrap_or_default();
-    }
-    if !mapped(&identity) {
-        if let Some(imdb) = id_of(&identity, "imdb").map(str::to_owned) {
-            if let Ok(document) = app.addons.meta("series", &imdb).await {
-                provider_identity::merge(&mut identity, &meta_of(document));
-            }
+    } else {
+        if release_document.is_none() {
+            release_document = app
+                .addons
+                .meta(&release.kind, &release.id)
+                .await
+                .ok()
+                .map(meta_of);
+        }
+        if let Some(meta) = release_document.as_ref() {
+            provider_identity::merge(&mut identity, meta);
+            videos = meta["videos"].as_array().cloned().unwrap_or_default();
         }
     }
     if simkl.is_none() && simkl_identity.is_none() {
@@ -138,6 +335,8 @@ pub(crate) async fn resolve(app: &App, release: &MediaIdentity) -> Option<AnimeS
             simkl = Some(id);
         }
     }
+    let mut identity = show_identity(identity)?;
+    let document = show_document(app, &mut identity).await;
     if !mapped(&identity) {
         return None;
     }
@@ -161,8 +360,9 @@ pub(crate) async fn resolve(app: &App, release: &MediaIdentity) -> Option<AnimeS
         }
     };
     Some(AnimeShow {
-        identity: show_identity(identity)?,
+        identity,
         layout,
+        document,
     })
 }
 
@@ -238,6 +438,27 @@ fn segments(rows: &[Value]) -> Vec<Segment> {
         }
     }
     segments
+}
+
+async fn show_document(app: &App, identity: &mut MediaIdentity) -> Option<Value> {
+    let id = ["imdb", "tvdb", "tmdb"]
+        .into_iter()
+        .find_map(|namespace| {
+            let value = id_of(identity, namespace)?;
+            Some(if namespace == "imdb" {
+                value.to_owned()
+            } else {
+                format!("{namespace}:{value}")
+            })
+        })?;
+    let meta = meta_of(app.addons.meta("series", &id).await.ok()?);
+    if !provider_identity::same_title(&meta, &id)
+        || meta["videos"].as_array().is_none_or(Vec::is_empty)
+    {
+        return None;
+    }
+    provider_identity::merge(identity, &meta);
+    Some(meta)
 }
 
 async fn simkl_lookup(app: &App, identity: &MediaIdentity) -> Option<(u64, Arc<Value>)> {
