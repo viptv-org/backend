@@ -11,6 +11,19 @@ fn needs_episode_art(meta: &Value) -> bool {
     })
 }
 
+fn declares_meta(manifest: &Value, kind: &str) -> bool {
+    manifest["resources"].as_array().is_some_and(|resources| {
+        resources.iter().any(|resource| {
+            let name = resource.as_str().or_else(|| resource["name"].as_str());
+            name == Some("meta")
+                && resource["types"]
+                    .as_array()
+                    .or_else(|| manifest["types"].as_array())
+                    .is_none_or(|types| types.iter().any(|value| value == kind))
+        })
+    })
+}
+
 impl Addons {
     pub async fn discover(
         &self,
@@ -183,11 +196,32 @@ impl Addons {
         kind: &str,
         id: &str,
     ) -> Result<(Value, i64), String> {
+        self.meta_lookup(kind, id, false).await
+    }
+    pub(crate) async fn meta_from_selected_addon(
+        &self,
+        kind: &str,
+        id: &str,
+    ) -> Result<(Value, i64), String> {
+        self.meta_lookup(kind, id, true).await
+    }
+    async fn meta_lookup(
+        &self,
+        kind: &str,
+        id: &str,
+        selected: bool,
+    ) -> Result<(Value, i64), String> {
         let endpoints = self
             .async_entries()
             .await?
             .into_iter()
-            .filter(|(_, _, m)| supports(m, "meta", kind, id))
+            .filter(|(_, _, m)| {
+                if selected {
+                    declares_meta(m, kind)
+                } else {
+                    supports(m, "meta", kind, id)
+                }
+            })
             .take(32)
             .map(|(addon, u, _)| {
                 Self::endpoint(&u, &["meta", kind, &format!("{id}.json")]).map(|url| (addon, url))

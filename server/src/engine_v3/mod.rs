@@ -32,6 +32,9 @@ pub(crate) mod revisions;
 #[cfg(test)]
 mod revisions_tests;
 mod projection;
+mod provider_identity;
+#[cfg(test)]
+mod provider_identity_tests;
 pub(crate) mod viewing_action;
 pub(crate) mod viewing_presentation;
 pub(crate) mod origins;

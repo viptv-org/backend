@@ -34,7 +34,11 @@ Request details with:
 - `GET /api/v3/meta/<kind>/<id>?provider_id=stremio&addon_id=<id>`
 - `GET /api/v3/meta/<kind>/<id>?provider_id=stremio` for generic Stremio metadata, including aggregated fallback recommendations.
 
-`offset` and `limit` remain available. Without explicit provenance, the existing browsing-plugin routing remains unchanged.
+`offset` and `limit` remain available. Without explicit provenance, the existing browsing-plugin routing remains unchanged. Details also accept `metadata_provider_id` and `metadata_addon_id` as aliases of `provider_id` and `addon_id`.
+
+An explicitly named add-on is asked for the title even when its manifest does not list the requested type or ID prefix, because manifests under-declare what they serve. An add-on whose manifest lists no `meta` resource is not a metadata connector and cannot be named. When the named add-on cannot answer, details fail with `The selected metadata add-on did not return this title`; another add-on never answers in its place.
+
+A provider document is the requested title when it returns the requested ID, or when it asserts that ID among its external IDs: `imdb`, `tmdb`, `tvdb`, `mal`, `kitsu`, `anilist` and `anidb`, including the underscore-prefixed cross-ids AIOMetadata emits (`_tmdbId`, `_kitsuId`, `_anidbId`, …). Asserted IDs are merged into the title's `identity.ids`, and a document that returns a different ID in the same namespace is a different title. Episode IDs may use a different namespace than the title (`mal:20` with `kitsu:11:N` episodes); they keep their own IDs and the title as `parent_identity`.
 
 Explicit origins must be enabled, account-owned and assigned to the selected profile. A source add-on needs an enabled Search or Metadata assignment. Metadata can come only from assigned Metadata connectors. Prefer the source add-on's metadata capability when enabled; a search-only add-on may delegate to other assigned Stremio metadata connectors. Foreign, disabled or unassigned origins are refused before provider access.
 
