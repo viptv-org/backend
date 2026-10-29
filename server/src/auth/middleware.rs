@@ -271,13 +271,14 @@ pub fn router() -> Router<App> {
         "device/token",
         "device/refresh",
         "device/revoke",
+        "device/revoke-own",
     ] {
         r = r.route(&format!("/auth/{p}"), post(action));
     }
     for p in ["me", "accounts", "devices", "events"] {
         r = r.route(&format!("/auth/{p}"), get(info));
     }
-    for p in ["code", "token", "refresh", "lookup", "approve", "deny"] {
+    for p in ["code", "token", "refresh", "lookup", "approve", "deny", "revoke-own"] {
         r = r.route(&format!("/device/{p}"), post(action));
     }
     r.route("/auth/sessions", get(info).delete(remove))

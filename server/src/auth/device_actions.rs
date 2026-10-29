@@ -198,11 +198,26 @@ pub(crate) fn dispatch_devices(
         }
         "/auth/device/revoke" | "/auth/device/revoke-own" | "/auth/device/revoke-admin" => {
             let principal = p.as_ref().ok_or_else(unauthorized)?;
-            let sid = field(v, "session_id", 100)?;
+            let own = principal.session_id();
+            let device_principal =
+                matches!(principal, Principal::Account { role, .. } if role == "device");
+            // A paired device can revoke the grant it is holding — the remedy
+            // when its account is at the session cap or the viewer is unpairing
+            // this screen — but never another session of that account. Naming
+            // no session means the caller's own. A browser still names the TV
+            // it means (`DELETE /devices/:id`).
+            let target = match v.get("session_id") {
+                Some(_) => field(v, "session_id", 100)?,
+                None if device_principal => own.ok_or_else(unauthorized)?,
+                None => return Err("Missing session_id".into()),
+            };
+            if device_principal && own != Some(target) {
+                return Err(forbidden());
+            }
             let owner = db
                 .query_row(
                     "SELECT account_id FROM auth_sessions WHERE id=?1 AND kind='device'",
-                    [sid],
+                    [target],
                     |row| row.get::<_, i64>(0),
                 )
                 .optional()
@@ -215,7 +230,7 @@ pub(crate) fn dispatch_devices(
             }
             db.execute(
                 "DELETE FROM auth_sessions WHERE id=?1 AND kind='device'",
-                [sid],
+                [target],
             )
             .map_err(crate::db_error)?;
             event(db, "session_revoked", Some(owner))?;

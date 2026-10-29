@@ -156,6 +156,9 @@ pub(crate) fn session(
 ) -> Result<(Value, Option<(String, String)>), ApiError> {
     let (a, r, c) = (token(), token(), token());
     let sid = Uuid::new_v4().to_string();
+    // Expired credentials are not sessions any more: drop them before any
+    // capacity arithmetic, whichever kind left them behind, so an account
+    // whose stored grants have all aged out can always sign in again (app#97).
     db.execute(
         "DELETE FROM auth_sessions WHERE refresh_expires<=?1",
         [now()],
@@ -168,6 +171,12 @@ pub(crate) fn session(
             |row| row.get(0),
         )
         .map_err(crate::db_error)?;
+    // The per-account cap bounds stored grants but never refuses the sign-in
+    // that would bound them (backend#34). The account's oldest session of the
+    // signing-in kind goes first, so a browser login prunes browser history
+    // rather than kicking a paired TV and a new pairing prunes the oldest TV
+    // rather than kicking a browser; only an account that holds none of its own
+    // kind falls back to the oldest session of any kind.
     let account_count: i64 = db
         .query_row(
             "SELECT count(*) FROM auth_sessions WHERE account_id=?1",
@@ -176,11 +185,15 @@ pub(crate) fn session(
         )
         .map_err(crate::db_error)?;
     if account_count >= MAX_SESSIONS_PER_ACCOUNT {
-        db.execute(
-            "DELETE FROM auth_sessions WHERE id IN(SELECT id FROM auth_sessions WHERE account_id=?1 AND kind='browser' ORDER BY created_at,id LIMIT ?2)",
-            params![id, account_count - MAX_SESSIONS_PER_ACCOUNT + 1],
-        )
-        .map_err(crate::db_error)?;
+        let evicted = db
+            .execute(
+                "DELETE FROM auth_sessions WHERE id IN(SELECT id FROM auth_sessions WHERE account_id=?1 ORDER BY CASE WHEN kind=?2 THEN 0 ELSE 1 END,created_at,rowid LIMIT ?3)",
+                params![id, kind, account_count - MAX_SESSIONS_PER_ACCOUNT + 1],
+            )
+            .map_err(crate::db_error)?;
+        if evicted > 0 {
+            event(db, "sessions_evicted", Some(id))?;
+        }
     }
     if role != "owner" {
         let member_count: i64 = db
@@ -202,12 +215,19 @@ pub(crate) fn session(
         .query_row("SELECT count(*) FROM auth_sessions", [], |row| row.get(0))
         .map_err(crate::db_error)?;
     if total >= MAX_SESSIONS {
+        // Server-wide abuse bound, not an account limit: the oldest member
+        // sessions of any kind go first, and the owner's own rows are never
+        // evicted to make room for another account.
         db.execute(
-            "DELETE FROM auth_sessions WHERE id IN(SELECT s.id FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id WHERE a.role='member' AND s.kind='browser' ORDER BY s.created_at,s.id LIMIT ?1)",
+            "DELETE FROM auth_sessions WHERE id IN(SELECT s.id FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id WHERE a.role='member' ORDER BY s.created_at,s.id LIMIT ?1)",
             [total - MAX_SESSIONS + 1],
         )
         .map_err(crate::db_error)?;
     }
+    // Defensive re-check after eviction. The account has room by construction
+    // (it just made some), so only a server-wide session table that could not
+    // be pruned trips this: a transient capacity state, not an account state,
+    // and not something the caller can remedy by revoking a device.
     let capacity: bool = db.query_row(
         "SELECT (SELECT count(*) FROM auth_sessions WHERE account_id=?1) < ?2 AND (SELECT count(*) FROM auth_sessions) < ?3",
         params![id,MAX_SESSIONS_PER_ACCOUNT,MAX_SESSIONS], |r| r.get(0),
@@ -215,7 +235,7 @@ pub(crate) fn session(
     if !capacity {
         return Err(ApiError(
             StatusCode::TOO_MANY_REQUESTS,
-            "Session limit reached. Revoke an unused device first.".into(),
+            "Server session capacity reached. Try again shortly.".into(),
         ));
     }
     db.execute(

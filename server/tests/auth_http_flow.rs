@@ -495,6 +495,126 @@ async fn canonical_devices_are_account_owned_and_revoke_only_the_callers_device(
     );
 }
 
+/// The beta state app#97 reported: an account whose stored grants are all
+/// device sessions with an immortal refresh but a stale access token. The cap
+/// must not refuse the browser sign-in that is the only way to revoke them.
+#[tokio::test]
+async fn an_account_at_the_cap_with_only_stale_device_grants_can_sign_in() {
+    let (app, state, _root) = owner_with_db();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    {
+        let db = state.db.lock().unwrap();
+        db.execute("DELETE FROM auth_sessions", []).unwrap();
+        // MAX_SESSIONS_PER_ACCOUNT stale device rows: refresh live, access expired.
+        for index in 0..32 {
+            db.execute("INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,profile_id,kind,device_name,access_expires,refresh_expires,created_at) VALUES(?1,1,?2,?3,?4,NULL,'device','VIPTV television',?5,253402300799,?6)",rusqlite::params![format!("stale-{index:02}"),format!("access-{index}"),format!("refresh-{index}"),format!("csrf-{index}"),now-60,index])
+                .unwrap();
+        }
+    }
+    let mut browser = Browser::default();
+    let (status, body) = browser_request(
+        &app,
+        &mut browser,
+        "POST",
+        "/api/auth/login",
+        json!({"username":"owner","password":"secure-owner-password"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(browser.cookies.contains_key("viptv_session"));
+    let db = state.db.lock().unwrap();
+    let stored: i64 = db
+        .query_row("SELECT count(*) FROM auth_sessions WHERE account_id=1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert!(stored <= 32, "stored {stored} sessions");
+}
+
+/// The remedy `AUTH.md` promises and the issue found unreachable: a paired TV
+/// revokes its own grant without a browser, and cannot revoke anyone else's.
+#[tokio::test]
+async fn a_paired_device_revokes_its_own_grant_and_never_a_sibling() {
+    let (app, _root) = owner_application();
+    let mut browser = Browser::default();
+    assert_eq!(
+        browser_request(
+            &app,
+            &mut browser,
+            "POST",
+            "/api/auth/login",
+            json!({"username":"owner","password":"secure-owner-password"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let first = pair_device(&app, &mut browser, "Owner Roku").await;
+    let second = pair_device(&app, &mut browser, "Bedroom Roku").await;
+    let first_access = first["access_token"].as_str().unwrap();
+    let first_id = first["session_id"].as_str().unwrap();
+    let second_access = second["access_token"].as_str().unwrap();
+    let second_id = second["session_id"].as_str().unwrap();
+    assert_eq!(
+        bearer_request(
+            &app,
+            second_access,
+            "POST",
+            "/api/auth/device/revoke-own",
+            json!({"session_id":first_id})
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        bearer_request(&app, first_access, "GET", "/api/profiles", Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, body) = bearer_request(
+        &app,
+        second_access,
+        "POST",
+        "/api/auth/device/revoke-own",
+        json!({"session_id":second_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(
+        bearer_request(&app, second_access, "GET", "/api/profiles", Value::Null)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    // The sibling TV keeps its grant, and a device may name no grant at all
+    // when the one it means is its own credential family.
+    assert_eq!(
+        bearer_request(&app, first_access, "GET", "/api/profiles", Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let third = pair_device(&app, &mut browser, "Kitchen Roku").await;
+    assert_eq!(
+        bearer_request(
+            &app,
+            third["access_token"].as_str().unwrap(),
+            "POST",
+            "/api/device/revoke-own",
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}
+
 #[tokio::test]
 async fn former_static_bearer_never_establishes_identity() {
     let (app, _) = application();
