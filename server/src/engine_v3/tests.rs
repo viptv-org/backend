@@ -150,7 +150,7 @@ async fn home_catalog_rows_carry_the_selector_their_catalog_requires() {
         }))
         .route("/catalog/movie/year/:extras", get(
             |axum::extract::Path(extras): axum::extract::Path<String>| async move {
-                if extras != "genre=2020" {
+                if extras.trim_end_matches(".json") != "genre=2020" {
                     return Err(StatusCode::BAD_REQUEST);
                 }
                 Ok(axum::Json(json!({"metas":[{"id":"tt2","type":"movie","name":"New one"}]})))
