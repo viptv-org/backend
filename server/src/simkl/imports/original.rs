@@ -12,6 +12,16 @@ fn runtime(value: &Value) -> Option<f64> {
         .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1440.0)
         .map(|n| n * 60.0)
 }
+fn tvdb_coordinates(episode: &Value) -> Option<(u32, u32)> {
+    let season = episode["tvdb"]["season"]
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())?;
+    let episode = episode["tvdb"]["episode"]
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| *n > 0)?;
+    Some((season, episode))
+}
 pub(super) fn original(
     db: &Connection,
     profile: i64,
@@ -70,10 +80,17 @@ pub(super) fn original(
                     card.identity.ids.clear();
                     card.parent_identity = Some(parent.identity.clone());
                     let coordinates = if category == "anime" {
-                        EpisodeCoordinates {
-                            order: "anidb".into(),
-                            season: None,
-                            episode: number,
+                        match tvdb_coordinates(episode) {
+                            Some((season, episode)) => EpisodeCoordinates {
+                                order: "aired".into(),
+                                season: Some(season),
+                                episode,
+                            },
+                            None => EpisodeCoordinates {
+                                order: "anidb".into(),
+                                season: None,
+                                episode: number,
+                            },
                         }
                     } else {
                         let Some(season) = season_number else {
@@ -87,9 +104,9 @@ pub(super) fn original(
                         }
                     };
                     card.identity.id = if let Some(s) = coordinates.season {
-                        format!("{}:{s}:{number}", parent.identity.id)
+                        format!("{}:{s}:{}", parent.identity.id, coordinates.episode)
                     } else {
-                        format!("{}:anidb:{number}", parent.identity.id)
+                        format!("{}:anidb:{}", parent.identity.id, coordinates.episode)
                     };
                     card.identity.episode = Some(coordinates);
                     let duration = runtime(&episode["runtime"]).unwrap_or(0.0);

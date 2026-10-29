@@ -62,6 +62,52 @@ impl Watched {
     }
 }
 
+pub(super) struct PathA {
+    pub(super) ids: Value,
+    pub(super) season: u32,
+    pub(super) episode: u32,
+}
+
+pub(super) async fn path_a(
+    app: &App,
+    id: u64,
+    season: Option<u32>,
+    episode: Option<u32>,
+) -> Option<PathA> {
+    let season = season?;
+    let episode = episode?;
+    if id == 0 || episode == 0 {
+        return None;
+    }
+    let release = viptv_engine::identity::MediaIdentity {
+        id: format!("simkl:anime:{id}"),
+        kind: "series".into(),
+        ids: Vec::new(),
+        episode: None,
+        edition: None,
+    };
+    let show = crate::engine_v3::anime_show::resolve(app, &release).await?;
+    let tvdb = show.tvdb_episode(&viptv_engine::identity::EpisodeCoordinates {
+        order: "aired".into(),
+        season: Some(season),
+        episode,
+    })?;
+    let mut ids = serde_json::Map::new();
+    for external in show.identity().ids.iter() {
+        if matches!(external.namespace.as_str(), "tvdb" | "tmdb") {
+            ids.insert(external.namespace.clone(), json!(external.value));
+        }
+    }
+    if ids.is_empty() {
+        return None;
+    }
+    Some(PathA {
+        ids: Value::Object(ids),
+        season: tvdb.season,
+        episode: tvdb.episode,
+    })
+}
+
 pub(super) async fn verify(
     app: &App,
     profile: i64,
@@ -123,8 +169,15 @@ pub(super) async fn record(
     watched_at: Option<&str>,
 ) -> Result<(), ApiError> {
     let verified = verify(app, profile, q, credential).await?;
+    let mapped = if q.category == "anime" {
+        path_a(app, q.id, q.season, q.episode).await
+    } else {
+        None
+    };
     let mut body = if q.category == "movie" {
         json!({"movies":[{"ids":{"simkl":q.id}}]})
+    } else if let Some(mapped) = &mapped {
+        json!({"shows":[{"ids":mapped.ids,"use_tvdb_anime_seasons":true,"seasons":[{"number":mapped.season,"episodes":[{"number":mapped.episode}]}]}]})
     } else if q.category == "anime" {
         if q.episode.is_none() {
             json!({"anime":[{"ids":{"simkl":q.id}}]})
@@ -141,7 +194,7 @@ pub(super) async fn record(
         } else if q.category == "anime" && q.episode.is_none() {
             body["anime"][0]["watched_at"] = json!(at);
         } else {
-            let field = if q.category == "anime" {
+            let field = if mapped.is_none() && q.category == "anime" {
                 "anime"
             } else {
                 "shows"

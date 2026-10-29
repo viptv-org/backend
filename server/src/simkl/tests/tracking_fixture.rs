@@ -35,10 +35,14 @@ pub(super) async fn tracking_server_with_failed_stop(
         .route("/tv/20",get(||async{axum::Json(json!({"title":"Show","ids":{"simkl":20}}))}))
         .route("/tv/episodes/20",get(||async{axum::Json(json!([{"season":1,"episode":2,"ids":{"simkl":30}}]))}))
         .route("/anime/40",get(||async{axum::Json(json!({"title":"Anime","anime_type":"tv","ids":{"simkl":40}}))}))
+        .route("/anime/41",get(||async{axum::Json(json!({"title":"Mapped Anime","anime_type":"tv","ids":{"simkl":41,"tvdb":267440,"tmdb":1429}}))}))
         .route("/anime/50",get(||async{axum::Json(json!({"title":"Anime Film","anime_type":"movie","ids":{"simkl":50}}))}))
         .route("/anime/episodes/40",get(||async{axum::Json(json!([
             {"episode":36,"type":"episode","aired":true,"tvdb":{"season":2,"episode":1},"ids":{"simkl_id":60}},
             {"type":"episode","aired":true,"tvdb":{"season":2,"episode":2},"ids":{"simkl_id":61}}
+        ]))}))
+        .route("/anime/episodes/41",get(||async{axum::Json(json!([
+            {"episode":36,"type":"episode","aired":true,"tvdb":{"season":2,"episode":4},"ids":{"simkl_id":62}}
         ]))}))
         .route("/sync/history",post(move|headers:axum::http::HeaderMap,axum::Json(body):axum::Json<Value>|{let history=history.clone();async move{
             assert_eq!(headers[header::AUTHORIZATION],"Bearer fixture-private-token");

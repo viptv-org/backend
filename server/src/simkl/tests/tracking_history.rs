@@ -315,3 +315,35 @@ async fn verified_anime_film_progress_uses_anime_title_without_episode() {
     assert!(body["movies"].is_null());
     task.abort();
 }
+
+#[tokio::test]
+async fn mapped_anime_progress_writes_tvdb_show_ids_coordinates_and_flag() {
+    let (app, task, writes) = tracking_server().await;
+    let mut body = history_body("simkl:anime:41:2:4", 95_000, 100_000);
+    body["record"]["identity"] = media_identity(
+        "simkl:anime:41:2:4",
+        "series",
+        Some(json!({"order":"aired","season":2,"episode":4})),
+    );
+    body["parent_identity"] = media_identity("simkl:anime:41", "series", None);
+    let (status, result) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/progress",
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    receipt(&app, "simkl:anime:41:2:4", "done").await;
+    assert_eq!(writes.lock().unwrap().len(), 1);
+    let history = writes.lock().unwrap()[0]["body"].clone();
+    assert!(history["anime"].is_null());
+    let show = &history["shows"][0];
+    assert_eq!(show["ids"]["tvdb"], "267440");
+    assert_eq!(show["ids"]["tmdb"], "1429");
+    assert_eq!(show["use_tvdb_anime_seasons"], true);
+    assert_eq!(show["seasons"][0]["number"], 2);
+    assert_eq!(show["seasons"][0]["episodes"][0]["number"], 4);
+    task.abort();
+}
