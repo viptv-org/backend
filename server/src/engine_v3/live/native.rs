@@ -307,6 +307,7 @@ pub(crate) async fn guide(
             && p.start_millis < now + 7 * 24 * 60 * 60 * 1000
     });
     guide.programs.truncate(100);
+    super::honest_guide(&mut guide);
     super::super::configuration::validate_revision(&app, profile, revision)?;
     if let Some(cache) = app.live_cache.lock().await.get_mut(&connection.id) {
         cache.guides.insert(

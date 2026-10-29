@@ -52,6 +52,9 @@ async fn private_xtream_projects_cached_catalog_guide_and_revocable_opaque_live_
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["channels"].as_array().unwrap().len(), 1);
     assert_eq!(page["channels"][0]["connection_id"], connection);
+    assert_eq!(page["channels"][0]["card"]["title"], "News");
+    assert_eq!(page["channels"][0]["group_id"], "news");
+    assert_eq!(page["channels"][0]["group_name"], "News group");
     assert_eq!(page["groups"][0]["label"], "News group");
     let (status, guide) = request(
         &app,
