@@ -10,7 +10,7 @@ impl Image {
             return None;
         }
         let (stem, extension) = asset.rsplit_once('.')?;
-        if !matches!(extension, "webp" | "jpg" | "png") {
+        if !matches!(extension, "webp" | "jpg" | "png" | "gif") {
             return None;
         }
         let (path, size) = stem.rsplit_once('_')?;
@@ -23,12 +23,9 @@ impl Image {
             return None;
         }
         let valid = match folder {
-            "posters" => matches!(size, "s" | "m" | "c" | "w"),
-            "episodes" => matches!(size, "m" | "w"),
-            "fanart" => matches!(
-                size,
-                "w" | "medium" | "mobile" | "s48" | "s192" | "s288" | "s384" | "d"
-            ),
+            "posters" => matches!(size, "s" | "cm" | "c" | "ca" | "m" | "w"),
+            "episodes" => matches!(size, "m" | "c" | "w"),
+            "fanart" => matches!(size, "w" | "medium" | "mobile" | "s48" | "d"),
             _ => false,
         };
         if !valid || (size == "d" && extension != "jpg") {
