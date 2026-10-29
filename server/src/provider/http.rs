@@ -51,7 +51,6 @@ impl ProviderService {
             }
             return self.protected_json(url, response_limit).await;
         }
-        // Never format reqwest errors: they can contain the credential-bearing URL.
         let client = self.client.clone();
         let mut response = client
             .get(url)
@@ -139,8 +138,6 @@ impl ProviderService {
             return Err("Provider returned invalid episode or guide data".into());
         }
         let snapshot = provider.clone();
-        // Cache failures must not hide successfully fetched streams. Deleted providers
-        // cannot be resurrected by an in-flight fetch, even with foreign keys disabled.
         self.blocking(move |s| {
             s.provider_for_kind(provider_id, kind)?;
             let plain=zeroize::Zeroizing::new(value.to_string());

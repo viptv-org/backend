@@ -123,7 +123,6 @@ async fn expired_private_snapshot_checks_activities_merges_deltas_ratings_and_re
     expire(&app).await;
     let (status, page) = request(&app, "member-token-1", "GET", path, json!({})).await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    // Remote removal cannot destructively delete an already imported local title.
     assert_eq!(page["cards"].as_array().unwrap().len(), 2);
     let show=page["statistics"].as_array().unwrap().iter().find(|s|s["identity"]["id"]=="simkl:tv:20").unwrap();
     assert_eq!(show["user_rating"], 9.0);

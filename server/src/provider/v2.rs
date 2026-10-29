@@ -1,5 +1,3 @@
-//! V2 account ownership and bounded catalog queries. No implicit legacy grants.
-//! Wiring into public handlers is a coordinated cutover, not an automatic migration.
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -12,8 +10,6 @@ fn db_error(_: rusqlite::Error) -> &'static str {
 }
 const MATCH_CURSOR_BYTES: usize = 2048;
 
-/// Never return a token larger than the matching decoder accepts. Original
-/// provider identifiers remain stored unchanged; unsupported pages fail safely.
 pub(super) fn encode_page_cursor<T: Serialize>(value: &T, bound: usize) -> Result<String> {
     let token = URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).map_err(|_| "invalid_cursor")?);
     if token.len() > bound {
@@ -89,8 +85,6 @@ pub(crate) fn inspect_ownership(db: &Connection) -> Result<OwnershipReport> {
     Ok(report)
 }
 
-/// Requires a complete explicit map. Unknown/disabled accounts and partial maps
-/// roll back atomically rather than assigning server-wide subscriptions publicly.
 pub(crate) fn assign_legacy(
     tx: &rusqlite::Transaction<'_>,
     owners: &BTreeMap<i64, i64>,
@@ -232,7 +226,6 @@ pub(crate) fn matches_page(
     } else {
         None
     };
-    // Ownership, revision and rows must come from one read snapshot.
     let tx = db.unchecked_transaction().map_err(db_error)?;
     let revision = tx
         .query_row(
@@ -354,8 +347,6 @@ pub(crate) fn override_match(
     {
         return Err("invalid_match_request");
     }
-    // Authorization is part of the write, not an earlier lookup vulnerable to
-    // a concurrent ownership change. Unknown/foreign IDs share one response.
     let changed = db.execute("INSERT INTO provider_matches(vod_id,metadata_id,kind)
         SELECT v.id,?3,v.kind FROM provider_vod v JOIN provider_ownership o ON o.provider_id=v.provider_id
         WHERE v.id=?2 AND v.kind=?4 AND o.account_id=?1
@@ -373,8 +364,6 @@ mod tests {
     #[test]
     fn page_cursor_encoder_accepts_exact_decoder_bounds_and_refuses_larger_tokens() {
         for bound in [MATCH_CURSOR_BYTES, 4096] {
-            // A JSON string adds exactly two quote bytes; these bounds are
-            // multiples of four, so base64 without padding fills them exactly.
             let value = "x".repeat(bound / 4 * 3 - 2);
             let encoded = encode_page_cursor(&value, bound).unwrap();
             assert_eq!(encoded.len(), bound);

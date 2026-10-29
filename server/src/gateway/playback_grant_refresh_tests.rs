@@ -1,11 +1,8 @@
-//! A source grant stays reopenable while playback keeps using it (backend#18).
 use super::*;
 use std::time::Instant;
 
 const PAST_GRANT_WINDOW: Duration = Duration::from_secs(31 * 60);
 
-/// Ages the discovery grant and its ownership record as if discovery ran
-/// 31 minutes ago.
 fn age_grant(app: &App, stream: &str) {
     let discovered = Instant::now().checked_sub(PAST_GRANT_WINDOW).unwrap();
     app.streams.lock().unwrap().get_mut(stream).unwrap().created = discovered;
@@ -17,7 +14,6 @@ fn age_grant(app: &App, stream: &str) {
         .created = discovered;
 }
 
-/// When the grant's window and its ownership record's window started.
 fn windows(app: &App, stream: &str) -> (Instant, Instant) {
     (
         app.streams.lock().unwrap()[stream].created,
@@ -36,7 +32,6 @@ async fn admit(app: &App, stream: &str, request_id: &str, platform: &str) -> (St
     .await
 }
 
-/// Discovers a source and starts a ready playback of it.
 async fn watching(app: &App, platform: &str) -> (String, String) {
     gateway(app, "first", 1);
     let stream = source(app);
@@ -58,7 +53,6 @@ async fn heartbeat(app: &App, id: &str) -> (StatusCode, Value) {
     .await
 }
 
-/// Lapses the playback lease the way a long network drop would.
 async fn lapse(app: &App, id: &str) {
     app.gateway_playbacks.lapse_lease(id);
     let (status, response) = heartbeat(app, id).await;
@@ -66,7 +60,6 @@ async fn lapse(app: &App, id: &str) {
     assert_eq!(response["error_code"], "playback_expired");
 }
 
-/// After the lease lapsed and retention ran, the same source reopens.
 async fn reopens(app: &App, stream: &str, platform: &str) {
     app.prune();
     let (status, reopened) = admit(app, stream, "reopen", platform).await;
@@ -81,7 +74,6 @@ async fn heartbeat_keeps_an_old_grant_reopenable_after_the_lease_lapses() {
         let (app, _peer) = setup().await;
         let (stream, id) = watching(&app, platform).await;
 
-        // 31 minutes into the episode the heartbeat is still alive.
         age_grant(&app, &stream);
         let (status, response) = heartbeat(&app, &id).await;
         assert_eq!(status, StatusCode::OK, "{response}");
@@ -115,8 +107,6 @@ async fn first_frame_keeps_an_old_grant_reopenable_after_the_lease_lapses() {
 async fn heartbeat_never_extends_a_grant_past_its_upstream_deadline() {
     let (app, _peer) = setup().await;
     let (stream, id) = watching(&app, "android").await;
-    // The upstream URL works for 10 more minutes, so the grant's window
-    // started 20 minutes ago.
     app.streams
         .lock()
         .unwrap()

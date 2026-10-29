@@ -1,4 +1,3 @@
-//! Model a request authenticated before revocation but dispatched afterwards.
 use crate::{auth_integration_tests::fixture, test_support::request, *};
 use axum::{
     extract::OriginalUri,
@@ -39,8 +38,6 @@ async fn stale_approval_cannot_recreate_a_family(revoke: Option<bool>) {
         header::ORIGIN,
         HeaderValue::from_static("https://fixture.invalid"),
     );
-    // Authentication/CSRF happened before revocation. Invoke the dispatch layer
-    // with that captured Principal so the interleaving is deterministic.
     let approved = auth::action(
         State(app.clone()),
         OriginalUri(Uri::from_static("/api/auth/device/approve")),

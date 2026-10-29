@@ -3,11 +3,6 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
-/// Concurrent parent-PIN hashes one app instance may compute at a time.
-///
-/// The bound is per `App`, not process-wide: the router owns its own budget, so
-/// two apps in one process (as every test fixture is) never refuse each other's
-/// PIN work with a 429.
 pub(crate) const PIN_CPU_PERMITS: usize = 2;
 
 fn pin_text(value: &Value, key: &str) -> Result<String, ApiError> {

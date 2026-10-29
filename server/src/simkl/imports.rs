@@ -1,4 +1,3 @@
-//! Profile-scoped, read-only remote import into the existing library and history.
 use super::*;
 mod aliases;
 mod history;

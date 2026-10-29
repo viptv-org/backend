@@ -1,8 +1,6 @@
 use super::*;
 use axum::{extract::OriginalUri, http::HeaderMap, Json};
 
-/// Enforces one rate bucket, mapping a tripped limit to the `(error, retry-after)`
-/// pair that `auth_error_with_retry` turns into a 429 with a `Retry-After` header.
 async fn enforce_rate_limit(
     app: App,
     bucket: String,
@@ -60,9 +58,6 @@ pub(crate) async fn action(
     {
         return auth_error_with_retry(error, retry_seconds);
     }
-    // Per-subject limits are keyed on the canonical path plus a bounded,
-    // hashed credential/device identifier, computed before entering the
-    // credential worker so a rate-limited request can carry its retry hint.
     let subject = if matches!(
         path.as_str(),
         "/auth/login" | "/auth/device/login" | "/auth/recover" | "/auth/register"
@@ -114,17 +109,13 @@ pub(crate) async fn action(
             let db = app.db.lock().map_err(|_| unauthorized())?;
             login_snapshot(&db, &path, &v)?
         };
-        // No SQLite guard exists during any Argon2 work. Expensive actions alone
-        // hold a bounded admission permit, and release it before final database work.
         let prepared = prepare_auth(&path, &v, snapshot)?;
         drop(permit);
         let mut db = app.db.lock().map_err(|_| unauthorized())?;
         let tx = db.transaction().map_err(crate::db_error)?;
-        // Authentication can precede queued/expensive work. A revoked family
-        // must not authorize a later mutation (including a fresh device grant).
         let authority = match p.as_ref() {
             Some(principal) => principal.0.validate_scope(&tx),
-            None => Ok(()), // Public login/refresh/recovery verify their own credentials.
+            None => Ok(()),
         };
         let result = authority.and_then(|()| {
             dispatch_prepared(&tx, &path, p.map(|p| p.0), &h, &v, &prepared)
@@ -353,8 +344,6 @@ pub(crate) fn dispatch_prepared(
                 )
                 .map_err(crate::db_error)?;
             }
-            // Rotate credentials in place: keep the stable family, approved device
-            // grants, and other browser tabs' CSRF tokens intact.
             let access = token();
             let refresh = token();
             db.execute(

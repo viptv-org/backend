@@ -1,6 +1,3 @@
-//! Shared remote viewing projections and explicit source-replacement intent.
-//! Clients report an observed clock; only this producer decides whether that
-//! observation belongs to the newly selected source and whether it can resume.
 use super::*;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -44,7 +41,6 @@ fn same_target(a: &Proof, b: &Proof) -> bool {
     if let (Some(a), Some(b)) = (&a.live_channel_id, &b.live_channel_id) {
         return a == b;
     }
-    // Unqualified provider-private IDs do not become global media identities.
     a.producer == b.producer
         && a.media_id
             .as_ref()
@@ -138,8 +134,6 @@ pub(super) async fn replace(
         intent.observed_position
     };
     request.resume = false;
-    // The original wire intent is already in the idempotency hash. Preparation
-    // now receives only the producer-resolved clock, just like server resume.
     request.replace_source = None;
     Ok(())
 }

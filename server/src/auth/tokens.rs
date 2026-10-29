@@ -74,7 +74,6 @@ pub(crate) fn username(v: &Value) -> Result<String, ApiError> {
     }
     Ok(s)
 }
-// Accepts either device-flow spelling and normalizes it before hashing.
 pub(crate) fn pairing_code(v: &Value) -> Result<String, ApiError> {
     let code = v
         .get("user_code")
@@ -127,7 +126,6 @@ pub(crate) fn rate(db: &Connection, bucket: &str, limit: i64) -> Result<(), ApiE
             |r| r.get(0),
         )
         .map_err(crate::db_error)?;
-    // Buckets are fixed endpoint names, never attacker-provided identifiers.
     if count > limit {
         event(db, "rate_limited", None)?;
         return Err(ApiError(
@@ -137,7 +135,6 @@ pub(crate) fn rate(db: &Connection, bucket: &str, limit: i64) -> Result<(), ApiE
     }
     Ok(())
 }
-/// Seconds until this bucket's fixed window expires; the client retry hint.
 pub(crate) fn retry_after(db: &Connection, bucket: &str) -> i64 {
     db.query_row(
         "SELECT expires FROM auth_limits WHERE bucket=?1",
@@ -156,9 +153,6 @@ pub(crate) fn session(
 ) -> Result<(Value, Option<(String, String)>), ApiError> {
     let (a, r, c) = (token(), token(), token());
     let sid = Uuid::new_v4().to_string();
-    // Expired credentials are not sessions any more: drop them before any
-    // capacity arithmetic, whichever kind left them behind, so an account
-    // whose stored grants have all aged out can always sign in again (app#97).
     db.execute(
         "DELETE FROM auth_sessions WHERE refresh_expires<=?1",
         [now()],
@@ -171,12 +165,6 @@ pub(crate) fn session(
             |row| row.get(0),
         )
         .map_err(crate::db_error)?;
-    // The per-account cap bounds stored grants but never refuses the sign-in
-    // that would bound them (backend#34). The account's oldest session of the
-    // signing-in kind goes first, so a browser login prunes browser history
-    // rather than kicking a paired TV and a new pairing prunes the oldest TV
-    // rather than kicking a browser; only an account that holds none of its own
-    // kind falls back to the oldest session of any kind.
     let account_count: i64 = db
         .query_row(
             "SELECT count(*) FROM auth_sessions WHERE account_id=?1",
@@ -215,19 +203,12 @@ pub(crate) fn session(
         .query_row("SELECT count(*) FROM auth_sessions", [], |row| row.get(0))
         .map_err(crate::db_error)?;
     if total >= MAX_SESSIONS {
-        // Server-wide abuse bound, not an account limit: the oldest member
-        // sessions of any kind go first, and the owner's own rows are never
-        // evicted to make room for another account.
         db.execute(
             "DELETE FROM auth_sessions WHERE id IN(SELECT s.id FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id WHERE a.role='member' ORDER BY s.created_at,s.id LIMIT ?1)",
             [total - MAX_SESSIONS + 1],
         )
         .map_err(crate::db_error)?;
     }
-    // Defensive re-check after eviction. The account has room by construction
-    // (it just made some), so only a server-wide session table that could not
-    // be pruned trips this: a transient capacity state, not an account state,
-    // and not something the caller can remedy by revoking a device.
     let capacity: bool = db.query_row(
         "SELECT (SELECT count(*) FROM auth_sessions WHERE account_id=?1) < ?2 AND (SELECT count(*) FROM auth_sessions) < ?3",
         params![id,MAX_SESSIONS_PER_ACCOUNT,MAX_SESSIONS], |r| r.get(0),
@@ -301,8 +282,6 @@ pub(crate) fn canonical(path: &str, v: &mut Value) -> Result<String, ApiError> {
         _ => path.into(),
     })
 }
-// Bound expensive credential work to the host's full hardware parallelism: this
-// prevents an auth flood from oversubscribing CPUs without imposing an artificial quota.
 pub(crate) static AUTH_CPU: LazyLock<tokio::sync::Semaphore> = LazyLock::new(|| {
     tokio::sync::Semaphore::new(std::thread::available_parallelism().map_or(1, |value| value.get()))
 });
@@ -351,8 +330,6 @@ pub(crate) fn prepare_auth(
     let needs_hash = matches!(path, "/auth/register" | "/auth/recover");
     let new_hash = if needs_hash { Some(password(v)?) } else { None };
     let login_valid = if matches!(path, "/auth/login" | "/auth/device/login") {
-        // A syntactically valid fixed Argon2id PHC forces the same expensive verifier
-        // path for unknown/disabled accounts without creating a usable credential.
         const DUMMY:&str="$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQxMjM0NTY3OA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         let phc = login_hash.as_deref().unwrap_or(DUMMY);
         let candidate = field(v, "password", 256)?;

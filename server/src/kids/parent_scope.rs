@@ -1,4 +1,3 @@
-//! Explicit target-profile authority for parent administration, never ordinary media.
 use super::*;
 #[derive(Clone)]
 pub(crate) struct ParentScope {

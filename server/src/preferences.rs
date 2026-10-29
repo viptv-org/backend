@@ -1,4 +1,3 @@
-//! One persistent, profile-scoped playback policy shared by phone, TV and server.
 use super::*;
 use serde::Serialize;
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -7,9 +6,6 @@ pub(crate) struct Preferences {
     pub audio_language: String,
     pub subtitle_language: String,
     pub subtitles_enabled: bool,
-    /// `always`, `foreign` (only when the audio is not `audio_language`) or
-    /// `never`. `subtitles_enabled` stays `subtitle_mode != never` for clients
-    /// that only know on/off.
     pub subtitle_mode: String,
     pub subtitle_size: String,
     pub subtitle_style: String,
@@ -45,7 +41,6 @@ pub(crate) fn load(db: &Connection, profile: i64) -> Result<Preferences, ApiErro
             let mut value: Value = serde_json::from_str(&v)?;
             if let Some(object) = value.as_object_mut() {
                 object.remove("quality");
-                // Rows saved before subtitle_mode hold only subtitles_enabled.
                 if !object.contains_key("subtitle_mode") {
                     let enabled = object.get("subtitles_enabled") == Some(&Value::Bool(true));
                     object.insert("subtitle_mode".into(), json!(if enabled { "always" } else { "never" }));
@@ -116,8 +111,6 @@ pub(crate) async fn put(
         if object.is_empty() { return Err("Empty playback preferences".into()); }
         if object.keys().all(|key|key=="quality"){return Err(ApiError::from("client_update_required"));}
         for (key,value) in object { if key!="quality" {merged[key]=value.clone();} }
-        // Clients that only know on/off send subtitles_enabled; keep `foreign`
-        // while it stays on. A sent subtitle_mode decides subtitles_enabled.
         if let Some(mode)=object.get("subtitle_mode").and_then(Value::as_str) {
             merged["subtitles_enabled"]=json!(mode!="never");
         } else if let Some(enabled)=object.get("subtitles_enabled").and_then(Value::as_bool) {

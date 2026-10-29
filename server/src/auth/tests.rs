@@ -529,8 +529,6 @@ fn configured_https_origin_is_pinned_without_forwarded_host_trust() {
         HeaderValue::from_static("https://tv.example"),
     );
     assert!(check_origin(&h, std::slice::from_ref(&pin)).is_err());
-    // Additional configured origins are accepted: a reverse-proxy hostname
-    // serving the same bundle must not be rejected as cross-site.
     let mirror = parse_origin("https://watch.example").unwrap();
     h.insert(
         header::ORIGIN,
@@ -1224,8 +1222,6 @@ fn avatar_styles_and_character_catalog_match_the_engine_worlds() {
     let mut worlds: Vec<&str> = AVATAR_WORLDS.iter().map(|(style, _)| *style).collect();
     worlds.sort_unstable();
     assert_eq!(styles, worlds, "account worlds are the engine's catalog");
-    // The bundled character catalog carries each world's real size, so the
-    // engine and the server agree on what a valid choice is.
     for (style, size) in AVATAR_WORLDS {
         if let Some(items) = character_avatars().get(style).and_then(Value::as_array) {
             assert_eq!(items.len(), *size as usize, "{style} catalog size");
@@ -1257,10 +1253,8 @@ fn avatar_choices_respect_each_world_size() {
             "{style} choice 0"
         );
     }
-    // Generated (dicebear) worlds keep the engine's 48.
     assert_eq!(avatar_choice("critters", "viptv-critters-48"), Some(48));
     assert_eq!(avatar_choice("critters", "viptv-critters-49"), None);
-    // A random seed and a style outside the catalog are no catalog choice.
     assert_eq!(avatar_choice("critters", "random-seed"), None);
     assert_eq!(avatar_choice("not-a-world", "viptv-not-a-world-1"), None);
 }
@@ -1282,7 +1276,6 @@ fn profile_payloads_validate_choices_in_the_world_they_name() {
             "{beyond}"
         );
     }
-    // A choice without a style is measured in the profile's current world.
     assert!(
         validate_profile_payload(&json!({"avatar_choice":12}), true, Some("princesses")).is_err()
     );
@@ -1307,7 +1300,6 @@ fn profile_rows_outside_the_world_size_project_no_choice_and_still_rename() {
     )
     .unwrap();
     let id = created["id"].as_str().unwrap().parse::<i64>().unwrap();
-    // Older data or an import can hold a position its world never had.
     db.execute(
         "UPDATE profiles SET avatar_seed='viptv-princesses-12' WHERE id=?1",
         [id],
@@ -1325,7 +1317,6 @@ fn profile_rows_outside_the_world_size_project_no_choice_and_still_rename() {
         character_avatars()["princesses"][0]["url"],
         "{card}"
     );
-    // A write that picks no avatar must not choke on that row.
     let renamed = update_profile(&db, 1, id, &json!({"name":"Renamed"})).unwrap();
     assert_eq!(renamed["name"], "Renamed");
     assert_eq!(renamed["avatar_choice"], Value::Null, "{renamed}");

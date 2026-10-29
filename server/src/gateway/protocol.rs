@@ -1,11 +1,8 @@
-//! Closed projection of gateway responses. Never forward arbitrary upstream JSON.
 use super::client;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 type Result<T> = std::result::Result<T, &'static str>;
 
-/// One closed mapping for control-API errors and asynchronous session failures.
-/// HTTP status alone is never evidence of an upstream connection limit.
 pub(crate) fn failure_code(code: Option<&str>) -> Option<&'static str> {
     Some(match code? {
         "unauthorized" => "gateway_key_rejected",
@@ -133,8 +130,6 @@ fn track(value: &Value) -> Result<Value> {
             out.insert("disposition".into(), Value::Object(disposition));
         }
     }
-    // Selection intent uses input_index. An output-only descriptor may be
-    // displayed by older clients, but cannot advertise an executable selection.
     if out.get("selectable") == Some(&Value::Bool(true))
         && (!out.contains_key("input_index") || out.get("supported") == Some(&Value::Bool(false))) {
         out.insert("selectable".into(), Value::Bool(false));

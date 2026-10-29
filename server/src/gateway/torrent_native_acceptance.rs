@@ -1,4 +1,3 @@
-//! Isolated owned Android qualification server; excluded from production builds.
 use crate::{app_state::ExactVod, app_state::ResourceLease, auth};
 use serde_json::{json, Value};
 use std::{
@@ -108,8 +107,6 @@ async fn actual_backend_android_native_server() {
     let ready = path.with_file_name("backend-ready.json");
     std::fs::write(ready, serde_json::to_vec(&json!({"port": listener.local_addr().unwrap().port(), "access_token": "member-token-1", "profile_id": "1", "sources": sources, "ordinary_sources": ordinary_sources,
         "core_session": {"sessionId":"s1","accountId":"1","profileId":"1","accessToken":"member-token-1","refreshToken":"owned-unused-refresh","expiresIn":3600}})).unwrap()).unwrap();
-    // This finite process owns only its in-memory database. Commands cannot
-    // affect production accounts, fixtures in another process, or an owner APK.
     let commands = path.with_file_name("backend-command.json");
     let command_app = app.clone();
     let watcher = tokio::spawn(async move {

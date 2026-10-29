@@ -1,5 +1,3 @@
-//! Read-only source fetch, private session-bound preview, then backup-first additive merge.
-//! Never log this module's request, source records, identifiers or upstream errors.
 use crate::{
     account_api::{self, Error},
     *,
@@ -25,7 +23,6 @@ const STORAGE: &str = "stremio_storage_unavailable";
 
 pub(crate) enum ReviewError {
     Api(Error),
-    /// Every selected add-on that failed, in selection order, with a fixed reason code.
     AddonVerification { failed: Vec<(String, &'static str)> },
 }
 impl From<Error> for ReviewError {
@@ -102,33 +99,22 @@ struct Preview {
     candidates: Vec<mapper::Candidate>,
     snapshot: [u8; 32],
     summary: Summary,
-    /// Review work that does not depend on the add-on selection, computed once
-    /// per preview (started in the background when the add-on stage opens).
     baseline: Arc<Baseline>,
     addon_metadata: Arc<Mutex<addon_review::AddonMetadataCache>>,
     verified_manifests: Arc<addon_review::VerifiedManifests>,
     _background: Option<Background>,
 }
-/// Anime remap and account-owned/Cinemeta metadata for one preview's source
-/// snapshot. Depends only on the snapshot (and, for metadata, the account's own
-/// add-ons, checked by revision), so every review of the preview shares it. It
-/// lives in the preview, so it expires or is dropped with the preview's slot.
 struct Baseline {
     remapped: Mutex<RemapState>,
     metadata: Mutex<addon_review::BaselineMetadata>,
-    /// Set once the background lookups have finished or run out of budget.
     done: tokio::sync::watch::Sender<bool>,
     owned_revision: String,
 }
 #[derive(Default)]
 struct RemapState {
     value: Option<Arc<remap::Remapped>>,
-    /// An incomplete remap (deadline or transient upstream failure) is retried once
-    /// by a review; after that it is kept as is.
     retried: bool,
 }
-/// Largest trimmed metadata one preview keeps from the anime remap; a larger
-/// result is used but recomputed by later reviews.
 const MAX_RETAINED_REMAP_BYTES: usize = 8 * 1024 * 1024;
 impl Baseline {
     fn new(owned_revision: String) -> Arc<Self> {
@@ -147,7 +133,6 @@ impl Baseline {
         }
         remapped
     }
-    /// The background half: remap and baseline lookups for the whole preview.
     async fn fill(&self, app: &App, pending_metadata: &[Value], source_items: &[Value]) {
         let deadline = tokio::time::Instant::now() + addon_review::background_budget(app);
         let (remapped, ()) = tokio::join!(
@@ -157,9 +142,6 @@ impl Baseline {
         self.keep(remapped, false);
         self.done.send_replace(true);
     }
-    /// What a review uses: the preview's remap, retried once (within `until`) if
-    /// it was incomplete or too large to keep; the items as fetched if the
-    /// background has not produced one yet.
     async fn remapped_for_review(
         &self,
         app: &App,
@@ -182,7 +164,6 @@ impl Baseline {
         }
     }
 }
-/// Aborts background baseline work once its preview is gone.
 struct Background(tokio::task::AbortHandle);
 impl Drop for Background {
     fn drop(&mut self) {
@@ -221,14 +202,9 @@ impl Slot {
 pub(crate) struct Service {
     pending: Mutex<HashMap<String, Slot>>,
     fetches: tokio::sync::Semaphore,
-    /// Previews' add-on-independent lookups run a few at a time, so they never take
-    /// fetch permits from reviews and cannot multiply upstream traffic.
     background: tokio::sync::Semaphore,
     client: reqwest::Client,
-    /// Simkl (`SIMKL_CLIENT_ID`) maps anime ids to IMDb. Unset: anime ids stay
-    /// review-only unless an add-on verifies them.
     metadata_service: Option<remap::MetadataService>,
-    // Fixed HTTPS endpoints in production; only isolated HTTP fixtures can override these.
     #[cfg(test)]
     endpoint: Option<String>,
     #[cfg(test)]
@@ -379,7 +355,6 @@ impl Service {
             .as_str()
             .filter(|s| !s.is_empty() && s.len() <= 256)
             .ok_or(UNAVAILABLE)?;
-        // Stable account identity, not the email, token or source content. Never exposed on the wire.
         let source = format!("{:x}", Sha256::digest(uid.as_bytes()));
         drop(result);
         #[derive(Serialize)]
@@ -437,8 +412,6 @@ impl Drop for Reservation {
     }
 }
 
-// A cancelled or failed network review leaves the last published plan available.
-// A newer generation owns its own flag, so an older response cannot clear it.
 struct ReviewReservation {
     service: Arc<Service>,
     id: String,
@@ -478,8 +451,6 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     }
     fill_missing_posters(db)
 }
-/// Earlier imports stored no poster. Give import-owned rows that still have none
-/// the poster a new import would store; rows with art and non-IMDb titles are kept.
 fn fill_missing_posters(db: &Connection) -> rusqlite::Result<()> {
     let tx = db.unchecked_transaction()?;
     for (table, title) in [("favorites", "id"), ("progress", "CASE WHEN title_id='' THEN id ELSE title_id END")] {
@@ -524,9 +495,6 @@ pub(crate) struct Confirmation {
     #[serde(default)]
     excluded_items: Vec<String>,
 }
-// Account sessions and paired devices may import history and My List into the
-// session's own selected, unrestricted profile, and adopt selected Stremio
-// add-ons into the account's shared add-ons, as `/api/v2/addons` allows them.
 fn authorize(db: &Connection, app: &App, profile: i64) -> Result<(), Error> {
     app.require_profile(db, profile)?;
     if kids::restricted(db, &app.identity())? {
@@ -586,7 +554,6 @@ pub(crate) async fn preview(
     let pending_metadata: Vec<Value> = if inspect_addons {
         items
             .iter()
-            // Verified completion candidates take priority over optional identity review.
             .filter(|item| {
                 item["type"] == "series"
                     && item["state"]["watched"]
@@ -626,7 +593,6 @@ pub(crate) async fn preview(
             .iter()
             .filter_map(|item| {
                 let kind = item["type"].as_str()?;
-                // Removed, never-watched entries are skipped like the summary skips them.
                 if !matches!(kind, "movie" | "series") || mapper::removed_without_history(item) {
                     return None;
                 }
@@ -669,7 +635,6 @@ pub(crate) async fn preview(
     let id = reservation.id.clone();
     let result = account_api::profile_import(app.clone(), app.request_lease(), move |db, _| {
         authorize(db, &worker, profile)?;
-        // A read transaction gives both the plan and its snapshot the same SQLite view.
         let tx = rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Deferred).map_err(|_| STORAGE)?;
         let snapshot = snapshot(&tx, profile)?;
         let summary = merge(&tx, profile, &source, &candidates, summary, false)?;
@@ -693,7 +658,6 @@ pub(crate) async fn preview(
     }).await?;
     reservation.retained = true;
     if let Some((pending_metadata, source_items)) = background_inputs {
-        // Start the add-on-independent review work while the user chooses add-ons.
         let (baseline, worker) = (background_cell, app.clone());
         let task = tokio::spawn(async move {
             let Ok(_turn) = worker.stremio_import.background.acquire().await else { return };
@@ -813,7 +777,6 @@ pub(crate) async fn review(
         let mut done = baseline_cell.done.subscribe();
         let finished = tokio::time::timeout_at(wait_until, done.wait_for(|done| *done)).await.is_ok_and(|r| r.is_ok());
         if baseline_cell.owned_revision != owned_revision(&app) {
-            // Account-owned add-ons changed since the preview: do not reuse their lookups.
             let remapped = baseline_cell.remapped_for_review(&app, &source_items, finished, wait_until).await;
             let (found, retained) = addon_review::baseline_metadata(&app, &pending_metadata).await;
             let attempted = addon_review::identities(&pending_metadata).into_iter().collect();
@@ -828,7 +791,6 @@ pub(crate) async fn review(
         let snapshot = baseline_cell.metadata.lock().map(|m| m.snapshot()).unwrap_or_else(|_| addon_review::BaselineMetadata::default().snapshot());
         (remapped, snapshot)
     };
-    // Verification runs alongside the selection-independent work and fails fast.
     let (verified, (remapped, baseline)) = futures::future::try_join(
         addon_review::verify(&app, &selected_refs, started + addon_review::VERIFY_BUDGET, &known_manifests),
         async { Ok::<_, ReviewError>(baseline.await) },
@@ -838,7 +800,6 @@ pub(crate) async fn review(
     let deadline = (started + budget).max(ready + budget.min(Duration::from_secs(8))).min(started + budget + Duration::from_secs(8));
     let unresolved: Vec<_> = addon_review::identities(&pending_metadata)
         .into_iter()
-        // Only lookups that finished without a result; pending ones may still verify.
         .filter(|identity| {
             baseline.attempted.contains(identity)
                 && !baseline.found.contains_key(identity)
@@ -846,8 +807,6 @@ pub(crate) async fn review(
                 && !remapped.renamed.contains_key(&identity.1)
         })
         .collect();
-    // Stremio resolves metadata in the user's add-on collection order, whatever
-    // order the client listed the selection in.
     let mut by_collection: Vec<(usize, &addon_review::VerifiedAddon)> = ranks.iter().copied().zip(&verified).collect();
     by_collection.sort_by_key(|(rank, _)| *rank);
     let by_collection: Vec<_> = by_collection.into_iter().map(|(_, addon)| addon).collect();
@@ -874,7 +833,6 @@ pub(crate) async fn review(
         for item in &preview.review_only {
             if rows.len() >= MAX_REVIEW_ROWS { break; }
             let renamed = remapped.renamed.get(&item.id);
-            // Resolved, but nothing to import (a removed entry with no history).
             if item.reason == "unmatched_identity" && renamed.is_some() { continue; }
             let names = |c: &mapper::Candidate| c.id == item.id || c.title == item.id || renamed.is_some_and(|t| &c.title == t);
             if candidates.iter().any(|c| c.kind == item.kind && c.progress.is_some() && names(c)) { continue; }
@@ -1031,7 +989,6 @@ pub(crate) async fn apply(
         backup::create(db, &worker.stremio_import)?;
         let tx = rusqlite::Transaction::new_unchecked(db, rusqlite::TransactionBehavior::Immediate)
             .map_err(|_| STORAGE)?;
-        // Recheck after backup/network and under SQLite's write lock, not only middleware.
         worker.request_lease().validate(&tx)?;
         kids::require_parent(&tx, &worker.identity())?;
         authorize(&tx, &worker, profile)?;
@@ -1083,11 +1040,7 @@ pub(crate) async fn apply(
         ))
     })
     .await?;
-    // Imported titles carry only a name and poster; give them the card Details
-    // shows, resolved through this session's own metadata add-ons, in the background.
     crate::engine_v3::library::hydration::schedule(&app, &app.request_lease(), profile);
-    // Imported history never went through the next-episode check: run it, so
-    // Continue Watching and the Watched badge know which shows are caught up.
     crate::engine_v3::continuation::releases::schedule(&app, &app.request_lease(), profile);
     Ok(applied)
 }
@@ -1140,8 +1093,6 @@ fn snapshot(db: &Connection, profile: i64) -> Result<[u8; 32], Error> {
     }
     Ok(hash.finalize().into())
 }
-/// Project an import-owned continuation without changing either episode's playback row.
-/// Ordinary playback invalidates the marker by advancing the original activity timestamp.
 pub(crate) fn continuation_item(
     db: &Connection,
     profile: i64,
@@ -1259,8 +1210,6 @@ fn merge(
                 && local
                     .as_ref()
                     .is_some_and(|v| v["stremio_import_watched"] != true);
-            // Version 2 repairs only the unchanged, receipt-owned imported resume.
-            // A watched assertion alone is not proof that local playback belongs to import.
             let add_anchor = completion_version < 2
                 && p.context["stremio_continuation"].is_object()
                 && progress_receipt == p.timestamp

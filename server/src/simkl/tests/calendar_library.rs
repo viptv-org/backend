@@ -1,5 +1,3 @@
-//! The Calendar merges the profile's library episodes with Simkl's public
-//! schedule; a profile without Simkl still has its own shows.
 use super::*;
 use axum::response::IntoResponse;
 
@@ -29,8 +27,6 @@ impl Drop for Served {
     }
 }
 
-/// A metadata add-on: every `tt…` series has episodes `(season, episode,
-/// released)`.
 async fn addon(app: &mut App, episodes: Vec<(u32, u32, u64)>) -> Served {
     app.addons.allow_test_loopback = true;
     let calls = Arc::new(AtomicUsize::new(0));
@@ -39,7 +35,6 @@ async fn addon(app: &mut App, episodes: Vec<(u32, u32, u64)>) -> Served {
         "/meta/series/:file",
         get(move |Path(file): Path<String>| {
             let id = file.trim_end_matches(".json").to_owned();
-            // `tt9…` series have no metadata.
             let missing = id.starts_with("tt9");
             let videos = episodes
                 .iter()
@@ -65,7 +60,6 @@ async fn addon(app: &mut App, episodes: Vec<(u32, u32, u64)>) -> Served {
     }
 }
 
-/// Saves a series to the library the way a Stremio import does.
 fn save_series(app: &App, id: &str) {
     app.db
         .lock()
@@ -138,12 +132,10 @@ async fn a_library_only_profile_gets_its_series_episodes_without_simkl() {
     assert_eq!(entry["episode_card"]["parent_identity"]["id"], "tt100");
     assert!(page.get("refresh_after_millis").is_none());
 
-    // The library only has series; movies have no own entries.
     let (status, movies) = calendar(&app, "?type=movie").await;
     assert_eq!(status, StatusCode::OK, "{movies}");
     assert!(movies["entries"].as_array().unwrap().is_empty());
 
-    // Kids rules are unchanged: no Calendar for a restricted profile.
     app.db
         .lock()
         .unwrap()
@@ -169,7 +161,6 @@ async fn a_series_without_metadata_leaves_the_others_and_no_refresh_hint() {
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(coordinates(&page), vec![(1, 1)]);
     assert_eq!(page["entries"][0]["card"]["identity"]["id"], "tt100");
-    // A failed lookup is retried on a later read, not announced as pending.
     assert!(page.get("refresh_after_millis").is_none());
 }
 
@@ -195,7 +186,6 @@ async fn library_calendar_windows_pages_and_caches_per_profile() {
     assert_eq!(second["complete"], false);
     assert_eq!(second["entries"][0]["id"], page["entries"][1]["id"]);
 
-    // Cached per profile: no metadata read even without the add-on cache.
     let calls = served.calls.load(Ordering::SeqCst);
     assert_eq!(calls, 1);
     app.addons.forget_responses();
@@ -203,7 +193,6 @@ async fn library_calendar_windows_pages_and_caches_per_profile() {
     assert_eq!(again, page);
     assert_eq!(served.calls.load(Ordering::SeqCst), calls);
 
-    // A new library series is a new key; concurrent reads share one fetch.
     save_series(&app, "tt200");
     app.addons.forget_responses();
     let ((a, first), (b, other)) = tokio::join!(calendar(&app, &window), calendar(&app, &window));
@@ -224,7 +213,6 @@ async fn a_simkl_profile_merges_library_and_public_entries_once() {
         "20":{"title":"Shared series","ids":{"simkl_id":20,"imdb":"tt1234567"}},
         "30":{"title":"Public only","ids":{"simkl_id":30}}
     }});
-    // Simkl lists the same episode as anime; the library shows it as a series.
     let anime_doc = json!({"calendar":[
         {"simkl_id":40,"date":iso(shared),"episode":{"season":2,"episode":3}}
     ],"metadata":{"40":{"title":"Shared anime","ids":{"simkl_id":40,"imdb":"tt1234567"}}}});
@@ -251,7 +239,6 @@ async fn a_simkl_profile_merges_library_and_public_entries_once() {
     let mut served = addon(&mut app, vec![(2, 3, shared), (2, 4, t + 3 * DAY)]).await;
     served.tasks.push(task);
 
-    // Simkl alone already offers the Calendar.
     assert!(navigation(&app).await.contains(&"calendar".to_owned()));
     let (status, public) = calendar(&app, "").await;
     assert_eq!(status, StatusCode::OK, "{public}");
@@ -289,7 +276,6 @@ async fn a_simkl_profile_merges_library_and_public_entries_once() {
     let (status, anime) = calendar(&app, "?type=anime").await;
     assert_eq!(status, StatusCode::OK, "{anime}");
     assert!(anime["entries"].as_array().unwrap().is_empty(), "{anime}");
-    // The public entry ids do not change.
     assert_eq!(
         entries[1]["id"],
         public["entries"]

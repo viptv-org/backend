@@ -7,7 +7,6 @@ const RANDOM_LIMIT: u32 = (u32::MAX / CODE_SPACE) * CODE_SPACE;
 const MAX_CODE_ATTEMPTS: usize = 10;
 
 fn format_random_code(value: u32) -> Option<String> {
-    // Reject the incomplete final range rather than biasing codes with modulo.
     (value < RANDOM_LIMIT).then(|| format!("{:08}", value % CODE_SPACE))
 }
 
@@ -43,7 +42,6 @@ pub(super) fn insert_pairing(
     let device_code = token();
     for _ in 0..MAX_CODE_ATTEMPTS {
         let user_code = generate()?;
-        // Reserve atomically; never replace another pending or approved TV.
         let inserted = db.execute(
             "INSERT INTO auth_pairings(code_hash,device_hash,device_name,expires) VALUES(?1,?2,?3,?4) ON CONFLICT(code_hash) DO NOTHING",
             params![hash(&user_code), hash(&device_code), name, now() + 600],
@@ -76,7 +74,6 @@ pub(crate) async fn device_qr(
             ));
         }
         let db = app.db.lock().map_err(|_| unauthorized())?;
-        // The public QR endpoint must not be an unlimited code-existence oracle.
         rate(&db, "auth:global:/auth/device/qr", 600)?;
         let exists: bool = db
             .query_row(

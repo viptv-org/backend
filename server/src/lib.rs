@@ -60,11 +60,6 @@ mod preserved_data_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-// The original monolithic lib.rs was split into the modules above without
-// changing any bodies. These re-exports keep the crate root namespace
-// identical: every `use super::*` consumer (session, kids, guides, the
-// contract tests, ...) keeps resolving the same names, and the public
-// surface (App, ApiError, router, router_with_viewers) is unchanged.
 pub(crate) use app_state::*;
 pub use app_state::{ApiError, App};
 pub(crate) use handlers_catalog::*;

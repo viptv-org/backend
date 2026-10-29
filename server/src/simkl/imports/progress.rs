@@ -1,4 +1,3 @@
-//! Insert original provider events; only unchanged importer-owned records may advance.
 use super::*;
 use viptv_engine::presentation::Card;
 pub(super) fn millis(value: &Value) -> Option<u64> {
@@ -71,7 +70,6 @@ pub(super) fn apply(
             return Ok(false);
         }
     }
-    // Newer title activity wins, including another episode or an explicit completed override.
     let title = parent.map(|p| p.identity.id.as_str()).unwrap_or(id);
     let latest:Option<u64>=db.query_row("SELECT MAX(updated_at) FROM progress WHERE profile_id=?1 AND type=?2 AND (id=?3 OR title_id=?3)",params![profile,kind,title],|r|r.get(0)).map_err(db_error)?;
     if !completed && latest.is_some_and(|t| t.saturating_mul(1000) >= updated) {

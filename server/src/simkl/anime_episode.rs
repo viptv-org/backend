@@ -1,4 +1,3 @@
-//! Resolve provider-asserted AniDB/Simkl/TVDB facts together, never by list order.
 use serde_json::Value;
 
 pub(super) fn select(
@@ -48,8 +47,6 @@ pub(super) fn select(
     {
         return None;
     }
-    // Scrobble/history address anime by regular absolute number. A second
-    // regular episode with that number makes the reverse mapping ambiguous.
     if let Some(number) = selected["episode"].as_u64() {
         if number == 0
             || rows

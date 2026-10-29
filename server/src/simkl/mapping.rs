@@ -52,7 +52,6 @@ pub(crate) async fn resolve_id(
     Ok(Some(Resolved { target, parent }))
 }
 
-/// Enrich from authoritative provider metadata while retaining canonical library/playback IDs.
 pub(crate) async fn resolve_request(
     app: &App,
     value: &mut Value,
@@ -92,7 +91,6 @@ pub(crate) async fn resolve_request(
         .as_deref()
         .and_then(|s| s.parse::<u32>().ok())
         .map_or(Value::Null, |year| json!(year));
-    // Never let unverified alternate IDs or aliases override the authoritative mapping.
     for key in ["tmdb_id", "aliases"] {
         if let Some(object) = value.as_object_mut() {
             object.remove(key);

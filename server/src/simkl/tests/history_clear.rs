@@ -125,7 +125,6 @@ async fn clear_history_is_selected_profile_local_only_and_invalidates_continue_w
         .0,
         StatusCode::OK
     );
-    // This local-only action uses the same selected child-profile policy as GET.
     app.db
         .lock()
         .unwrap()

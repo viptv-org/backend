@@ -19,7 +19,6 @@ pub(super) fn forbidden() -> ApiError {
 pub(super) fn parent_required() -> ApiError {
     ApiError(StatusCode::FORBIDDEN, MSG_PARENT_REQUIRED.into())
 }
-// One stored-PIN lookup; callers bind either a known account id or a nullable one.
 pub(super) fn stored_pin(
     db: &Connection,
     account: impl rusqlite::ToSql,
@@ -215,7 +214,6 @@ pub(crate) async fn approve(
     .await
 }
 
-// Shared by legacy and typed entry points: keep the original policy and write semantics.
 pub(super) fn apply_approval(
     tx: &Connection,
     app: &App,

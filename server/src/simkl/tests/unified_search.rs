@@ -86,9 +86,6 @@ async fn configuration(app: &App, browser: &str, remove: Option<&str>) {
 #[tokio::test]
 async fn multi_catalog_addons_split_rows_per_catalog_with_catalog_names() {
     let (mut app, task, _, _) = stack(0).await;
-    // Give addon 101 a second searchable movie catalog so search must split
-    // rows per catalog, each labeled with the catalog's own name. The stack
-    // seals addon manifests into the vault, so update the sealed blob.
     let (manifest_url, mut manifest): (String, Value) = {
         let db = app.db.lock().unwrap();
         let sealed: String = db
@@ -162,7 +159,6 @@ async fn multi_catalog_addons_split_rows_per_catalog_with_catalog_names() {
     assert_eq!(second["title"], "Fixture 101 · Extra Catalog");
     assert_eq!(second["state"], "Ready");
     assert!(!second["cards"].as_array().unwrap().is_empty());
-    // Single-catalog add-ons keep the legacy row identity.
     assert!(rows.iter().any(|row| row["id"] == "addon:102"));
     task.abort();
 }
@@ -685,8 +681,6 @@ async fn typed_parent_search_and_approval_are_selected_profile_scoped_and_observ
         assert_eq!(count, 3);
         db.execute("DELETE FROM parent_grants", []).unwrap();
     }
-    // The restricted detail lookup is scoped to the simkl provider; the
-    // scoped store authorizes the approved series.
     let (status, detail) = request(
         &app,
         "member-token-1",
@@ -1053,7 +1047,6 @@ async fn restricted_canonical_episode_consumers_use_verified_policy_and_revoke_r
         .0,
         StatusCode::OK
     );
-    // The same approved namespace cannot be relabeled as another add-on's opaque ID.
     assert_eq!(
         request(
             &app,
@@ -1147,8 +1140,6 @@ async fn restricted_opaque_explicit_consumers_remain_unsupported_without_widenin
 {
     let (app, task, _, _) = stack(0).await;
     configuration(&app, "stremio", None).await;
-    // Opaque unscoped ids can no longer be approved through the typed
-    // endpoint: a scoped selection is required.
     assert_eq!(
         request(
             &app,
@@ -1169,9 +1160,6 @@ async fn restricted_opaque_explicit_consumers_remain_unsupported_without_widenin
             [],
         )
         .unwrap();
-    // The opaque unscoped approval is no longer accepted by the typed
-    // endpoint; seed the legacy row directly to keep exercising the legacy
-    // consumer surface without widening it.
     app.db
         .lock()
         .unwrap()
@@ -1192,9 +1180,6 @@ async fn restricted_opaque_explicit_consumers_remain_unsupported_without_widenin
         .0,
         StatusCode::OK
     );
-    // Explicit-origin consumers for opaque titles are now served through the
-    // scoped document flow, which validates observations itself; unobserved
-    // titles would still be rejected.
     assert_eq!(
         request(
             &app,
@@ -1372,7 +1357,6 @@ fn add_parent_target(app: &App) {
 async fn parent_target_search_and_approval_use_owned_target_without_switching_media_profile() {
     let (app, task, _, _) = stack(0).await;
     add_parent_target(&app);
-    // An explicit target configuration uses only its own enabled assignments.
     let (status, value) = request(
         &app,
         "member-token-1",

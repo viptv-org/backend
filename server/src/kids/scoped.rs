@@ -1,4 +1,3 @@
-//! Origin-scoped observations and grants, additive to explicitly legacy policy rows.
 use super::*;
 use viptv_engine::{
     origin::{
@@ -46,7 +45,6 @@ fn origin_key(origin: &MetadataOrigin) -> Result<String, ApiError> {
         .key()
         .map_err(|_| ApiError::from("Invalid metadata origin"))
 }
-/// Caller has verified this exact provider document and all identity assertions.
 pub(crate) fn observe(
     db: &Connection,
     account: i64,
@@ -221,7 +219,6 @@ pub(crate) fn approve_db(
         }
         db.execute("INSERT INTO kids_origin_approvals(profile_id,policy_key,card)VALUES(?1,?2,?3)ON CONFLICT(profile_id,policy_key)DO UPDATE SET card=excluded.card",params![profile,policy,serde_json::to_string(card).map_err(|_|ApiError::from("Invalid title approval"))?]).map_err(db_error)?;
     } else {
-        // A posted alias can only select an exact host-stored assertion-bearing grant.
         let stored: Option<String> = db
             .query_row(
                 "SELECT card FROM kids_origin_approvals WHERE profile_id=?1 AND policy_key=?2",
@@ -270,7 +267,6 @@ pub(crate) fn observe_document(
         .metadata_origin
         .as_ref()
         .ok_or("Metadata origin is required")?;
-    // Replace current authoritative episode edges; removed provider episodes lose access.
     db.execute("UPDATE kids_origin_media SET current=0 WHERE account_id=?1 AND origin=?2 AND parent_key=?3 AND policy_key<>parent_key",params![account,origin_key(origin)?,key(parent)?]).map_err(db_error)?;
     let rows = meta["videos"].as_array();
     for episode in episodes {
@@ -317,7 +313,6 @@ pub(crate) fn invalidate_mismatch(
     Ok(())
 }
 
-/// Membership projects only identity columns; presentation blobs are unnecessary policy input.
 pub(crate) fn require_identity_db(
     db: &Connection,
     p: &auth::Principal,

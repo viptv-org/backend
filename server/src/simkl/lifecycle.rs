@@ -53,7 +53,6 @@ pub(super) fn identity_value(
     Ok(value)
 }
 
-/// Supported lifecycle calls; incomplete stops become pauses to retain VIPTV's 95% policy.
 pub(crate) async fn playback(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,

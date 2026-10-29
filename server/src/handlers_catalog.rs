@@ -104,7 +104,6 @@ pub(crate) async fn start_streams(
     State(a): State<App>,
     axum::Json(mut v): axum::Json<Value>,
 ) -> ApiResult {
-    // Explicit IPTV continuation scopes discovery, without changing ordinary source browsing.
     let only_provider = match v.get("only_provider_id") {
         None => None,
         Some(value) => Some(
@@ -204,7 +203,7 @@ pub(crate) async fn start_streams(
         .as_ref()
         .is_some_and(|(provider, _, _)| provider == "stremio")
     {
-        None // An add-on's opaque ID is never authority to invoke Simkl mappings.
+        None
     } else {
         crate::simkl::resolve_request(&metadata_app, &mut v).await?
     };
@@ -366,8 +365,6 @@ pub(crate) async fn start_streams(
                     emit_batch(&a, &job, &source, batch, false);
                 })
                 .await;
-            // One pending token represents the entire IPTV producer, not each batch.
-            // Final completion never discards already registered sources.
             emit(&a, &job, "iptv", r.map(|_| Vec::new()));
         });
     }

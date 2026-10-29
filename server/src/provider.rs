@@ -1,5 +1,3 @@
-//! Xtream indexes are internal stream candidates, never discovery catalogs.
-//! Call `init` during database startup before constructing `ProviderService`.
 use futures::{stream, StreamExt};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
@@ -42,7 +40,6 @@ use normalize::*;
 use service::*;
 
 const MAX_RESPONSE: usize = 64 * 1024 * 1024;
-// Detail discovery is demand-driven, never a full-library metadata sync.
 const MAX_LAZY_DETAILS: usize = 8;
 
 pub fn init(db: &Connection) -> rusqlite::Result<()> {

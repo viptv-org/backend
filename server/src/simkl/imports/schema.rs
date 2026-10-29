@@ -13,7 +13,6 @@ pub(in crate::simkl) fn init(db: &Connection) -> rusqlite::Result<()> {
     CREATE TABLE IF NOT EXISTS simkl_import_progress(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,type TEXT NOT NULL,id TEXT NOT NULL,receipt TEXT NOT NULL,source_updated_at_millis INTEGER NOT NULL,PRIMARY KEY(profile_id,type,id));
     CREATE TABLE IF NOT EXISTS simkl_import_snapshots(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,account_id INTEGER NOT NULL,link_revision INTEGER NOT NULL,configuration_revision INTEGER NOT NULL,activities TEXT NOT NULL,items TEXT NOT NULL);")
 }
-/// Revalidate under the same database lock as publication, avoiding a revoke/write race.
 pub(in crate::simkl) fn validate_db(
     db: &Connection,
     app: &App,

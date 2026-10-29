@@ -1,4 +1,3 @@
-//! Read-only linked-profile watchlists; no memos, PRO claims, state writes or public-cache sharing.
 use super::*;
 use viptv_engine::library::{Entry, LibraryStatistics};
 pub(super) type Cache =
@@ -93,7 +92,6 @@ pub(crate) async fn load(
     Ok((entries, known, total, running))
 }
 
-/// Cache-only projection never waits for an active private network read.
 pub(crate) async fn cached(app:&App,profile:i64,lease:&ResourceLease)->Result<Option<(Vec<Entry>,usize,usize,bool)>,ApiError>{
     let access=store::credential(app,profile,Capability::Authorization)?;
     let key=format!("{}:{}:{:?}",app.identity().key(),access.configuration_revision,access.revision);

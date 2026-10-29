@@ -1,4 +1,3 @@
-//! Account-owned Xtream management. Secrets are write-only, encrypted at creation.
 use super::{credentials_v2::Credentials, *};
 use crate::{
     account_api::{self, Error},
@@ -161,8 +160,6 @@ pub(crate) async fn create(
         let tx=db.unchecked_transaction().map_err(storage)?;
         let count:i64=tx.query_row("SELECT count(*) FROM provider_ownership WHERE account_id=?1",[account],|r|r.get(0)).map_err(storage)?;
         if count>=64 {return Err(Error::Code("too_many_providers"));}
-        // Compare decrypted logins only within this account. No cross-tenant
-        // duplicate response reveals whether someone else has the subscription.
         let ids=tx.prepare("SELECT p.id FROM providers p JOIN provider_ownership o ON o.provider_id=p.id WHERE o.account_id=?1").map_err(storage)?.query_map([account],|r|r.get::<_,i64>(0)).map_err(storage)?.collect::<rusqlite::Result<Vec<_>>>().map_err(storage)?;
         for id in ids {
             let old=read_credentials(&tx,&vault,account,id)?;
@@ -287,8 +284,6 @@ pub(crate) async fn delete(
             .map_err(storage)?;
         v2::live_catalog(&tx, account, None)?;
         tx.commit().map_err(storage)?;
-        // Existing permits retain their Arc until playback cleanup, but a deleted
-        // connection must not leave an unbounded registry of idle gates.
         if let Ok(mut gates) = gates.lock() {
             gates.remove(&-id);
         }

@@ -1,4 +1,3 @@
-//! Preserve addon identities while encrypting token-bearing URLs and manifests.
 use super::*;
 use crate::secret_store::Vault;
 use rusqlite::OptionalExtension;
@@ -87,8 +86,6 @@ pub(crate) fn init(db: &Connection) -> Result<(), &'static str> {
         [],
     )
     .map_err(storage)?;
-    // Keep the token outside addons so removing the final row cannot reset it.
-    // Triggers run in the writer's transaction, including Stremio's addon/data apply.
     db.execute_batch("CREATE TABLE IF NOT EXISTS addon_config_revisions(
             account_id INTEGER PRIMARY KEY, revision TEXT NOT NULL CHECK(length(revision)=32));
         CREATE TRIGGER IF NOT EXISTS addon_config_insert AFTER INSERT ON addons BEGIN
@@ -143,7 +140,6 @@ pub(super) fn read(
     read_inner(db, vault, account, id, url, manifest, version, false)
 }
 
-// Explicitly offline only: encryption must inspect the original plaintext.
 #[allow(clippy::too_many_arguments)]
 fn read_inner(
     db: &Connection,
@@ -295,7 +291,6 @@ fn store_rows(
     let id = if let Some(id) = existing {
         id
     } else {
-        // Never reuse a deleted encrypted addon ID for a different source.
         tx.execute(
             "INSERT OR IGNORE INTO addon_identity_v2(id) SELECT id FROM addons",
             [],
@@ -322,7 +317,6 @@ fn store_rows(
         [account],
     )
     .map_err(storage)?;
-    // The caller commits the encompassing transaction.
     Ok(id)
 }
 pub(crate) fn encrypt_legacy(
@@ -456,7 +450,6 @@ mod tests {
     fn vault() -> Arc<Vault> {
         Arc::new(Vault::from_json(&json!({"active":"fixture","keys":{"fixture":base64::engine::general_purpose::STANDARD.encode([7u8;32])}}).to_string()).unwrap())
     }
-    /// Store against the current snapshot, as a fresh install does.
     fn store(
         db: &Connection,
         vault: &Vault,
@@ -497,7 +490,6 @@ mod tests {
             .unwrap();
         assert_eq!(public["manifest_url"], Value::Null);
         assert_eq!(public["credentials_encrypted"], true);
-        // The manifest's logo can repeat the private token: only the server's route is listed.
         assert_eq!(public["logo"].as_str().unwrap().split('?').next(), Some(&*format!("/api/addons/{id}/logo")));
         assert!(!public.to_string().contains("private-addon-token"));
         assert!(!public.to_string().contains("art.invalid"));

@@ -93,10 +93,8 @@ pub(super) fn display(
     }).collect()
 }
 
-/// Total time for verifying every selected add-on manifest.
 pub(super) const VERIFY_BUDGET: Duration = Duration::from_secs(30);
 
-/// A fixed reason code for a manifest check failure; never upstream text or URLs.
 fn reason(code: &str) -> &'static str {
     match code {
         "invalid_addon_endpoint" | "addon_private_destination" => "addon_unsupported_transport",
@@ -131,13 +129,8 @@ async fn check(
     Ok((url, manifest))
 }
 
-/// Manifests verified earlier in this preview, by add-on handle. Failures are not
-/// kept, so an unticked-and-retried add-on is checked again.
 pub(super) type VerifiedManifests = Mutex<HashMap<String, (String, Value)>>;
 
-/// Checks every selected add-on (manifest checks queue on the server-wide limit
-/// within `deadline`) and reports all failures together, so a user can untick
-/// every failing add-on in one step.
 pub(super) async fn verify(
     app: &App,
     selected: &[&SourceAddon],
@@ -176,7 +169,6 @@ pub(super) async fn verify(
         match outcome {
             Ok((url, manifest)) => verified.push((addon.id.clone(), url, manifest)),
             Err(reason) => {
-                // Position and category only, never the add-on URL.
                 tracing::warn!(position, selected = selected.len(), reason, "Stremio import add-on verification failed");
                 failed.push((addon.id.clone(), reason));
             }
@@ -206,9 +198,6 @@ pub(super) async fn verify(
 }
 
 
-/// Keep only what identity verification reads, so long series (One Piece,
-/// Detective Conan) are bounded by episode count rather than by overviews
-/// and thumbnails.
 pub(super) fn trimmed_meta(meta: &Value) -> Value {
     let mut out = json!({"id":meta["id"],"type":meta["type"]});
     if let Some(videos) = meta["videos"].as_array() {
@@ -234,7 +223,6 @@ fn imdb(id: &str) -> bool {
         (5..=12).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit())
     })
 }
-/// Fixed public Cinemeta, for IMDb movie/series ids only.
 pub(super) async fn cinemeta(app: &App, kind: &str, id: &str) -> Option<Value> {
     if !(matches!(kind, "movie" | "series") && imdb(id)) {
         return None;
@@ -248,8 +236,6 @@ pub(super) async fn cinemeta(app: &App, kind: &str, id: &str) -> Option<Value> {
     #[cfg(not(test))]
     let base = "https://v3-cinemeta.strem.io";
     let url = url::Url::parse(&format!("{base}/meta/{kind}/{id}.json")).ok()?;
-    // The raw response carries overviews and thumbnails; only the trimmed
-    // identity fields are retained.
     let value = crate::source_http::json(
         url,
         4_000_000,
@@ -280,7 +266,6 @@ fn retain_metadata(
     found.insert(identity, meta);
     true
 }
-/// Identities worth looking up, in the caller's priority order, without duplicates.
 pub(super) fn identities(items: &[Value]) -> Vec<(String, String)> {
     let mut seen = std::collections::HashSet::new();
     items
@@ -297,13 +282,8 @@ pub(super) fn metadata_budget(app: &App) -> Duration {
         return duration;
     }
     let _ = app;
-    // Leave room for add-on verification and publication within the dashboard's
-    // 45-second request timeout. Completed metadata survives this earlier cutoff.
     Duration::from_secs(30)
 }
-/// Runs `lookup` for each identity, at most eight at a time, and retains completed
-/// results within both the deadline and the byte budget. Unfinished identities stay
-/// review-only, never guessed.
 async fn collect<F, Fut>(
     identities: Vec<(String, String)>,
     deadline: tokio::time::Instant,
@@ -329,8 +309,6 @@ async fn collect<F, Fut>(
         }
     }
 }
-/// What a review without add-ons verifies: account-owned sources first, then fixed
-/// public Cinemeta for IMDb ids.
 async fn baseline_meta(app: &App, kind: &str, id: &str) -> Option<Value> {
     let owned = app
         .addons
@@ -346,7 +324,6 @@ async fn baseline_meta(app: &App, kind: &str, id: &str) -> Option<Value> {
         None => cinemeta(app, kind, id).await,
     }
 }
-/// Baseline metadata, independent of the add-on selection, and the retained bytes.
 pub(super) async fn baseline_metadata(
     app: &App,
     items: &[Value],
@@ -361,13 +338,9 @@ pub(super) async fn baseline_metadata(
     (found, MAX_RETAINED_METADATA_BYTES - remaining)
 }
 
-/// Per-preview baseline lookups, filled progressively by background work so a
-/// review can use whatever has completed and later reviews see more.
 pub(super) struct BaselineMetadata {
     found: HashMap<(String, String), Value>,
-    /// Lookups that completed, with or without a result.
     attempted: std::collections::HashSet<(String, String)>,
-    /// Missing IMDb results already retried once by a review.
     retried: std::collections::HashSet<(String, String)>,
     remaining: usize,
 }
@@ -395,7 +368,6 @@ impl BaselineMetadata {
         }
     }
 }
-/// Background work may take longer than one request: the user is choosing add-ons.
 pub(super) fn background_budget(app: &App) -> Duration {
     #[cfg(test)]
     if let Some(duration) = app.stremio_import.metadata_deadline {
@@ -432,7 +404,6 @@ async fn collect_shared(
         }
     }
 }
-/// Fills `state` for every identity not yet attempted.
 pub(super) async fn fill_baseline(
     app: &App,
     items: &[Value],
@@ -445,8 +416,6 @@ pub(super) async fn fill_baseline(
     };
     collect_shared(app, wanted, deadline, state, false).await;
 }
-/// Retries, once per identity, IMDb lookups that completed without a result (a
-/// Cinemeta timeout is not evidence the title is unknown).
 pub(super) async fn retry_baseline(app: &App, state: &Mutex<BaselineMetadata>, deadline: tokio::time::Instant) {
     let wanted: Vec<_> = {
         let Ok(mut state) = state.lock() else { return };
@@ -459,15 +428,11 @@ pub(super) async fn retry_baseline(app: &App, state: &Mutex<BaselineMetadata>, d
         missing
     };
     if !wanted.is_empty() {
-        // An identity counts as retried once its retry completes.
         collect_shared(app, wanted, deadline, state, true).await;
     }
 }
 
 const MAX_CACHED_ADDON_METADATA_BYTES: usize = 8 * 1024 * 1024;
-/// Per-preview results of selected add-on metadata lookups, keyed by add-on
-/// manifest URL and identity, so changing the add-on choice reuses earlier answers.
-/// Only completed responses are kept; failed requests are retried next review.
 #[derive(Default)]
 pub(super) struct AddonMetadataCache {
     entries: HashMap<(String, String, String), Option<Value>>,
@@ -485,7 +450,6 @@ impl AddonMetadataCache {
         }
     }
 }
-/// The first selected add-on, in selection order, whose metadata names this identity.
 async fn selected_meta(
     app: &App,
     selected: &[&VerifiedAddon],
@@ -519,10 +483,6 @@ async fn selected_meta(
     }
     None
 }
-/// Stremio encodes an IMDb series' watched bitfield against Cinemeta's episode
-/// list, so selected add-ons never replace what the baseline already verified:
-/// callers pass only identities the baseline (and anime remap) could not resolve.
-/// Selecting add-ons can add verification but never lose it, whatever the order.
 pub(super) async fn selected_metadata(
     app: &App,
     unresolved: Vec<(String, String)>,

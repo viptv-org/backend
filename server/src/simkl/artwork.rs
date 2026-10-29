@@ -1,4 +1,3 @@
-//! Optional artwork uses only the authoritative metadata's explicit IMDb mapping.
 use super::*;
 use viptv_engine::presentation::Card;
 
@@ -46,8 +45,6 @@ pub(super) async fn enrich_service(service: &Service, card: &mut Card) {
     {
         value.clone()
     } else {
-        // This is the canonical public logo asset path returned by Cinemeta.
-        // Verify the image itself; fetching full series metadata just for artwork is unnecessary.
         let Ok(url) = url::Url::parse(&format!(
             "https://images.metahub.space/logo/medium/{imdb}/img"
         )) else {

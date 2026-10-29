@@ -323,7 +323,6 @@ fn series_resume_candidates_with_bits(bits: [u8; 2]) -> Vec<mapper::Candidate> {
     )
 }
 
-/// One series item with `state` and episodes 1–12 of season 2 watched per `bits`.
 fn series_candidates(bits: [u8; 2], mut state: Value) -> Vec<mapper::Candidate> {
     use base64::Engine;
     use std::io::Write;
@@ -349,11 +348,9 @@ fn series_candidates(bits: [u8; 2], mut state: Value) -> Vec<mapper::Candidate> 
 async fn a_finished_current_episode_is_a_dated_completion_that_updates_an_undated_one() {
     let app = crate::auth_integration_tests::fixture();
     let db = app.db.lock().unwrap();
-    // An earlier import knew episode 12 only as watched, without a date.
     let undated = series_candidates([0xff, 0x0f], json!({"timesWatched":1}));
     merge(&db, 1, "synthetic-source", &undated, Summary::default(), true)
         .unwrap_or_else(|_| panic!("merge failed"));
-    // Stremio now has it as the current video, finished: offset reset to 0.
     let finished = series_candidates(
         [0xff, 0x0f],
         json!({"lastWatched":DATE,"video_id":"tt2934286:2:12","timeOffset":0,"duration":100000,"timesWatched":1}),
@@ -1027,7 +1024,6 @@ async fn failed_review_can_retry_from_last_published_version() {
         .1["error_code"],
         "stremio_invalid_request"
     );
-    // Exhausting verification permits fails after reservation; no plan exists yet.
     let permits = f.app.stremio_import.fetches.acquire_many(4).await.unwrap();
     assert_eq!(
         request(
@@ -1263,8 +1259,6 @@ async fn metadata_deadline_keeps_fast_verified_results_and_bounds_inflight() {
     assert!(maximum.load(Ordering::SeqCst) <= 8);
     upstream.abort();
 }
-/// A loopback add-on host: `/ok{n}` serve valid manifests (slowly, counting
-/// concurrent checks), `/renamed` changed its id, `/broken` is not JSON.
 async fn addon_host(delay: Duration) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
     use axum::extract::Path;
     struct Active(Arc<AtomicUsize>);
@@ -1322,7 +1316,6 @@ async fn review_reports_every_failing_addon_with_a_fixed_reason() {
     assert_eq!(reasons[ids[1].as_str().unwrap()], "manifest_id_changed");
     assert_eq!(reasons[ids[3].as_str().unwrap()], "addon_protocol_invalid");
     assert!(!failure.to_string().contains(&base) && !failure.to_string().contains("manifest.json"));
-    // Unticking exactly the reported add-ons succeeds in one step.
     let path = import_path(&preview, "review");
     let (status, reviewed) = request(&f.app, "member-token-1", "POST", &path,
         json!({"selected_addons":[ids[0], ids[2]],"expected_review_revision":0})).await;
@@ -1392,7 +1385,6 @@ async fn removed_entries_without_history_are_not_review_rows() {
     assert_eq!(rows.iter().filter(|r| r["reason"] == "unmatched_identity").count(), 1, "{reviewed}");
     assert_eq!(reviewed["summary"]["skipped_items"], 1);
     assert_eq!(reviewed["summary"]["needs_review"], 1);
-    // The dashboard's rowCountKeys invariant: row counts sum to the summary.
     for key in ["favorites_to_add", "progress_to_add", "progress_to_update", "existing_preserved", "already_imported"] {
         let sum: u64 = rows.iter().map(|r| r["counts"][key].as_u64().unwrap()).sum();
         assert_eq!(json!(sum), reviewed["summary"][key], "{key}");
@@ -1412,7 +1404,6 @@ async fn selected_metadata_addon_never_replaces_cinemeta_verification() {
     let base = format!("http://{}", listener.local_addr().unwrap());
     let upstream = tokio::spawn(async move {
         axum::serve(listener, Router::new()
-            // Public Cinemeta: the list the bitfield was encoded against.
             .route("/meta/series/:id", get(|Path(id): Path<String>| async move {
                 let title = id.trim_end_matches(".json").to_owned();
                 Json(json!({"meta":{"id":title,"type":"series","videos":[
@@ -1420,7 +1411,6 @@ async fn selected_metadata_addon_never_replaces_cinemeta_verification() {
                     {"id":format!("{title}:1:2"),"season":1,"episode":2}]}}))
             }))
             .route("/addon/manifest.json", get(|| async { Json(json!({"id":"synthetic.meta","name":"Other metadata","types":["series"],"idPrefixes":["tt"],"resources":["meta"]})) }))
-            // A different episode list for the same show, which cannot verify the bitfield.
             .route("/addon/meta/series/:id", get(move |Path(id): Path<String>| {
                 calls.fetch_add(1, Ordering::SeqCst);
                 async move {
@@ -2233,7 +2223,6 @@ async fn authorization_unauthorized_foreign_replaced_device_restricted_and_paren
             [],
         )
         .unwrap();
-    // A paired device may import into its own selected, unrestricted profile.
     let (status, device) = request(&f.app, "member-token-1", "POST", PATH, credentials()).await;
     assert_eq!(status, StatusCode::OK, "{device}");
     assert_eq!(f.calls.load(Ordering::SeqCst), 2);
@@ -2265,14 +2254,12 @@ async fn authorization_unauthorized_foreign_replaced_device_restricted_and_paren
     assert_eq!(counts(&f.app), (0, 0, 0));
 }
 const DEVICE: &str = "device-token-1";
-/// A paired device session `d1` for account 1, separate from browser session `s1`.
 fn pair_device(app: &App, profile: Option<i64>) {
     app.db.lock().unwrap().execute(
         "INSERT INTO auth_sessions(id,account_id,profile_id,access_hash,refresh_hash,csrf_hash,kind,device_name,access_expires,refresh_expires,created_at) VALUES('d1',1,?1,?2,'refresh-device','unused','device','Fixture phone',?3,?3,0)",
         params![profile, auth::hash(DEVICE), util::now() + 3600],
     ).unwrap();
 }
-/// The draft's route; an empty action is the cancel (DELETE) route.
 fn import_path(preview: &Value, action: &str) -> String {
     let draft = format!(
         "/api/profiles/1/imports/stremio/{}",
@@ -2284,7 +2271,6 @@ fn import_path(preview: &Value, action: &str) -> String {
         format!("{draft}/{action}")
     }
 }
-/// Account add-on storage and Simkl tracking receipts (an import never pushes to Simkl).
 fn account_side_effects(app: &App) -> (i64, i64, i64) {
     let db = app.db.lock().unwrap();
     let count = |sql: &str| db.query_row(sql, [], |r| r.get(0)).unwrap();
@@ -2312,11 +2298,9 @@ async fn device_session_previews_reviews_and_applies_into_its_own_profile() {
     let revision_before = f.app.addons.clone().for_account(1).revision().unwrap();
     let side_effects = account_side_effects(&f.app);
     let preview = device_staged_preview(&f.app).await;
-    // Read-only listing for the device, same shape as for account sessions.
     assert_eq!(preview["addons"].as_array().unwrap().len(), 1, "{preview}");
     assert_eq!(preview["summary"]["favorites_to_add"], 2);
     assert_eq!(counts(&f.app), (0, 0, 0));
-    // A browser session of the same account cannot use the device's draft.
     assert_eq!(
         request(
             &f.app,
@@ -2362,7 +2346,6 @@ async fn device_session_previews_reviews_and_applies_into_its_own_profile() {
         f.app.addons.clone().for_account(1).revision().unwrap(),
         revision_before
     );
-    // Device cancel works on its own draft and not on the browser session's.
     let own = request(&f.app, DEVICE, "POST", PATH, credentials()).await.1;
     let (status, cancelled) = request(
         &f.app,
@@ -2430,7 +2413,6 @@ async fn device_session_reviews_and_registers_selected_addons_into_its_own_profi
     assert_eq!(reviewed["addons_to_add"], 1);
     assert!(!reviewed.to_string().contains("secret-token"));
     assert!(manifest_calls.load(Ordering::SeqCst) >= 1);
-    // Review verifies but writes nothing.
     assert_eq!(counts(&f.app), (0, 0, 0));
     assert_eq!(account_side_effects(&f.app), (addons, credentials, receipts));
     assert_eq!(
@@ -2438,7 +2420,6 @@ async fn device_session_reviews_and_registers_selected_addons_into_its_own_profi
         revision_before
     );
     let apply = json!({"confirm":true,"review_revision":reviewed["review_revision"]});
-    // The device's draft stays bound to the device session.
     assert_eq!(
         request(
             &f.app,
@@ -2465,7 +2446,6 @@ async fn device_session_reviews_and_registers_selected_addons_into_its_own_profi
     assert_eq!(applied["addons_added"], 1);
     assert_eq!(applied["addons_existing"], 0);
     assert_eq!(counts(&f.app), (1, 1, 1));
-    // Account-wide, encrypted add-on storage; no Simkl push.
     assert_eq!(
         account_side_effects(&f.app),
         (addons + 1, credentials + 1, receipts)
@@ -2503,7 +2483,6 @@ async fn device_session_reviews_and_registers_selected_addons_into_its_own_profi
             .unwrap()
             .starts_with("sealed:addon:"));
     }
-    // The registered add-on is the account's shared add-on, as listed to the device.
     let (status, listed) = request(&f.app, DEVICE, "GET", "/api/addons", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{listed}");
@@ -2549,7 +2528,6 @@ async fn device_session_without_profile_foreign_or_restricted_is_refused() {
             [],
         )
         .unwrap();
-    // Without a parent grant the parent rule refuses first; with one, imports stay closed.
     let (status, refused) = request(&f.app, DEVICE, "POST", PATH, credentials()).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
     f.app
@@ -2635,7 +2613,6 @@ async fn imported_history_is_visible_in_v3_continue_and_history_and_dedupes_app_
     assert_eq!(history[0]["card"]["identity"]["id"], "tt0000001");
     assert_eq!(history[0]["updated_at_millis"], imported_at);
 
-    // The app plays the same IMDb title through an add-on origin (a v3 scoped record).
     let card = call("/api/meta/movie/tt0000001?provider_id=stremio&addon_id=101".into()).await
         ["item"]
         .clone();
@@ -2652,7 +2629,6 @@ async fn imported_history_is_visible_in_v3_continue_and_history_and_dedupes_app_
     assert_eq!(scope, "shared");
     assert_eq!(counts(&f.app), (1, 1, 1), "the imported row is kept");
 
-    // One logical title in both views; the newer app record wins.
     let queue = call("/api/profiles/1/continue".into()).await;
     let entries = queue["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1, "{queue}");
@@ -2663,7 +2639,6 @@ async fn imported_history_is_visible_in_v3_continue_and_history_and_dedupes_app_
     assert_eq!(history[0]["card"]["progress"], 0.3);
     assert!(history[0]["updated_at_millis"].as_u64().unwrap() > imported_at);
 
-    // History is newest-wins: an older app record yields to the imported row.
     f.app.db.lock().unwrap().execute(
         "UPDATE engine_scoped_records SET updated_at_millis=1000,value=json_set(value,'$.updated_at_millis',1000) WHERE profile_id=1 AND record_kind='playback'",
         [],
@@ -2756,7 +2731,6 @@ async fn network_reauthorization_rejects_profile_replacement_before_publishing_p
             .unwrap();
     });
     let mut f = fixture_with(vec![movie("tt0000001")], login(), Some(action)).await;
-    // Use the same DB the synthetic source callback changes, retaining the isolated service.
     f.app.db = app.db;
     let (s, _) = request(&f.app, "member-token-1", "POST", PATH, credentials()).await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
@@ -3036,7 +3010,6 @@ async fn imported_completion_is_replaced_by_newer_rewatch_resume_and_replay_is_i
 
     let mut resume = movie("tt0000001");
     resume["state"]["lastWatched"] = json!("2025-01-01T01:00:00.123Z");
-    // The nonzero historical watched counter must not suppress this rewatch position.
     let mut second = fixture(vec![resume], login()).await;
     second.app.db = first.app.db.clone();
     let preview = get_preview(&second.app).await;
@@ -3144,8 +3117,6 @@ async fn genuine_manual_watched_correction_is_preserved_even_with_import_owned_a
             ),
             (Some(100.0), Some(100.0))
         );
-        // Historical synthetic correction is older than the source resume. Its manual
-        // authority, rather than recency, must protect it even if an import marker remains.
         f.app
             .db
             .lock()
@@ -3204,7 +3175,6 @@ async fn genuine_manual_watched_correction_is_preserved_even_with_import_owned_a
     assert!(queue["entries"].as_array().unwrap().is_empty());
 }
 
-// ---- anime ids remapped through the VIPTV metadata service ----
 
 const AOT: &str = "tt2560140";
 fn aot_meta(s3_episodes: i64, overview: usize) -> Value {
@@ -3227,9 +3197,6 @@ fn anime_item(id: &str, watched: &str, resume: Option<u64>) -> Value {
     }
     item
 }
-/// Simkl + Cinemeta fixture. S3 Part 2 (kitsu 41982) episode `a`
-/// maps to TVDB season 3 episode `a + 12` unless `bad_second` sends episode 2
-/// to an episode Cinemeta does not have.
 async fn remap_review(items: Vec<Value>, s3_episodes: i64, overview: usize, bad_second: bool) -> Value {
     use axum::extract::{Path, RawQuery};
     let mut f = fixture(items, login()).await;
@@ -3250,7 +3217,6 @@ async fn remap_review(items: Vec<Value>, s3_episodes: i64, overview: usize, bad_
                 match id.as_str() {
                     "931899" => Json(json!({"anime_type":"tv","ids":{"simkl":931899,"kitsu":"41982","imdb":AOT}})).into_response(),
                     "39687" => Json(json!({"anime_type":"tv","ids":{"simkl":39687,"kitsu":"7442","imdb":AOT}})).into_response(),
-                    // On IMDb, but Cinemeta has no entry for it.
                     "1999" => Json(json!({"anime_type":"tv","ids":{"simkl":1999,"kitsu":"999","imdb":"tt0000099"}})).into_response(),
                     _ => StatusCode::NOT_FOUND.into_response(),
                 }
@@ -3319,7 +3285,6 @@ async fn untranslatable_anime_episode_is_reviewed_not_guessed() {
 
 #[tokio::test]
 async fn long_cinemeta_series_is_not_rejected_by_size() {
-    // 1,500 episodes with real-sized overviews is ~1 MB of raw metadata.
     let id = AOT;
     let item = json!({"_id":id,"type":"series","name":"Long series","removed":false,"temp":false,
         "state":{"lastWatched":DATE,"watched":format!("{id}:1:2:2:eJxjBgAABAAE")}});
@@ -3327,7 +3292,6 @@ async fn long_cinemeta_series_is_not_rejected_by_size() {
     assert_eq!(episode_rows(&reviewed), vec![(1, 1, false), (1, 2, false)]);
 }
 
-/// Simkl + Cinemeta fixture counting upstream calls; `/search/id` waits `delay`.
 async fn counted_remap_fixture(delay: Duration) -> (Fixture, Arc<AtomicUsize>, Arc<AtomicUsize>, tokio::task::JoinHandle<()>, Arc<AtomicBool>) {
     use axum::extract::Path;
     let items = vec![
@@ -3410,7 +3374,6 @@ async fn re_reviews_reuse_the_preview_remap_and_metadata() {
 async fn baseline_starts_with_the_addon_stage_and_verification_fails_fast_alongside_it() {
     let (f, simkl, _, upstream, _) = counted_remap_fixture(Duration::from_secs(3)).await;
     let preview = staged_preview(&f.app).await;
-    // The selection-independent work starts before any review request.
     let waited = std::time::Instant::now();
     while simkl.load(Ordering::SeqCst) == 0 && waited.elapsed() < Duration::from_secs(2) {
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -3422,7 +3385,6 @@ async fn baseline_starts_with_the_addon_stage_and_verification_fails_fast_alongs
     assert_eq!(status, StatusCode::FAILED_DEPENDENCY, "{failure}");
     assert_eq!(failure["failed_addon_reasons"][renamed.as_str().unwrap()], "manifest_id_changed");
     assert!(started.elapsed() < Duration::from_secs(2), "verification must not wait for the remap");
-    // The interrupted request did not restart the remap; the next review reuses it.
     let (status, reviewed) = review_selection(&f.app, &preview, json!([])).await;
     assert_eq!(status, StatusCode::OK, "{reviewed}");
     assert_eq!(simkl.load(Ordering::SeqCst), 1);
@@ -3430,7 +3392,6 @@ async fn baseline_starts_with_the_addon_stage_and_verification_fails_fast_alongs
     upstream.abort();
 }
 
-/// Waits until every open preview's background lookups have finished.
 async fn background_finished(app: &App) {
     let baselines: Vec<_> = app.stremio_import.pending.lock().unwrap().values()
         .filter_map(|s| s.preview.as_ref().map(|p| p.baseline.clone())).collect();
@@ -3520,17 +3481,11 @@ async fn selected_addon_manifests_and_metadata_are_reused_across_reviews_of_one_
         summaries.push(reviewed["summary"].clone());
     }
     let counts: Vec<_> = counts.iter().map(|c| c.load(Ordering::SeqCst)).collect();
-    // The title is unresolved by Cinemeta and the account's add-ons (none), so the
-    // first add-on in collection order answers every review from the cache.
     assert_eq!(counts, vec![1, 1, 1, 1], "each manifest verified once, each title looked up once per add-on: {counts:?}");
     assert!(summaries.windows(2).all(|w| w[0] == w[1]), "{summaries:?}");
     upstream.abort();
 }
 
-/// Opt-in, read-only: the owner's real Stremio library through the guided
-/// preview + review on a synthetic VIPTV database. Never applies. Prints
-/// aggregate counts only. Run with STREMIO_EMAIL/STREMIO_PASSWORD set:
-/// `cargo test --lib real_library_remap_preview -- --ignored --nocapture`.
 #[tokio::test]
 #[ignore]
 async fn real_library_remap_preview() {
@@ -3556,7 +3511,6 @@ async fn real_library_remap_preview() {
         }
         let episodes = rows.iter().filter(|r| r["selectable"] == true && r["season"].is_i64()).count();
         if simkl {
-            // Unmatched review rows by id family, type and source state: counts only.
             let shown: std::collections::HashSet<&str> = rows.iter()
                 .filter(|r| r["reason"] == "unmatched_identity").filter_map(|r| r["item_id"].as_str()).collect();
             let slots = app.stremio_import.pending.lock().unwrap();
@@ -3586,7 +3540,6 @@ async fn real_library_remap_preview() {
     }
 }
 
-/// Stremio-compatible decoding: alignment is by list position at the anchor.
 fn decoded(field: &str, videos: &[(i64, i64)]) -> Option<Vec<(i64, i64)>> {
     let meta = json!({"videos": videos.iter().map(|(s, e)| json!({"id":format!("tt0000001:{s}:{e}"),"season":s,"episode":e})).collect::<Vec<_>>()});
     let bits = |byte: u8| {
@@ -3606,7 +3559,6 @@ fn decoded(field: &str, videos: &[(i64, i64)]) -> Option<Vec<(i64, i64)>> {
 
 #[test]
 fn specials_may_skip_numbers() {
-    // Konosuba: Cinemeta's specials start at S0E3.
     assert_eq!(
         decoded("1:2|3|00000110", &[(0, 3), (1, 1), (1, 2)]),
         Some(vec![(1, 1), (1, 2)])
@@ -3616,7 +3568,6 @@ fn specials_may_skip_numbers() {
 
 #[test]
 fn anchor_aligns_after_videos_were_added_before_it() {
-    // Overlord: a special appeared before the anchor after Stremio stored 2 bits.
     assert_eq!(
         decoded("1:2|2|00000011", &[(0, 1), (1, 1), (1, 2)]),
         Some(vec![(1, 1), (1, 2)])
@@ -3625,7 +3576,6 @@ fn anchor_aligns_after_videos_were_added_before_it() {
 
 #[test]
 fn bits_after_a_stale_anchor_are_read() {
-    // Talker: anchor at episode 2 but episode 3 was finished afterwards.
     assert_eq!(
         decoded("1:2|2|00000111", &[(1, 1), (1, 2), (1, 3)]),
         Some(vec![(1, 1), (1, 2), (1, 3)])
@@ -3652,12 +3602,6 @@ async fn resolved_removed_entry_without_history_is_not_flagged_unmatched() {
     );
 }
 
-/// Opt-in, read-only timing probe against the owner's real Stremio account on a
-/// synthetic VIPTV database: review without add-ons, with every available add-on
-/// (dropping failures until it succeeds), and a re-review without add-ons. Never
-/// applies. Prints aggregate counts, failure categories and timings only. Run with
-/// STREMIO_EMAIL/STREMIO_PASSWORD/SIMKL_CLIENT_ID set:
-/// `cargo test --lib real_library_review_timings -- --ignored --nocapture`.
 #[tokio::test]
 #[ignore]
 async fn real_library_review_timings() {
@@ -3676,7 +3620,6 @@ async fn real_library_review_timings() {
     assert_eq!(status, StatusCode::OK, "preview failed: {}", preview["error"]);
     println!("[timings] preview: {:.1}s addons={}", started.elapsed().as_secs_f64(), preview["addons"].as_array().map_or(0, Vec::len));
     if std::env::var("PROBE_WAIT_BACKGROUND").is_ok() {
-        // Background baseline duration, as when the user spends time choosing add-ons.
         let baseline = {
             let slots = app.stremio_import.pending.lock().unwrap();
             slots.values().find_map(|s| s.preview.as_ref()).unwrap().baseline.clone()
@@ -3755,7 +3698,6 @@ async fn imported_titles_get_the_canonical_public_poster_never_the_source_url() 
     let preview = staged_preview(&f.app).await;
     let (status, review) = review_selection(&f.app, &preview, json!([])).await;
     assert_eq!(status, StatusCode::OK, "{review}");
-    // The review keeps neutral type icons: no artwork of any origin is offered.
     let rendered = review.to_string();
     assert!(!rendered.contains("poster") && !rendered.contains("metahub") && !rendered.contains("private-addon"), "{rendered}");
     let (status, result) = request(
@@ -3775,7 +3717,6 @@ async fn imported_titles_get_the_canonical_public_poster_never_the_source_url() 
     assert_eq!(poster("favorites", "tt0000001"), Some(public_poster("tt0000001")));
     assert_eq!(poster("favorites", "tt1234567"), Some(public_poster("tt1234567")));
     assert_eq!(poster("progress", "tt0000001"), Some(public_poster("tt0000001")));
-    // An episode row shows its series' poster.
     assert_eq!(poster("progress", "tt1234567:2:3"), Some(public_poster("tt1234567")));
     let leaked: i64 = db
         .query_row("SELECT (SELECT COUNT(*) FROM favorites WHERE poster LIKE '%private-addon%')+(SELECT COUNT(*) FROM progress WHERE poster LIKE '%private-addon%')", [], |r| r.get(0))
@@ -3888,11 +3829,6 @@ async fn imported_titles_get_the_full_details_card_through_owned_metadata_addons
     assert_eq!(listed["logo"], "https://images.example/tt1234567/logo.png");
 }
 
-/// backend#60: a profile with no Simkl link still gets the Simkl plugin
-/// connection, so the profile default browsing plugin is "simkl". A card the
-/// Stremio import created carries no metadata origin, so its details looked up
-/// a Simkl identity it never had (400 "A Simkl title identity is required").
-/// Imported Continue Watching rows open their Cinemeta metadata instead.
 #[tokio::test]
 async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link() {
     let mut series = movie("tt13293588");
@@ -3901,8 +3837,6 @@ async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link
     series["state"]["video_id"] = json!("tt13293588:3:4");
     let mut f = fixture(vec![series], login()).await;
     f.app.addons.allow_test_loopback = true;
-    // The server has Simkl configured; the fixture base never answers, so any
-    // lookup that falls through to Simkl fails loudly instead of silently.
     f.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:1"));
     let requested = Arc::new(Mutex::new(Vec::new()));
     let seen = requested.clone();
@@ -3923,7 +3857,6 @@ async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link
             listener,
             Router::new()
                 .route("/meta/series/:id", meta)
-                // The dev host probes every new loopback listener with HEAD / (backend#48).
                 .route("/", axum::routing::any(|| async { StatusCode::OK })),
         )
         .await
@@ -3936,8 +3869,6 @@ async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link
         params![format!("http://{address}/manifest.json"), manifest.to_string()],
     ).unwrap();
     crate::test_support::encrypt_fixture_sources(&f.app);
-    // No link, but the plugin connection is there, so Simkl is the profile's
-    // default browsing plugin - the state that broke the imported card.
     let (status, integration) = request(&f.app, "member-token-1", "GET", "/api/profiles/1/integrations", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{integration}");
     assert_eq!(integration["configuration"]["browsing_plugin"], "simkl", "{integration}");
@@ -3968,18 +3899,12 @@ async fn imported_continue_watching_opens_cinemeta_metadata_without_a_simkl_link
         assert_eq!(detail["item"]["metadata_origin"]["connection_id"], "addon:101", "{path}: {detail}");
         assert_eq!(detail["episodes"][0]["identity"]["id"], "tt13293588:3:4", "{path}: {detail}");
     }
-    // Both lookups read the parent title - the second from the add-on cache;
-    // the episode coordinates never reach the add-on.
     let requested = requested.lock().unwrap();
     assert!(!requested.is_empty(), "the metadata add-on was never asked");
     assert!(requested.iter().all(|id| id == "tt13293588.json"), "{requested:?}");
     addon.abort();
 }
 
-/// backend#72: a Continue Watching row the Stremio import wrote carries no
-/// provider provenance, so the app had to load Details before it could find
-/// sources. The server knows which scope serves the row, so its entries name it
-/// and the tap starts discovery at once.
 #[tokio::test]
 async fn imported_continue_watching_entries_carry_the_addon_origin() {
     let mut series = movie("tt13293588");
@@ -4006,7 +3931,6 @@ async fn imported_continue_watching_entries_carry_the_addon_origin() {
             Router::new()
                 .route("/meta/series/:id", meta)
                 .route("/stream/series/:id", streams)
-                // The dev host probes every new loopback listener with HEAD / (backend#48).
                 .route("/", axum::routing::any(|| async { StatusCode::OK })),
         )
         .await

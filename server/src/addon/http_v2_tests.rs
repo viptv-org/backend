@@ -686,8 +686,6 @@ async fn save_without_keyring_refuses_before_download_or_write() {
 
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDRlogo-fixture";
-/// One add-on per token; each manifest's logo is a route on the same loopback
-/// server, and every logo download is counted.
 async fn logo_upstream() -> (
     String,
     Arc<std::sync::atomic::AtomicUsize>,
@@ -790,12 +788,10 @@ async fn manifest_logos_are_served_only_through_the_owner_checked_route() {
     assert_eq!(headers["content-type"], "image/png");
     assert_eq!(headers["x-content-type-options"], "nosniff");
     assert!(headers["cache-control"].to_str().unwrap().starts_with("private"));
-    // A second request is served from the cache, without the version too.
     let (status, _, body) = raw_get(&app, "member-token-1", &format!("{ROOT}/{id}/logo")).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, PNG));
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-    // Another account cannot see the add-on or its logo.
     let (status, _, body) = raw_get(&app, "member-token-2", &logo).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(!String::from_utf8_lossy(&body).contains("private-token"));

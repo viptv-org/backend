@@ -70,7 +70,6 @@ pub(super) fn reserve(service: Arc<Service>, key: String) -> Option<Reservation>
         .then(|| Reservation { service, key })
 }
 
-/// Called only after an authenticated history write succeeds; saving history never awaits egress.
 pub(crate) fn schedule_progress(app: App, profile: i64, value: Value, explicit_watched: bool) {
     let completed = value["position"]
         .as_f64()

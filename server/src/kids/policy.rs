@@ -7,8 +7,6 @@ pub(crate) fn allow_item(
     id: &str,
 ) -> Result<bool, ApiError> {
     let auth::Principal::Account { profile_id, .. } = p;
-    // Share the collection predicate so episode cards and direct source requests agree.
-    // This reads only policy fields instead of reparsing a full series for every episode.
     let allowed = sql_allowed("?1", "?2", "?3");
     db.query_row(
         &format!("SELECT {allowed}"),
@@ -83,7 +81,6 @@ fn decode_path(value: &str) -> Result<String, ApiError> {
     }
     String::from_utf8(output).map_err(|_| "Invalid path".into())
 }
-/// A restricted request never falls through to arbitrary addon catalogs or raw provider live listings.
 enum PolicyDecision {
     Pass,
     Respond(Value),
@@ -156,8 +153,6 @@ fn decide_request(
                 }
                 return Ok(PolicyDecision::Pass);
             }
-            // The opaque selection handler checks the exact session/profile,
-            // configuration, provider revision and current title policy.
             ["subtitle-content", _] if method == axum::http::Method::GET => {
                 return Ok(PolicyDecision::Pass)
             }
@@ -166,7 +161,6 @@ fn decide_request(
                 return Ok(PolicyDecision::Pass);
             }
             ["profiles", _, "preferences"] => return Ok(PolicyDecision::Pass),
-            // Change tokens only; the handler enforces the selected profile.
             ["profiles", _, "revisions"] if method == axum::http::Method::GET => {
                 return Ok(PolicyDecision::Pass)
             }
@@ -267,10 +261,7 @@ fn decide_request(
     Ok(PolicyDecision::Sanitize)
 }
 fn sanitize_request(app: &App, path: &str, mut value: Value) -> Result<Value, ApiError> {
-    // The modern source handler validates the full scoped expected Card and fresh metadata.
     if path=="/streams" && value.get("metadata_origin").is_some(){return Ok(value);}
-    // The typed history write validates the scoped record and its metadata
-    // origin itself; the legacy field rewrite below would erase the record.
     if path.ends_with("/progress") && value.get("record").is_some(){return Ok(value);}
     {
         let db = app.db.lock().unwrap();
@@ -306,7 +297,6 @@ fn sanitize_request(app: &App, path: &str, mut value: Value) -> Result<Value, Ap
             if kind == "series" {
                 value["series_id"] = json!(parent);
             }
-            // Never let an approved title's opaque request smuggle an unrelated provider ID.
             if path == "/streams" {
                 let mut safe = json!({"type":kind,"id":id,"name":meta["name"]});
                 for key in [
@@ -338,8 +328,6 @@ pub(crate) async fn before(app: &App, req: &mut Request) -> Result<Option<Value>
         PolicyDecision::Pass => return Ok(None),
         PolicyDecision::Respond(value) => return Ok(Some(value)),
         PolicyDecision::Sanitize if closed_v2_playback => {
-            // The v2 handler validates original closed JSON and server-issued
-            // source/title proof. A Value round trip here would erase duplicates.
             return Ok(None);
         }
         PolicyDecision::Sanitize => {}
@@ -491,8 +479,6 @@ pub(crate) async fn after(app: &App, path: &str, response: Response) -> Response
     Response::from_parts(parts, axum::body::Body::from(value.to_string()))
 }
 
-// Source jobs and playback keep the existing title/episode authorization
-// rules. Raw live catalogs/guide and management routes remain separately gated.
 fn policy_path(path: &str) -> &str {
     if path == "/playback-protocol" || path == "/torrent-runtime-protocol" {
         return "/playback/protocol";
@@ -502,7 +488,6 @@ fn policy_path(path: &str) -> &str {
     }
     path
 }
-/// Converts an engine Card into the legacy metadata shape the trust store observes.
 fn legacy_meta(card: &Value) -> Option<Value> {
     let id = card["identity"]["id"].as_str()?;
     let kind = card["identity"]["kind"].as_str()?;
@@ -542,7 +527,6 @@ fn filter_response_items(
     Ok(())
 }
 
-/// SQL counterpart used before pagination; arguments are compile-time column/parameter names.
 pub(crate) fn sql_allowed(kind: &str, id: &str, profile: &str) -> String {
     format!("(NOT EXISTS(SELECT 1 FROM kids_profiles k0 WHERE k0.profile_id={profile} AND k0.enabled=1) OR EXISTS(SELECT 1 FROM kids_media m JOIN profile_owners o ON o.account_id=m.account_id JOIN kids_profiles k ON k.profile_id=o.profile_id JOIN kids_media root ON root.account_id=m.account_id AND root.kind=m.kind AND root.id=m.parent_id WHERE o.profile_id={profile} AND m.kind={kind} AND m.id={id} AND NOT EXISTS(SELECT 1 FROM kids_ambiguous bad WHERE bad.account_id=m.account_id AND bad.kind=m.kind AND bad.id=m.id) AND COALESCE(m.age,0)<18 AND COALESCE(root.age,0)<18 AND (m.id=m.parent_id OR EXISTS(SELECT 1 FROM json_each(root.metadata,'$.videos') video WHERE json_extract(video.value,'$.id')=m.id)) AND (EXISTS(SELECT 1 FROM kids_approvals a WHERE a.profile_id={profile} AND a.kind=m.kind AND a.id=m.parent_id) OR (m.conflict=0 AND root.conflict=0 AND root.age<=k.max_age AND m.age<=k.max_age))))")
 }

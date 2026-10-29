@@ -1,4 +1,3 @@
-//! Public Simkl pixels only: no arbitrary URLs, credentials or account data.
 use crate::*;
 use std::time::Instant;
 mod cache;

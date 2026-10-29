@@ -1,13 +1,9 @@
 use super::*;
 
-/// Application router for the KMP viewing app. The KMP app owns `/`, `/device`,
-/// and every other UI route; there is no legacy dashboard or TV-web mount.
 pub fn router(app: App) -> Router {
     router_with_viewers(app, None)
 }
 
-/// Mount the KMP viewing app at `/` without changing API/media origins or
-/// enabling cross-origin credentials.
 pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -> Router {
     let api = Router::new()
         .route("/profiles/:id/viewing-action", post(engine_v3::viewing_action::resolve))
@@ -342,9 +338,6 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
         .route("/privacy", get(privacy_page))
         .route("/terms", get(terms_page));
     if let Some(path) = tv_dashboard {
-        // The KMP viewing app owns the site root and every client route,
-        // including `/device`. Unknown paths fall back to the app shell so
-        // client-side deep links resolve.
         let root_index = path.join("index.html");
         r = r
             .route("/", get(move || dashboard_entry(root_index.clone())))
@@ -354,8 +347,6 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
                 ),
             );
     } else {
-        // A server-only image still answers / with its identity so health
-        // checks pass without a mounted viewing app.
         r = r.route(
             "/",
             get(|| async {
@@ -369,14 +360,6 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
     }
     r
 }
-/// Origins allowed to read session media cross-origin, from
-/// `VIPTV_MEDIA_CORS_ORIGINS` (comma-separated, exact `scheme://host[:port]`).
-///
-/// Defaults to the Mediabunny instrument, which reads a session's bytes directly
-/// to inspect and debug them. Set the variable to an empty string to disable
-/// cross-origin media reads entirely (the native client is same-origin and does
-/// not need them).
-// Static HTML responses share one non-cacheable envelope.
 fn html_page(body: impl IntoResponse) -> Response {
     (
         StatusCode::OK,

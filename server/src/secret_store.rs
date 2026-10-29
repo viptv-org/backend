@@ -1,5 +1,3 @@
-//! Authenticated encryption for account-owned source/gateway credentials.
-//! Key material is operator supplied, never generated into the database.
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rand_core::{OsRng, RngCore};
 use ring::aead::{self, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -9,8 +7,6 @@ use zeroize::{Zeroize, Zeroizing};
 
 type Result<T> = std::result::Result<T, &'static str>;
 const MAX_SECRET: usize = 256 * 1024;
-// Addon documents have a separate serialized-payload budget; normal
-// gateway/provider secrets retain their smaller limit.
 const MAX_ADDON: usize = 33 * 1024 * 1024;
 
 pub(crate) struct SecretBytes(Zeroizing<Vec<u8>>);

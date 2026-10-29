@@ -1,4 +1,3 @@
-//! Narrow child-consumer checks; private-origin policy migration remains separate.
 use super::*;
 pub(crate) const UNSUPPORTED: &str =
     "This provider's private title IDs do not support restricted playback yet";
@@ -28,8 +27,6 @@ pub(crate) fn require(
         .optional()
         .map_err(db_error)?
         .ok_or_else(forbidden)?;
-    // A public namespace cannot become an add-on-private title just by changing
-    // a query parameter. Episode authority comes from the observed parent edge.
     if (id.starts_with("simkl:") || parent.starts_with("simkl:")) && provider != "simkl" {
         return Err(forbidden());
     }

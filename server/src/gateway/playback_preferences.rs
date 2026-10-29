@@ -1,5 +1,3 @@
-//! Admission snapshots for shared v3 preferences. An explicit track/language
-//! intent wins; old clients with only a legacy saved row retain its behavior.
 use super::*;
 
 pub(super) fn apply(
@@ -39,9 +37,6 @@ fn apply_v3(
         match preferences.subtitle_mode {
             SubtitleMode::Never => request.subtitles_off = true,
             SubtitleMode::Always => request.preferred_subtitle_language = preferences.preferred_subtitle_language.clone(),
-            // The current gateway protocol cannot compare the actual selected
-            // audio language with profile policy. Do not silently execute a
-            // different policy, or ask a thin client to guess that language.
             SubtitleMode::Foreign => return Err(ApiError(StatusCode::CONFLICT,
                 "Foreign-audio subtitles are unavailable on this gateway. Choose Always, Never, or an explicit subtitle track.".into()).into()),
         }
