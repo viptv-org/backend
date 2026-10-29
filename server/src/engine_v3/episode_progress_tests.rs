@@ -54,6 +54,8 @@ fn seed_owner_rows(app: &App) {
         params![format!("{SERIES}:1:3"),json!({"episode":3,"imdb_id":SERIES,"season":1,"series_id":SERIES}).to_string(),SERIES]).unwrap();
     db.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,?1,'series','Level 999 no Murabito',NULL,1400,1430,1792484000,?2,?3)",
         params![format!("{SERIES}:1:4"),json!({"episode":4,"imdb_id":SERIES,"season":1,"series_id":SERIES}).to_string(),SERIES]).unwrap();
+    db.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,?1,'series','Level 999 no Murabito',NULL,0.001,1420.01,1792484717,?2,?3)",
+        params![format!("{SERIES}:1:5"),json!({"episode":5,"imdb_id":SERIES,"season":1,"series_id":SERIES,"stremio_import_watched":true}).to_string(),SERIES]).unwrap();
 }
 
 #[tokio::test]
@@ -66,7 +68,7 @@ async fn details_episodes_show_imported_completion_partial_progress_and_finished
         format!("/api/meta/series/{SERIES}?offset=0&limit=96"),
     ] {
         let list = episodes(&app, &path).await;
-        for number in [1, 2, 4] {
+        for number in [1, 2, 4, 5] {
             let card = episode(&list, number);
             assert!(watched(card), "{path}: E{number} must be watched: {card}");
             assert!(card["progress"].is_null(), "{path}: completed E{number} has no partial bar: {card}");
@@ -75,11 +77,28 @@ async fn details_episodes_show_imported_completion_partial_progress_and_finished
         assert!(!watched(partial), "{path}: E3 is in progress: {partial}");
         let fraction = partial["progress"].as_f64().unwrap_or_else(|| panic!("{path}: E3 progress: {partial}"));
         assert!((fraction - 934.737 / 1430.015).abs() < 1e-6, "{path}: {fraction}");
-        for number in [5, 6] {
-            let card = episode(&list, number);
-            assert!(!watched(card) && card["progress"].is_null(), "{path}: E{number} is unseen: {card}");
-        }
+        let unseen = episode(&list, 6);
+        assert!(!watched(unseen) && unseen["progress"].is_null(), "{path}: E6 is unseen: {unseen}");
     }
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_resume_in_viptv_after_the_import_keeps_its_progress() {
+    let (app, task) = stack().await;
+    seed_owner_rows(&app);
+    let list = episodes(&app, &format!("/api/meta/series/{SERIES}?provider_id=stremio&addon_id=101")).await;
+    let seeded = episode(&list, 5).clone();
+    let record = json!({"identity":seeded["identity"],"parent_identity":seeded["parent_identity"],"provider_id":"library","title":"Level 999 no Murabito","poster":null,"landscape":null,"position_millis":400_000,"duration_millis":1_420_000,"updated_at_millis":0,"completed_at_millis":null});
+    let (status, body) = request(&app, "member-token-1", "PUT", "/api/profiles/1/progress", json!({"record":record})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let context: String = app.db.lock().unwrap().query_row("SELECT context FROM progress WHERE profile_id=1 AND type='series' AND id=?1", [format!("{SERIES}:1:5")], |r| r.get(0)).unwrap();
+    assert!(serde_json::from_str::<Value>(&context).unwrap().get("stremio_import_watched").is_none(), "{context}");
+    let list = episodes(&app, &format!("/api/meta/series/{SERIES}")).await;
+    let card = episode(&list, 5);
+    assert!(!watched(card), "{card}");
+    let fraction = card["progress"].as_f64().unwrap_or_else(|| panic!("{card}"));
+    assert!((fraction - 400.0 / 1420.0).abs() < 1e-6, "{fraction}");
     task.abort();
 }
 
