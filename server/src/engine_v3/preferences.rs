@@ -17,7 +17,6 @@ pub(crate) async fn get(
     app.require_profile(&db, profile)?;
     lease.validate(&db)?;
     let snapshot = read(&db, lease.principal.account_id().unwrap(), profile)?;
-    // Display settings are presentation facts for the owning profile only.
     let snapshot = PreferencesSnapshot {
         display: read_display(&db, lease.principal.account_id().unwrap(), profile)?,
         ..snapshot
@@ -60,9 +59,7 @@ pub(crate) fn read_display(
         .transpose()
         .map(Option::unwrap_or_default)
 }
-// The settings snapshot and playback admission must resolve the same effective
-// values. Only a persisted legacy row is inherited; an absent row uses the
-// shared v3 defaults, rather than the legacy loader's different defaults.
+// The snapshot and playback admission must resolve the same effective values.
 fn inherited(db: &Connection, profile: i64) -> Result<ProfilePreferences, ApiError> {
     let mut result = ProfilePreferences::default();
     let saved: bool = db.query_row(
@@ -87,9 +84,7 @@ fn inherited(db: &Connection, profile: i64) -> Result<ProfilePreferences, ApiErr
 #[serde(deny_unknown_fields)]
 pub(crate) struct Update {
     revision: u64,
-    /// Parsed against the stored row so an on/off-only client keeps `foreign`.
     preferences: Option<Value>,
-    /// Display settings replace whole; every field is projected to clients.
     display: Option<DisplayPreferences>,
 }
 pub(crate) async fn update(
@@ -121,8 +116,7 @@ pub(crate) async fn update(
             "Profile preferences changed".into(),
         ));
     }
-    // Shape errors (unknown fields, unknown enum values) keep the JSON
-    // extractor's 422; well-formed values that fail validation are 400.
+    // Shape errors keep the extractor's 422; values that fail validation are 400.
     let preferences = match update.preferences {
         Some(value) => ProfilePreferences::from_update(value, &previous.preferences)
             .map_err(|_| {

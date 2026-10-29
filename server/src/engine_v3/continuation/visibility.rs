@@ -76,7 +76,6 @@ pub(crate) async fn update(
             stored,
         )
     } else {
-        // A prepared next episode has no artificial history row. Its verified cache is proof.
         let mut query=db.prepare("SELECT series_id,result FROM continuation_cache WHERE profile_id=?1 AND updated_at>?2 ORDER BY updated_at DESC LIMIT 200").map_err(db_error)?;
         let rows = query
             .query_map(params![profile, util::now() - 3600], |r| {

@@ -1,5 +1,3 @@
-//! Continue Watching promotes a caught-up series once per new release and
-//! counts later releases without moving it again.
 use super::*;
 use crate::{auth_integration_tests::fixture, test_support::request};
 use std::sync::{
@@ -37,14 +35,12 @@ impl Drop for Show {
     }
 }
 
-/// A metadata add-on whose episode release times the test controls.
 async fn show(releases: Vec<(u32, u64)>) -> Show {
     let mut app = fixture();
     app.addons.allow_test_loopback = true;
     let releases = Arc::new(Mutex::new(releases));
     let calls = Arc::new(AtomicUsize::new(0));
     let (served, counted) = (releases.clone(), calls.clone());
-    // Every `tt…` series shares the controlled release times.
     let routes = Router::new().route(
         "/meta/series/:file",
         axum::routing::get(move |axum::extract::Path(file): axum::extract::Path<String>| {
@@ -74,8 +70,6 @@ async fn show(releases: Vec<(u32, u64)>) -> Show {
     }
 }
 
-/// Saves playback of an episode (finished when `ended`) or a movie, then
-/// places that activity at `at` on the queue's clock.
 async fn watch(app: &App, identity: Value, parent: Option<Value>, ended: bool, at: u64) {
     let finished = if ended { 100000 } else { 30000 };
     let (status, value) = request(app, "member-token-1", "PUT", "/api/profiles/1/progress", json!({"ended":ended,"record":{"identity":identity,"parent_identity":parent,"provider_id":"stremio","title":if parent.is_some(){"Fixture Show"}else{"Fixture Film"},"poster":null,"landscape":null,"position_millis":finished,"duration_millis":100000,"updated_at_millis":1,"completed_at_millis":null}})).await;
@@ -90,8 +84,6 @@ async fn watch(app: &App, identity: Value, parent: Option<Value>, ended: bool, a
         .unwrap();
 }
 
-/// What a client resolves when playback of `from` ends; it also records the
-/// release facts Continue Watching reads.
 async fn resolve(app: &App, from: u32) {
     app.addons.forget_responses();
     let (status, next) = request(
@@ -152,15 +144,11 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
     watch(app, film, None, false, start - 5 * DAY).await;
     resolve(app, 1).await;
 
-    // Caught up: nothing new, the film watched later stays first, and the
-    // finished episode the series stays on is drawn watched.
     let entries = queue(app).await;
     assert_eq!(ids(&entries), ["tt200", "tt100:1:1"]);
     let caught_up = show_entry(&entries);
     assert_eq!(caught_up["card"]["badges"], json!(["Watched"]), "{caught_up}");
 
-    // Episode 2 is released: the series moves to the front with a badge and
-    // opens episode 2, titled by the series with the episode as caption.
     show.releases.lock().unwrap()[1].1 = start - 2 * DAY;
     resolve(app, 1).await;
     let entries = queue(app).await;
@@ -175,8 +163,6 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
     assert_eq!(new["previous_identity"]["id"], "tt100:1:1");
     assert_eq!(new["record"]["identity"]["id"], "tt100:1:1");
 
-    // Another title is watched after that release, then episode 3 is released
-    // while episode 2 is still unwatched: the count grows, the position does not.
     let other = json!({"id":"tt300","kind":"movie","ids":[],"episode":null,"edition":null});
     watch(app, other, None, false, start - DAY).await;
     show.releases.lock().unwrap()[2].1 = start - HOUR;
@@ -188,7 +174,6 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
         json!(["+2"])
     );
 
-    // Home carries the same card, so every client renders the badge.
     let (status, home) = request(
         app,
         "member-token-1",
@@ -206,7 +191,6 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
         .unwrap();
     assert_eq!(row["cards"][1]["badges"], json!(["+2"]));
 
-    // Removing it hides it until an episode is released after the removal.
     let (status, receipt) = request(
         app,
         "member-token-1",
@@ -234,7 +218,6 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
         show_entry(&entries)["card"]["badges"],
         json!(["+3"])
     );
-    // The next Home load un-hides it for good, so playing it keeps it listed.
     request(
         app,
         "member-token-1",
@@ -243,8 +226,6 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
         Value::Null,
     )
     .await;
-    // The un-hide is the background refresh Home schedules; wait for it to
-    // land rather than asserting immediately and racing it (backend#53).
     let hidden = || {
         app.db
             .lock()
@@ -255,7 +236,6 @@ async fn a_release_promotes_a_caught_up_series_once_and_later_releases_only_coun
     until(|| hidden() == 0).await;
     assert_eq!(hidden(), 0);
 
-    // Watching episode 2 leaves a backlog that was already out: no badge.
     watch(app, episode(2), Some(series()), true, now()).await;
     resolve(app, 2).await;
     let entries = queue(app).await;
@@ -277,7 +257,6 @@ async fn a_backlog_and_an_in_progress_episode_are_never_promoted() {
     ])
     .await;
     let app = &show.app;
-    // Episode 2 had aired before episode 1 was finished: behind, not new.
     watch(app, episode(1), Some(series()), true, start - 10 * DAY).await;
     resolve(app, 1).await;
     let entries = queue(app).await;
@@ -285,7 +264,6 @@ async fn a_backlog_and_an_in_progress_episode_are_never_promoted() {
         .as_array()
         .unwrap()
         .is_empty());
-    // An unfinished episode is resumed, never promoted.
     watch(app, episode(2), Some(series()), false, start - 2 * DAY).await;
     let entries = queue(app).await;
     assert_eq!(show_entry(&entries)["status"], "Resume");
@@ -305,8 +283,6 @@ async fn credits_count_as_finished_and_the_newest_finished_episode_is_drawn_watc
     ])
     .await;
     let app = &show.app;
-    // Episode 1 stopped in the credits (96 %, 58 s left): finished, so the
-    // series moves on to episode 2, which is not drawn watched.
     let (status, value) = request(app, "member-token-1", "PUT", "/api/profiles/1/progress", json!({"ended":false,"record":{"identity":episode(1),"parent_identity":series(),"provider_id":"stremio","title":"Fixture Show","poster":null,"landscape":null,"position_millis":1_382_000,"duration_millis":1_440_000,"updated_at_millis":1,"completed_at_millis":null}})).await;
     assert_eq!(status, StatusCode::OK, "{value}");
     resolve(app, 1).await;
@@ -315,8 +291,6 @@ async fn credits_count_as_finished_and_the_newest_finished_episode_is_drawn_watc
     assert_eq!(next["card"]["identity"]["id"], "tt100:1:2");
     assert!(next["card"]["badges"].as_array().unwrap().is_empty(), "{next}");
 
-    // Episode 2 is the newest released one: the card stays on it, watched,
-    // on the queue and on Home.
     watch(app, episode(2), Some(series()), true, now() + 2000).await;
     resolve(app, 2).await;
     let finished = show_entry(&queue(app).await);
@@ -329,7 +303,6 @@ async fn credits_count_as_finished_and_the_newest_finished_episode_is_drawn_watc
     assert_eq!(row["cards"][0]["identity"]["id"], "tt100:1:2");
     assert_eq!(row["cards"][0]["badges"], json!(["Watched"]));
 
-    // Rewatching episode 1 is in progress again: resumed, not watched.
     watch(app, episode(1), Some(series()), false, now() + 4000).await;
     let resumed = show_entry(&queue(app).await);
     assert_eq!(resumed["status"], "Resume", "{resumed}");
@@ -347,8 +320,6 @@ async fn an_opened_episode_before_a_watched_one_leaves_the_series_at_the_watched
     ])
     .await;
     let app = &show.app;
-    // Imported Stremio history: episodes 1 and 3 watched without a date, and
-    // episode 2 the last one played, opened for 0.1 s.
     for number in [1, 3] {
         app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,?1,'series','Fixture Show',NULL,0,0,0,?2,'tt100')",params![format!("tt100:1:{number}"),json!({"season":1,"episode":number,"series_id":"tt100","watched_override":true,"stremio_import_watched":true,"stremio_completion_only":true,"stremio_watch_date_unknown":true}).to_string()]).unwrap();
     }
@@ -362,7 +333,6 @@ async fn an_opened_episode_before_a_watched_one_leaves_the_series_at_the_watched
     assert_ne!(entry["status"], "Resume");
     assert_eq!(entry["card"]["badges"], json!(["Watched"]));
 
-    // Real progress on episode 2 is resumed.
     opened(600.0);
     let entry = show_entry(&queue(app).await);
     assert_eq!(entry["status"], "Resume", "{entry}");
@@ -407,11 +377,9 @@ async fn home_refreshes_stale_release_facts_in_the_background_and_bumps_the_revi
     }
     assert_eq!(badge, json!(["+1"]));
     assert!(revision() > before);
-    // Home's own card enrichment may read the same document; the refresh adds one.
     tokio::time::sleep(Duration::from_millis(200)).await;
     let calls = show.calls.load(Ordering::SeqCst);
     assert!((1..=2).contains(&calls), "{calls}");
-    // A fresh document is not fetched again by the next Home load.
     request(
         app,
         "member-token-1",
@@ -462,7 +430,6 @@ async fn imported_watched_history_is_a_finished_episode_for_the_refresh() {
     let start = now();
     let show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
     let app = &show.app;
-    // A Stremio-imported episode: watched by flag, with a partial position.
     app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,'tt100:1:1','series','Fixture Show',NULL,5,100,?1,?2,'tt100')",params![((start - 10 * DAY) / 1000) as i64,json!({"season":1,"episode":1,"series_id":"tt100","stremio_import_watched":true}).to_string()]).unwrap();
     assert_eq!(show_entry(&queue(app).await)["status"], "Pending");
     request(
@@ -484,13 +451,10 @@ async fn imported_watched_history_is_a_finished_episode_for_the_refresh() {
     assert_eq!(badge, json!(["+1"]));
 }
 
-/// A Stremio-imported episode as the import writes it: watched by Stremio's
-/// flag and dated by the import's `lastWatched`, not by the watch itself.
 fn imported(app: &App, series: &str, number: u32, position: f64, duration: f64, at: u64) {
     app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(1,?1,'series','Fixture Show',NULL,?2,?3,?4,?5,?6)",params![format!("{series}:1:{number}"),position,duration,(at / 1000) as i64,json!({"season":1,"episode":number,"series_id":series,"stremio_import_watched":true}).to_string(),series]).unwrap();
 }
 
-/// An imported finished episode 1 with a partial position.
 fn import(app: &App, series: &str, at: u64) {
     imported(app, series, 1, 5.0, 100.0, at);
 }
@@ -512,25 +476,20 @@ async fn until(mut done: impl FnMut() -> bool) {
 #[tokio::test]
 async fn imported_history_gets_a_durable_next_episode_verdict_for_the_watched_badge() {
     let start = now();
-    // Imported, finished on the newest episode, the next one announced: caught up.
     let show = show(vec![(1, start - 30 * DAY), (2, start + 7 * DAY)]).await;
     let app = &show.app;
     import(app, "tt100", start - 10 * DAY);
     request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
     until(|| verdict(app, "tt100").is_some()).await;
     assert_eq!(verdict(app, "tt100"), Some(("tt100:1:1".to_owned(), "upcoming")));
-    // Durable, not the evictable queue cache, and no prepared queue target.
     let cached: i64 = app.db.lock().unwrap().query_row("SELECT COUNT(*) FROM continuation_cache", [], |r| r.get(0)).unwrap();
     assert_eq!(cached, 0);
     assert_eq!(show_entry(&queue(app).await)["status"], "Pending");
     let card: viptv_engine::presentation::Card = serde_json::from_value(json!({"identity":series(),"provider_id":"addon:1","title":"Fixture Show","subtitle":null,"description":null,"poster":null,"landscape":null,"logo":null,"progress":null,"badges":[]})).unwrap();
     let watched = || super::super::watched::Watched::load(&app.db.lock().unwrap(), 1).unwrap();
     assert!(watched().contains(&card));
-    // The check is booked for just after the known air time.
     let next_check: i64 = app.db.lock().unwrap().query_row("SELECT next_check_at FROM continuation_releases WHERE series_id='tt100'", [], |r| r.get(0)).unwrap();
     assert_eq!(next_check, ((start + 7 * DAY) / 1000) as i64 + 5 * 60);
-    // The stored air time passes: the verdict and badge flip from stored data
-    // alone, before any refetch.
     let calls = show.calls.load(Ordering::SeqCst);
     {
         let db = app.db.lock().unwrap();
@@ -542,7 +501,6 @@ async fn imported_history_gets_a_durable_next_episode_verdict_for_the_watched_ba
     assert_eq!(verdict(app, "tt100").unwrap().1, "next");
     assert!(!watched().contains(&card));
     assert_eq!(show_entry(&queue(app).await)["card"]["badges"], json!(["+1"]));
-    // Once due, the refresh asks the add-on again despite its response cache.
     app.db.lock().unwrap().execute("UPDATE continuation_releases SET next_check_at=0", []).unwrap();
     request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
     until(|| show.calls.load(Ordering::SeqCst) > calls).await;
@@ -553,7 +511,6 @@ async fn one_run_refreshes_every_finished_series_and_never_evicts_their_verdicts
     let start = now();
     let show = show(vec![(1, start - 30 * DAY)]).await;
     let app = &show.app;
-    // More finished series than one batch.
     for n in 0..60 {
         import(app, &format!("tt{}", 5000 + n), start - (n as u64 + 1) * HOUR);
     }
@@ -568,14 +525,12 @@ async fn one_run_refreshes_every_finished_series_and_never_evicts_their_verdicts
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(checked(), 60);
-    // One refresh per series (Home's own enrichment of its first cards aside).
     tokio::time::sleep(Duration::from_millis(300)).await;
     let calls = show.calls.load(Ordering::SeqCst);
     assert!((60..=72).contains(&calls), "{calls}");
     let verdicts = super::releases::verdicts_db(&app.db.lock().unwrap(), 1).unwrap();
     assert_eq!(verdicts.len(), 60);
     assert!(verdicts.values().all(|(_, status)| *status == "caught_up"));
-    // Caught up with nothing announced: checked again daily, not sooner.
     let soonest: i64 = app.db.lock().unwrap().query_row("SELECT MIN(next_check_at) FROM continuation_releases", [], |r| r.get(0)).unwrap();
     assert!(soonest >= (start / 1000) as i64 + 24 * 3600 - 60, "{soonest}");
     request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
@@ -583,14 +538,10 @@ async fn one_run_refreshes_every_finished_series_and_never_evicts_their_verdicts
     assert_eq!(show.calls.load(Ordering::SeqCst), calls);
 }
 
-/// Empties Home's in-memory card enrichment, as a server restart does.
 fn restart(app: &App) {
     app.verified_cards.lock().unwrap().clear();
 }
 
-/// Stremio-imported (library) Continue Watching cards carry 16:9 art from
-/// stored metadata, not only from Home's in-memory enrichment, which a
-/// restart empties and which stops at its deadline (backend#31).
 #[tokio::test]
 async fn an_imported_finished_series_card_keeps_the_episode_still_after_a_restart() {
     let start = now();
@@ -603,7 +554,6 @@ async fn an_imported_finished_series_card_keeps_the_episode_still_after_a_restar
     let entry = show_entry(&queue(app).await);
     assert_eq!(entry["card"]["provider_id"], "addon:1", "{entry}");
     assert_eq!(entry["card"]["landscape"], "https://img.invalid/1.jpg", "{entry}");
-    // Without a still for that episode, the series backdrop.
     {
         let db = app.db.lock().unwrap();
         let raw: String = db.query_row("SELECT document FROM continuation_releases WHERE series_id='tt100'", [], |r| r.get(0)).unwrap();
@@ -615,9 +565,6 @@ async fn an_imported_finished_series_card_keeps_the_episode_still_after_a_restar
     assert_eq!(entry["card"]["landscape"], "https://img.invalid/tt100/backdrop.jpg", "{entry}");
 }
 
-/// An imported title Continue Watching has no metadata document for (an
-/// episode in progress, a movie) uses the backdrop its My List card gained
-/// from the import's Details fill.
 #[tokio::test]
 async fn imported_titles_without_release_facts_use_their_my_list_backdrop() {
     let app = fixture();
@@ -638,15 +585,10 @@ async fn imported_titles_without_release_facts_use_their_my_list_backdrop() {
     assert_eq!(entries[1]["card"]["landscape"], "https://img.invalid/tt200/backdrop.jpg");
 }
 
-/// Simkl is the browsing integration (the default once the server has Simkl
-/// configured), but a Stremio-imported series Simkl has no mapping for still
-/// gets its release facts from the metadata add-ons, so its verdict and "+N"
-/// badge keep updating (backend#36).
 #[tokio::test]
 async fn an_imported_series_simkl_cannot_map_still_gets_release_facts_on_a_simkl_profile() {
     let start = now();
     let mut show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
-    // No Simkl request is needed: the series has no Simkl mapping.
     show.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:9"));
     let app = &show.app;
     let (status, integrations) =
@@ -662,14 +604,10 @@ async fn an_imported_series_simkl_cannot_map_still_gets_release_facts_on_a_simkl
     assert_eq!(show_entry(&queue(app).await)["card"]["badges"], json!(["+1"]));
 }
 
-/// A series Simkl does map stays on Simkl: while Simkl fails it backs off
-/// rather than switching to add-on facts, so its badge never alternates
-/// between providers.
 #[tokio::test]
 async fn a_series_simkl_maps_backs_off_while_simkl_fails_instead_of_using_the_add_ons() {
     let start = now();
     let mut show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
-    // Nothing listens here: every Simkl read fails.
     show.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:9"));
     let app = &show.app;
     import(app, "tt100", start - 10 * DAY);
@@ -683,8 +621,6 @@ async fn a_series_simkl_maps_backs_off_while_simkl_fails_instead_of_using_the_ad
     assert_eq!(verdict(app, "tt100"), None);
 }
 
-/// Details and the player's Next resolve the next episode of `from` without
-/// an explicit metadata origin.
 async fn next(app: &App, from: u32) -> Value {
     app.addons.forget_responses();
     let (status, next) = request(
@@ -699,15 +635,10 @@ async fn next(app: &App, from: u32) -> Value {
     next
 }
 
-/// The next-episode resolution reads the same provider as the release
-/// refresh: a Stremio-imported series Simkl cannot map is read from the
-/// metadata add-ons on a Simkl profile, so Details and the player's Next
-/// agree with the card's "+1" badge (backend#47).
 #[tokio::test]
 async fn next_episode_of_an_imported_series_simkl_cannot_map_comes_from_the_add_ons() {
     let start = now();
     let mut show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
-    // No Simkl request is needed: the series has no Simkl mapping.
     show.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:9"));
     let app = &show.app;
     let (status, integrations) =
@@ -723,8 +654,6 @@ async fn next_episode_of_an_imported_series_simkl_cannot_map_comes_from_the_add_
     assert_eq!(show_entry(&queue(app).await)["card"]["badges"], json!(["+1"]));
 }
 
-/// A series Simkl maps keeps reading Simkl's document: Simkl announces
-/// episode 2 for later while the add-ons list it as released.
 #[tokio::test]
 async fn next_episode_of_a_series_simkl_maps_still_comes_from_simkl() {
     let start = now();
@@ -748,7 +677,6 @@ async fn next_episode_of_a_series_simkl_maps_still_comes_from_simkl() {
     simkl.abort();
 }
 
-/// A Stremio profile resolves from its own metadata add-ons, as before.
 #[tokio::test]
 async fn next_episode_on_a_stremio_profile_comes_from_its_add_ons() {
     let start = now();
@@ -765,11 +693,6 @@ async fn next_episode_on_a_stremio_profile_comes_from_its_add_ons() {
     assert_eq!(show.calls.load(Ordering::SeqCst), 1);
 }
 
-/// A Stremio import dates the finished episode with the import clock, so the
-/// episode that came out while the profile was behind predates the finish.
-/// Continue Watching still advances to it: an imported finished episode with
-/// a released next episode is the up-next entry, without a new-episode badge
-/// and without moving up (backend#61).
 #[tokio::test]
 async fn an_imported_finish_advances_to_the_next_released_episode() {
     let start = now();
@@ -780,16 +703,12 @@ async fn an_imported_finish_advances_to_the_next_released_episode() {
     ])
     .await;
     let app = &show.app;
-    // Stremio leaves the finished episode as the series' current video with its
-    // offset reset to ~0 %; episode 2 was already out when the import dated it.
     imported(app, "tt100", 1, 0.001, 1420.01, start - 10 * DAY);
     let film = json!({"id":"tt200","kind":"movie","ids":[],"episode":null,"edition":null});
     watch(app, film, None, false, start - 12 * DAY).await;
-    // Before the release facts are known the finished episode is caught up.
     let entry = show_entry(&queue(app).await);
     assert_eq!(entry["card"]["identity"]["id"], "tt100:1:1", "{entry}");
     assert_eq!(entry["card"]["badges"], json!(["Watched"]), "{entry}");
-    // Home stores the series' release facts: episode 2 is out.
     request(
         app,
         "member-token-1",
@@ -800,8 +719,6 @@ async fn an_imported_finish_advances_to_the_next_released_episode() {
     .await;
     until(|| verdict(app, "tt100").is_some()).await;
     let entries = queue(app).await;
-    // Episode 1 finished later than episode 2 came out: the entry is the
-    // up-next episode, no badge, and it keeps the finish's place in the queue.
     assert_eq!(ids(&entries), ["tt100:1:2", "tt200"], "{entries:?}");
     let next = show_entry(&entries);
     assert_eq!(next["status"], "Next", "{next}");
@@ -810,10 +727,8 @@ async fn an_imported_finish_advances_to_the_next_released_episode() {
     assert_eq!(next["card"]["subtitle"], "S1 E2 · Chapter 2", "{next}");
     assert!(next["card"]["badges"].as_array().unwrap().is_empty(), "{next}");
     assert!(next["card"]["progress"].is_null(), "{next}");
-    // The finished episode stays the history anchor playback resumes after.
     assert_eq!(next["record"]["identity"]["id"], "tt100:1:1", "{next}");
     assert_eq!(next["previous_identity"]["id"], "tt100:1:1", "{next}");
-    // Bootstrap carries the same entry.
     let (status, bootstrap) =
         request(app, "member-token-1", "GET", "/api/bootstrap", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{bootstrap}");
@@ -821,8 +736,6 @@ async fn an_imported_finish_advances_to_the_next_released_episode() {
     assert_eq!(ids(entries), ["tt100:1:2", "tt200"], "{bootstrap}");
 }
 
-/// The next episode has not aired yet: the finished episode stays the
-/// caught-up entry, drawn watched (backend#61).
 #[tokio::test]
 async fn an_imported_finish_with_no_released_next_episode_stays_caught_up() {
     let start = now();
@@ -849,11 +762,6 @@ async fn an_imported_finish_with_no_released_next_episode_stays_caught_up() {
     assert!(entry["card"]["subtitle"].is_null(), "{entry}");
 }
 
-/// `/continue/next` prepares the profile's own next episode in the queue
-/// cache, with the provider that answered as its provenance. A Stremio import
-/// leaves the row it was prepared for without provider provenance, and the
-/// prepared target must still project when the stored release document cannot
-/// (backend#63).
 #[tokio::test]
 async fn a_prepared_target_projects_an_imported_row_the_release_document_cannot() {
     let start = now();
@@ -865,8 +773,6 @@ async fn a_prepared_target_projects_an_imported_row_the_release_document_cannot(
     .await;
     let app = &show.app;
     imported(app, "tt100", 1, 0.001, 1420.01, start - 10 * DAY);
-    // Playback ends and the player prepares episode 2 from the profile's own
-    // metadata add-on.
     app.addons.forget_responses();
     let (status, prepared) = request(
         app,
@@ -888,8 +794,6 @@ async fn a_prepared_target_projects_an_imported_row_the_release_document_cannot(
         serde_json::from_str::<Value>(&cached).unwrap()["metadata_origin"],
         "addon:1"
     );
-    // The stored release document cannot project it (its list no longer holds
-    // the anchor), so the prepared target is the only record of episode 2.
     app.db
         .lock()
         .unwrap()
@@ -902,9 +806,6 @@ async fn a_prepared_target_projects_an_imported_row_the_release_document_cannot(
     assert_eq!(entry["record"]["identity"]["id"], "tt100:1:1", "{entry}");
 }
 
-/// backend#72: the up-next episode is projected from the stored release
-/// document, so the entry names that document's scope as its origin and the app
-/// starts finding sources on the tap.
 #[tokio::test]
 async fn the_up_next_entry_carries_the_documents_origin() {
     let start = now();
@@ -920,13 +821,10 @@ async fn the_up_next_entry_carries_the_documents_origin() {
     assert_eq!(entry["card"]["provider_id"], "addon:1", "{entry}");
 }
 
-/// backend#72: a title the profile's own Simkl link identifies keeps its Simkl
-/// origin, so the app opens the scope the host serves it from.
 #[tokio::test]
 async fn an_entry_simkl_identifies_carries_the_simkl_origin() {
     let start = now();
     let mut show = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
-    // Nothing listens here: a resumed episode needs no metadata read.
     show.app.simkl = Arc::new(crate::simkl::Service::fixture("http://127.0.0.1:9"));
     let app = &show.app;
     {
@@ -951,10 +849,6 @@ async fn an_entry_simkl_identifies_carries_the_simkl_origin() {
     assert_eq!(entry["card"]["provider_id"], "simkl", "{entry}");
 }
 
-/// backend#78: a caught-up entry names the episode the viewer is waiting for
-/// and its date, so the app can label "S1 E2 · ..." instead of only the
-/// finished episode. The facts come from the stored release document, the same
-/// one the badge and the Watched verdict read.
 #[tokio::test]
 async fn a_caught_up_entry_carries_the_next_episode_and_its_release_date() {
     let start = now();
@@ -965,7 +859,6 @@ async fn a_caught_up_entry_carries_the_next_episode_and_its_release_date() {
     request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
     until(|| verdict(app, "tt100").is_some()).await;
     let entry = show_entry(&queue(app).await);
-    // The finished episode keeps the card; the next one is only announced.
     assert_eq!(entry["status"], "Pending", "{entry}");
     assert_eq!(entry["card"]["identity"]["id"], "tt100:1:1", "{entry}");
     assert_eq!(entry["card"]["badges"], json!(["Watched"]), "{entry}");
@@ -976,7 +869,6 @@ async fn a_caught_up_entry_carries_the_next_episode_and_its_release_date() {
         "{entry}"
     );
     assert_eq!(entry["next_episode"]["released_at_millis"], aired, "{entry}");
-    // `/bootstrap` carries the same continuation page, so every client sees it.
     let (status, bootstrap) =
         request(app, "member-token-1", "GET", "/api/bootstrap", Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{bootstrap}");
@@ -985,12 +877,9 @@ async fn a_caught_up_entry_carries_the_next_episode_and_its_release_date() {
     assert_eq!(entry["next_episode"]["released_at_millis"], aired, "{bootstrap}");
 }
 
-/// Nothing further is listed, or the next one is already out and is the
-/// entry's card: no announcement either way.
 #[tokio::test]
 async fn a_finished_or_up_next_entry_announces_no_next_episode() {
     let start = now();
-    // Only one episode exists: the show is over.
     let last = show(vec![(1, start - 30 * DAY)]).await;
     let app = &last.app;
     watch(app, episode(1), Some(series()), true, start - 10 * DAY).await;
@@ -999,7 +888,6 @@ async fn a_finished_or_up_next_entry_announces_no_next_episode() {
     assert_eq!(entry["status"], "CaughtUp", "{entry}");
     assert!(entry["next_episode"].is_null(), "{entry}");
 
-    // The next episode is released: it is up next, not an announcement.
     let released = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
     let app = &released.app;
     watch(app, episode(1), Some(series()), true, start - 10 * DAY).await;

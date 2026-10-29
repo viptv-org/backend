@@ -1,4 +1,3 @@
-//! Shared-engine Xtream requests/projections with server-owned scope and egress.
 use super::*;
 
 pub(super) async fn directory(

@@ -1,4 +1,3 @@
-//! Counts only observed completion transitions; old watch totals remain unknown.
 use super::*;
 use viptv_engine::library::{Entry, LibraryStatistics};
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
@@ -156,7 +155,6 @@ pub(crate) fn entries(
         .collect::<Result<Vec<_>, ApiError>>()?;
     for (key, mut entry) in super::scoped_library::entries_db(&db, app, profile)? {
         let observed = entry.statistics.clone();
-        // A canonical legacy observation remains valid for that same shared title.
         if let Some(old) = entries
             .iter()
             .find(|old| super::scoped_library::raw_key(&old.card).is_ok_and(|old| old == key))
@@ -168,8 +166,6 @@ pub(crate) fn entries(
             }
         }
         if key.0 == "shared" {
-            // Only the host-verified storage key may select authoritative imports.
-            // Keep the public lookup ID/origin on the response, not the canonical alias.
             entry.statistics.identity.id = key.2.clone();
             entry.statistics.identity.kind = key.1.clone();
             crate::simkl::imports::merge(&db, profile, &mut entry.statistics)?;
@@ -190,7 +186,6 @@ pub(crate) fn entries(
             }
             entry.statistics.provenance = provenance;
         }
-        // Only canonical public identities can replace a corresponding legacy view.
         entries.retain(|old| super::scoped_library::raw_key(&old.card).is_ok_and(|old| old != key));
         entries.push(entry);
     }

@@ -16,7 +16,6 @@ pub(crate) fn apply(
     cap: viptv_engine::capabilities::Capability,
 ) -> Result<(App, u64), ApiError> {
     let (configuration, connections) = read(&app, lease, profile)?;
-    // Removed connections are omitted rather than reviving a stale assignment.
     let mut effective = configuration.clone();
     effective
         .assignments
@@ -29,9 +28,6 @@ pub(crate) fn apply(
         .filter_map(|c| c.id.strip_prefix("addon:")?.parse().ok())
         .collect();
     if configuration.scope.revision == 0 && cap == viptv_engine::capabilities::Capability::Sources {
-        // Default assignments include enabled account addons. An unreadable legacy
-        // credential must still publish its safe migration error without egress.
-        // Explicit saved assignments continue to exclude unassigned connections.
         let (_, errors) = app.addons.entries_with_errors()?;
         ids.extend(errors.into_iter().map(|(id, _)| id));
     }

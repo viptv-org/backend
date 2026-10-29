@@ -1,14 +1,5 @@
 use super::*;
 
-/// One series' episode document from the profile's provider (Simkl when it is
-/// the browsing integration, otherwise the profile's metadata add-ons) or,
-/// when that provider cannot serve the series, from the series' own provider:
-/// a `tt…` Stremio import Simkl has no identity for is read from the metadata
-/// add-ons, a `simkl:` series the add-ons cannot read from Simkl. A series
-/// Simkl does identify stays on Simkl, also while Simkl fails, so its facts
-/// never alternate between providers. Continue Watching's release facts and
-/// the Calendar's library episodes both read through here, so they agree.
-/// `fresh` skips the add-on response cache; `timeout` bounds the whole read.
 pub(super) async fn series_document(
     app: &App,
     lease: &ResourceLease,
@@ -23,8 +14,6 @@ pub(super) async fn series_document(
         .as_ref()
         .ok_or_else(|| ApiError::from("An explicit parent identity is required"))?;
     let deadline = tokio::time::Instant::now() + timeout;
-    // Simkl browsing leaves the profile's own metadata scope without add-ons,
-    // so reading them for Simkl's misses names them explicitly.
     let addons = ("stremio".to_owned(), None, String::new());
     let read = |simkl: bool, named: bool| {
         let explicit = named.then_some(&addons);
@@ -69,7 +58,6 @@ pub(super) async fn document(
     if simkl {
         let (mut parent, mut entries) =
             crate::simkl::continuation_document(app, profile, &parent.kind, &parent.id).await?;
-        // Simkl served this document, so its episodes are Simkl's (backend#72).
         let origin = metadata_origin.cloned().unwrap_or(viptv_engine::origin::MetadataOrigin {
             provider_id: "simkl".into(),
             connection_id: None,
@@ -97,9 +85,6 @@ pub(super) async fn document(
     }
     let (raw, issuer) = host.addons.meta_with_origin("series", &parent.id).await?;
     configuration::validate_revision(app, profile, revision)?;
-    // The add-on that answered names the document's scope: a plain `stremio`
-    // scope spans every assigned add-on, so keep the exact one the app can ask
-    // again (backend#72).
     let origin = if origin == "stremio" {
         format!("addon:{issuer}")
     } else {

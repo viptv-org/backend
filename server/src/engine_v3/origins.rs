@@ -1,4 +1,3 @@
-//! Stable metadata lookup provenance. Revisions fence access; incarnations identify installs.
 use super::*;
 use viptv_engine::{identity::MediaIdentity, origin::MetadataOrigin};
 
@@ -40,10 +39,6 @@ pub(crate) fn for_provider_db(
     }))
 }
 
-/// The profile's metadata integrations, read once so every Continue Watching
-/// row can be attributed without asking the provider. Add-on manifests may be
-/// sealed in the vault, so they come from the add-on store rather than the
-/// database the queue holds.
 pub(crate) struct Serving {
     account: i64,
     profile: i64,
@@ -60,8 +55,6 @@ impl Serving {
         let account = lease.principal.account_id().ok_or_else(auth::forbidden)?;
         let linked = crate::simkl::linked(app, profile)?;
         let (configuration, _) = super::configuration::read(app, lease, profile)?;
-        // The queue serves an imported title from the add-ons even when the
-        // profile browses Simkl (backend#60), so read that scope's add-ons.
         let addons = match super::search::metadata_scope(
             app.clone(),
             lease,
@@ -87,18 +80,12 @@ impl Serving {
         })
     }
 
-    /// The metadata scope that serves `identity`: a `simkl:` title, and one the
-    /// profile's own Simkl link identifies, stay on Simkl; a shared title comes
-    /// from the first assigned add-on that publishes it (the fallback of
-    /// backend#60). A Stremio import writes no provider provenance, so the queue
-    /// attributes its rows from here (backend#72).
     pub(crate) fn origin(
         &self,
         db: &Connection,
         identity: &MediaIdentity,
     ) -> Result<Option<MetadataOrigin>, ApiError> {
         let (kind, id) = (identity.kind.as_str(), identity.id.as_str());
-        // Only a Simkl link can carry a mapping, and only Simkl browsing reads it.
         if id.starts_with("simkl:")
             || self.simkl_browsing && self.linked && self.identifies(db, identity)?
         {
@@ -108,8 +95,6 @@ impl Serving {
                 incarnation: None,
             }));
         }
-        // An add-on id that only one connector knows cannot be attributed from
-        // its shape: two add-ons may publish different titles under it.
         if !viptv_engine::origin::shared_identity(identity) {
             return Ok(None);
         }
@@ -131,7 +116,6 @@ impl Serving {
     }
 }
 
-/// Capability selection remains with each producer; this proves current ownership and install.
 pub(crate) fn validate_db(
     db: &Connection,
     account: i64,
@@ -239,7 +223,6 @@ pub(crate) fn parse_card(
     })
     .transpose()
 }
-/// Match old scalar routing with the exact modern install token, never silently reinterpret it.
 pub(crate) fn selectors(
     app: &App,
     provider: Option<&str>,
@@ -285,7 +268,6 @@ pub(crate) fn check_expected(
     }
     Ok(())
 }
-/// The exact metadata provider is host selected; client external IDs are consistency checks only.
 pub(crate) async fn verified_card(
     app: &App,
     expected: &viptv_engine::presentation::Card,
@@ -360,7 +342,6 @@ pub(crate) enum MetadataEvidence {
     Verified(viptv_engine::presentation::Card, MetadataProof),
     Unverified(viptv_engine::presentation::Card),
 }
-/// Catalog provenance permits a private lookup record, not a shared external-ID alias.
 pub(crate) async fn persistence_card(
     app: &App,
     expected: &viptv_engine::presentation::Card,
@@ -710,7 +691,6 @@ pub(crate) fn validate_assignment_db(
     Ok(())
 }
 
-/// Construct identity-affecting provider matching only from the verified host card.
 pub(crate) fn source_value(card: &viptv_engine::presentation::Card) -> Value {
     let mut value = json!({"type":card.identity.kind,"id":card.identity.id,"name":if card.identity.episode.is_some(){Value::Null}else{json!(card.title)},"poster":card.poster,"card":card,"metadata_origin":card.metadata_origin});
     if let Some(episode) = &card.identity.episode {

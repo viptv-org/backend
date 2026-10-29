@@ -9,8 +9,6 @@ pub(super) struct PresentedHome {
     previews: Vec<Vec<Value>>,
 }
 impl PresentedHome {
-    /// Applied after the shared card decorator, without trusting provider or
-    /// client-supplied view fields. Both arrays come from this same snapshot.
     pub fn attach(&self, value: &mut Value) {
         for (row, previews) in self.previews.iter().enumerate() {
             for (column, preview) in previews.iter().enumerate() {
@@ -41,8 +39,7 @@ pub(super) async fn load(
     let home_addon_revision = app.addons.revision()?;
     crate::simkl::imports::schedule(&app, &lease, profile);
     super::continuation::releases::schedule(&app, &lease, profile);
-    // Use the same origin-aware personal projections as the explicit routes.
-    // This snapshot owns its DB lock; never call it inside the favorites lock.
+    // This snapshot takes its own DB lock; never call it while holding the favorites lock.
     let continuation = super::continuation::snapshot(&app, &lease, profile, 0, 12)?;
     let queue = continuation
         .entries
@@ -130,7 +127,6 @@ pub(super) async fn load(
         })
         .take(10)
         .collect::<Vec<_>>();
-    // Titles are decided before any row loads (see `catalog_row_titles`).
     let titles = super::home_titles::catalog_row_titles(
         &catalogs
             .iter()
@@ -237,9 +233,6 @@ pub(super) async fn load(
         ));
     }
     configuration::validate_revision(&app, profile, configuration_revision)?;
-    // Continue Watching cards come marked by the queue itself: only a finished
-    // episode its series stays on, never a title in progress (a rewatch of a
-    // finished movie keeps its progress bar and no check).
     let watched = super::watched::Watched::for_profile(&app, profile);
     for row in &mut snapshot.rows {
         if row.id != "continue" {
@@ -253,14 +246,11 @@ pub(super) async fn load(
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?,
     )?;
-    // Reuse the already-verified parent metadata in one bounded cache read.
-    // Episode artwork stays on the tile; the preview can use its series art.
     let parents = snapshot.rows.iter().flat_map(|row| &row.cards).filter_map(|card| {
         let parent = card.parent_identity.as_ref()?;
         let mut preview = card.clone();
         preview.identity = parent.clone(); preview.parent_identity = None;
-        // Only verified parent artwork belongs in this shared map. Keeping an
-        // episode frame here could give a sibling card that frame on cache miss.
+        // Only verified parent artwork belongs here: an episode frame would land on sibling cards.
         preview.landscape = None;
         Some((preview_key(card), preview))
     }).collect::<Vec<_>>();
@@ -404,7 +394,6 @@ async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
         apply_metadata(snapshot, &original, &metadata);
         presented.push((original, metadata));
     }
-    // Artwork cannot hold completed authoritative metadata behind its deadline.
     let mut logos = futures::stream::iter(
         presented
             .into_iter()

@@ -1,4 +1,3 @@
-//! Complete toggle membership without projecting cards or reading a provider.
 use super::*;
 use viptv_engine::identity::MediaIdentity;
 pub(crate) fn snapshot(app: &App, lease: &ResourceLease, profile: i64) -> Result<Value, ApiError> {
@@ -8,7 +7,7 @@ pub(crate) fn snapshot(app: &App, lease: &ResourceLease, profile: i64) -> Result
         .map_err(|_| ApiError::from("Database unavailable"))?;
     snapshot_db(app, lease, profile, &db)
 }
-/// The caller already owns the connection (or a mutation transaction). Never relock it.
+/// The caller already owns the connection; never relock it.
 pub(super) fn snapshot_db(
     app: &App,
     lease: &ResourceLease,

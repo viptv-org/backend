@@ -1,4 +1,3 @@
-//! Profile-private Xtream credentials; legacy account providers remain separate.
 use super::*;
 
 pub(super) fn connections(

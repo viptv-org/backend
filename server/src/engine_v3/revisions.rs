@@ -1,22 +1,10 @@
-//! Cheap per-profile change signals for client freshness checks.
-//!
-//! `GET /api/profiles/:id/revisions` and bootstrap `revisions` return opaque
-//! strings read from a handful of single-row SQLite lookups. No add-on,
-//! Simkl, metadata or Home work happens here.
 use super::*;
 
-/// The add-on revision a restricted kids session observes; it matches the
-/// constant `GET /api/catalogs/revision` answers for such a session.
 const KIDS_ADDON_REVISION: &str = "00000000000000000000000000000000";
 
-/// Account-scoped profile-management revision. Triggers bump it whenever a
-/// value projected into the account's profile list changes: profile
-/// creation/deletion (ownership rows), name/presentation edits, avatar,
-/// kids `enabled`/`max_age`, and the account parent PIN.
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_account_profile_revisions(account_id INTEGER PRIMARY KEY REFERENCES auth_accounts(id) ON DELETE CASCADE,revision INTEGER NOT NULL);")?;
-    // Selecting through auth_accounts skips accounts that are being deleted,
-    // so a cascading account delete never inserts an orphaned revision row.
+    // Selecting through auth_accounts skips accounts being deleted, so no orphan revision row is inserted.
     let account = |expr: &str| {
         format!("INSERT INTO engine_account_profile_revisions(account_id,revision) SELECT id,1 FROM auth_accounts WHERE id={expr} ON CONFLICT(account_id) DO UPDATE SET revision=revision+1;")
     };
@@ -68,7 +56,6 @@ pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
             "",
             owner("OLD.profile_id"),
         ),
-        // Approval-only kids writes bump just the profile's policy revision.
         (
             "kids_insert",
             "AFTER INSERT ON kids_profiles",
@@ -121,8 +108,6 @@ fn scalar(db: &Connection, sql: &str, params: impl rusqlite::Params) -> Result<i
         .map(|v| v.unwrap_or(0))
 }
 
-/// Reads the selected profile's tokens. Callers have already checked that
-/// `profile` is the session's selected profile.
 pub(crate) fn read(db: &Connection, app: &App, profile: i64) -> Result<Value, ApiError> {
     let principal = app.identity();
     let account = principal.account_id().ok_or_else(auth::unauthorized)?;
@@ -161,8 +146,6 @@ pub(crate) fn read(db: &Connection, app: &App, profile: i64) -> Result<Value, Ap
     } else {
         app.addons.revision_db(db)?
     };
-    // A parent grant is per session and expires without a write; it changes
-    // this session's profile locks, so it is part of the profiles token.
     let unlocked = u8::from(kids::unlocked(db, &principal)?);
     Ok(json!({
         "library": library.to_string(),
@@ -174,7 +157,6 @@ pub(crate) fn read(db: &Connection, app: &App, profile: i64) -> Result<Value, Ap
     }))
 }
 
-/// Reads the tokens for `profile` after the usual selected-profile check.
 pub(crate) fn snapshot(app: &App, profile: i64) -> Result<Value, ApiError> {
     let db = app
         .db

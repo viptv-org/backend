@@ -171,8 +171,6 @@ pub(crate) async fn page(
     let start = (query.offset as usize).min(filtered.len());
     let end = start.saturating_add(limit).min(filtered.len());
     super::super::configuration::validate_revision(&app, profile, revision)?;
-    // This monotonic cache-instance timestamp is stable across clones/pages and
-    // changes on every directory replacement; guide refreshes leave it intact.
     let catalog_generation = format!("{}:{:?}", connection.id, cache.expires);
     snapshot::project(&app, profile, revision, &query, &catalog_generation, filtered.len() as u64, LivePage {
         channels: filtered

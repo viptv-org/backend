@@ -1,9 +1,7 @@
-//! Cached configuration facts; startup never probes a subtitle provider.
 use super::*;
 pub(super) fn subtitles(app: &App, lease: &ResourceLease, profile: i64) -> Result<Value, ApiError> {
     let scoped = app.clone().with_lease(lease.clone());
     let (mut configuration, connections) = configuration::read(&scoped, lease, profile)?;
-    // Match execution: removed connections cannot revive a stale assignment.
     configuration
         .assignments
         .retain(|a| connections.iter().any(|c| c.id == a.connection_id));
@@ -18,9 +16,6 @@ pub(super) fn subtitles(app: &App, lease: &ResourceLease, profile: i64) -> Resul
     Ok(json!({"available":!providers.is_empty(),"provider_count":providers.len()}))
 }
 
-/// Shared viewing navigation, projected from cached configuration only. A
-/// configured provider's temporary network failure remains a retryable screen;
-/// startup does not probe providers to decide whether their route exists.
 pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>) -> Result<Value, ApiError> {
     use viptv_engine::capabilities::Capability;
     let Some(profile) = profile else {
@@ -43,7 +38,6 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
         (restricted, live_allowed, linked, continuation::calendar::has_series_db(&db, profile)?)
     };
     let (movies, series) = if restricted {
-        // Restricted discovery is the scoped approved Library projection.
         (true, true)
     } else if configuration.browsing_plugin == "simkl" {
         let discovery = enabled(Capability::Discovery)?;
@@ -58,8 +52,6 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
         && (configuration.browsing_plugin != "simkl" || simkl_linked));
     let live = live_allowed && enabled(Capability::LiveTv)?;
     let search = media_search || live;
-    // Calendar merges the library's series ("your shows", any integration)
-    // with Simkl's public schedule; either source offers it.
     let calendar = !restricted
         && (library_series || (configuration.browsing_plugin == "simkl" && enabled(Capability::Discovery)?));
     configuration::validate_revision(&scoped, profile, configuration.scope.revision)?;

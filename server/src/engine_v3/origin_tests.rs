@@ -241,10 +241,7 @@ async fn private_origin_approval_detail_next_caption_source_and_revocation_are_i
             .0,
         StatusCode::FORBIDDEN
     );
-    // The stale-session sweep observes the revocation on its own one-second
-    // cadence and terminates the session as expired (backend#66). Drive the
-    // same observation through the playback status endpoint so the ordering
-    // is deterministic instead of racing that tick.
+    // Drive the stale-session sweep through this endpoint instead of racing its one-second tick.
     assert_eq!(
         request(&app, "member-token-1", "GET", &playback_path, Value::Null)
             .await
@@ -273,7 +270,6 @@ async fn private_origin_stale_expected_alias_and_reinstalled_connector_are_rejec
     let card = &a["item"];
     let origin = &card["metadata_origin"];
     revision.store(1, Ordering::SeqCst);
-    // Config revision also invalidates private endpoint caches; the install token remains stable.
     app.db
         .lock()
         .unwrap()
@@ -404,7 +400,6 @@ async fn captions_with_same_raw_id_require_the_exact_origin_and_assertion_contex
         .await;
         assert_eq!(status, StatusCode::OK, "{result}");
         selections.push(result["candidates"][0]["id"].as_str().unwrap().to_owned());
-        // Discovery replaces old unretained candidates; retain the tested immutable selection.
         app.subtitle_selections
             .retain_content(&selections.last().unwrap(), &lease, Arc::from("WEBVTT\n\n"))
             .unwrap();

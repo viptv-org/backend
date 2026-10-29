@@ -6,7 +6,6 @@ pub(crate) struct Rank {
     ids: Vec<String>,
     #[serde(default)]
     quality_height: Option<u32>,
-    /// The height the device shows; caps quality together with the profile cap.
     #[serde(default)]
     device_max_height: Option<u32>,
 }
@@ -122,7 +121,6 @@ pub(crate) async fn rank(
     }
     drop(grants);
     drop(db);
-    // Title original-language metadata is not plumbed to ranking yet.
     viptv_engine::preferences::rank_sources(
         &mut candidates,
         &preferences.preferences,
