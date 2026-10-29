@@ -314,6 +314,19 @@ async fn resolve(
         .await?;
         let mut detail: DetailSnapshot =
             serde_json::from_value(result.0).map_err(|_| ApiError::from("Metadata unavailable"))?;
+        let show = super::anime_show::detail(
+            &app,
+            &lease,
+            profile,
+            &detail.item,
+            "simkl",
+            page.offset,
+            page.limit.unwrap_or(24),
+        )
+        .await;
+        if let Some(show) = show {
+            detail = show;
+        }
         super::origins::stamp(&app, std::slice::from_mut(&mut detail.item), "simkl")?;
         super::origins::stamp(&app, &mut detail.episodes, "simkl")?;
         super::origins::stamp(&app, &mut detail.recommendations, "simkl")?;
@@ -410,6 +423,12 @@ async fn resolve(
     let mut parent = meta.clone();
     parent["type"] = json!(kind);
     parent["id"] = json!(lookup);
+    if kind == "series" {
+        let document = super::anime_show::tvdb_document(&app, &lease, profile, &parent).await;
+        if let Some(document) = document {
+            parent = document;
+        }
+    }
     if requested_origin.is_none() {
         projection::cards(&app, vec![parent.clone()], &origin)?
             .into_iter()
