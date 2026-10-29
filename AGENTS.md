@@ -20,6 +20,9 @@ mounted web app. Read the workspace `AGENTS.md` first.
   default runs never compile the feature-gated tests.
 - `python3 scripts/sync-engine.py check`
 
+The same three run in `.github/workflows/checks.yml` on pull requests into `edge`
+and `main` and on pushes to `edge`.
+
 ## Tests
 
 Fake servers in tests must ignore `HEAD` and other safe-method requests to `/`:
