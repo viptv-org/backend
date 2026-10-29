@@ -67,6 +67,12 @@ oversized or failed logos, and add-ons without one return 404
 `addon_logo_unavailable`. Logos are cached in memory per account, add-on and
 revision (16 MiB); failures are retried after five minutes.
 
+A `v` other than the add-on's current revision returns 404
+`addon_logo_unavailable` without loading the logo, so a client holding an old
+revision URL never receives the current or a removed logo. A request without
+`v`, or with an empty one, serves the current revision. The endpoint stays
+cached for a day because its URL changes with the logo.
+
 ## Storage and runtime behavior
 
 The addon manifest URL can contain a token, and the manifest can repeat it in

@@ -790,6 +790,14 @@ async fn manifest_logos_are_served_only_through_the_owner_checked_route() {
     assert!(headers["cache-control"].to_str().unwrap().starts_with("private"));
     let (status, _, body) = raw_get(&app, "member-token-1", &format!("{ROOT}/{id}/logo")).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, PNG));
+    let (status, _, body) = raw_get(&app, "member-token-1", &format!("{ROOT}/{id}/logo?v=")).await;
+    assert_eq!((status, &body[..]), (StatusCode::OK, PNG));
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let (status, headers, body) =
+        raw_get(&app, "member-token-1", &format!("{ROOT}/{id}/logo?v=deadbeefcafe")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(headers["content-type"], "application/json");
+    assert!(!String::from_utf8_lossy(&body).contains("private-token"));
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
 
     let (status, _, body) = raw_get(&app, "member-token-2", &logo).await;
@@ -819,4 +827,120 @@ async fn missing_oversized_and_non_raster_logos_are_not_served() {
         assert!(!body.contains("private-token") && !body.contains("<svg"), "{token}: {body}");
     }
     server.abort();
+}
+
+const REVISED: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDRlogo-revised";
+struct RevisionUpstream {
+    base: String,
+    hits: Arc<std::sync::atomic::AtomicUsize>,
+    revision: Arc<std::sync::atomic::AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl RevisionUpstream {
+    async fn start() -> Self {
+        use axum::{extract::Path, http::header};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let base = format!("http://{address}");
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let revision = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let origin = base.clone();
+        let counted = hits.clone();
+        let served = hits.clone();
+        let current = revision.clone();
+        let task = tokio::spawn(async move {
+            let router = Router::new()
+                .route(
+                    "/:token/manifest.json",
+                    get({
+                        let current = current.clone();
+                        move |Path(token): Path<String>| {
+                            let origin = origin.clone();
+                            let current = current.clone();
+                            async move {
+                                let mut manifest = json!({"id":format!("fixture.{token}"),"name":"Logo revision","resources":["stream"],"types":["movie"]});
+                                if !token.starts_with("plain") {
+                                    manifest["logo"] = json!(match current.load(std::sync::atomic::Ordering::SeqCst) {
+                                        0 => format!("{origin}/{token}/logo.png"),
+                                        _ => format!("{origin}/{token}/logo-revised.png"),
+                                    });
+                                }
+                                axum::Json(manifest)
+                            }
+                        }
+                    }),
+                )
+                .route(
+                    "/:token/logo.png",
+                    get(move || {
+                        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        async { ([(header::CONTENT_TYPE, "image/png")], PNG.to_vec()) }
+                    }),
+                )
+                .route(
+                    "/:token/logo-revised.png",
+                    get(move || {
+                        served.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        async { ([(header::CONTENT_TYPE, "image/png")], REVISED.to_vec()) }
+                    }),
+                )
+                .route("/", axum::routing::any(|| async { StatusCode::OK }));
+            axum::serve(listener, router).await.unwrap();
+        });
+        crate::test_support::send_port_probe(address).await;
+        Self {
+            base,
+            hits,
+            revision,
+            task,
+        }
+    }
+}
+#[tokio::test]
+async fn a_changed_manifest_logo_changes_the_bytes_for_the_new_revision_only() {
+    let app = app();
+    let upstream = RevisionUpstream::start().await;
+    let token = "png-private-token";
+    let first = install(&app, &upstream.base, token).await;
+    let id = first["id"].as_i64().unwrap();
+    let old = first["logo"].as_str().unwrap().to_owned();
+    let (status, _, body) = raw_get(&app, "member-token-1", &old).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(&body[..], PNG);
+
+    upstream
+        .revision
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let again = install(&app, &upstream.base, token).await;
+    assert_eq!(again["id"], id);
+    let (_, page) = request(&app, "member-token-1", "GET", ROOT, Value::Null).await;
+    let current = page["items"][0]["logo"].as_str().unwrap().to_owned();
+    assert_ne!(current, old);
+    let (status, headers, body) = raw_get(&app, "member-token-1", &current).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["content-type"], "image/png");
+    assert_eq!(&body[..], REVISED);
+    let (status, _, _) = raw_get(&app, "member-token-1", &old).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(upstream.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    upstream.task.abort();
+}
+#[tokio::test]
+async fn an_addon_without_a_logo_serves_no_revision() {
+    let app = app();
+    let upstream = RevisionUpstream::start().await;
+    let row = install(&app, &upstream.base, "plain-private-token").await;
+    assert_eq!(row["logo"], Value::Null);
+    let (_, page) = request(&app, "member-token-1", "GET", ROOT, Value::Null).await;
+    assert_eq!(page["items"][0]["logo"], Value::Null);
+    let id = row["id"].as_i64().unwrap();
+    for suffix in ["", "?v=", "?v=deadbeefcafe"] {
+        let (status, headers, body) =
+            raw_get(&app, "member-token-1", &format!("{ROOT}/{id}/logo{suffix}")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{suffix}");
+        assert_eq!(headers["content-type"], "application/json", "{suffix}");
+        assert!(!String::from_utf8_lossy(&body).contains("private-token"), "{suffix}");
+    }
+    assert_eq!(upstream.hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    upstream.task.abort();
 }
