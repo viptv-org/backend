@@ -56,7 +56,8 @@ claim that production has adopted them.
 `device_max_height`, and adds optional `quality_height`. Its response contains:
 
 - `streams`: server-ranked rows, filtered by the requested height when supplied;
-- `best_match_id`: the best row across the submitted set before the display filter;
+- `best_match_id`: the first id of `best_match_ids`, and null when no submitted row passes the hard filters;
+- `best_match_ids`: the ids of the Best matches group in ranking order, at most five: the top-ranked rows that pass every hard filter (camera/telesync/telecine/screener/R5, 3D, torrents under five known seeders). Both are decided over the submitted set before the display filter, so a height filter drops rows from `streams` without moving the marker;
 - `quality_filters`: `{height, label, count}` entries for that set;
 - `total`: the submitted eligible ranked set's size before the display filter;
 - `selection_note`: the server preference’s explanatory text for the source panel.

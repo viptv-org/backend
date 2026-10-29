@@ -148,6 +148,7 @@ pub(super) async fn guide(
             && program.start_millis < now.saturating_add(7 * 24 * 60 * 60 * 1000)
     });
     guide.programs.truncate(100);
+    super::honest_guide(&mut guide);
     xtream_configuration::validate(&app, &lease, profile, revision, &connection)?;
     if let Some(cache) = app.live_cache.lock().await.get_mut(&connection.id) {
         cache.guides.insert(

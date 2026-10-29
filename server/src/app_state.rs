@@ -26,6 +26,7 @@ impl ApiError {
             "Verified source mapping is unavailable for this title or episode" => {
                 Some("metadata_mapping_unavailable")
             }
+            "This title is no longer available." => Some("metadata_not_found"),
             "client_update_required" => Some("client_update_required"),
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),

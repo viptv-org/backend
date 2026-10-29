@@ -340,10 +340,11 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
     if let Some(path) = tv_dashboard {
         let root_index = path.join("index.html");
         let web: Router = Router::new()
-            .fallback_service(
-                tower_http::services::ServeDir::new(&path)
-                    .fallback(tower_http::services::ServeFile::new(path.join("index.html"))),
-            )
+            .fallback_service(tower_http::services::ServeDir::new(&path))
+            .layer(middleware::from_fn_with_state(
+                root_index.clone(),
+                spa_fallback,
+            ))
             .layer(middleware::from_fn(web_asset_cache));
         r = r
             .route("/", get(move || dashboard_entry(root_index.clone())))
@@ -385,14 +386,58 @@ async fn terms_page() -> Response {
     )
 }
 
-async fn dashboard_entry(path: PathBuf) -> Response {
-    const MAX_INDEX_BYTES: usize = 2 * 1024 * 1024;
-    match tokio::fs::read(path).await {
-        Ok(bytes) if bytes.len() <= MAX_INDEX_BYTES => html_page(bytes),
+const MAX_INDEX_BYTES: usize = 2 * 1024 * 1024;
+
+fn looks_like_asset(path: &str) -> bool {
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if name.contains('.') || (name.len() >= 20 && name.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return true;
+    }
+    path.trim_start_matches('/').split('/').any(|segment| {
+        matches!(
+            segment,
+            "assets" | "composeResources" | "static" | "fonts" | "images" | "media" | "wasm"
+        )
+    })
+}
+
+async fn spa_fallback(State(index): State<PathBuf>, request: Request, next: Next) -> Response {
+    let asset = looks_like_asset(request.uri().path());
+    let response = next.run(request).await;
+    if response.status() != StatusCode::NOT_FOUND || asset {
+        return response;
+    }
+    match tokio::fs::read(&index).await {
+        Ok(bytes) if !bytes.is_empty() && bytes.len() <= MAX_INDEX_BYTES => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            bytes,
+        )
+            .into_response(),
         Ok(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CACHE_CONTROL, "no-store")],
-            "Dashboard entry exceeds 2 MiB",
+            "Viewing app entry is empty or exceeds 2 MiB",
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CACHE_CONTROL, "no-store")],
+            "Viewing app entry unavailable",
+        )
+            .into_response(),
+    }
+}
+
+async fn dashboard_entry(path: PathBuf) -> Response {
+    match tokio::fs::read(path).await {
+        Ok(bytes) if !bytes.is_empty() && bytes.len() <= MAX_INDEX_BYTES => html_page(bytes),
+        Ok(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CACHE_CONTROL, "no-store")],
+            "Dashboard entry is empty or exceeds 2 MiB",
         )
             .into_response(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => (
@@ -410,10 +455,128 @@ async fn dashboard_entry(path: PathBuf) -> Response {
     }
 }
 
+pub fn validate_tv_dist(dist: &std::path::Path) -> Result<(), String> {
+    if !dist.is_dir() {
+        return Err(format!("{} is not a directory", dist.display()));
+    }
+    let index = dist.join("index.html");
+    let html = std::fs::read(&index).map_err(|error| format!("{}: {error}", index.display()))?;
+    if html.is_empty() {
+        return Err(format!("{} is empty", index.display()));
+    }
+    if html.len() > MAX_INDEX_BYTES {
+        return Err(format!("{} exceeds {MAX_INDEX_BYTES} bytes", index.display()));
+    }
+    for reference in referenced_assets(&String::from_utf8_lossy(&html)) {
+        let Some(relative) = local_asset_path(&reference) else {
+            continue;
+        };
+        let asset = dist.join(&relative);
+        let metadata = std::fs::metadata(&asset)
+            .map_err(|error| format!("{}: {error}", asset.display()))?;
+        if !metadata.is_file() {
+            return Err(format!("{} is not a file", asset.display()));
+        }
+        if metadata.len() == 0 {
+            return Err(format!("{} is empty", asset.display()));
+        }
+    }
+    Ok(())
+}
+
+fn referenced_assets(html: &str) -> Vec<String> {
+    let mut references = Vec::new();
+    let mut rest = html;
+    while let Some(open) = rest.find('<') {
+        let tag_start = open + 1;
+        let Some(close) = rest[tag_start..].find('>') else {
+            break;
+        };
+        let tag = &rest[tag_start..tag_start + close];
+        rest = &rest[tag_start + close + 1..];
+        let name = tag
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .next()
+            .unwrap_or_default();
+        if name.eq_ignore_ascii_case("script") {
+            references.extend(attribute(tag, "src"));
+        } else if name.eq_ignore_ascii_case("link") {
+            let rel = attribute(tag, "rel").unwrap_or_default().to_ascii_lowercase();
+            if matches!(rel.as_str(), "stylesheet" | "modulepreload" | "preload") {
+                references.extend(attribute(tag, "href"));
+            }
+        }
+    }
+    references
+}
+
+fn attribute(tag: &str, name: &str) -> Option<String> {
+    let mut rest = tag;
+    while let Some(position) = rest.find(name) {
+        let end = position + name.len();
+        let before = rest[..position].chars().next_back();
+        let after = rest[end..].chars().next();
+        let bounded = before.is_none_or(|c| !attribute_name_char(c))
+            && after.is_none_or(|c| !attribute_name_char(c));
+        if bounded {
+            let tail = rest[end..].trim_start();
+            if let Some(tail) = tail.strip_prefix('=') {
+                let tail = tail.trim_start();
+                let quote = tail.chars().next().filter(|c| *c == '"' || *c == '\'');
+                let value = match quote {
+                    Some(quote) => tail[1..].split(quote).next().unwrap_or_default(),
+                    None => tail
+                        .split(|c: char| c.is_whitespace() || c == '>')
+                        .next()
+                        .unwrap_or_default(),
+                };
+                return Some(value.to_string());
+            }
+        }
+        rest = &rest[end..];
+    }
+    None
+}
+
+fn attribute_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':'
+}
+
+fn local_asset_path(reference: &str) -> Option<PathBuf> {
+    let reference = reference.trim();
+    if reference.is_empty()
+        || reference.starts_with('#')
+        || reference.starts_with("//")
+        || reference.contains("://")
+        || reference.starts_with("data:")
+        || reference.starts_with("blob:")
+        || reference.starts_with("mailto:")
+    {
+        return None;
+    }
+    let path = reference
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches('/');
+    let path = std::path::Path::new(path);
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(path.to_path_buf())
+}
+
 #[cfg(test)]
 mod tv_web_mount_tests {
     use super::*;
     use tower::ServiceExt;
+    async fn web_request(app:&Router,path:&str)->Response {
+        app.clone().oneshot(axum::http::Request::builder().uri(path).body(axum::body::Body::empty()).unwrap()).await.unwrap()
+    }
     #[tokio::test]
     async fn optional_tv_mount_preserves_root_dashboard_api_and_deep_links() {
         let root=tempfile::tempdir().unwrap();let tv=tempfile::tempdir().unwrap();let dashboard=tempfile::tempdir().unwrap();
@@ -425,6 +588,35 @@ mod tv_web_mount_tests {
             let bytes=axum::body::to_bytes(response.into_body(),1024).await.unwrap();assert_eq!(&bytes[..],expected.as_bytes(),"{path}");
         }
         let response=app.oneshot(axum::http::Request::builder().uri("/api/health").body(axum::body::Body::empty()).unwrap()).await.unwrap();assert_eq!(response.status(),StatusCode::OK);
+    }
+    #[tokio::test]
+    async fn tv_mount_answers_client_routes_with_the_shell_and_assets_with_themselves() {
+        const SHELL:&str="<!doctype html><div id=\"viptv-ui-layer\"></div>";
+        let web=tempfile::tempdir().unwrap();
+        std::fs::create_dir(web.path().join("composeResources")).unwrap();
+        std::fs::write(web.path().join("index.html"),SHELL).unwrap();
+        std::fs::write(web.path().join("composeApp.js"),"startApp()").unwrap();
+        std::fs::write(web.path().join("819d242a46ca39e513ca.wasm"),"wasm").unwrap();
+        std::fs::write(web.path().join("composeResources/avatar.png"),"png").unwrap();
+        let app=router_with_viewers(crate::auth_integration_tests::fixture(),Some(web.path().into()));
+        for path in ["/","/device","/device?code=12345678","/tv/show/123","/tv/show/123?season=2","/device/"] {
+            let response=web_request(&app,path).await;
+            assert_eq!(response.status(),StatusCode::OK,"{path}");
+            assert!(response.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"),"{path}");
+            let bytes=axum::body::to_bytes(response.into_body(),4096).await.unwrap();
+            assert_eq!(&bytes[..],SHELL.as_bytes(),"{path}");
+        }
+        for (path,content_type,body) in [
+            ("/composeApp.js","text/javascript","startApp()"),
+            ("/819d242a46ca39e513ca.wasm","application/wasm","wasm"),
+            ("/composeResources/avatar.png","image/png","png"),
+        ] {
+            let response=web_request(&app,path).await;
+            assert_eq!(response.status(),StatusCode::OK,"{path}");
+            assert_eq!(response.headers()[header::CONTENT_TYPE],content_type,"{path}");
+            let bytes=axum::body::to_bytes(response.into_body(),4096).await.unwrap();
+            assert_eq!(&bytes[..],body.as_bytes(),"{path}");
+        }
     }
     #[tokio::test]
     async fn tv_mount_revalidates_shell_files_and_immutably_caches_hashed_assets() {
@@ -445,5 +637,75 @@ mod tv_web_mount_tests {
             assert_eq!(response.status(),StatusCode::OK,"{path}");
             assert_eq!(response.headers()[header::CACHE_CONTROL],cache,"{path}");
         }
+    }
+    #[tokio::test]
+    async fn tv_mount_answers_missing_assets_with_404_and_extension_less_routes_with_the_shell() {
+        const SHELL:&str="<!doctype html><div id=\"viptv-ui-layer\"></div>";
+        let web=tempfile::tempdir().unwrap();
+        std::fs::write(web.path().join("index.html"),SHELL).unwrap();
+        std::fs::write(web.path().join("composeApp.js"),"startApp()").unwrap();
+        let app=router_with_viewers(crate::auth_integration_tests::fixture(),Some(web.path().into()));
+        for path in ["/tv/assets/main-ABC123.js","/composeApp.js.map","/assets/app.css","/819d242a46ca39e513ca","/composeResources/missing.png"] {
+            let response=web_request(&app,path).await;
+            assert_eq!(response.status(),StatusCode::NOT_FOUND,"{path}");
+            assert_ne!(response.headers().get(header::CONTENT_TYPE).and_then(|value|value.to_str().ok()),Some("text/html; charset=utf-8"),"{path}");
+        }
+        for path in ["/device","/device?code=12345678","/tv/show/123"] {
+            let response=web_request(&app,path).await;
+            assert_eq!(response.status(),StatusCode::OK,"{path}");
+            let bytes=axum::body::to_bytes(response.into_body(),4096).await.unwrap();
+            assert_eq!(&bytes[..],SHELL.as_bytes(),"{path}");
+        }
+    }
+    #[tokio::test]
+    async fn tv_mount_serves_assets_with_their_content_types() {
+        let web=tempfile::tempdir().unwrap();
+        std::fs::write(web.path().join("index.html"),"shell").unwrap();
+        for (name,body) in [("app.css","body{}"),("app.mjs","export {}"),("app.js.map","{}"),("font.woff2","font"),("data.json","{}")] {
+            std::fs::write(web.path().join(name),body).unwrap();
+        }
+        let app=router_with_viewers(crate::auth_integration_tests::fixture(),Some(web.path().into()));
+        for (path,content_type) in [("/app.css","text/css"),("/app.mjs","application/javascript"),("/app.js.map","text/plain"),("/font.woff2","font/woff2"),("/data.json","application/json")] {
+            let response=web_request(&app,path).await;
+            assert_eq!(response.status(),StatusCode::OK,"{path}");
+            assert_eq!(response.headers()[header::CONTENT_TYPE],content_type,"{path}");
+        }
+    }
+    #[tokio::test]
+    async fn tv_mount_does_not_serve_a_zero_byte_entry_as_the_shell() {
+        let web=tempfile::tempdir().unwrap();
+        std::fs::write(web.path().join("index.html"),"").unwrap();
+        let app=router_with_viewers(crate::auth_integration_tests::fixture(),Some(web.path().into()));
+        for path in ["/","/device"] {
+            let response=web_request(&app,path).await;
+            assert_eq!(response.status(),StatusCode::INTERNAL_SERVER_ERROR,"{path}");
+        }
+    }
+    #[test]
+    fn tv_dist_validation_requires_a_non_empty_entry_and_its_referenced_assets() {
+        const SHELL:&str="<!doctype html><html><head><link rel=\"stylesheet\" href=\"assets/app.css\"><script src=\"composeApp.js\"></script><link rel=\"modulepreload\" href=\"app.wasm\"><link rel=\"icon\" href=\"missing.ico\"><script src=\"https://cdn.example/app.js\"></script><link href=\"data:text/css,\"><script src=\"../outside.js\"></script></head><body></body></html>";
+        let web=tempfile::tempdir().unwrap();
+        std::fs::create_dir(web.path().join("assets")).unwrap();
+        std::fs::write(web.path().join("assets/app.css"),"body{}").unwrap();
+        std::fs::write(web.path().join("app.wasm"),"wasm").unwrap();
+        std::fs::write(web.path().join("index.html"),SHELL).unwrap();
+        assert!(validate_tv_dist(web.path()).unwrap_err().contains("composeApp.js"));
+        std::fs::write(web.path().join("composeApp.js"),"").unwrap();
+        assert!(validate_tv_dist(web.path()).unwrap_err().contains("composeApp.js"));
+        std::fs::write(web.path().join("composeApp.js"),"startApp()").unwrap();
+        validate_tv_dist(web.path()).unwrap();
+        std::fs::remove_file(web.path().join("assets/app.css")).unwrap();
+        assert!(validate_tv_dist(web.path()).unwrap_err().contains("app.css"));
+        std::fs::write(web.path().join("assets/app.css"),"").unwrap();
+        assert!(validate_tv_dist(web.path()).unwrap_err().contains("app.css"));
+        std::fs::write(web.path().join("assets/app.css"),"body{}").unwrap();
+        std::fs::remove_file(web.path().join("app.wasm")).unwrap();
+        assert!(validate_tv_dist(web.path()).unwrap_err().contains("app.wasm"));
+        std::fs::write(web.path().join("app.wasm"),"wasm").unwrap();
+        validate_tv_dist(web.path()).unwrap();
+        std::fs::remove_file(web.path().join("index.html")).unwrap();
+        assert!(validate_tv_dist(web.path()).unwrap_err().contains("index.html"));
+        std::fs::write(web.path().join("index.html"),"").unwrap();
+        assert!(validate_tv_dist(web.path()).unwrap_err().contains("is empty"));
     }
 }

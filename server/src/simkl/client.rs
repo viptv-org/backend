@@ -211,24 +211,7 @@ impl Service {
             .send()
             .await
             .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "Simkl is unavailable".into()))?;
-        if !response.status().is_success() {
-            let authorization_required = matches!(response.status().as_u16(), 401 | 403);
-            let status = match response.status().as_u16() {
-                401 | 403 => StatusCode::BAD_GATEWAY,
-                409 => StatusCode::CONFLICT,
-                429 => StatusCode::TOO_MANY_REQUESTS,
-                _ => StatusCode::BAD_GATEWAY,
-            };
-            return Err(ApiError(
-                status,
-                if authorization_required {
-                    "Simkl authorization is required"
-                } else {
-                    "Simkl request was not accepted"
-                }
-                .into(),
-            ));
-        }
+        let status = response.status().as_u16();
         let mut bytes = Zeroizing::new(Vec::new());
         while let Some(chunk) = response
             .chunk()
@@ -240,8 +223,16 @@ impl Service {
             }
             bytes.extend_from_slice(&chunk);
         }
-        serde_json::from_slice(&bytes)
-            .map_err(|_| ApiError(StatusCode::BAD_GATEWAY, "Simkl response was invalid".into()))
+        let document = serde_json::from_slice::<Value>(&bytes).ok();
+        if !(200..300).contains(&status) {
+            return Err(upstream_error(status, document.as_ref()));
+        }
+        let document = document
+            .ok_or_else(|| ApiError(StatusCode::BAD_GATEWAY, "Simkl response was invalid".into()))?;
+        if reports_missing_id(&document) {
+            return Err(title_not_found());
+        }
+        Ok(document)
     }
 
     #[cfg(test)]
@@ -257,5 +248,39 @@ impl Service {
         .unwrap();
         service.data_base = base.into();
         service
+    }
+}
+
+fn title_not_found() -> ApiError {
+    ApiError(
+        StatusCode::NOT_FOUND,
+        "This title is no longer available.".into(),
+    )
+}
+
+fn reports_missing_id(document: &Value) -> bool {
+    matches!(document["error"].as_str(), Some("id_not_found" | "not_found"))
+}
+
+fn upstream_error(status: u16, document: Option<&Value>) -> ApiError {
+    match status {
+        404 => title_not_found(),
+        401 | 403 => ApiError(
+            StatusCode::BAD_GATEWAY,
+            "Simkl authorization is required".into(),
+        ),
+        409 => ApiError(
+            StatusCode::CONFLICT,
+            "Simkl request was not accepted".into(),
+        ),
+        429 => ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Simkl request was not accepted".into(),
+        ),
+        _ if document.is_some_and(reports_missing_id) => title_not_found(),
+        _ => ApiError(
+            StatusCode::BAD_GATEWAY,
+            "Simkl request was not accepted".into(),
+        ),
     }
 }

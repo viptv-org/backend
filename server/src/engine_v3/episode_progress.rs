@@ -91,10 +91,12 @@ fn legacy(db: &Connection, profile: i64, id: &str) -> Option<State> {
     let context = serde_json::from_str::<Value>(&context).unwrap_or(Value::Null);
     let mut item = json!({"position":position,"duration":duration});
     crate::library::add_watch_fields(&mut item, &context);
-    let resumable = item["resume_active"] == true;
+    // A Stremio import writes a finished episode near offset zero, so the watched verdict outranks that offset.
+    let watched = item["watched"] == true;
     Some(State {
-        watched: !resumable && item["watched"] == true,
-        progress: resumable.then(|| (position / duration).clamp(0.0, 1.0)),
+        watched,
+        progress: (!watched && item["resume_active"] == true)
+            .then(|| (position / duration).clamp(0.0, 1.0)),
         updated_millis: u64::try_from(updated).unwrap_or(0).saturating_mul(1000),
     })
 }

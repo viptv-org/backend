@@ -70,3 +70,51 @@ async fn remote_quality_filters_preserve_server_order_and_report_all_facets() {
     assert_eq!(body["streams"][0]["view"]["title"], "HD");
     assert_eq!(body["streams"][0]["view"]["addon_label"], "Sources");
 }
+
+#[tokio::test]
+async fn best_matches_are_the_first_five_rows_passing_the_hard_filters() {
+    let mut streams=(1..=7).map(|step|json!({"url":format!("https://media.example/{step}.mp4"),"name":format!("row {step}"),"quality_height":2400-step*240})).collect::<Vec<_>>();
+    streams.push(json!({"infoHash":"0123456789abcdef0123456789abcdef01234567","name":"camera","title":"Thing.2024.1080p.CAM.x264-GRP\n👤 900"}));
+    streams.push(json!({"url":"https://media.example/stereo.mp4","name":"stereo","three_d":true,"quality_height":2160}));
+    streams.push(json!({"infoHash":"1123456789abcdef0123456789abcdef01234567","name":"dead","title":"Thing.2024.2160p.WEB-DL.x264-GRP","seeders":4}));
+    let(app,cards)=rank_fixture(streams);
+    let cam=cards[7]["id"].clone();let stereo=cards[8]["id"].clone();let dead=cards[9]["id"].clone();
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    let(status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids})).await;
+    assert_eq!(status,StatusCode::OK,"{body}");
+    let ranked=body["streams"].as_array().unwrap().iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    assert_eq!(ranked.len(),10);
+    assert_eq!(body["best_match_ids"],json!(ranked[..5].to_vec()));
+    assert_eq!(body["best_match_id"],ranked[0]);
+    for excluded in [cam,stereo,dead] {
+        assert!(ranked[7..].contains(&excluded));
+        assert!(!body["best_match_ids"].as_array().unwrap().contains(&excluded));
+    }
+}
+
+#[tokio::test]
+async fn hard_filtered_rows_supply_no_best_match() {
+    let(app,cards)=rank_fixture(vec![
+        json!({"infoHash":"0123456789abcdef0123456789abcdef01234567","name":"camera","title":"Thing.2024.1080p.CAM.x264-GRP\n👤 900"}),
+        json!({"url":"https://media.example/stereo.mp4","name":"stereo","three_d":true}),
+        json!({"infoHash":"1123456789abcdef0123456789abcdef01234567","name":"dead","title":"Thing.2024.1080p.WEB-DL.x264-GRP","seeders":4}),
+    ]);
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    let(status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids})).await;
+    assert_eq!(status,StatusCode::OK,"{body}");
+    assert_eq!(body["streams"].as_array().unwrap().len(),3);
+    assert_eq!(body["best_match_ids"],json!([]));
+    assert!(body["best_match_id"].is_null(),"{body}");
+}
+
+#[tokio::test]
+async fn the_quality_filter_hides_rows_without_changing_group_membership() {
+    let(app,cards)=rank_fixture(vec![json!({"url":"https://media.example/4k.mp4","name":"4K","quality_height":2160}),json!({"url":"https://media.example/hd.mp4","name":"HD","quality_height":1080})]);
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    let(status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"quality_height":1080})).await;
+    assert_eq!(status,StatusCode::OK,"{body}");
+    assert_eq!(body["streams"].as_array().unwrap().len(),1);
+    assert_eq!(body["streams"][0]["id"],ids[1]);
+    assert_eq!(body["best_match_ids"],json!([ids[0].clone(),ids[1].clone()]));
+    assert_eq!(body["best_match_id"],ids[0]);
+}
