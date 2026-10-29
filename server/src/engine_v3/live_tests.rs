@@ -115,6 +115,42 @@ async fn live_channels_and_real_guide_timestamps_remain_profile_assigned_and_sou
         StatusCode::FORBIDDEN
     );
 }
+#[tokio::test]
+async fn healthy_source_without_programmes_reports_unsupported_guide_and_named_channels() {
+    let app = fixture();
+    {
+        let db = app.db.lock().unwrap();
+        db.execute_batch("INSERT INTO providers(id,name,url,username,password,enabled,enable_live,enable_movies,enable_series)VALUES(10,'Owned live','https://provider.example','private-user','private-password',1,1,0,0);INSERT INTO provider_ownership VALUES(10,1);INSERT INTO provider_live(id,provider_id,stream_id,name,category_id,category,ordinal)VALUES('empty-guide',10,'9','News channel','news','News',1);").unwrap();
+        let now = util::now();
+        db.execute("INSERT INTO provider_cache VALUES(10,'get_short_epg:9',?1,?2)",params![now+60,json!({"epg_listings":[]}).to_string()]).unwrap();
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/live/channels",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["availability"], "Available");
+    assert_eq!(page["channels"][0]["card"]["title"], "News channel");
+    assert_eq!(page["channels"][0]["group_name"], "News");
+    assert_eq!(page["channels"][0]["group_id"], "news");
+    let (status, guide) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/live/empty-guide/guide",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{guide}");
+    assert_eq!(guide["availability"], "Unsupported");
+    assert!(guide["programs"].as_array().unwrap().is_empty());
+    assert!(guide["reason"].is_string());
+}
 #[cfg(feature = "live-runtime")]
 #[tokio::test]
 async fn m3u_configuration_and_live_grants_keep_credentials_private_and_missing_guide_honest() {

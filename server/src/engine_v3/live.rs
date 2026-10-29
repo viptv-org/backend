@@ -228,9 +228,8 @@ async fn guide_inner(
     .await;
     super::configuration::validate_revision(&app, profile, revision)?;
     let guide = match result {
-        Ok(Ok(value)) => LiveGuide {
-            channel_id: channel.clone(),
-            programs: value["programs"]
+        Ok(Ok(value)) => {
+            let programs: Vec<LiveProgram> = value["programs"]
                 .as_array()
                 .into_iter()
                 .flatten()
@@ -243,10 +242,19 @@ async fn guide_inner(
                         end_millis: p["end"].as_u64()?.checked_mul(1000)?,
                     })
                 })
-                .collect(),
-            availability: Availability::Available,
-            reason: None,
-        },
+                .collect();
+            let empty = programs.is_empty();
+            LiveGuide {
+                channel_id: channel.clone(),
+                programs,
+                availability: if empty {
+                    Availability::Unsupported
+                } else {
+                    Availability::Available
+                },
+                reason: empty.then(|| "No programme guide for this channel".into()),
+            }
+        }
         _ => LiveGuide {
             channel_id: channel,
             programs: vec![],
@@ -255,6 +263,13 @@ async fn guide_inner(
         },
     };
     Ok(axum::Json(json!(guide)))
+}
+#[cfg(feature = "live-runtime")]
+pub(super) fn honest_guide(guide: &mut LiveGuide) {
+    if guide.availability == Availability::Available && guide.programs.is_empty() {
+        guide.availability = Availability::Unsupported;
+        guide.reason = Some("No programme guide for this channel".into());
+    }
 }
 pub(crate) async fn sources(
     State(app): State<App>,

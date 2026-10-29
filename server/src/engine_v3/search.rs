@@ -212,7 +212,10 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
                         Plan::Addon(id, _, _, _) => format!("addon:{id}"),
                     };
                     match super::origins::stamp(&app, &mut cards, &provider) {
-                        Ok(()) => plan.row(cards, failed),
+                        Ok(()) => {
+                            dedupe_display_names(&mut cards);
+                            plan.row(cards, failed)
+                        }
                         Err(_) => plan.row(vec![], true),
                     }
                 }
@@ -320,6 +323,28 @@ async fn load(
     }
 }
 
+fn display_title(title: &str) -> String {
+    title
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+fn dedupe_display_names(cards: &mut Vec<Card>) {
+    let titled = |card: &Card| (card.identity.kind.clone(), display_title(&card.title));
+    let dated = cards
+        .iter()
+        .filter(|card| card.metadata.as_ref().and_then(|m| m.year).is_some())
+        .map(|card| titled(card))
+        .collect::<std::collections::HashSet<_>>();
+    cards.retain(|card| {
+        card.metadata.as_ref().and_then(|m| m.year).is_some()
+            || !dated.contains(&titled(card))
+    });
+}
 pub(crate) fn metadata_scope(
     app: App,
     lease: &ResourceLease,
@@ -473,4 +498,59 @@ pub(crate) fn request_origin(
     };
     let (_, origin, _) = metadata_scope(app.clone(), &lease, profile, provider, addon)?;
     Ok(Some((provider.to_owned(), addon, origin)))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use viptv_engine::{identity::MediaIdentity, presentation::CardMetadata};
+    fn card(kind: &str, title: &str, year: Option<u32>) -> Card {
+        Card {
+            metadata_origin: None,
+            identity: MediaIdentity {
+                id: format!("{kind}:{title}:{year:?}"),
+                kind: kind.into(),
+                ids: vec![],
+                episode: None,
+                edition: None,
+            },
+            provider_id: "addon:1".into(),
+            title: title.into(),
+            subtitle: None,
+            description: None,
+            poster: None,
+            landscape: None,
+            logo: None,
+            progress: None,
+            badges: vec![],
+            parent_identity: None,
+            added_at_millis: None,
+            category: Some(kind.into()),
+            metadata: Some(CardMetadata {
+                year,
+                ..Default::default()
+            }),
+        }
+    }
+    #[test]
+    fn year_less_duplicate_display_names_are_dropped() {
+        let mut cards = vec![
+            card("movie", "Inception", Some(2010)),
+            card("movie", "Inception", None),
+            card("series", "Inception", None),
+        ];
+        dedupe_display_names(&mut cards);
+        assert_eq!(cards.len(), 2);
+        assert!(cards.iter().any(|card| card.identity.kind == "movie"
+            && card.metadata.as_ref().and_then(|m| m.year) == Some(2010)));
+        assert!(cards.iter().any(|card| card.identity.kind == "series"));
+    }
+    #[test]
+    fn year_less_same_name_is_kept_when_no_same_named_title_has_a_year() {
+        let mut cards = vec![
+            card("movie", "Inception", None),
+            card("movie", "Inception", None),
+        ];
+        dedupe_display_names(&mut cards);
+        assert_eq!(cards.len(), 2);
+    }
 }

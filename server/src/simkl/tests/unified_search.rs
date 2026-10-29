@@ -24,7 +24,7 @@ async fn stack(
         .route("/addon/:owner/catalog/:kind/:catalog/:extras",get({let started=started.clone();let gate=gate.clone();move|Path((_,kind,catalog,_)):Path<(String,String,String,String)>|{let started=started.clone();let gate=gate.clone();async move{
             if catalog=="broken"{return (StatusCode::BAD_GATEWAY,axum::Json(json!({"error":"private provider reflection"})));}
             if slow > 0 && catalog=="slow" && (slow!=2 || kind=="series"){started.notify_one();let _permit=gate.acquire().await.unwrap();}
-            let metas=if slow==9 && catalog=="good" {vec![json!({"id":"simkl:movie:10","type":"movie","name":"Spoofed private title"})]}else if slow==7 && catalog=="good" {vec![json!({"id":"opaque-parent","type":kind,"name":"Opaque fixture"}),json!({"id":"tt18","type":kind,"name":"Adult fixture","certification":"TV-MA"}),json!({"id":"tt123","type":kind,"name":"Canonical fixture"})]}else if catalog=="empty" {vec![]}else if slow==6 && catalog=="good" {vec![json!(null),json!(17),json!("bad")]}else if slow==4&&catalog=="good" {(0..250).map(|index|json!({"id":format!("tt{index}"),"type":kind,"name":"Fixture title"})).collect()}else{vec![json!({"id":"tt123","type":kind,"name":"Fixture title"})]};
+            let metas=if slow==9 && catalog=="good" {vec![json!({"id":"simkl:movie:10","type":"movie","name":"Spoofed private title"})]}else if slow==10 && catalog=="good" {vec![json!({"id":"tt1375666","type":kind,"name":"Inception","releaseInfo":"2010"}),json!({"id":"tt5581256","type":kind,"name":"Inception"})]}else if slow==7 && catalog=="good" {vec![json!({"id":"opaque-parent","type":kind,"name":"Opaque fixture"}),json!({"id":"tt18","type":kind,"name":"Adult fixture","certification":"TV-MA"}),json!({"id":"tt123","type":kind,"name":"Canonical fixture"})]}else if catalog=="empty" {vec![]}else if slow==6 && catalog=="good" {vec![json!(null),json!(17),json!("bad")]}else if slow==4&&catalog=="good" {(0..250).map(|index|json!({"id":format!("tt{index}"),"type":kind,"name":"Fixture title"})).collect()}else{vec![json!({"id":"tt123","type":kind,"name":"Fixture title"})]};
             (StatusCode::OK,axum::Json(json!({"metas":metas})))
         }}}))
         .route("/addon/:owner/meta/:kind/:id",get(|Path((owner,kind,id)):Path<(String,String,String)>|async move{let id=id.trim_end_matches(".json");axum::Json(json!({"meta":{"id":id,"type":kind,"name":format!("Delegated fixture {owner}"),"recommendations":[{"id":"tt456","type":"movie","name":"Related"}],"videos":[{"id":format!("{id}:1:1"),"season":1,"episode":1,"title":"Pilot","released":"2020-01-01T00:00:00Z"},{"id":format!("{id}:1:2"),"season":1,"episode":2,"title":"Second","released":"2020-01-02T00:00:00Z"}]}}))}));
@@ -380,6 +380,41 @@ async fn empty_rows_are_distinct_from_failure_and_large_rows_keep_the_bounded_20
         }
         task.abort();
     }
+}
+
+#[tokio::test]
+async fn duplicate_display_names_without_a_year_are_dropped_from_search() {
+    let (app, task, _, _) = stack(10).await;
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/search?query=Inception",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let row = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "addon:101")
+        .unwrap();
+    assert_eq!(row["state"], "Ready", "{page}");
+    let cards = row["cards"].as_array().unwrap();
+    assert!(
+        cards
+            .iter()
+            .any(|card| card["identity"]["id"] == "tt1375666"),
+        "{page}"
+    );
+    assert!(
+        cards
+            .iter()
+            .all(|card| card["identity"]["id"] != "tt5581256"),
+        "{page}"
+    );
+    task.abort();
 }
 
 #[cfg(feature = "vsources-runtime")]
