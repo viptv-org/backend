@@ -975,6 +975,9 @@ pub(crate) fn continuation_db(
                 record,
                 status,
                 previous_identity,
+                // A scoped row's next episode is a separate selector's answer
+                // (`engine_scoped_next`); nothing announces it yet.
+                next_episode: None,
             },
         ));
     }

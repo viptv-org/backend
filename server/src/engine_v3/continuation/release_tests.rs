@@ -950,3 +950,62 @@ async fn an_entry_simkl_identifies_carries_the_simkl_origin() {
     assert!(entry["card"]["metadata_origin"]["connection_id"].is_null(), "{entry}");
     assert_eq!(entry["card"]["provider_id"], "simkl", "{entry}");
 }
+
+/// backend#78: a caught-up entry names the episode the viewer is waiting for
+/// and its date, so the app can label "S1 E2 · ..." instead of only the
+/// finished episode. The facts come from the stored release document, the same
+/// one the badge and the Watched verdict read.
+#[tokio::test]
+async fn a_caught_up_entry_carries_the_next_episode_and_its_release_date() {
+    let start = now();
+    let aired = start + 7 * DAY;
+    let show = show(vec![(1, start - 30 * DAY), (2, aired)]).await;
+    let app = &show.app;
+    imported(app, "tt100", 1, 0.001, 1420.01, start - 10 * DAY);
+    request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    until(|| verdict(app, "tt100").is_some()).await;
+    let entry = show_entry(&queue(app).await);
+    // The finished episode keeps the card; the next one is only announced.
+    assert_eq!(entry["status"], "Pending", "{entry}");
+    assert_eq!(entry["card"]["identity"]["id"], "tt100:1:1", "{entry}");
+    assert_eq!(entry["card"]["badges"], json!(["Watched"]), "{entry}");
+    assert_eq!(entry["next_episode"]["identity"]["id"], "tt100:1:2", "{entry}");
+    assert_eq!(
+        entry["next_episode"]["identity"]["episode"],
+        json!({"order":"aired","season":1,"episode":2}),
+        "{entry}"
+    );
+    assert_eq!(entry["next_episode"]["released_at_millis"], aired, "{entry}");
+    // `/bootstrap` carries the same continuation page, so every client sees it.
+    let (status, bootstrap) =
+        request(app, "member-token-1", "GET", "/api/bootstrap", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{bootstrap}");
+    let entry = show_entry(bootstrap["continuation"]["entries"].as_array().unwrap());
+    assert_eq!(entry["next_episode"]["identity"]["id"], "tt100:1:2", "{bootstrap}");
+    assert_eq!(entry["next_episode"]["released_at_millis"], aired, "{bootstrap}");
+}
+
+/// Nothing further is listed, or the next one is already out and is the
+/// entry's card: no announcement either way.
+#[tokio::test]
+async fn a_finished_or_up_next_entry_announces_no_next_episode() {
+    let start = now();
+    // Only one episode exists: the show is over.
+    let last = show(vec![(1, start - 30 * DAY)]).await;
+    let app = &last.app;
+    watch(app, episode(1), Some(series()), true, start - 10 * DAY).await;
+    resolve(app, 1).await;
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["status"], "CaughtUp", "{entry}");
+    assert!(entry["next_episode"].is_null(), "{entry}");
+
+    // The next episode is released: it is up next, not an announcement.
+    let released = show(vec![(1, start - 30 * DAY), (2, start - DAY)]).await;
+    let app = &released.app;
+    watch(app, episode(1), Some(series()), true, start - 10 * DAY).await;
+    resolve(app, 1).await;
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["status"], "Next", "{entry}");
+    assert_eq!(entry["card"]["identity"]["id"], "tt100:1:2", "{entry}");
+    assert!(entry["next_episode"].is_null(), "{entry}");
+}
