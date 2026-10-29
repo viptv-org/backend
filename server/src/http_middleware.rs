@@ -4,7 +4,8 @@ pub(crate) async fn web_asset_cache(req: Request, next: Next) -> Response {
     let name = req.uri().path().rsplit('/').next().unwrap_or_default();
     let hashed = content_hashed(name);
     let mut response = next.run(req).await;
-    let served = response.status().is_success();
+    let status = response.status();
+    let served = status.is_success() || status == StatusCode::NOT_MODIFIED;
     if !served || response.headers().contains_key(header::CACHE_CONTROL) {
         return response;
     }
