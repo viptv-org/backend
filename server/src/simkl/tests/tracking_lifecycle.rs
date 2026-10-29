@@ -238,3 +238,26 @@ async fn anime_scrobble_uses_verified_sequential_mapping_and_rejects_missing_map
     assert!(body["episode"].is_null());
     task.abort();
 }
+
+#[tokio::test]
+async fn mapped_anime_scrobble_uses_show_ids_and_tvdb_coordinates() {
+    let (app, task, writes) = tracking_server().await;
+    let event = json!({"attempt_id":"mapped-anime","sequence":1,"identity":media_identity("simkl:anime:41:2:4","series",Some(json!({"order":"aired","season":2,"episode":4}))),"parent_identity":media_identity("simkl:anime:41","series",None),"event":"start","position_millis":0,"duration_millis":100_000,"ended":false});
+    let (status, result) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/profiles/1/playback-events",
+        event,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["state"], "recorded");
+    let body = writes.lock().unwrap()[0]["body"].clone();
+    assert!(body["anime"].is_null());
+    assert_eq!(body["show"]["ids"]["tvdb"], "267440");
+    assert_eq!(body["show"]["ids"]["tmdb"], "1429");
+    assert_eq!(body["episode"], json!({"season":2,"number":4}));
+    assert!(body.get("use_tvdb_anime_seasons").is_none());
+    task.abort();
+}

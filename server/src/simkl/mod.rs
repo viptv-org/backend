@@ -56,7 +56,6 @@ fn unavailable() -> ApiError {
     )
 }
 
-#[allow(dead_code)]
 pub(crate) async fn public_document(app: &App, path: &str) -> Result<Arc<Value>, ApiError> {
     tokio::time::timeout(
         Duration::from_secs(4),

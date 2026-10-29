@@ -156,10 +156,18 @@ pub(crate) async fn playback(
         } else {
             (q.position_millis as f64 / q.duration_millis as f64 * 100.0).min(100.0)
         };
+        let mapped = if target.category == "anime" && target.episode.is_some() {
+            tracking::path_a(&app, target.id, target.season, target.episode).await
+        } else {
+            None
+        };
+        let anime_number=if mapped.is_none()&&target.category=="anime"&&target.episode.is_some(){Some(tracking::anime_number(&app,profile,&target,&credential,&verified).await?)}else{None};
         let mut body = json!({"progress":progress});
-        let anime_number=if target.category=="anime"&&target.episode.is_some(){Some(tracking::anime_number(&app,profile,&target,&credential,&verified).await?)}else{None};
         if target.category == "movie" {
             body["movie"] = json!({"ids":{"simkl":target.id}});
+        } else if let Some(mapped)=&mapped {
+            body["show"]=json!({"ids":mapped.ids});
+            body["episode"]=json!({"season":mapped.season,"number":mapped.episode});
         } else if target.category=="anime" {
             body["anime"]=json!({"ids":{"simkl":target.id}});
             if let Some(number)=anime_number {body["episode"]=json!({"season":1,"number":number});}
@@ -182,10 +190,16 @@ pub(crate) async fn playback(
             .await?;
         app.simkl.tracking.events.validate(&fence)?;
         store::validate(&app, profile, &credential)?;
-        let media_key=if target.category=="movie" {"movie"}else if target.category=="anime"{"anime"} else {"show"};
-        let correct_identity=viptv_engine::simkl::id(&result[media_key])==Some(target.id)
-            && (if target.category=="anime" {if let Some(number)=anime_number{result["episode"]["season"].as_u64()==Some(1)&&result["episode"]["number"].as_u64()==Some(u64::from(number))}else{result["episode"].is_null()}}else{target.category=="movie" || (result["episode"]["season"].as_u64()==target.season.map(u64::from)
-                && result["episode"]["number"].as_u64()==target.episode.map(u64::from))});
+        let correct_identity=if let Some(mapped)=&mapped {
+            mapped.ids.as_object().is_some_and(|ids| ids.iter().all(|(key,value)| result["show"]["ids"][key]==*value))
+                && (result["episode"]["season"].as_u64()==Some(u64::from(mapped.season))&&result["episode"]["number"].as_u64()==Some(u64::from(mapped.episode))
+                    || result["episode"]["tvdb_season"].as_u64()==Some(u64::from(mapped.season))&&result["episode"]["tvdb_number"].as_u64()==Some(u64::from(mapped.episode)))
+        } else {
+            let media_key=if target.category=="movie" {"movie"}else if target.category=="anime"{"anime"} else {"show"};
+            viptv_engine::simkl::id(&result[media_key])==Some(target.id)
+                && (if target.category=="anime" {if let Some(number)=anime_number{result["episode"]["season"].as_u64()==Some(1)&&result["episode"]["number"].as_u64()==Some(u64::from(number))}else{result["episode"].is_null()}}else{target.category=="movie" || (result["episode"]["season"].as_u64()==target.season.map(u64::from)
+                    && result["episode"]["number"].as_u64()==target.episode.map(u64::from))})
+        };
         if !correct_identity {return Err(ApiError(StatusCode::BAD_GATEWAY,"Simkl returned a different playback item".into()));}
         let expected = if action == "stop" { "scrobble" } else { action };
         if result["action"].as_str() != Some(expected) {

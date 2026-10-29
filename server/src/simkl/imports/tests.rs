@@ -86,6 +86,40 @@ async fn original_episode_import_does_not_invent_missing_watched_rows_dates_or_a
 }
 
 #[tokio::test]
+async fn original_episode_import_maps_anime_tvdb_coordinates_and_stays_anidb_without_them() {
+    let app = crate::auth_integration_tests::fixture();
+    let db = app.db.lock().unwrap();
+    let items = json!({"anime":[
+        {"show":{"title":"Mapped anime","ids":{"simkl":30}},"seasons":[{"number":1,"episodes":[{"number":36,"watched_at":"2020-01-01T00:00:00Z","tvdb":{"season":2,"episode":4}}]}]},
+        {"show":{"title":"Unmapped anime","ids":{"simkl":31}},"seasons":[{"number":1,"episodes":[{"number":36,"watched_at":"2020-01-01T00:00:00Z"}]}]}
+    ]});
+    let entries = super::super::watchlists::projection::entries(&items).unwrap();
+    let counts = history::original(&db, 1, 1, &items, &entries).unwrap();
+    assert_eq!(counts.inserted, 2);
+    let context: String = db
+        .query_row(
+            "SELECT context FROM progress WHERE id='simkl:anime:30:2:4'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let context: Value = serde_json::from_str(&context).unwrap();
+    assert_eq!(context["engine_identity"]["episode"]["order"], "aired");
+    assert_eq!(context["engine_identity"]["episode"]["season"], 2);
+    assert_eq!(context["engine_identity"]["episode"]["episode"], 4);
+    let context: String = db
+        .query_row(
+            "SELECT context FROM progress WHERE id='simkl:anime:31:anidb:36'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let context: Value = serde_json::from_str(&context).unwrap();
+    assert_eq!(context["engine_identity"]["episode"]["order"], "anidb");
+    assert!(context["engine_identity"]["episode"]["season"].is_null());
+}
+
+#[tokio::test]
 async fn cheap_membership_contains_verified_aliases_and_alias_removal_targets_one_saved_row() {
     use crate::test_support::request;
     let app = crate::auth_integration_tests::fixture();

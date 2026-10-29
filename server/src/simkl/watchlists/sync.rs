@@ -112,14 +112,14 @@ pub(super) async fn read(
                     app,
                     profile,
                     access,
-                    &format!("/sync/all-items?date_from={encoded}&next_watch_info=yes&extended=full&include_all_episodes=original&episode_watched_at=yes&episode_runtime=yes&episode_tvdb_id=yes"),
+                    &format!("/sync/all-items?date_from={encoded}&next_watch_info=yes&extended=full_anime_seasons&include_all_episodes=original&episode_watched_at=yes&episode_runtime=yes&episode_tvdb_id=yes"),
                 )
                 .await?;
                 merge(&mut items, delta, false)?;
             }
         } else {
             items =
-                store::private_read(app, profile, access, "/sync/all-items?next_watch_info=yes&extended=full&include_all_episodes=original&episode_watched_at=yes&episode_runtime=yes&episode_tvdb_id=yes")
+                store::private_read(app, profile, access, "/sync/all-items?next_watch_info=yes&extended=full_anime_seasons&include_all_episodes=original&episode_watched_at=yes&episode_runtime=yes&episode_tvdb_id=yes")
                     .await?;
         }
         if changed(&activities, &previous.activities, "rated_at") {
@@ -152,7 +152,7 @@ pub(super) async fn read(
         }
         items
     } else {
-        store::private_read(app, profile, access, "/sync/all-items?next_watch_info=yes&extended=full&include_all_episodes=original&episode_watched_at=yes&episode_runtime=yes&episode_tvdb_id=yes").await?
+        store::private_read(app, profile, access, "/sync/all-items?next_watch_info=yes&extended=full_anime_seasons&include_all_episodes=original&episode_watched_at=yes&episode_runtime=yes&episode_tvdb_id=yes").await?
     };
     sections(&items)?;
     clean(&mut items);
