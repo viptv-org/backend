@@ -147,15 +147,18 @@ pub(crate) async fn rank(
         }
     }
     let filters=heights.into_iter().rev().map(|(height,count)|json!({"height":height,"label":if height==2160{"4K".into()}else{format!("{height}p")},"count":count})).collect::<Vec<_>>();
-    let best_match_id = ranked
-        .first()
-        .and_then(|card| card["id"].as_str())
-        .map(str::to_owned);
+    let best_match_ids = ranked
+        .iter()
+        .filter(|card| !fails_hard_filter(*card))
+        .take(BEST_MATCHES_LIMIT)
+        .filter_map(|card| card["id"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    let best_match_id = best_match_ids.first().cloned();
     let total = ranked.len();
     let selection_note = if preferences.preferences.source_selection
         == viptv_engine::preferences::SourceSelection::Best
     {
-        "Play starts the best match when discovery finishes. Change how it’s chosen in Settings › Playback."
+        "Play starts the best match. Change how it’s chosen in Settings › Playback."
     } else {
         "Choose a source to start playback. Change your default in Settings › Playback."
     };
@@ -168,8 +171,17 @@ pub(crate) async fn rank(
         })
         .collect::<Vec<_>>();
     Ok(axum::Json(
-        json!({"streams":streams,"best_match_id":best_match_id,"quality_filters":filters,"total":total,"selection_note":selection_note}),
+        json!({"streams":streams,"best_match_id":best_match_id,"best_match_ids":best_match_ids,"quality_filters":filters,"total":total,"selection_note":selection_note}),
     ))
+}
+
+const BEST_MATCHES_LIMIT: usize = 5;
+
+fn fails_hard_filter(card: &Value) -> bool {
+    card["release_type"].as_str() == Some("cam")
+        || card["three_d"].as_bool() == Some(true)
+        || (card["delivery"].as_str() == Some("torrent")
+            && card["seeders"].as_u64().is_some_and(|seeders| seeders < 5))
 }
 
 fn display(candidate: &SourceCandidate, addon: Option<&str>) -> Value {
