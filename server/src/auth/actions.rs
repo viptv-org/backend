@@ -185,6 +185,8 @@ pub(crate) fn dispatch_prepared(
                 | "/auth/device/lookup"
                 | "/auth/device/approve"
                 | "/auth/device/deny"
+                | "/auth/device/revoke"
+                | "/auth/device/revoke-own"
         )
     {
         return Err(forbidden());

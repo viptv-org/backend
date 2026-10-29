@@ -6,7 +6,11 @@ contains a stable family ID, supplied display name, session kind, creation time,
 current-browser flag and per-device sign-out availability. No credential, hash,
 IP address or hardware identifier is returned. The current browser is listed last.
 Account session creation limits each account to 32 active families; no manual
-pagination is needed.
+pagination is needed. A sign-in at that limit evicts the account's oldest family
+of the same kind first (a browser sign-in prunes a browser, a new pairing prunes
+an older paired app), falling back to the oldest family of either kind only when
+the account holds none of its own kind, so a sign-in is never refused for the
+account's own cap. Expired families never count.
 
 `DELETE /api/v3/account/devices/:id` revokes one owned family and its used-refresh
 tombstones. Foreign or missing identities return 404. Per-device removal of the

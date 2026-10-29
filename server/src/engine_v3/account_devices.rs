@@ -16,7 +16,9 @@ pub(crate) async fn get(
             [account],
             |row| Ok(json!({"id":account.to_string(),"username":row.get::<_,String>(0)?,"name":row.get::<_,String>(1)?,"role":row.get::<_,String>(2)?})),
         ).map_err(db_error)?;
-        // Account session creation already enforces MAX_SESSIONS_PER_ACCOUNT (32).
+        // Account session creation bounds this account to MAX_SESSIONS_PER_ACCOUNT
+        // (32) families by evicting its oldest same-kind family, never by refusing
+        // the sign-in.
         // Read both kinds so this view does not misrepresent browsers as signed out.
         let mut statement = db.prepare("SELECT id,device_name,kind,created_at FROM auth_sessions WHERE account_id=?1 AND refresh_expires>?2 AND kind IN ('browser','device') ORDER BY (id=?3) ASC,created_at DESC,id DESC")
             .map_err(db_error)?;
