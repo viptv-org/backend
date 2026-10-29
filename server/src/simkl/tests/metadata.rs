@@ -296,3 +296,24 @@ async fn all_search_keeps_anime_subtype_and_ranks_naruto_above_unrelated_movie_o
  assert_eq!(status,StatusCode::OK,"{body}");assert_eq!(body["cards"].as_array().unwrap().len(),5);assert_eq!(body["cards"][0]["identity"]["id"],"simkl:anime:4");assert_eq!(body["cards"][0]["category"],"anime");assert_eq!(body["cards"][0]["identity"]["kind"],"series");
  task.abort();
 }
+
+#[tokio::test]
+async fn an_unknown_simkl_title_is_a_json_not_found_rather_than_an_upstream_gateway_error(){
+ let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+ let router=Router::new()
+ .route("/movies/1",get(||async{(StatusCode::NOT_FOUND,axum::Json(json!({"error":"id_not_found"})))}))
+ .route("/tv/2",get(||async{(StatusCode::NOT_FOUND,axum::Json(json!({"error":"not_found"})))}))
+ .route("/movies/3",get(||async{axum::Json(json!({"error":"id_not_found"}))}));
+ let task=tokio::spawn(async move{axum::serve(listener,router).await.unwrap()});
+ let mut app=fixture();app.simkl=Arc::new(Service::fixture(&format!("http://{address}")));
+ for path in ["/api/meta/movie/simkl:movie:1","/api/meta/series/simkl:tv:2","/api/meta/movie/simkl:movie:3"]{
+  let (status,body)=request(&app,"member-token-1","GET",path,json!({})).await;
+  assert_eq!(status,StatusCode::NOT_FOUND,"{path}: {body}");
+  assert_eq!(body["error_code"],"metadata_not_found","{path}");
+  assert_eq!(body["error"],"This title is no longer available.","{path}");
+  assert!(!body.to_string().contains("id_not_found"),"{path}: {body}");
+ }
+ let (status,body)=request(&app,"member-token-1","GET","/api/meta/tv/simkl:tv:1",json!({})).await;
+ assert_eq!(status,StatusCode::BAD_REQUEST,"{body}");assert_eq!(body["error"],"Invalid metadata request");
+ task.abort();
+}
