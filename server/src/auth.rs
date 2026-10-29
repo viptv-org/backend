@@ -27,7 +27,8 @@ pub(crate) use device_pairing::device_qr;
 pub(crate) use handlers::{info, remove, status};
 pub(crate) use middleware::{
     auth_error, auth_error_with_retry, bearer, canonical_origin, constant_eq, cookie,
-    csrf_for_session, forbidden, issue_csrf, origin, required_origins, unauthorized,
+    csrf_for_session, device_origin, device_path, forbidden, issue_csrf, origin, required_origins,
+    unauthorized,
 };
 pub(crate) use profiles_actions::{
     create_profile, dispatch_profiles, list_profiles, update_profile,
@@ -50,4 +51,4 @@ pub(crate) use avatars::character_avatars;
 #[cfg(test)]
 use axum::http::{HeaderMap, HeaderValue, Method};
 #[cfg(test)]
-pub(crate) use middleware::{check_origin, parse_origin, public};
+pub(crate) use middleware::{check_device_origin, check_origin, parse_origin, public};

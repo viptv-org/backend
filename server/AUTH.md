@@ -34,6 +34,16 @@ Fresh accounts remain at zero profiles until an authenticated household browser 
 
 ## Device pairing
 
+Pairing keeps the origin check, widened by the origin that served the request:
+`device/code`, `device/login`, `device/token`, `device/refresh`, `device/revoke`,
+`device/revoke-own`, `profile` and `logout` accept any HTTPS origin this server
+answers on as well as the configured `VIPTV_AUTH_ORIGIN`, and refuse cross-site
+requests. A TV loaded from a viewing hostname therefore pairs and claims its own
+code without that hostname being configured, while the `verification_uri`,
+`verification_uri_complete` and `qr_uri` it receives always name the canonical
+(first configured) origin. Every other auth call stays pinned: a browser sign-in
+or approval from the viewing hostname is still forbidden.
+
 1. `POST /device/code {device_name, device_code?}` returns `device_code`, `user_code`, `verification_uri`, `verification_uri_complete`, `qr_uri`, `expires_in`, and `interval`. A TV asking for a fresh code may send the `device_code` it currently holds; the server then expires that device's earlier pending code so it can no longer be approved or redeemed (its token poll reads `expired_token`).
 2. The QR contains only the complete dashboard activation URL. The server-generated PNG is bound to an unexpired user code and sent with `Cache-Control: no-store`.
 3. A signed-in browser uses `POST /device/lookup {user_code}`, then confirms `POST /device/approve {user_code}` or denies with `POST /device/deny {user_code}`. Approval always binds to the current account; no target account or profile subset is accepted.

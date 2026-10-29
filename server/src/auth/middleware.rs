@@ -108,29 +108,77 @@ pub(crate) fn required_origins() -> Result<Vec<url::Url>, ApiError> {
 pub(crate) fn origin(h: &HeaderMap) -> Result<(), ApiError> {
     check_origin(h, &required_origins()?)
 }
-pub(crate) fn check_origin(h: &HeaderMap, configured: &[url::Url]) -> Result<(), ApiError> {
-    if h.get("sec-fetch-site")
+pub(crate) fn device_origin(h: &HeaderMap) -> Result<(), ApiError> {
+    check_device_origin(h, &required_origins()?)
+}
+pub(crate) fn device_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/auth/profile"
+            | "/auth/logout"
+            | "/auth/device/code"
+            | "/auth/device/login"
+            | "/auth/device/token"
+            | "/auth/device/refresh"
+            | "/auth/device/revoke"
+            | "/auth/device/revoke-own"
+    )
+}
+fn cross_site(h: &HeaderMap) -> bool {
+    h.get("sec-fetch-site")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v == "cross-site")
-    {
+}
+fn request_origin(h: &HeaderMap) -> Result<Option<url::Origin>, ApiError> {
+    let Some(value) = h.get(header::ORIGIN) else {
+        return Ok(None);
+    };
+    Ok(Some(
+        parse_origin(value.to_str().map_err(|_| forbidden())?)?.origin(),
+    ))
+}
+fn served_origin(h: &HeaderMap) -> Result<url::Origin, ApiError> {
+    let host = h
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(forbidden)?;
+    Ok(parse_origin(&format!("https://{host}"))?.origin())
+}
+pub(crate) fn check_origin(h: &HeaderMap, configured: &[url::Url]) -> Result<(), ApiError> {
+    if cross_site(h) {
         return Err(forbidden());
     }
-    if let Some(o) = h.get(header::ORIGIN) {
-        let u = parse_origin(o.to_str().map_err(|_| forbidden())?)?;
-        let allowed: Vec<url::Origin> = if !configured.is_empty() {
-            configured.iter().map(|c| c.origin()).collect()
-        } else {
-            let host = h
-                .get(header::HOST)
-                .and_then(|v| v.to_str().ok())
-                .ok_or_else(forbidden)?;
-            vec![parse_origin(&format!("https://{host}"))?.origin()]
-        };
-        if !allowed.contains(&u.origin()) {
-            return Err(forbidden());
-        }
+    let Some(origin) = request_origin(h)? else {
+        return Ok(());
+    };
+    let allowed: Vec<url::Origin> = if configured.is_empty() {
+        vec![served_origin(h)?]
+    } else {
+        configured.iter().map(|c| c.origin()).collect()
+    };
+    if allowed.contains(&origin) {
+        Ok(())
+    } else {
+        Err(forbidden())
     }
-    Ok(())
+}
+/// A paired device holds a bearer credential, so any origin this server answers on may pair.
+pub(crate) fn check_device_origin(h: &HeaderMap, configured: &[url::Url]) -> Result<(), ApiError> {
+    if cross_site(h) {
+        return Err(forbidden());
+    }
+    let Some(origin) = request_origin(h)? else {
+        return Ok(());
+    };
+    let mut allowed: Vec<url::Origin> = configured.iter().map(|c| c.origin()).collect();
+    if let Ok(served) = served_origin(h) {
+        allowed.push(served);
+    }
+    if allowed.contains(&origin) {
+        Ok(())
+    } else {
+        Err(forbidden())
+    }
 }
 pub(crate) fn csrf_for_session(
     db: &Connection,
