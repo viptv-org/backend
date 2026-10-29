@@ -56,7 +56,6 @@ fn unavailable() -> ApiError {
     )
 }
 
-/// Public Simkl metadata other modules read identities and episode coordinates from.
 #[allow(dead_code)]
 pub(crate) async fn public_document(app: &App, path: &str) -> Result<Arc<Value>, ApiError> {
     tokio::time::timeout(

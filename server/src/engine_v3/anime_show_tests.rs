@@ -186,7 +186,7 @@ async fn naruto_from_an_anime_catalog_resolves_to_its_tvdb_and_tmdb_show() {
         assert_eq!(id_of(show.identity(), "tvdb"), Some("78857".into()), "{id}");
         assert_eq!(id_of(show.identity(), "tmdb"), Some("46260".into()), "{id}");
         assert_eq!(
-            show.tvdb(&episode(1, 2)),
+            show.tvdb_episode(&episode(1, 2)),
             Some(TvdbEpisode {
                 season: 1,
                 episode: 2
@@ -206,21 +206,21 @@ async fn an_attack_on_titan_cour_lands_on_its_show_and_tvdb_season() {
     assert_eq!(cour.identity().id, "tt2560140");
     assert_eq!(id_of(cour.identity(), "tvdb"), Some("267440".into()));
     assert_eq!(
-        cour.tvdb(&episode(1, 1)),
+        cour.tvdb_episode(&episode(1, 1)),
         Some(TvdbEpisode {
             season: 3,
             episode: 13
         })
     );
     assert_eq!(
-        cour.tvdb(&episode(1, 10)),
+        cour.tvdb_episode(&episode(1, 10)),
         Some(TvdbEpisode {
             season: 3,
             episode: 22
         })
     );
     assert_eq!(
-        cour.release(TvdbEpisode {
+        cour.release_episode(TvdbEpisode {
             season: 3,
             episode: 22
         }),
@@ -234,14 +234,14 @@ async fn an_attack_on_titan_cour_lands_on_its_show_and_tvdb_season() {
         .unwrap();
     assert_eq!(id_of(from_simkl.identity(), "tvdb"), Some("267440".into()));
     assert_eq!(
-        from_simkl.tvdb(&episode(3, 13)),
+        from_simkl.tvdb_episode(&episode(3, 13)),
         Some(TvdbEpisode {
             season: 3,
             episode: 13
         })
     );
     assert_eq!(
-        from_simkl.release(TvdbEpisode {
+        from_simkl.release_episode(TvdbEpisode {
             season: 3,
             episode: 13
         }),
@@ -261,14 +261,14 @@ async fn absolute_numbering_maps_to_tvdb_coordinates_in_both_directions() {
         .unwrap();
     assert_eq!(id_of(show.identity(), "tvdb"), Some("81797".into()));
     assert_eq!(
-        show.tvdb(&episode(1, 199)),
+        show.tvdb_episode(&episode(1, 199)),
         Some(TvdbEpisode {
             season: 10,
             episode: 4
         })
     );
     assert_eq!(
-        show.release(TvdbEpisode {
+        show.release_episode(TvdbEpisode {
             season: 10,
             episode: 4
         }),
@@ -278,7 +278,7 @@ async fn absolute_numbering_maps_to_tvdb_coordinates_in_both_directions() {
         })
     );
     assert_eq!(
-        show.release(TvdbEpisode {
+        show.release_episode(TvdbEpisode {
             season: 1,
             episode: 3
         }),
@@ -287,7 +287,7 @@ async fn absolute_numbering_maps_to_tvdb_coordinates_in_both_directions() {
             episode: 3
         })
     );
-    assert_eq!(show.tvdb(&episode(1, 100)), None);
+    assert_eq!(show.tvdb_episode(&episode(1, 100)), None);
     task.abort();
 }
 
@@ -310,9 +310,9 @@ async fn a_simkl_episode_list_without_tvdb_coordinates_still_resolves_the_show()
         .await
         .unwrap();
     assert_eq!(id_of(show.identity(), "tvdb"), Some("999".into()));
-    assert_eq!(show.tvdb(&episode(1, 1)), None);
+    assert_eq!(show.tvdb_episode(&episode(1, 1)), None);
     assert_eq!(
-        show.release(TvdbEpisode {
+        show.release_episode(TvdbEpisode {
             season: 1,
             episode: 1
         }),

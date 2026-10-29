@@ -6,10 +6,6 @@ const ANIME_SOURCES: [&str; 4] = ["mal", "kitsu", "anilist", "anidb"];
 const MAX_EPISODES: u32 = 10_000;
 const MAX_ROWS: usize = 10_000;
 
-/// A release shown as the TVDB/TMDB show it belongs to.
-///
-/// `resolve` answers `None` for a release with no TVDB or TMDB identity and for
-/// anything that is not an anime title: those keep the identity they arrived with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AnimeShow {
     identity: MediaIdentity,
@@ -18,10 +14,8 @@ pub(crate) struct AnimeShow {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Layout {
-    /// The release already numbers its episodes the way TVDB does.
-    Tvdb,
-    /// Release episode numbers land in one TVDB season at a time.
-    Numbered {
+    Aired,
+    Segments {
         release_season: Option<u32>,
         segments: Vec<Segment>,
     },
@@ -35,17 +29,14 @@ struct Segment {
     offset: i64,
 }
 
-/// The coordinates Simkl Path A writes use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TvdbEpisode {
     pub(crate) season: u32,
     pub(crate) episode: u32,
 }
 
-/// The episode a release numbers itself, for provider rows that carry TVDB coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ReleaseEpisode {
-    /// The release's season, for a release that numbers its episodes in seasons.
     pub(crate) season: Option<u32>,
     pub(crate) episode: u32,
 }
@@ -55,17 +46,16 @@ impl AnimeShow {
         &self.identity
     }
 
-    /// The TVDB coordinates of an episode numbered the way the release numbers it.
-    pub(crate) fn tvdb(&self, release: &EpisodeCoordinates) -> Option<TvdbEpisode> {
+    pub(crate) fn tvdb_episode(&self, release: &EpisodeCoordinates) -> Option<TvdbEpisode> {
         if release.episode == 0 {
             return None;
         }
         match &self.layout {
-            Layout::Tvdb => Some(TvdbEpisode {
+            Layout::Aired => Some(TvdbEpisode {
                 season: release.season?,
                 episode: release.episode,
             }),
-            Layout::Numbered { segments, .. } => {
+            Layout::Segments { segments, .. } => {
                 let segment = segments
                     .iter()
                     .find(|segment| (segment.first..=segment.last).contains(&release.episode))?;
@@ -80,14 +70,13 @@ impl AnimeShow {
         }
     }
 
-    /// The release episode a TVDB episode belongs to.
-    pub(crate) fn release(&self, tvdb: TvdbEpisode) -> Option<ReleaseEpisode> {
+    pub(crate) fn release_episode(&self, tvdb: TvdbEpisode) -> Option<ReleaseEpisode> {
         if tvdb.episode == 0 {
             return None;
         }
         let (season, episode) = match &self.layout {
-            Layout::Tvdb => (Some(tvdb.season), tvdb.episode),
-            Layout::Numbered {
+            Layout::Aired => (Some(tvdb.season), tvdb.episode),
+            Layout::Segments {
                 release_season,
                 segments,
             } => {
@@ -107,15 +96,12 @@ impl AnimeShow {
     }
 }
 
-/// Resolve an anime release's title identity to the show it belongs to.
 pub(crate) async fn resolve(app: &App, release: &MediaIdentity) -> Option<AnimeShow> {
     let simkl_identity = simkl_anime(&release.id);
     let anime_addon = ANIME_ADDONS
         .iter()
         .any(|prefix| release.id.starts_with(*prefix));
-    if release.kind != "series"
-        || release.episode.is_some()
-        || simkl_identity.is_none() && !anime_addon
+    if release.kind != "series" || release.episode.is_some() || simkl_identity.is_none() && !anime_addon
     {
         return None;
     }
@@ -156,18 +142,21 @@ pub(crate) async fn resolve(app: &App, release: &MediaIdentity) -> Option<AnimeS
         return None;
     }
     let layout = if simkl_identity.is_some() {
-        Layout::Tvdb
+        Layout::Aired
     } else {
-        let release_season = single_season(&videos);
-        let segments = match (release_season, simkl) {
-            (Some(_), Some(id)) => simkl_episodes(app, id)
-                .await
-                .map(|rows| segments(&rows))
-                .unwrap_or_default(),
-            _ => Vec::new(),
+        let segments = if spans_seasons(&videos) {
+            Vec::new()
+        } else {
+            match simkl {
+                Some(id) => simkl_episodes(app, id)
+                    .await
+                    .map(|rows| segments(&rows))
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            }
         };
-        Layout::Numbered {
-            release_season: release_season.flatten(),
+        Layout::Segments {
+            release_season: single_season(&videos),
             segments,
         }
     };
@@ -177,19 +166,29 @@ pub(crate) async fn resolve(app: &App, release: &MediaIdentity) -> Option<AnimeS
     })
 }
 
-/// `Some(None)` when the release numbers no season, `None` when it numbers several.
-fn single_season(videos: &[Value]) -> Option<Option<u32>> {
-    let seasons = videos
-        .iter()
-        .filter_map(|video| video["season"].as_u64())
-        .collect::<std::collections::BTreeSet<_>>();
+fn single_season(videos: &[Value]) -> Option<u32> {
+    let seasons = season_numbers(videos);
     match seasons.len() {
-        0 => Some(None),
-        1 => Some(seasons.first().copied().and_then(|season| u32::try_from(season).ok())),
+        1 => seasons
+            .first()
+            .copied()
+            .and_then(|season| u32::try_from(season).ok()),
         _ => None,
     }
 }
 
+fn spans_seasons(videos: &[Value]) -> bool {
+    season_numbers(videos).len() > 1
+}
+
+fn season_numbers(videos: &[Value]) -> std::collections::BTreeSet<u64> {
+    videos
+        .iter()
+        .filter_map(|video| video["season"].as_u64())
+        .collect()
+}
+
+/// Release episode numbers count the way Simkl's `episode` numbers do inside one anime title.
 fn segments(rows: &[Value]) -> Vec<Segment> {
     let mut pairs = std::collections::BTreeMap::new();
     let mut conflicting = HashSet::new();
@@ -198,7 +197,9 @@ fn segments(rows: &[Value]) -> Vec<Segment> {
             continue;
         }
         let (Some(number), Some(season), Some(episode)) = (
-            row["episode"].as_u64().and_then(|number| u32::try_from(number).ok()),
+            row["episode"]
+                .as_u64()
+                .and_then(|number| u32::try_from(number).ok()),
             row["tvdb"]["season"]
                 .as_u64()
                 .and_then(|season| u32::try_from(season).ok()),
