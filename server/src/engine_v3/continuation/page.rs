@@ -114,6 +114,19 @@ pub(crate) fn snapshot(
                 }
             }
         }
+        // An entry that is not up next still names the episode the viewer is
+        // waiting for, when the stored facts list one that is not out yet
+        // (backend#78).
+        let next_episode = match (&record.parent_identity, &found) {
+            (Some(series), None) if status != ContinuationStatus::Resume => {
+                super::releases::upcoming_db(&db, app, lease, profile, &series.id, &record, now)?
+                    .filter(|next| {
+                        let (kind, id) = (&next.identity.kind, &next.identity.id);
+                        kids::require_item(&db, &lease.principal, kind, id).is_ok()
+                    })
+            }
+            _ => None,
+        };
         super::art::fill(&db, lease, profile, restricted, &mut card)?;
         crate::simkl::imports::enrich(&db, profile, &mut card)?;
         super::super::source_integrations::merge_cached_with_db(
@@ -130,6 +143,7 @@ pub(crate) fn snapshot(
                 record,
                 status,
                 previous_identity,
+                next_episode,
             },
         ));
     }

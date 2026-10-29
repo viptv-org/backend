@@ -311,6 +311,71 @@ pub(crate) fn up_next_db(
     anchor: &PlaybackRecord,
     now_millis: u64,
 ) -> Result<Option<UpNext>, ApiError> {
+    let Some(facts) = facts_db(db, app, lease, profile, series, anchor)? else {
+        return Ok(None);
+    };
+    let watched = Watched::read(db, profile, series)?;
+    let Some(pending) = pending_episodes(
+        &facts.anchor,
+        &facts.episodes,
+        |card| watched.contains(card),
+        now_millis,
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some(UpNext {
+        card: pending.next,
+        count: pending.count,
+        released_at_millis: pending.released_at_millis,
+        new_release_at_millis: (pending.first_released_at_millis > anchor.updated_at_millis)
+            .then_some(pending.first_released_at_millis),
+        origin: facts.origin,
+    }))
+}
+
+/// The episode a caught-up entry is waiting for, from the same stored document
+/// and provenance checks that project the up-next card (backend#78). `None`
+/// when nothing further is listed (the show is over), when the next one is
+/// already out (it is the entry's card then), or when the document is stale,
+/// foreign or for another finished episode.
+pub(crate) fn upcoming_db(
+    db: &Connection,
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    series: &str,
+    anchor: &PlaybackRecord,
+    now_millis: u64,
+) -> Result<Option<viptv_engine::continuation::NextEpisode>, ApiError> {
+    let Some(facts) = facts_db(db, app, lease, profile, series, anchor)? else {
+        return Ok(None);
+    };
+    Ok(viptv_engine::continuation::upcoming_episode(
+        &facts.anchor,
+        &facts.episodes,
+        now_millis,
+    ))
+}
+
+/// A stored release document that still describes `anchor`: read for that
+/// finished episode, for this account, configuration and add-on revision, and
+/// from the provider the row was played from. The episodes keep the anchor
+/// first and the ones after it in its own order and season family.
+struct Facts {
+    anchor: MediaIdentity,
+    episodes: Vec<EpisodeAvailability>,
+    /// The scope that published the document.
+    origin: Option<MetadataOrigin>,
+}
+
+fn facts_db(
+    db: &Connection,
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    series: &str,
+    anchor: &PlaybackRecord,
+) -> Result<Option<Facts>, ApiError> {
     let Some((from, document)) = document_db(db, profile, series)? else {
         return Ok(None);
     };
@@ -326,26 +391,14 @@ pub(crate) fn up_next_db(
     if stored.identity.id != anchor.identity.id {
         return Ok(None);
     }
-    let stored_anchor = stored.identity.clone();
-    let origin = stored.card.as_ref().map(|card| card.provider_id.as_str());
-    if !crate::continuation::same_origin(&anchor.provider_id, origin) {
+    let played_from = stored.card.as_ref().map(|card| card.provider_id.as_str());
+    if !crate::continuation::same_origin(&anchor.provider_id, played_from) {
         return Ok(None);
     }
-    let origin = document.origin.clone();
-    let episodes = availability(document.episodes);
-    let watched = Watched::read(db, profile, series)?;
-    let Some(pending) =
-        pending_episodes(&stored_anchor, &episodes, |card| watched.contains(card), now_millis)
-    else {
-        return Ok(None);
-    };
-    Ok(Some(UpNext {
-        card: pending.next,
-        count: pending.count,
-        released_at_millis: pending.released_at_millis,
-        new_release_at_millis: (pending.first_released_at_millis > anchor.updated_at_millis)
-            .then_some(pending.first_released_at_millis),
-        origin,
+    Ok(Some(Facts {
+        anchor: stored.identity.clone(),
+        episodes: availability(document.episodes),
+        origin: document.origin,
     }))
 }
 
