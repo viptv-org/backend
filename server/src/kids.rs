@@ -11,6 +11,8 @@ pub(crate) mod profile_pin;
 mod schema;
 pub(crate) mod scoped;
 pub(crate) mod titles;
+#[cfg(test)]
+mod tests;
 pub(crate) fn adult(meta: &Value) -> bool {
     metadata::assessment(meta).0.is_some_and(|age| age >= 18)
 }
