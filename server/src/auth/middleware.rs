@@ -19,11 +19,11 @@ pub(crate) fn auth_error_with_retry(error: ApiError, retry_after: Option<i64>) -
     } else if error.1 == "Refresh token reuse detected" {
         "refresh_reuse"
     } else if let Some(
-        code @ (MSG_AUTHORIZATION_PENDING
-        | MSG_ACCESS_DENIED
-        | MSG_EXPIRED_TOKEN
-        | MSG_PASSWORD_INCORRECT
-        | MSG_PASSWORD_TOO_SHORT),
+        code @ ("authorization_pending"
+        | "access_denied"
+        | "expired_token"
+        | "password_incorrect"
+        | "password_too_short"),
     ) = error.api_error_code()
     {
         code
