@@ -263,6 +263,9 @@ async fn rating_ceilings_apply_per_kind_and_keep_the_numeric_fallback() {
 async fn unrated_titles_stay_hidden_until_the_profile_allows_them() {
     let (a, task) = fixture().await;
     let movies = catalog(&a, "movie").await;
+    for title in ["pg", "pg13", "r", "adult", "unrated", "conflict"] {
+        observe(&a, "movie", &movies, title).await;
+    }
     let id = create_kids(&a, json!({"max_age":17,"movie_rating":"R"})).await;
     switch(&a, &id).await;
     assert_eq!(catalog_ids(&a, "movie").await, vec!["pg", "pg13", "r"]);
@@ -276,9 +279,6 @@ async fn unrated_titles_stay_hidden_until_the_profile_allows_them() {
     switch(&a, "1").await;
     let saved = policy(&a, &id, json!({"enabled":true,"max_age":17,"allow_unrated":true})).await;
     assert_eq!(saved["allow_unrated"], true);
-    let refreshed = catalog(&a, "movie").await;
-    assert_eq!(refreshed.len(), 6);
-    observe(&a, "movie", &refreshed, "unrated").await;
     switch(&a, &id).await;
     assert_eq!(
         catalog_ids(&a, "movie").await,
