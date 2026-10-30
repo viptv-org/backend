@@ -7,7 +7,7 @@ async fn typed_profile_crud_preserves_ownership_avatar_and_primary_protection() 
     assert_eq!(status, StatusCode::OK, "{list}");
     assert_eq!(
         list["capabilities"]["profile_pin"]["availability"],
-        "Unsupported"
+        "Available"
     );
     assert_eq!(list["profiles"][0]["locked"], false);
     let (status, profile) = request(
@@ -60,7 +60,7 @@ async fn typed_profile_crud_preserves_ownership_avatar_and_primary_protection() 
         )
         .await
         .0,
-        StatusCode::UNPROCESSABLE_ENTITY
+        StatusCode::OK
     );
     let (_, pin) = request(
         &app,
@@ -70,7 +70,8 @@ async fn typed_profile_crud_preserves_ownership_avatar_and_primary_protection() 
         json!({}),
     )
     .await;
-    assert_eq!(pin["availability"], "Unsupported");
+    assert_eq!(pin["availability"], "Available");
+    assert_eq!(pin["configured"], true);
     assert_eq!(
         request(
             &app,

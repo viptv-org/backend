@@ -16,6 +16,8 @@ pub struct ApiError(pub StatusCode, pub String);
 pub(crate) const MSG_PROFILE_REQUIRED: &str = "Profile selection required";
 pub(crate) const MSG_PARENT_REQUIRED: &str = "Parent PIN required";
 pub(crate) const MSG_PARENT_PIN_INVALID: &str = "Incorrect parent PIN";
+pub(crate) const MSG_LEAVE_PIN_REQUIRED: &str = "Profile PIN required";
+pub(crate) const MSG_LEAVE_PIN_INVALID: &str = "Incorrect profile PIN";
 pub(crate) const MSG_PROFILE_POLICY_CHANGED: &str = "Profile policy changed";
 pub(crate) const MSG_AUTHORIZATION_PENDING: &str = "authorization_pending";
 pub(crate) const MSG_ACCESS_DENIED: &str = "access_denied";
@@ -50,6 +52,8 @@ impl ApiError {
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),
             MSG_PARENT_PIN_INVALID => Some("parent_pin_invalid"),
+            MSG_LEAVE_PIN_REQUIRED => Some("leave_pin_required"),
+            MSG_LEAVE_PIN_INVALID => Some("leave_pin_invalid"),
             MSG_PARENT_PIN_INCORRECT => Some(CODE_PARENT_PIN_INCORRECT),
             MSG_ACCOUNT_DELETE_REJECTED => Some(CODE_ACCOUNT_DELETE_REJECTED),
             MSG_LAST_OWNER => Some(CODE_LAST_OWNER),

@@ -159,7 +159,7 @@ fn seed(app: &App, account: i64) {
     )
     .unwrap();
     db.execute(
-        "INSERT INTO kids_profiles VALUES(?1,1,12,1)",
+        "INSERT INTO kids_profiles(profile_id,enabled,max_age,revision) VALUES(?1,1,12,1)",
         [profile],
     )
     .unwrap();

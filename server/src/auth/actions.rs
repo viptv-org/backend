@@ -117,6 +117,11 @@ pub(crate) async fn action(
             login_snapshot(&db, &path, &v, p.as_ref().and_then(|value| value.0.account_id()))?
         };
         let prepared = prepare_auth(&path, &v, snapshot)?;
+        if path == "/auth/profile" {
+            if let Some(principal) = p.as_ref() {
+                crate::kids::profile_pin::leave_gate(&app, &principal.0, &v)?;
+            }
+        }
         drop(permit);
         let mut db = app.db.lock().map_err(|_| unauthorized())?;
         let tx = db.transaction().map_err(crate::db_error)?;
