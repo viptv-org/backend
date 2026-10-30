@@ -99,6 +99,9 @@ pub(crate) async fn action(
     if let Err((error, retry_seconds)) = enforce_rate_limit(app.clone(), bucket, subject_limit).await {
         return auth_error_with_retry(error, retry_seconds);
     }
+    if path == "/auth/account" {
+        return super::delete_account(app, p, v).await;
+    }
     let expensive = matches!(
         path.as_str(),
         "/auth/register" | "/auth/login" | "/auth/device/login" | "/auth/recover"

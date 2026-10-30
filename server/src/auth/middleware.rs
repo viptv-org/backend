@@ -18,8 +18,15 @@ pub(crate) fn auth_error_with_retry(error: ApiError, retry_after: Option<i64>) -
         "parent_required"
     } else if error.1 == "Refresh token reuse detected" {
         "refresh_reuse"
-    } else if let Some(code @ (MSG_AUTHORIZATION_PENDING | MSG_ACCESS_DENIED | MSG_EXPIRED_TOKEN)) =
-        error.api_error_code()
+    } else if let Some(
+        code @ (MSG_AUTHORIZATION_PENDING
+        | MSG_ACCESS_DENIED
+        | MSG_EXPIRED_TOKEN
+        | MSG_ACCOUNT_DELETE_REJECTED
+        | MSG_PARENT_PIN_INCORRECT
+        | MSG_LAST_OWNER
+        | MSG_ACCOUNT_SESSION_REQUIRED),
+    ) = error.api_error_code()
     {
         code
     } else {
@@ -321,6 +328,7 @@ pub fn router() -> Router<App> {
         r = r.route(&format!("/device/{p}"), post(action));
     }
     r.route("/auth/sessions", get(info).delete(remove))
+        .route("/auth/account", delete(action))
         .route("/devices", get(info))
         .route("/devices/:id", axum::routing::delete(remove))
         .route("/admin/devices", get(info))
