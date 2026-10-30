@@ -7,17 +7,17 @@ pub(super) fn fill(
     restricted: bool,
     card: &mut Card,
 ) -> Result<(), ApiError> {
-    if card.landscape.is_some() {
-        return Ok(());
+    if card.landscape.is_none() {
+        if let Some(series) = &card.parent_identity {
+            card.landscape =
+                super::releases::landscape_db(db, lease, profile, &series.id, &card.identity.id)?;
+        }
+        if card.landscape.is_none() && !restricted {
+            let title = card.parent_identity.as_ref().unwrap_or(&card.identity);
+            card.landscape = my_list(db, profile, &title.kind, &title.id)?;
+        }
     }
-    if let Some(series) = &card.parent_identity {
-        card.landscape =
-            super::releases::landscape_db(db, lease, profile, &series.id, &card.identity.id)?;
-    }
-    if card.landscape.is_none() && !restricted {
-        let title = card.parent_identity.as_ref().unwrap_or(&card.identity);
-        card.landscape = my_list(db, profile, &title.kind, &title.id)?;
-    }
+    super::super::art::fill(card);
     Ok(())
 }
 

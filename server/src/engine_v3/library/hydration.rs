@@ -73,6 +73,7 @@ fn fill(existing: Option<Card>, resolved: Card, name: &str, poster: Option<&str>
     card.progress = None;
     card.added_at_millis = None;
     card.metadata_origin = None;
+    super::super::art::fill(&mut card);
     card
 }
 

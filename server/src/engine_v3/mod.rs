@@ -24,6 +24,9 @@ mod cross_ids_tests;
 pub(crate) mod anime_show_migration;
 #[cfg(test)]
 mod anime_show_migration_tests;
+pub(crate) mod art;
+#[cfg(test)]
+mod art_tests;
 pub(crate) mod continuation;
 pub(crate) mod history;
 mod home;

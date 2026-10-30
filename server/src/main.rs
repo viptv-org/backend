@@ -95,6 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     tracing::info!("VIPTV server listening");
     viptv_server::start_anime_show_migration(app.clone());
+    viptv_server::start_card_art_backfill(app.clone());
     let router =
         router_with_viewers(app, tv_dashboard).layer(axum::middleware::from_fn_with_state(
             telemetry.clone(),

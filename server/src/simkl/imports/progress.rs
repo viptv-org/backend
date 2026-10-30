@@ -50,6 +50,7 @@ pub(super) fn apply(
         }
     }
     let parent = parent.as_ref();
+    crate::engine_v3::art::fill(&mut card);
     let id = &card.identity.id;
     let kind = &card.identity.kind;
     let removed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM library_history_removals WHERE profile_id=?1 AND type=?2 AND id=?3) OR EXISTS(SELECT 1 FROM simkl_import_history_floors WHERE profile_id=?1 AND cutoff_millis>=?4)",params![profile,kind,id,updated],|r|r.get(0)).map_err(db_error)?;

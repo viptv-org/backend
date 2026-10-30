@@ -21,6 +21,7 @@ pub(super) fn card(item: &Value) -> Option<Card> {
     saved.poster = item["poster"].as_str().map(str::to_owned);
     saved.progress = None;
     saved.added_at_millis = item["added_at_millis"].as_u64();
+    super::art::fill(&mut saved);
     Some(saved)
 }
 pub(super) fn cards(
@@ -88,6 +89,7 @@ pub(crate) async fn save(
         card.identity.id=membership::resolve(&db,profile,&card.identity.kind,&card.identity.id)?;
         card.progress = None;
         card.added_at_millis=None;
+        super::art::fill(&mut card);
         if kids::restricted(&db, &app.identity())? {
             let item = json!({"type":card.identity.kind,"id":card.identity.id});
             let approved = kids::filter_items(&db, &app.identity(), vec![item])?;

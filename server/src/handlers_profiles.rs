@@ -184,7 +184,11 @@ pub(crate) async fn save_favorite(
     let name = text(&v, "name", 512)?;
     let db = a.db.lock().unwrap();
     a.require_profile(&db, profile)?;
-    db.execute("INSERT INTO favorites(profile_id,id,type,name,poster,added_at_millis) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster",params![profile,stored,kind,name,v["poster"].as_str(),util::now_millis()]).map_err(db_error)?;
+    let poster = v["poster"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| engine_v3::art::poster_url(&stored));
+    db.execute("INSERT INTO favorites(profile_id,id,type,name,poster,added_at_millis) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster",params![profile,stored,kind,name,poster,util::now_millis()]).map_err(db_error)?;
     Ok(axum::Json(json!({"ok":true})))
     }).await
 }
@@ -256,13 +260,16 @@ pub(crate) async fn save_progress(
     if p < 0.0 || d < 0.0 || p > 1e9 || d > 1e9 {
         return Err("Invalid playback position".into());
     }
-    let context = engine_v3::history::context(&v)?;
+    let title = continuation::title_id(&v);
+    let mut poster = v["poster"].as_str().map(str::to_owned);
+    let mut context = engine_v3::history::context(&v)?;
+    engine_v3::art::fill_progress(&title, &mut poster, &mut context);
     let mut db = a.db.lock().unwrap();
     a.require_profile(&db, profile)?;
     kids::require_item(&db, &a.identity(), kind, id)?;
     let tx=db.transaction().map_err(db_error)?;
     engine_v3::library_stats::observe(&tx,profile,kind,id,d>0.0&&p/d>=0.95)?;
-    tx.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster,position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,context=json_remove(json_patch(progress.context,excluded.context),'$.watched_override','$.stremio_import_watched','$.stremio_completion_only','$.stremio_watch_date_unknown'),title_id=CASE WHEN json_extract(excluded.context,'$.series_id') IS NULL AND json_extract(progress.context,'$.series_id') IS NOT NULL THEN json_extract(progress.context,'$.series_id') ELSE excluded.title_id END",params![profile,id,kind,name,v["poster"].as_str(),p,d,library::activity_time(&tx,profile)?,context.to_string(),continuation::title_id(&v)]).map_err(db_error)?;
+    tx.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster,position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,context=json_remove(json_patch(progress.context,excluded.context),'$.watched_override','$.stremio_import_watched','$.stremio_completion_only','$.stremio_watch_date_unknown'),title_id=CASE WHEN json_extract(excluded.context,'$.series_id') IS NULL AND json_extract(progress.context,'$.series_id') IS NOT NULL THEN json_extract(progress.context,'$.series_id') ELSE excluded.title_id END",params![profile,id,kind,name,poster,p,d,library::activity_time(&tx,profile)?,context.to_string(),title]).map_err(db_error)?;
     tx.commit().map_err(db_error)?;
     Ok(axum::Json(json!({"ok":true})))
     }).await?;
