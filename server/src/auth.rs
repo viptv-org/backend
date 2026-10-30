@@ -1,4 +1,5 @@
 use super::*;
+mod account_actions;
 mod actions;
 mod avatars;
 mod device_actions;
@@ -9,6 +10,8 @@ mod principal;
 mod profiles_actions;
 mod schema;
 #[cfg(test)]
+mod account_tests;
+#[cfg(test)]
 mod tests;
 mod tokens;
 
@@ -17,6 +20,7 @@ pub use principal::Principal;
 pub use schema::init;
 pub use tokens::create_owner_offline;
 
+pub(crate) use account_actions::delete_account;
 pub(crate) use actions::{action, dispatch_prepared};
 pub(crate) use avatars::{
     avatar_choice, avatar_style, primary_profile, profile_json, require_household_manager, selected_avatar_seed,

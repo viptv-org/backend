@@ -59,6 +59,25 @@ An account holds at most 32 sessions, browser and paired-device together, so a c
 
 Store Roku access/refresh values only in private device storage and send access tokens in the Authorization header, never a query parameter. Pairing codes are short-lived, one-time, and not credentials by themselves. Revocation clears access immediately; there is no fallback credential.
 
+## Deleting an account
+
+`DELETE /auth/account {username,password,pin?}` deletes the signed-in account and
+everything it owns in one transaction: profiles and their owners, progress and
+history, favorites and library, approvals, per-profile and account preferences,
+add-ons, IPTV connections and their sealed secrets, device pairings, sessions and
+onboarding state. The typed `username` must equal the account's username and
+`password` must verify; anything else is `400 account_delete_rejected` with no
+row changed. When the account has a household PIN, `pin` must verify too:
+`400 parent_pin_incorrect`. A paired device is refused with
+`403 account_session_required` and the route shares the auth rate limit
+(`429 rate_limited` with `Retry-After`). Success returns `204` and expires both
+browser cookies.
+
+An owner deletes its own account and its household like anyone else, including
+when it is the server's only account. The one refusal is an owner whose server
+still holds other accounts: they would be left without an owner, so it answers
+`409 last_owner` until those accounts are deleted.
+
 ## Authorization and operations
 
 Discovery jobs, registered source handles, playback controls, SSE, and bearerless media capabilities carry a server-authored account/profile/session lease. Every use revalidates the exact credential family, enabled account, selected completed profile, and ownership grant. Revoking any link invalidates the resource. Foreign handles cannot be replayed across sessions.
