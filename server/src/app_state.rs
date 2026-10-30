@@ -20,6 +20,9 @@ pub(crate) const MSG_PROFILE_POLICY_CHANGED: &str = "Profile policy changed";
 pub(crate) const MSG_AUTHORIZATION_PENDING: &str = "authorization_pending";
 pub(crate) const MSG_ACCESS_DENIED: &str = "access_denied";
 pub(crate) const MSG_EXPIRED_TOKEN: &str = "expired_token";
+pub(crate) const MSG_PASSWORD_INCORRECT: &str = "That password is not correct.";
+pub(crate) const MSG_PASSWORD_TOO_SHORT: &str =
+    "New password must contain at least 12 characters";
 pub(crate) const MSG_ACCOUNT_DELETE_REJECTED: &str = "The username or password is not correct.";
 pub(crate) const MSG_PARENT_PIN_INCORRECT: &str = "The parent PIN is not correct.";
 pub(crate) const MSG_LAST_OWNER: &str =
@@ -31,6 +34,8 @@ pub(crate) const CODE_ACCOUNT_DELETE_REJECTED: &str = "account_delete_rejected";
 pub(crate) const CODE_PARENT_PIN_INCORRECT: &str = "parent_pin_incorrect";
 pub(crate) const CODE_LAST_OWNER: &str = "last_owner";
 pub(crate) const CODE_ACCOUNT_SESSION_REQUIRED: &str = "account_session_required";
+pub(crate) const CODE_PASSWORD_INCORRECT: &str = "password_incorrect";
+pub(crate) const CODE_PASSWORD_TOO_SHORT: &str = "password_too_short";
 impl ApiError {
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
@@ -50,6 +55,8 @@ impl ApiError {
             MSG_AUTHORIZATION_PENDING => Some(MSG_AUTHORIZATION_PENDING),
             MSG_ACCESS_DENIED => Some(MSG_ACCESS_DENIED),
             MSG_EXPIRED_TOKEN => Some(MSG_EXPIRED_TOKEN),
+            MSG_PASSWORD_INCORRECT => Some(CODE_PASSWORD_INCORRECT),
+            MSG_PASSWORD_TOO_SHORT => Some(CODE_PASSWORD_TOO_SHORT),
             "Provider connection limit reached" => Some("provider_connection_limit"),
             _ => None,
         }

@@ -398,6 +398,205 @@ fn recovery_is_single_use_and_revokes_sessions() {
     )
     .is_ok());
 }
+fn password_principal(session_id: String) -> Principal {
+    Principal::Account {
+        account_id: 1,
+        role: "owner".into(),
+        profile_id: Some(1),
+        session_id: Some(session_id),
+    }
+}
+#[test]
+fn password_change_verifies_current_password_and_keeps_sessions_signed_in() {
+    let db = db();
+    let (claimed, _) = claim(&db);
+    let sid = claimed["session_id"].as_str().unwrap().to_owned();
+    let stored = |db: &Connection| -> String {
+        db.query_row(
+            "SELECT password_hash FROM auth_accounts WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let before = stored(&db);
+    let wrong = dispatch(
+        &db,
+        "/auth/password",
+        Some(password_principal(sid.clone())),
+        &headers(),
+        &json!({"current_password":"not-the-current-password","new_password":"a-brand-new-long-password"}),
+        SESSION_TOKEN,
+    )
+    .unwrap_err();
+    assert_eq!(wrong.0, StatusCode::BAD_REQUEST);
+    assert_eq!(wrong.1, MSG_PASSWORD_INCORRECT);
+    assert_eq!(stored(&db), before);
+    let short = dispatch(
+        &db,
+        "/auth/password",
+        Some(password_principal(sid.clone())),
+        &headers(),
+        &json!({"current_password":"a-long-owner-password","new_password":"elevenchars"}),
+        SESSION_TOKEN,
+    )
+    .unwrap_err();
+    assert_eq!(short.0, StatusCode::BAD_REQUEST);
+    assert_eq!(short.1, MSG_PASSWORD_TOO_SHORT);
+    assert_eq!(stored(&db), before);
+    let (out, cookies) = dispatch(
+        &db,
+        "/auth/password",
+        Some(password_principal(sid.clone())),
+        &headers(),
+        &json!({"current_password":"a-long-owner-password","new_password":"a-brand-new-long-password"}),
+        SESSION_TOKEN,
+    )
+    .unwrap();
+    assert!(cookies.is_none());
+    assert_eq!(out["account_id"], 1);
+    assert_eq!(out["session_id"], sid);
+    assert!(out["csrf_token"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    let after = stored(&db);
+    assert_ne!(after, before);
+    assert!(after.starts_with("$argon2id$"));
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM auth_sessions", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert!(dispatch(
+        &db,
+        "/auth/login",
+        None,
+        &HeaderMap::new(),
+        &json!({"username":"owner","password":"a-long-owner-password"}),
+        SESSION_TOKEN
+    )
+    .is_err());
+    assert!(dispatch(
+        &db,
+        "/auth/login",
+        None,
+        &HeaderMap::new(),
+        &json!({"username":"owner","password":"a-brand-new-long-password"}),
+        SESSION_TOKEN
+    )
+    .is_ok());
+}
+#[test]
+fn device_session_can_change_the_account_password() {
+    let db = db();
+    claim(&db);
+    let grant = session(&db, 1, Some(1), "device", "Living room TV").unwrap().0;
+    let principal = Principal::Account {
+        account_id: 1,
+        role: "device".into(),
+        profile_id: Some(1),
+        session_id: Some(grant["session_id"].as_str().unwrap().to_owned()),
+    };
+    let (out, cookies) = dispatch(
+        &db,
+        "/auth/password",
+        Some(principal),
+        &headers(),
+        &json!({"current_password":"a-long-owner-password","new_password":"a-device-chosen-long-password"}),
+        SESSION_TOKEN,
+    )
+    .unwrap();
+    assert!(cookies.is_none());
+    assert!(out["csrf_token"].as_str().is_some());
+    assert!(dispatch(
+        &db,
+        "/auth/login",
+        None,
+        &HeaderMap::new(),
+        &json!({"username":"owner","password":"a-device-chosen-long-password"}),
+        SESSION_TOKEN
+    )
+    .is_ok());
+}
+#[test]
+fn recovery_codes_regenerate_and_invalidate_the_previous_code() {
+    let db = db();
+    let (claimed, _) = claim(&db);
+    let previous = claimed["recovery_code"].as_str().unwrap().to_owned();
+    let sid = claimed["session_id"].as_str().unwrap().to_owned();
+    let (out, _) = dispatch(
+        &db,
+        "/auth/recovery-codes",
+        Some(password_principal(sid)),
+        &headers(),
+        &json!({}),
+        SESSION_TOKEN,
+    )
+    .unwrap();
+    let codes = out["recovery_codes"].as_array().unwrap();
+    assert_eq!(codes.len(), 1);
+    let regenerated = codes[0].as_str().unwrap().to_owned();
+    assert_ne!(regenerated, previous);
+    let stored: String = db
+        .query_row(
+            "SELECT recovery_hash FROM auth_accounts WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, hash(&regenerated));
+    assert_ne!(stored, regenerated);
+    assert!(dispatch(
+        &db,
+        "/auth/recover",
+        None,
+        &HeaderMap::new(),
+        &json!({"username":"owner","recovery_code":previous,"password":"recovered-long-password"}),
+        SESSION_TOKEN
+    )
+    .is_err());
+    assert!(dispatch(
+        &db,
+        "/auth/recover",
+        None,
+        &HeaderMap::new(),
+        &json!({"username":"owner","recovery_code":regenerated,"password":"recovered-long-password"}),
+        SESSION_TOKEN
+    )
+    .is_ok());
+}
+#[test]
+fn password_errors_do_not_echo_secrets() {
+    let db = db();
+    let (claimed, _) = claim(&db);
+    let sid = claimed["session_id"].as_str().unwrap().to_owned();
+    let current = "a-long-owner-password";
+    let new = "the-secret-new-password";
+    let error = dispatch(
+        &db,
+        "/auth/password",
+        Some(password_principal(sid)),
+        &headers(),
+        &json!({"current_password":"the-wrong-current-password","new_password":new}),
+        SESSION_TOKEN,
+    )
+    .unwrap_err();
+    assert!(!error.1.contains("the-wrong-current-password"));
+    assert!(!error.1.contains(new));
+    assert!(!error.1.contains(current));
+    assert!(!error.1.contains("$argon2"));
+    let events: Vec<String> = db
+        .prepare("SELECT kind FROM auth_events")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(events
+        .iter()
+        .all(|kind| !kind.contains(new) && !kind.contains(current)));
+}
 #[test]
 fn refresh_replay_revokes_only_its_family_and_devices_are_not_admins() {
     let db = db();
@@ -588,7 +787,7 @@ fn password_snapshot_revalidation_and_last_owner_protection() {
     let prepared = prepare_auth(
         "/auth/login",
         &payload,
-        login_snapshot(&db, "/auth/login", &payload).unwrap(),
+        login_snapshot(&db, "/auth/login", &payload, None).unwrap(),
     )
     .unwrap();
     assert!(prepared.login_valid);

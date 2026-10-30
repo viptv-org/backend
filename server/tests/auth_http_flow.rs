@@ -765,6 +765,94 @@ async fn rate_limited_device_login_is_distinct_from_wrong_password() {
 }
 
 #[tokio::test]
+async fn password_change_keeps_the_browser_session_and_requires_csrf() {
+    let (app, _root) = application();
+    let mut browser = register(&app, "password.viewer").await;
+    let current = "secure-password-for-password.viewer";
+    let replacement = "a-replacement-long-password";
+    let mut without_csrf = Browser {
+        cookies: browser.cookies.clone(),
+        csrf: String::new(),
+    };
+    let (status, body) = browser_request(
+        &app,
+        &mut without_csrf,
+        "POST",
+        "/api/auth/password",
+        json!({"current_password":current,"new_password":replacement}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error_code"], "forbidden");
+    let (status, body) = browser_request(
+        &app,
+        &mut browser,
+        "POST",
+        "/api/auth/password",
+        json!({"current_password":"not-the-current-password","new_password":replacement}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error_code"], "password_incorrect");
+    assert_eq!(body["error"], "That password is not correct.");
+    assert!(!body.to_string().contains("$argon2"));
+    let (status, body) = browser_request(
+        &app,
+        &mut browser,
+        "POST",
+        "/api/auth/password",
+        json!({"current_password":current,"new_password":"elevenchars"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error_code"], "password_too_short");
+    let before = browser.csrf.clone();
+    let (status, body) = browser_request(
+        &app,
+        &mut browser,
+        "POST",
+        "/api/auth/password",
+        json!({"current_password":current,"new_password":replacement}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["profile_id"].is_null());
+    assert!(!body["csrf_token"].as_str().unwrap_or_default().is_empty());
+    assert_ne!(browser.csrf, before);
+    assert_eq!(
+        browser_request(&app, &mut browser, "GET", "/api/auth/me", Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let mut sign_in = Browser::default();
+    assert_eq!(
+        browser_request(
+            &app,
+            &mut sign_in,
+            "POST",
+            "/api/auth/login",
+            json!({"username":"password.viewer","password":current})
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        browser_request(
+            &app,
+            &mut sign_in,
+            "POST",
+            "/api/auth/login",
+            json!({"username":"password.viewer","password":replacement})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn rate_limited_device_poll_endpoints_return_429() {
     let (router, app, _root) = owner_with_db();
 
