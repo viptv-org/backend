@@ -116,8 +116,6 @@ impl AnimeShow {
         Some(ReleaseEpisode { season, episode })
     }
 
-    /// The show's own TVDB-ordered Details document under the identity that was opened.
-    /// The release's own episodes keep their ids so their watch state still matches.
     fn details_document(&self, release: &Value) -> Value {
         if let Some(document) = &self.document {
             let mut document = document.clone();
@@ -153,8 +151,6 @@ impl AnimeShow {
     }
 }
 
-/// The show's TVDB-ordered metadata document for a Details page, keyed to the release that
-/// was opened. `None` when the release is not an anime show this server can map.
 pub(crate) async fn tvdb_document(
     app: &App,
     lease: &ResourceLease,
@@ -173,7 +169,6 @@ pub(crate) async fn tvdb_document(
     Some(show.details_document(release))
 }
 
-/// The Details page of an anime show whose whole episode list comes from the show itself.
 pub(crate) async fn detail(
     app: &App,
     lease: &ResourceLease,
@@ -265,7 +260,6 @@ fn keep_release_ids(document: &mut Value, ids: std::collections::BTreeMap<(u32, 
     }
 }
 
-/// The TVDB coordinates of the episodes the opened Simkl title itself lists.
 async fn simkl_episode_coordinates(app: &App, title: &str) -> Vec<(u32, u32)> {
     let Some(id) = simkl_anime(title) else {
         return Vec::new();
