@@ -18,6 +18,9 @@ pub(crate) mod configuration;
 pub(crate) mod anime_show;
 #[cfg(test)]
 mod anime_show_tests;
+pub(crate) mod anime_show_migration;
+#[cfg(test)]
+mod anime_show_migration_tests;
 pub(crate) mod continuation;
 pub(crate) mod history;
 mod home;

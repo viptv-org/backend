@@ -67,6 +67,11 @@ pub(crate) use handlers_media::*;
 pub(crate) use handlers_profiles::*;
 pub(crate) use http_middleware::*;
 pub(crate) use matching_context::*;
+
+pub fn start_anime_show_migration(app: App) {
+    engine_v3::anime_show_migration::start(app);
+}
+
 pub use routes::{router, router_with_viewers, validate_tv_dist};
 
 #[cfg(test)]
