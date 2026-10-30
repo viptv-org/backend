@@ -61,6 +61,16 @@ fn tvdb_videos(prefix: &str, seasons: &[(u32, u32)]) -> Value {
     )
 }
 
+fn kitsu_videos(prefix: &str, count: u64, season: u64, offset: u64) -> Value {
+    Value::Array(
+        (1..=count)
+            .map(|number| {
+                json!({"id":format!("{prefix}:{number}"),"season":1,"episode":number,"imdbSeason":season,"imdbEpisode":offset+number,"absoluteEpisode":offset+number})
+            })
+            .collect(),
+    )
+}
+
 const ATTACK_ON_TITAN_SEASONS: [(u32, u32); 5] = [(0, 2), (1, 3), (2, 3), (3, 22), (4, 3)];
 
 fn episode_at(body: &Value, season: u64, episode: u64) -> String {
@@ -104,6 +114,9 @@ fn meta_of(addon: i64, id: &str) -> Value {
         (15, "mal:9") => json!({"meta":{"id":"mal:9","type":"series","name":"Unmapped","_malId":"9",
             "videos":[{"id":"mal:9:1","season":1,"episode":1}]}}),
         (16, "kitsu:11") => json!({"meta":{"id":"kitsu:11","type":"series","name":"Naruto","imdb_id":"tt0409591","kitsu_id":"11"}}),
+        (16, "kitsu:41982") => json!({"meta":{"id":"kitsu:41982","type":"series","name":"Attack on Titan Season 3 Part 2","imdb_id":"tt2560140","kitsu_id":"41982",
+            "videos":kitsu_videos("kitsu:41982", 10, 3, 12)}}),
+        (16, "kitsu:9") => json!({"meta":{"id":"kitsu:9","type":"series","name":"Unmapped Kitsu","kitsu_id":"9"}}),
         _ => json!({}),
     }
 }
@@ -347,6 +360,45 @@ async fn a_release_without_a_tvdb_or_tmdb_mapping_keeps_its_identity() {
     assert!(resolve(&app, &release("tt0903747", &[("imdb", "tt0903747")]))
         .await
         .is_none());
+    assert!(resolve(&app, &release("kitsu:9", &[("kitsu", "9")]))
+        .await
+        .is_none());
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_kitsu_release_document_maps_its_episodes_to_the_show_without_simkl() {
+    let (app, task) = stack().await;
+    let show = resolve(&app, &release("kitsu:41982", &[("kitsu", "41982")]))
+        .await
+        .unwrap();
+    assert_eq!(show.identity().id, "tt2560140");
+    assert_eq!(id_of(show.identity(), "tvdb"), Some("267440".into()));
+    assert_eq!(
+        show.tvdb_episode(&episode(1, 1)),
+        Some(TvdbEpisode {
+            season: 3,
+            episode: 13
+        })
+    );
+    assert_eq!(
+        show.tvdb_episode(&episode(1, 10)),
+        Some(TvdbEpisode {
+            season: 3,
+            episode: 22
+        })
+    );
+    assert_eq!(show.tvdb_episode(&episode(1, 11)), None);
+    assert_eq!(
+        show.release_episode(TvdbEpisode {
+            season: 3,
+            episode: 22
+        }),
+        Some(ReleaseEpisode {
+            season: Some(1),
+            episode: 10
+        })
+    );
     task.abort();
 }
 
@@ -553,6 +605,28 @@ async fn a_release_episode_write_is_stored_under_the_show_and_its_tvdb_coordinat
         .query_row("SELECT count(*) FROM progress WHERE profile_id=1", [], |r| r.get(0))
         .unwrap();
     assert_eq!(rows, 1);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_kitsu_release_episode_write_is_stored_under_the_show() {
+    let (app, task) = stack().await;
+    let parent = parent("kitsu:41982", "kitsu", "41982");
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/progress",
+        episode_write("kitsu:41982:1", 1, 1, &parent),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (id, title_id, context) = progress_row(&app, "tt2560140:3:13");
+    assert_eq!(id, "tt2560140:3:13");
+    assert_eq!(title_id, "tt2560140");
+    assert_eq!(context["series_id"], "tt2560140");
+    assert_eq!(context["season"], 3);
+    assert_eq!(context["episode"], 13);
     task.abort();
 }
 
