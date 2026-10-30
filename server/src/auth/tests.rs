@@ -520,6 +520,61 @@ fn device_session_cannot_change_the_account_password() {
     .is_err());
 }
 #[test]
+fn native_sign_in_records_its_origin_and_keeps_the_account_role() {
+    let db = db();
+    claim(&db);
+    let (login, _) = dispatch(
+        &db,
+        "/auth/device/login",
+        None,
+        &headers(),
+        &json!({"username":"owner","password":"a-long-owner-password","device_name":"Pixel"}),
+        SESSION_TOKEN,
+    )
+    .unwrap();
+    let origin = |session: &str| {
+        db.query_row(
+            "SELECT origin FROM auth_sessions WHERE id=?1",
+            [session],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .unwrap()
+    };
+    let sid = login["session_id"].as_str().unwrap().to_owned();
+    assert_eq!(origin(&sid).as_deref(), Some("native"));
+    let native = Principal::Account {
+        account_id: 1,
+        role: "owner".into(),
+        profile_id: None,
+        session_id: Some(sid.clone()),
+    };
+    assert!(native.validate_scope(&db).is_ok());
+    let as_tv = Principal::Account {
+        account_id: 1,
+        role: "device".into(),
+        profile_id: None,
+        session_id: Some(sid),
+    };
+    assert!(as_tv.validate_scope(&db).is_err());
+    let tv = session(&db, 1, None, "device", "Living room TV").unwrap().0;
+    let tv_sid = tv["session_id"].as_str().unwrap().to_owned();
+    assert_eq!(origin(&tv_sid).as_deref(), Some("tv"));
+    let paired = Principal::Account {
+        account_id: 1,
+        role: "device".into(),
+        profile_id: None,
+        session_id: Some(tv_sid.clone()),
+    };
+    assert!(paired.validate_scope(&db).is_ok());
+    let promoted = Principal::Account {
+        account_id: 1,
+        role: "owner".into(),
+        profile_id: None,
+        session_id: Some(tv_sid),
+    };
+    assert!(promoted.validate_scope(&db).is_err());
+}
+#[test]
 fn recovery_codes_regenerate_and_invalidate_the_previous_code() {
     let db = db();
     let (claimed, _) = claim(&db);

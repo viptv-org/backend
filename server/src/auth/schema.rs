@@ -52,7 +52,7 @@ fn init_schema(db: &Connection) -> rusqlite::Result<()> {
 CREATE TABLE IF NOT EXISTS auth_accounts(id INTEGER PRIMARY KEY,username TEXT NOT NULL UNIQUE,name TEXT NOT NULL DEFAULT '',password_hash TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('owner','member')),recovery_hash TEXT NOT NULL,disabled INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS auth_one_owner ON auth_accounts(role) WHERE role='owner';
 CREATE TABLE IF NOT EXISTS auth_profiles(account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,PRIMARY KEY(account_id,profile_id));
-CREATE TABLE IF NOT EXISTS auth_sessions(id TEXT PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,access_hash TEXT NOT NULL UNIQUE,refresh_hash TEXT NOT NULL UNIQUE,csrf_hash TEXT NOT NULL,profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,kind TEXT NOT NULL,device_name TEXT NOT NULL,access_expires INTEGER NOT NULL,refresh_expires INTEGER NOT NULL,created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS auth_sessions(id TEXT PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,access_hash TEXT NOT NULL UNIQUE,refresh_hash TEXT NOT NULL UNIQUE,csrf_hash TEXT NOT NULL,profile_id INTEGER REFERENCES profiles(id) ON DELETE SET NULL,kind TEXT NOT NULL,origin TEXT,device_name TEXT NOT NULL,access_expires INTEGER NOT NULL,refresh_expires INTEGER NOT NULL,created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS auth_csrf_tokens(session_id TEXT NOT NULL REFERENCES auth_sessions(id) ON DELETE CASCADE,csrf_hash TEXT NOT NULL,expires INTEGER NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(session_id,csrf_hash));
 CREATE TABLE IF NOT EXISTS auth_pairings(code_hash TEXT PRIMARY KEY,device_hash TEXT NOT NULL UNIQUE,device_name TEXT NOT NULL,account_id INTEGER REFERENCES auth_accounts(id) ON DELETE CASCADE,profile_id INTEGER REFERENCES profiles(id) ON DELETE CASCADE,expires INTEGER NOT NULL,denied INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS auth_pairing_profiles(code_hash TEXT NOT NULL REFERENCES auth_pairings(code_hash) ON DELETE CASCADE,profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,PRIMARY KEY(code_hash,profile_id));
@@ -77,6 +77,13 @@ CREATE TABLE IF NOT EXISTS auth_events(id INTEGER PRIMARY KEY,kind TEXT NOT NULL
         db.execute_batch(
             "ALTER TABLE auth_pairings ADD COLUMN denied INTEGER NOT NULL DEFAULT 0;",
         )?;
+    }
+    let session_columns = db
+        .prepare("PRAGMA table_info(auth_sessions)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !session_columns.iter().any(|column| column == "origin") {
+        db.execute_batch("ALTER TABLE auth_sessions ADD COLUMN origin TEXT;")?;
     }
     let has_name = db
         .prepare("PRAGMA table_info(auth_accounts)")?

@@ -220,7 +220,7 @@ impl ResourceLease {
                     WHEN NOT EXISTS(SELECT 1 FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id
                         WHERE s.id=?1 AND s.account_id=?2 AND s.profile_id IS ?3
                           AND s.refresh_expires>?4 AND a.disabled=0
-                          AND ((?5='device' AND s.kind='device') OR (?5=a.role AND s.kind='browser')))
+                          AND ((?5='device' AND s.kind='device' AND COALESCE(s.origin,'tv')<>'native') OR (?5=a.role AND (s.kind='browser' OR (s.kind='device' AND s.origin='native')))))
                         THEN 'scope'
                     WHEN NOT (?3 IS NULL OR EXISTS(SELECT 1 FROM profile_owners o JOIN profiles p ON p.id=o.profile_id
                         WHERE o.account_id=?2 AND o.profile_id=?3 AND p.presentation_complete=1))

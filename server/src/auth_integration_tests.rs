@@ -3294,6 +3294,19 @@ fn secondary_session(a: &App, id: &str, account: i64, kind: &str) -> String {
     token
 }
 
+fn native_session(a: &App, id: &str, account: i64) -> String {
+    let token = format!("{id}-token");
+    let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
+    a.db.lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,kind,origin,device_name,access_expires,refresh_expires,created_at) VALUES(?1,?2,?3,?4,'unused','device','native','Fixture phone',?5,?5,0)",
+            params![id, account, hash, format!("{id}-refresh"), util::now() + 3600],
+        )
+        .unwrap();
+    token
+}
+
 struct Guarded {
     method: &'static str,
     path: String,
@@ -3441,4 +3454,71 @@ async fn account_credentials_are_self_service_for_account_sessions() {
     let (status, error) = request(&a, "member-token-2", "DELETE", "/api/auth/account", json!({"username":"member1","password":"wrong-password"})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(error["error_code"], "account_delete_rejected");
+}
+
+#[tokio::test]
+async fn native_account_sessions_manage_devices_and_the_household_pin_by_role() {
+    let a = fixture();
+    let native_owner = native_session(&a, "native-owner", 1);
+    let native_member = native_session(&a, "native-member", 2);
+    let tv = secondary_session(&a, "paired-tv", 1, "device");
+    let legacy = secondary_session(&a, "legacy-device", 1, "device");
+    let account_devices = [
+        (native_owner.as_str(), "1"),
+        (native_member.as_str(), "2"),
+        ("member-token-1", "1"),
+        ("member-token-2", "2"),
+    ];
+    for token in [tv.as_str(), legacy.as_str()] {
+        let (status, error) = request(&a, token, "GET", "/api/account/devices", Value::Null).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{token}");
+        assert_eq!(error["error_code"], "account_session_required", "{token}");
+    }
+    for (token, account) in account_devices {
+        let (status, devices) = request(&a, token, "GET", "/api/account/devices", Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{token} {devices}");
+        assert_eq!(devices["account"]["id"], account, "{token}");
+        assert!(
+            devices["devices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|device| device["current"] == true),
+            "{token}"
+        );
+    }
+    let pin = json!({"pin":"7248","current_pin":"7248"});
+    for (token, expected) in [
+        (tv.as_str(), "account_session_required"),
+        (legacy.as_str(), "account_session_required"),
+        (native_member.as_str(), "owner_required"),
+        ("member-token-2", "owner_required"),
+    ] {
+        let (status, error) = request(&a, token, "PUT", "/api/parent/pin", pin.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{token}");
+        assert_eq!(error["error_code"], expected, "{token}");
+    }
+    for token in [native_owner.as_str(), "member-token-1"] {
+        let (status, reply) = request(&a, token, "PUT", "/api/parent/pin", pin.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{token} {reply}");
+        assert_eq!(reply["pin_configured"], true, "{token}");
+    }
+    for (token, expected) in [
+        (tv.as_str(), false),
+        (legacy.as_str(), false),
+        (native_owner.as_str(), true),
+        (native_member.as_str(), true),
+        ("member-token-1", true),
+        ("member-token-2", true),
+    ] {
+        let (status, me) = request(&a, token, "GET", "/api/auth/me", Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{token} {me}");
+        assert_eq!(me["capabilities"]["manage_account"], expected, "{token} {me}");
+    }
+    let (status, error) = request(&a, &tv, "PATCH", "/api/addons/10", json!({"enabled":false})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "account_session_required");
+    let (status, error) = request(&a, &native_member, "PATCH", "/api/addons/10", json!({"enabled":false})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
 }

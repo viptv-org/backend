@@ -164,6 +164,16 @@ pub(crate) fn session(
     kind: &str,
     name: &str,
 ) -> Result<(Value, Option<(String, String)>), ApiError> {
+    session_from(db, id, profile, kind, name, if kind == "device" { Some("tv") } else { None })
+}
+pub(crate) fn session_from(
+    db: &Connection,
+    id: i64,
+    profile: Option<i64>,
+    kind: &str,
+    name: &str,
+    origin: Option<&str>,
+) -> Result<(Value, Option<(String, String)>), ApiError> {
     let (a, r, c) = (token(), token(), token());
     let sid = Uuid::new_v4().to_string();
     db.execute(
@@ -233,7 +243,7 @@ pub(crate) fn session(
         ));
     }
     db.execute(
-        "INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,profile_id,kind,device_name,access_expires,refresh_expires,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        "INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,profile_id,kind,origin,device_name,access_expires,refresh_expires,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![
             sid,
             id,
@@ -242,6 +252,7 @@ pub(crate) fn session(
             hash(&c),
             profile,
             kind,
+            origin,
             name,
             now() + ACCESS,
             if kind == "device" { DEVICE_EXPIRY } else { now() + REFRESH },

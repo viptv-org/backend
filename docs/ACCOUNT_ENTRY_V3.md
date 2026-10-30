@@ -6,7 +6,7 @@ These are the existing local account/password and recovery-code contracts. They 
 
 Use the browser's Secure/HttpOnly/SameSite session cookies. Public register/login/recover calls require the pinned HTTPS Origin. `GET /api/auth/status` returns `registration_enabled`, `authenticated` and `csrf_token`; authenticated cookie mutations use that CSRF token. Status can report authenticated when the refresh cookie remains valid after access expiry. In that case refresh before relying on `/api/auth/me`.
 
-`GET /api/auth/me` returns the account `{id,username,name,role}`, selected `profile_id`, owned profiles, profile-management flags and CSRF token. Account-only entry and TV approval do not require Home/catalog/profile metadata requests.
+`GET /api/auth/me` returns the account `{id,username,name,role}`, selected `profile_id`, owned profiles, profile-management flags, `capabilities.manage_account` and CSRF token. `manage_account` is true for a browser or native sign-in session and false for a paired TV, so a client no longer infers that from the platform. Account-only entry and TV approval do not require Home/catalog/profile metadata requests.
 
 ## Registration and recovery
 
@@ -37,13 +37,13 @@ Usernames are trimmed/lowercased ASCII alphanumeric strings with `.`, `_`, `-`, 
 
 Capture and present the replacement recovery kit immediately after a successful register/recover response, before optional bootstrap requests. If bootstrap fails, retain the one-time kit in memory and retry bootstrap, rather than replaying the account mutation. Passwords and recovery codes must not enter preference/session storage, logs, analytics or diagnostic `toString()` output. Acknowledge the recovery kit before moving on.
 
-Recovery retains profiles, saved titles and watch progress. The old password, used recovery code and old session families must fail afterward. A paired app cannot administer account entry through its restricted device role.
+Recovery retains profiles, saved titles and watch progress. The old password, used recovery code and old session families must fail afterward. A paired TV cannot administer account entry through its restricted device role; a native sign-in session acts for its own account and can change its password or regenerate its recovery code.
 
 ## First profile and parent administration
 
 A new member has no profile. `GET /api/v3/profiles` and `POST /api/v3/profiles {name,avatar_style?,avatar_choice?}` (legacy `avatar_id?` still accepted) work with an account-only session. Create/select a real profile before media requests. Profile selection is `POST /api/auth/profile {profile_id}`. Existing onboarding state is available through `/api/auth/setup`; its accepted fields are household_name, timezone, language, completed, step and profile_id.
 
-Household configuration is owner-only: the household PIN (`PUT /api/v3/parent/pin`), add-ons, IPTV connections and matches, gateways, source integrations and signing other devices out answer `403 owner_required` to a member session and `403 account_session_required` to a paired device. Profile and parental-policy routes stay with any browser account session. Parent operations are:
+Household configuration is owner-only: the household PIN (`PUT /api/v3/parent/pin`), add-ons, IPTV connections and matches, gateways, source integrations and signing other devices out answer `403 owner_required` to a member session and `403 account_session_required` to a paired TV. A native sign-in session counts as an account session and follows the same owner/member rules, so a native owner may change the household PIN while a native member gets `403 owner_required`. Profile and parental-policy routes stay with any account session. Parent operations are:
 
 - `GET /api/v3/parent/status` → `{pin_configured,unlocked,restricted,leave_pin_configured}`.
 - `POST /api/v3/parent/unlock {pin}` → a session-bound, one-shot grant lasting 120 seconds. Wrong PIN is 403; five failures trigger a five-minute lockout (429).
