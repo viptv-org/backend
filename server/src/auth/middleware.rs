@@ -18,8 +18,13 @@ pub(crate) fn auth_error_with_retry(error: ApiError, retry_after: Option<i64>) -
         "parent_required"
     } else if error.1 == "Refresh token reuse detected" {
         "refresh_reuse"
-    } else if let Some(code @ (MSG_AUTHORIZATION_PENDING | MSG_ACCESS_DENIED | MSG_EXPIRED_TOKEN)) =
-        error.api_error_code()
+    } else if let Some(
+        code @ (MSG_AUTHORIZATION_PENDING
+        | MSG_ACCESS_DENIED
+        | MSG_EXPIRED_TOKEN
+        | MSG_PASSWORD_INCORRECT
+        | MSG_PASSWORD_TOO_SHORT),
+    ) = error.api_error_code()
     {
         code
     } else {
@@ -300,6 +305,8 @@ pub fn router() -> Router<App> {
         "login",
         "refresh",
         "recover",
+        "password",
+        "recovery-codes",
         "logout",
         "profile",
         "device/login",

@@ -15,6 +15,8 @@ Use the browser's Secure/HttpOnly/SameSite session cookies. Public register/logi
 | `POST /api/auth/register` | `{username,name?,password}` | New member browser session, `profile_id:null`, `profiles:[]`, one-time `recovery_code` and single-element `recovery_codes` |
 | `POST /api/auth/login` | `{username,password}` | Browser session; no recovery code is disclosed |
 | `POST /api/auth/recover` | `{username,recovery_code,password}` | Replaces the password and recovery code, revokes old account sessions and approved pairings, creates a new browser session |
+| `POST /api/auth/password` | `{current_password,new_password}` | Verifies the current password, replaces the hash after the register length rule, keeps this session and the other sessions signed in, and returns a fresh `csrf_token`; a wrong current password is 400 `password_incorrect`, a short new password 400 `password_too_short` |
+| `POST /api/auth/recovery-codes` | `{}` | Replaces the account's one-time recovery code and returns it once in `recovery_codes`; the previous code stops working |
 
 A normalized response example uses synthetic values only:
 
@@ -48,7 +50,7 @@ Any browser member manages its own household; the household-manager check exclud
 - `PUT /api/v3/parent/pin {pin,current_pin?}` sets/rotates the PIN; an empty new PIN removes it only when no kids profiles remain. PINs contain 4–8 ASCII digits. Rotation/removal requires the current PIN and clears grants.
 - `GET/PUT /api/profiles/:id/kids` reads/changes `{enabled,max_age}`. Age ceilings are integers 0–17. Enabling requires a configured account PIN. Ownership and parent restrictions apply, policy revision changes invalidate old media leases, and the client must refresh selected-profile content.
 
-Selecting another profile consumes an unlock grant. There is no authenticated account-name/password editing API, email-delivery API, or forgotten-parent-PIN reset contract in this slice; do not present those operations as completed.
+Selecting another profile consumes an unlock grant. An authenticated account session can change its own password and regenerate its recovery code, but there is no account-name editing API, email-delivery API, or forgotten-parent-PIN reset contract in this slice; do not present those operations as completed.
 
 The v3 profile-management projection preserves `kids` as a JSON boolean and returns the actual integer `max_age` alongside it. This is not a nested policy object. Older servers may omit `max_age`; clients should represent an unknown ceiling instead of fabricating one. A regression checks ordinary-profile `false/12` and an actual configured kids policy `true/7`.
 

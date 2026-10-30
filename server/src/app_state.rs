@@ -20,6 +20,9 @@ pub(crate) const MSG_PROFILE_POLICY_CHANGED: &str = "Profile policy changed";
 pub(crate) const MSG_AUTHORIZATION_PENDING: &str = "authorization_pending";
 pub(crate) const MSG_ACCESS_DENIED: &str = "access_denied";
 pub(crate) const MSG_EXPIRED_TOKEN: &str = "expired_token";
+pub(crate) const MSG_PASSWORD_INCORRECT: &str = "That password is not correct.";
+pub(crate) const MSG_PASSWORD_TOO_SHORT: &str =
+    "New password must contain at least 12 characters";
 impl ApiError {
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
@@ -35,6 +38,8 @@ impl ApiError {
             MSG_AUTHORIZATION_PENDING => Some(MSG_AUTHORIZATION_PENDING),
             MSG_ACCESS_DENIED => Some(MSG_ACCESS_DENIED),
             MSG_EXPIRED_TOKEN => Some(MSG_EXPIRED_TOKEN),
+            MSG_PASSWORD_INCORRECT => Some("password_incorrect"),
+            MSG_PASSWORD_TOO_SHORT => Some("password_too_short"),
             "Provider connection limit reached" => Some("provider_connection_limit"),
             _ => None,
         }

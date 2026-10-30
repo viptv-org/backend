@@ -14,11 +14,7 @@ pub(crate) fn identifier(v: &Value, key: &str) -> Result<i64, ApiError> {
         .and_then(|value| value.as_i64().or_else(|| value.as_str()?.parse().ok()))
         .ok_or_else(|| ApiError::from(format!("Invalid {key}")))
 }
-fn password(v: &Value) -> Result<String, ApiError> {
-    let p = field(v, "password", 256)?;
-    if p.len() < 12 {
-        return Err("Password must contain at least 12 characters".into());
-    }
+fn hash_password(p: &str) -> Result<String, ApiError> {
     Argon2::default()
         .hash_password(p.as_bytes(), &SaltString::generate(&mut OsRng))
         .map(|v| v.to_string())
@@ -28,6 +24,23 @@ fn password(v: &Value) -> Result<String, ApiError> {
                 "Password hashing failed".into(),
             )
         })
+}
+fn password(v: &Value) -> Result<String, ApiError> {
+    let p = field(v, "password", 256)?;
+    if p.len() < 12 {
+        return Err("Password must contain at least 12 characters".into());
+    }
+    hash_password(p)
+}
+fn new_password(v: &Value) -> Result<String, ApiError> {
+    let p = field(v, "new_password", 256)?;
+    if p.len() < 12 {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            MSG_PASSWORD_TOO_SHORT.into(),
+        ));
+    }
+    hash_password(p)
 }
 pub fn create_owner_offline(
     db: &mut Connection,
@@ -310,29 +323,58 @@ pub(crate) fn login_snapshot(
     db: &Connection,
     path: &str,
     v: &Value,
+    account_id: Option<i64>,
 ) -> Result<Option<String>, ApiError> {
-    if !matches!(path, "/auth/login" | "/auth/device/login") {
-        return Ok(None);
-    }
-    db.query_row(
-        "SELECT password_hash FROM auth_accounts WHERE username=?1 AND disabled=0",
-        [username(v)?],
-        |r| r.get(0),
-    )
-    .optional()
-    .map_err(crate::db_error)
+    let hash = match path {
+        "/auth/login" | "/auth/device/login" => db
+            .query_row(
+                "SELECT password_hash FROM auth_accounts WHERE username=?1 AND disabled=0",
+                [username(v)?],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(crate::db_error)?,
+        "/auth/password" => account_id
+            .map(|id| {
+                db.query_row(
+                    "SELECT password_hash FROM auth_accounts WHERE id=?1 AND disabled=0",
+                    [id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(crate::db_error)
+            })
+            .transpose()?
+            .flatten(),
+        _ => None,
+    };
+    Ok(hash)
 }
 pub(crate) fn prepare_auth(
     path: &str,
     v: &Value,
     login_hash: Option<String>,
 ) -> Result<PreparedAuth, ApiError> {
-    let needs_hash = matches!(path, "/auth/register" | "/auth/recover");
-    let new_hash = if needs_hash { Some(password(v)?) } else { None };
-    let login_valid = if matches!(path, "/auth/login" | "/auth/device/login") {
+    let new_hash = match path {
+        "/auth/register" | "/auth/recover" => Some(password(v)?),
+        "/auth/password" => Some(new_password(v)?),
+        _ => None,
+    };
+    let login_valid = if matches!(
+        path,
+        "/auth/login" | "/auth/device/login" | "/auth/password"
+    ) {
         const DUMMY:&str="$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQxMjM0NTY3OA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
         let phc = login_hash.as_deref().unwrap_or(DUMMY);
-        let candidate = field(v, "password", 256)?;
+        let candidate = field(
+            v,
+            if path == "/auth/password" {
+                "current_password"
+            } else {
+                "password"
+            },
+            256,
+        )?;
         let valid = PasswordHash::new(phc).ok().is_some_and(|p| {
             Argon2::default()
                 .verify_password(candidate.as_bytes(), &p)
@@ -353,6 +395,8 @@ pub(crate) fn endpoint_global_limit(path: &str) -> i64 {
         "/auth/register" => 100,
         "/auth/login" | "/auth/device/login" => 600,
         "/auth/recover" => 100,
+        "/auth/password" => 100,
+        "/auth/recovery-codes" => 100,
         "/auth/device/code" => 120,
         "/auth/device/token" | "/auth/device/lookup" => 600,
         "/auth/refresh" | "/auth/device/refresh" => 1_200,
