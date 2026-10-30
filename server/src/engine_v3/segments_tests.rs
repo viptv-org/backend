@@ -194,8 +194,7 @@ async fn an_upstream_failure_reports_no_segments_and_backs_off() {
 }
 
 #[tokio::test]
-async fn an_anime_episode_asks_for_its_mal_release_episode_and_serves_both_segments() {
-    let (mut app, stack_task) = stack().await;
+async fn an_anime_episode_asks_for_its_mal_release_episode_and_serves_both_segments() {    let (mut app, stack_task) = stack().await;
     let source = source(fixture_rows()).await;
     app.segments = Arc::new(Service::fixture(&source.base));
     let card = episode_card(3, 22);
@@ -212,5 +211,26 @@ async fn an_anime_episode_asks_for_its_mal_release_episode_and_serves_both_segme
         json!({"segments":[]})
     );
     assert_eq!(answer(&app, &lease(), None).await, json!({"segments":[]}));
+    stack_task.abort();
+}
+
+#[tokio::test]
+async fn an_episode_card_whose_own_ids_are_opaque_uses_its_parent_show() {
+    let (mut app, stack_task) = stack().await;
+    let source = source(fixture_rows()).await;
+    app.segments = Arc::new(Service::fixture(&source.base));
+    let mut card = episode_card(3, 22);
+    card.identity.ids = vec![viptv_engine::identity::ExternalId {
+        namespace: "opaque".into(),
+        value: "release-1x10".into(),
+    }];
+    assert_eq!(target(&app, &lease(), &card).await, Some((38524, 10)));
+    assert_eq!(
+        answer(&app, &lease(), Some(&card)).await,
+        json!({"segments":[
+            {"kind":"intro","start_ms":310571,"end_ms":400571},
+            {"kind":"credits","start_ms":1290000,"end_ms":1380000}
+        ]})
+    );
     stack_task.abort();
 }
