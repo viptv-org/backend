@@ -10,6 +10,16 @@ pub(crate) fn unauthorized() -> ApiError {
 pub(crate) fn forbidden() -> ApiError {
     ApiError(StatusCode::FORBIDDEN, "Forbidden".into())
 }
+// Compared by value: a &str const pattern matches the reference, not the text.
+const EXPOSED_CODES: [&str; 7] = [
+    MSG_AUTHORIZATION_PENDING,
+    MSG_ACCESS_DENIED,
+    MSG_EXPIRED_TOKEN,
+    CODE_ACCOUNT_DELETE_REJECTED,
+    CODE_PARENT_PIN_INCORRECT,
+    CODE_LAST_OWNER,
+    CODE_ACCOUNT_SESSION_REQUIRED,
+];
 pub(crate) fn auth_error(error: ApiError) -> Response {
     auth_error_with_retry(error, None)
 }
@@ -18,8 +28,9 @@ pub(crate) fn auth_error_with_retry(error: ApiError, retry_after: Option<i64>) -
         "parent_required"
     } else if error.1 == "Refresh token reuse detected" {
         "refresh_reuse"
-    } else if let Some(code @ (MSG_AUTHORIZATION_PENDING | MSG_ACCESS_DENIED | MSG_EXPIRED_TOKEN)) =
-        error.api_error_code()
+    } else if let Some(code) = error
+        .api_error_code()
+        .filter(|code| EXPOSED_CODES.contains(code))
     {
         code
     } else {
@@ -321,6 +332,7 @@ pub fn router() -> Router<App> {
         r = r.route(&format!("/device/{p}"), post(action));
     }
     r.route("/auth/sessions", get(info).delete(remove))
+        .route("/auth/account", delete(action))
         .route("/devices", get(info))
         .route("/devices/:id", axum::routing::delete(remove))
         .route("/admin/devices", get(info))

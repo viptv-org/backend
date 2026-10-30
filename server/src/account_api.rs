@@ -246,7 +246,7 @@ fn details(code: &str) -> (StatusCode, &'static str) {
             ),
             "account_session_required" => (
                 StatusCode::FORBIDDEN,
-                "Manage account settings from an account session, not a paired TV.",
+                crate::app_state::MSG_ACCOUNT_SESSION_REQUIRED,
             ),
             _ => (
                 StatusCode::SERVICE_UNAVAILABLE,
