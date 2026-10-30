@@ -1756,6 +1756,9 @@ mod discovery_cancel_tests;
 #[path = "playback_caption_tests.rs"]
 mod caption_tests;
 
+#[path = "playback_segment_tests.rs"]
+mod segment_tests;
+
 #[path = "playback_required_audio_tests.rs"]
 mod required_audio_tests;
 

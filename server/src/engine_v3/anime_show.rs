@@ -90,7 +90,6 @@ impl AnimeShow {
         self.tvdb_episode(release)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn release_episode(&self, tvdb: TvdbEpisode) -> Option<ReleaseEpisode> {
         if tvdb.episode == 0 {
             return None;

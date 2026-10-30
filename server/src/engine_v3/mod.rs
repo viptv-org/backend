@@ -52,6 +52,9 @@ pub(crate) mod watched;
 mod watched_tests;
 pub(crate) mod source_ranking;
 pub(crate) mod subtitles;
+pub(crate) mod segments;
+#[cfg(test)]
+mod segments_tests;
 pub(crate) use catalog::{detail, discover};
 #[cfg(test)]
 mod history_tests;

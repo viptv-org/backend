@@ -245,6 +245,10 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
                     post(gateway::playback::attach_subtitle),
                 )
                 .route(
+                    "/playback/:id/segments",
+                    get(gateway::playback::skip_segments),
+                )
+                .route(
                     "/playback/:id/first-frame",
                     post(gateway::playback::first_frame),
                 )
