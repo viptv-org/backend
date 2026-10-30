@@ -69,12 +69,16 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
         )
         .route(
             "/profiles/:id/pin",
-            get(engine_v3::profiles::pin_status).put(engine_v3::profiles::unsupported_pin),
+            get(kids::profile_pin::status).put(kids::profile_pin::set),
         )
         .route("/parent/search", get(engine_v3::search::parent))
         .route(
             "/profiles/:id/approvals",
             get(kids::titles::list).post(kids::titles::approve),
+        )
+        .route(
+            "/profiles/:id/blocked",
+            get(kids::blocked::list).post(kids::blocked::set),
         )
         .route("/parent/status", get(kids::status))
         .route("/parent/unlock", post(kids::unlock))

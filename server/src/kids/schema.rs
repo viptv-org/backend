@@ -1,13 +1,44 @@
 use super::*;
 
+fn add_column(
+    db: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> rusqlite::Result<()> {
+    let present: bool = db.query_row(
+        &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}')WHERE name='{column}')"),
+        [],
+        |r| r.get(0),
+    )?;
+    if !present {
+        db.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))?;
+    }
+    Ok(())
+}
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     super::scoped::init(db)?;
-    db.execute_batch("CREATE TABLE IF NOT EXISTS kids_profiles(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,max_age INTEGER NOT NULL DEFAULT 12,revision INTEGER NOT NULL DEFAULT 0);
+    db.execute_batch("CREATE TABLE IF NOT EXISTS kids_profiles(profile_id INTEGER PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,enabled INTEGER NOT NULL DEFAULT 0,max_age INTEGER NOT NULL DEFAULT 12,movie_rating TEXT,movie_age INTEGER,series_rating TEXT,series_age INTEGER,allow_unrated INTEGER NOT NULL DEFAULT 0,leave_pin_hash TEXT,leave_failures INTEGER NOT NULL DEFAULT 0,leave_blocked_until INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS parent_controls(account_id INTEGER PRIMARY KEY REFERENCES auth_accounts(id) ON DELETE CASCADE,pin_hash TEXT NOT NULL,failures INTEGER NOT NULL DEFAULT 0,blocked_until INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS parent_grants(session_id TEXT PRIMARY KEY REFERENCES auth_sessions(id) ON DELETE CASCADE,expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS kids_media(account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,kind TEXT NOT NULL,id TEXT NOT NULL,parent_id TEXT NOT NULL,metadata TEXT NOT NULL,age INTEGER,conflict INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,kind,id));
     CREATE TABLE IF NOT EXISTS kids_ambiguous(account_id INTEGER NOT NULL REFERENCES auth_accounts(id) ON DELETE CASCADE,kind TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(account_id,kind,id));
-    CREATE TABLE IF NOT EXISTS kids_approvals(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,kind TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(profile_id,kind,id));")?;
+    CREATE TABLE IF NOT EXISTS kids_approvals(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,kind TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(profile_id,kind,id));
+    CREATE TABLE IF NOT EXISTS kids_blocked(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,kind TEXT NOT NULL,id TEXT NOT NULL,name TEXT,poster TEXT,blocked_at INTEGER NOT NULL,PRIMARY KEY(profile_id,kind,id));")?;
+    for (column, definition) in [
+        ("movie_rating", "TEXT"),
+        ("movie_age", "INTEGER"),
+        ("series_rating", "TEXT"),
+        ("series_age", "INTEGER"),
+        ("allow_unrated", "INTEGER NOT NULL DEFAULT 0"),
+        ("leave_pin_hash", "TEXT"),
+        ("leave_failures", "INTEGER NOT NULL DEFAULT 0"),
+        ("leave_blocked_until", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        add_column(db, "kids_profiles", column, definition)?;
+    }
     Ok(())
 }
 pub(super) fn forbidden() -> ApiError {
@@ -110,20 +141,44 @@ pub(super) fn manager(
 }
 pub(crate) fn profile_fields(db: &Connection, id: i64) -> Result<Value, ApiError> {
     db.query_row(
-        "SELECT enabled,max_age FROM kids_profiles WHERE profile_id=?1",
+        "SELECT enabled,max_age,movie_rating,series_rating,allow_unrated FROM kids_profiles WHERE profile_id=?1",
         [id],
-        |r| Ok(json!({"enabled":r.get::<_,bool>(0)?,"max_age":r.get::<_,i64>(1)?})),
+        |r| Ok(json!({"enabled":r.get::<_,bool>(0)?,"max_age":r.get::<_,i64>(1)?,"movie_rating":r.get::<_,Option<String>>(2)?,"series_rating":r.get::<_,Option<String>>(3)?,"allow_unrated":r.get::<_,bool>(4)?})),
     )
     .optional()
     .map_err(db_error)
-    .map(|v| v.unwrap_or(json!({"enabled":false,"max_age":12})))
+    .map(|value| {
+        let mut fields = value.unwrap_or(json!({"enabled":false,"max_age":12,"movie_rating":null,"series_rating":null,"allow_unrated":false}));
+        fields["ratings"] = limits::mapping();
+        fields
+    })
 }
 pub(crate) async fn status(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
 ) -> ApiResult {
     let app = app.with_lease(lease);
-    blocking(move||{let db=app.db.lock().unwrap();app.request_lease().validate(&db)?;let p=app.identity();let configured:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM parent_controls WHERE account_id=?1)",[p.account_id()],|r|r.get(0)).map_err(db_error)?;Ok(axum::Json(json!({"pin_configured":configured,"unlocked":unlocked(&db,&p)?,"restricted":restricted(&db,&p)?})))}).await
+    blocking(move || {
+        let db = app.db.lock().unwrap();
+        app.request_lease().validate(&db)?;
+        let p = app.identity();
+        let configured: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM parent_controls WHERE account_id=?1)",
+                [p.account_id()],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        let leave_pin = match &p {
+            auth::Principal::Account {
+                profile_id: Some(profile),
+                ..
+            } => profile_pin::stored(&db, *profile)?.is_some(),
+            _ => false,
+        };
+        Ok(axum::Json(json!({"pin_configured":configured,"unlocked":unlocked(&db,&p)?,"restricted":restricted(&db,&p)?,"leave_pin_configured":leave_pin})))
+    })
+    .await
 }
 
 pub(crate) async fn get_policy(
@@ -149,10 +204,15 @@ pub(crate) async fn set_policy(
     let app = app.with_lease(lease);
     blocking(move||{let mut db=app.db.lock().unwrap();let tx=db.transaction().map_err(db_error)?;app.request_lease().validate(&tx)?;let account=manager(&tx,&app.identity(),Some(id))?;
         let enabled=value["enabled"].as_bool().ok_or("Invalid kids setting")?;let age=value["max_age"].as_i64().filter(|v|(0..=17).contains(v)).ok_or("Age ceiling must be between 0 and 17")?;
+        let current=profile_fields(&tx,id)?;
+        let movie=limits::movie(value.get("movie_rating"),&current["movie_rating"])?;
+        let series=limits::series(value.get("series_rating"),&current["series_rating"])?;
+        let unrated=match value.get("allow_unrated"){None=>current["allow_unrated"].as_bool().unwrap_or(false),Some(v)=>v.as_bool().ok_or("Invalid unrated titles setting")?};
         if enabled {let configured:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM parent_controls WHERE account_id=?1)",[account],|r|r.get(0)).map_err(db_error)?;if !configured{return Err(ApiError(StatusCode::CONFLICT,"Set a parent PIN before enabling a kids profile".into()));}}
-        tx.execute("INSERT INTO kids_profiles(profile_id,enabled,max_age,revision) VALUES(?1,?2,?3,1) ON CONFLICT(profile_id) DO UPDATE SET enabled=excluded.enabled,max_age=excluded.max_age,revision=kids_profiles.revision+1",params![id,enabled,age]).map_err(db_error)?;
+        tx.execute("INSERT INTO kids_profiles(profile_id,enabled,max_age,movie_rating,movie_age,series_rating,series_age,allow_unrated,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1) ON CONFLICT(profile_id) DO UPDATE SET enabled=excluded.enabled,max_age=excluded.max_age,movie_rating=excluded.movie_rating,movie_age=excluded.movie_age,series_rating=excluded.series_rating,series_age=excluded.series_age,allow_unrated=excluded.allow_unrated,revision=kids_profiles.revision+1",params![id,enabled,age,movie.as_ref().map(|v|v.0.clone()),movie.as_ref().map(|v|v.1),series.as_ref().map(|v|v.0.clone()),series.as_ref().map(|v|v.1),unrated]).map_err(db_error)?;
         tx.execute("DELETE FROM parent_grants WHERE session_id IN(SELECT id FROM auth_sessions WHERE profile_id=?1)",[id]).map_err(db_error)?;
-        tx.commit().map_err(db_error)?;Ok(axum::Json(json!({"enabled":enabled,"max_age":age})))
+        let fields=profile_fields(&tx,id)?;
+        tx.commit().map_err(db_error)?;Ok(axum::Json(fields))
     }).await
 }
 

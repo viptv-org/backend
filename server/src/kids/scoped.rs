@@ -111,6 +111,9 @@ fn permitted(db: &Connection, p: &auth::Principal, card: &Card) -> Result<bool, 
     };
     let origin = card.metadata_origin.as_ref().ok_or_else(forbidden)?;
     let policy = key(card)?;
+    if super::blocked::card_blocked(db, p, card)? {
+        return Ok(false);
+    }
     let ambiguous:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM kids_origin_ambiguous WHERE account_id=?1 AND origin=?2 AND kind=?3 AND lookup_id=?4)",params![p.account_id(),origin_key(origin)?,card.identity.kind,card.identity.id],|r|r.get(0)).map_err(db_error)?;
     if ambiguous {
         return Ok(false);
@@ -127,7 +130,10 @@ fn permitted(db: &Connection, p: &auth::Principal, card: &Card) -> Result<bool, 
     if shared_identity(&canonical) && policy::allow_item(db, p, &canonical.kind, &canonical.id)? {
         return Ok(true);
     }
-    db.query_row("SELECT EXISTS(SELECT 1 FROM kids_origin_media m JOIN kids_profiles k ON k.profile_id=?1 JOIN kids_origin_media root ON root.account_id=m.account_id AND root.policy_key=m.parent_key AND root.policy_key=root.parent_key WHERE m.current=1 AND root.current=1 AND m.account_id=?2 AND m.origin=?3 AND m.kind=?4 AND m.lookup_id=?5 AND m.policy_key=?6 AND COALESCE(m.age,0)<18 AND COALESCE(root.age,0)<18 AND NOT EXISTS(SELECT 1 FROM kids_origin_media adult WHERE adult.account_id=m.account_id AND adult.policy_key IN(m.policy_key,m.parent_key) AND adult.age>=18) AND (EXISTS(SELECT 1 FROM kids_origin_approvals a WHERE a.profile_id=?1 AND a.policy_key=m.parent_key) OR (m.conflict=0 AND root.conflict=0 AND m.age<=k.max_age AND root.age<=k.max_age)))",params![profile,p.account_id(),origin_key(origin)?,card.identity.kind,card.identity.id,policy],|r|r.get(0)).map_err(db_error)
+    let ceiling = super::limits::ceiling("m.kind");
+    let unrated = super::limits::unrated_sql();
+    let age = super::limits::age_sql(&ceiling);
+    db.query_row(&format!("SELECT EXISTS(SELECT 1 FROM kids_origin_media m JOIN kids_profiles k ON k.profile_id=?1 JOIN kids_origin_media root ON root.account_id=m.account_id AND root.policy_key=m.parent_key AND root.policy_key=root.parent_key WHERE m.current=1 AND root.current=1 AND m.account_id=?2 AND m.origin=?3 AND m.kind=?4 AND m.lookup_id=?5 AND m.policy_key=?6 AND COALESCE(m.age,0)<18 AND COALESCE(root.age,0)<18 AND NOT EXISTS(SELECT 1 FROM kids_origin_media adult WHERE adult.account_id=m.account_id AND adult.policy_key IN(m.policy_key,m.parent_key) AND adult.age>=18) AND (EXISTS(SELECT 1 FROM kids_origin_approvals a WHERE a.profile_id=?1 AND a.policy_key=m.parent_key) OR ({unrated} AND {age})))"),params![profile,p.account_id(),origin_key(origin)?,card.identity.kind,card.identity.id,policy],|r|r.get(0)).map_err(db_error)
 }
 pub(crate) fn require_card_db(
     db: &Connection,
