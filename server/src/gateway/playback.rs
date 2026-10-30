@@ -34,7 +34,10 @@ mod captions;
 mod profile_preferences;
 #[path = "playback_view.rs"]
 mod viewing;
+#[path = "playback_segments.rs"]
+mod playback_segments;
 pub(crate) use captions::attach as attach_subtitle;
+pub(crate) use playback_segments::segments as skip_segments;
 
 const LEASE: Duration = Duration::from_secs(60);
 const REQUEST_QUOTA: usize = 4096;
