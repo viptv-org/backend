@@ -94,8 +94,11 @@ fn seed(app: &App, account: i64) {
         [profile],
     )
     .unwrap();
-    db.execute("INSERT INTO engine_library_revisions VALUES(?1,1)", [profile])
-        .unwrap();
+    db.execute(
+        "INSERT INTO engine_library_revisions VALUES(?1,1) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1",
+        [profile],
+    )
+    .unwrap();
     db.execute(
         "INSERT INTO engine_scoped_records VALUES(?1,'favorite','title','movie','tt1','tmdb','1','title','{}',0,0,1)",
         [profile],
@@ -275,7 +278,7 @@ fn seed(app: &App, account: i64) {
     )
     .unwrap();
     db.execute(
-        "INSERT INTO provider_match_revisions_v2 VALUES(?1,1)",
+        "INSERT INTO provider_match_revisions_v2 VALUES(?1,1) ON CONFLICT(account_id) DO UPDATE SET revision=revision+1",
         [account],
     )
     .unwrap();
@@ -317,7 +320,7 @@ fn seed(app: &App, account: i64) {
     )
     .unwrap();
     db.execute(
-        "INSERT INTO simkl_oauth_states VALUES(?1,?2,?3,?4,'member',1,1,?5)",
+        "INSERT INTO simkl_oauth_states(state_hash,profile_id,account_id,session_id,role,policy_revision,link_revision,expires) VALUES(?1,?2,?3,?4,'member',1,1,?5)",
         params![format!("state-{account}"), profile, account, format!("session-{account}"), now() + 60],
     )
     .unwrap();
@@ -471,7 +474,7 @@ async fn send(
     for (name, value) in headers {
         builder = builder.header(*name, value);
     }
-    let response = router(app.clone())
+    let response = crate::router(app.clone())
         .oneshot(
             builder
                 .body(if body.is_null() {

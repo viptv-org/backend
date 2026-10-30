@@ -135,7 +135,6 @@ fn delete_owned(tx: &Connection, snapshot: &Snapshot) -> Result<(), ApiError> {
         "DELETE FROM auth_events WHERE account_id=?1",
         "DELETE FROM addons WHERE account_id=?1",
         "DELETE FROM addon_config_revisions WHERE account_id=?1",
-        "DELETE FROM provider_match_revisions_v2 WHERE account_id=?1",
     ] {
         tx.execute(sql, [account]).map_err(crate::db_error)?;
     }
@@ -143,6 +142,8 @@ fn delete_owned(tx: &Connection, snapshot: &Snapshot) -> Result<(), ApiError> {
         tx.execute("DELETE FROM providers WHERE id=?1", [provider])
             .map_err(crate::db_error)?;
     }
+    tx.execute("DELETE FROM provider_match_revisions_v2 WHERE account_id=?1", [account])
+        .map_err(crate::db_error)?;
     tx.execute("DELETE FROM auth_accounts WHERE id=?1", [account])
         .map_err(crate::db_error)?;
     for profile in &snapshot.profiles {

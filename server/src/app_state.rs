@@ -27,6 +27,10 @@ pub(crate) const MSG_LAST_OWNER: &str =
 pub(crate) const MSG_ACCOUNT_CHANGED: &str = "This account changed. Try again.";
 pub(crate) const MSG_ACCOUNT_SESSION_REQUIRED: &str =
     "Manage account settings from an account session, not a paired TV.";
+pub(crate) const CODE_ACCOUNT_DELETE_REJECTED: &str = "account_delete_rejected";
+pub(crate) const CODE_PARENT_PIN_INCORRECT: &str = "parent_pin_incorrect";
+pub(crate) const CODE_LAST_OWNER: &str = "last_owner";
+pub(crate) const CODE_ACCOUNT_SESSION_REQUIRED: &str = "account_session_required";
 impl ApiError {
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
@@ -38,10 +42,10 @@ impl ApiError {
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),
             MSG_PARENT_PIN_INVALID => Some("parent_pin_invalid"),
-            MSG_PARENT_PIN_INCORRECT => Some("parent_pin_incorrect"),
-            MSG_ACCOUNT_DELETE_REJECTED => Some("account_delete_rejected"),
-            MSG_LAST_OWNER => Some("last_owner"),
-            MSG_ACCOUNT_SESSION_REQUIRED => Some("account_session_required"),
+            MSG_PARENT_PIN_INCORRECT => Some(CODE_PARENT_PIN_INCORRECT),
+            MSG_ACCOUNT_DELETE_REJECTED => Some(CODE_ACCOUNT_DELETE_REJECTED),
+            MSG_LAST_OWNER => Some(CODE_LAST_OWNER),
+            MSG_ACCOUNT_SESSION_REQUIRED => Some(CODE_ACCOUNT_SESSION_REQUIRED),
             MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
             MSG_AUTHORIZATION_PENDING => Some(MSG_AUTHORIZATION_PENDING),
             MSG_ACCESS_DENIED => Some(MSG_ACCESS_DENIED),
