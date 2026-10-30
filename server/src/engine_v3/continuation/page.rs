@@ -79,6 +79,13 @@ pub(crate) fn snapshot(
         let previous = item
             .get("previous_episode")
             .and_then(super::super::history::record);
+        // A finished movie has nothing left to continue; a corrected episode still stands at its row.
+        if rendered.identity.episode.is_none()
+            && rendered.position_millis == 0
+            && rendered.completed_at_millis.is_none()
+        {
+            continue;
+        }
         let status = state(&item, &rendered);
         let mut card = rendered.card();
         let mut record = if status == ContinuationStatus::Next {
