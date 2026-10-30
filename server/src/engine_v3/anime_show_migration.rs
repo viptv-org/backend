@@ -5,7 +5,6 @@ use viptv_engine::identity::{EpisodeCoordinates, ExternalId, MediaIdentity};
 
 const MAX_ROWS: usize = 20_000;
 
-/// Re-keys stored anime episodes and saved titles on the show identity.
 pub(crate) fn start(app: App) {
     tokio::spawn(async move {
         if let Err(error) = run(&app).await {
@@ -237,7 +236,6 @@ fn release_id(candidate: &str, context: &Value) -> Option<MediaIdentity> {
     Some(identity)
 }
 
-/// The release id of `<release>:<season>:<episode>`, which is how episode rows without a series id are keyed.
 fn title_of(id: &str) -> Option<String> {
     let parts: Vec<&str> = id.split(':').collect();
     let season = parts.get(parts.len().checked_sub(2)?)?;
