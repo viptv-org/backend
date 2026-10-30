@@ -683,7 +683,8 @@ pub(crate) fn correct_db(
         if duration > 0 {
             position = position.min(duration);
         }
-        let completed = watched || position.saturating_mul(100) >= duration.saturating_mul(95) && duration > 0;
+        let completed =
+            watched || (duration > 0 && position.saturating_mul(100) >= duration.saturating_mul(95));
         record.times_watched = record.times_watched.map(|n| match (was_completed, completed) {
             (false, true) => n.saturating_add(1),
             (true, false) => n.saturating_sub(1),

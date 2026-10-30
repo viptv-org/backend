@@ -79,7 +79,10 @@ async fn a_correction_overrides_the_engine_playback_record_for_every_read() {
     let queue = get(&app, "/api/profiles/1/continue").await;
     assert!(queue["entries"].as_array().unwrap().is_empty(), "{queue}");
 
-    correct(&app, json!({"id":"tt1000001","type":"movie","name":"Finished film","action":"unwatched"})).await;
+    let corrected = correct(&app, json!({"id":"tt1000001","type":"movie","name":"Finished film","action":"unwatched"})).await;
+    assert_eq!(corrected["position"], json!(0.0));
+    assert_eq!(corrected["duration"], json!(100.0));
+    assert_eq!(corrected["watched"], json!(false));
     let history = get(&app, "/api/profiles/1/history").await;
     assert_eq!(history[0]["position"], json!(0.0));
     assert_eq!(history[0]["duration"], json!(100.0));
@@ -95,7 +98,10 @@ async fn a_correction_overrides_the_engine_playback_record_for_every_read() {
     assert_eq!(unwatched["_current_completed"], json!(false));
     assert_eq!(unwatched["times_watched"], json!(0));
 
-    correct(&app, json!({"id":"tt1000001","type":"movie","name":"Finished film","action":"position","position":30})).await;
+    let corrected = correct(&app, json!({"id":"tt1000001","type":"movie","name":"Finished film","action":"position","position":30})).await;
+    assert_eq!(corrected["position"], json!(30.0));
+    assert_eq!(corrected["duration"], json!(100.0));
+    assert_eq!(corrected["watched"], json!(false));
     let history = get(&app, "/api/profiles/1/history").await;
     assert_eq!(history[0]["position"], json!(30.0));
     assert_eq!(history[0]["duration"], json!(100.0));
