@@ -20,6 +20,13 @@ pub(crate) const MSG_PROFILE_POLICY_CHANGED: &str = "Profile policy changed";
 pub(crate) const MSG_AUTHORIZATION_PENDING: &str = "authorization_pending";
 pub(crate) const MSG_ACCESS_DENIED: &str = "access_denied";
 pub(crate) const MSG_EXPIRED_TOKEN: &str = "expired_token";
+pub(crate) const MSG_ACCOUNT_DELETE_REJECTED: &str = "The username or password is not correct.";
+pub(crate) const MSG_PARENT_PIN_INCORRECT: &str = "The parent PIN is not correct.";
+pub(crate) const MSG_LAST_OWNER: &str =
+    "This is the server's last owner account. Create another owner before deleting it.";
+pub(crate) const MSG_ACCOUNT_CHANGED: &str = "This account changed. Try again.";
+pub(crate) const MSG_ACCOUNT_SESSION_REQUIRED: &str =
+    "Manage account settings from an account session, not a paired TV.";
 impl ApiError {
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
@@ -31,6 +38,10 @@ impl ApiError {
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),
             MSG_PARENT_PIN_INVALID => Some("parent_pin_invalid"),
+            MSG_PARENT_PIN_INCORRECT => Some("parent_pin_incorrect"),
+            MSG_ACCOUNT_DELETE_REJECTED => Some("account_delete_rejected"),
+            MSG_LAST_OWNER => Some("last_owner"),
+            MSG_ACCOUNT_SESSION_REQUIRED => Some("account_session_required"),
             MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
             MSG_AUTHORIZATION_PENDING => Some(MSG_AUTHORIZATION_PENDING),
             MSG_ACCESS_DENIED => Some(MSG_ACCESS_DENIED),
@@ -402,6 +413,25 @@ impl App {
             principal: self.identity(),
             session_id: None,
         })
+    }
+    pub(crate) fn release_resources(&self, owned: impl Fn(&auth::Principal) -> bool) {
+        let keys: Vec<String> = self
+            .resource_owners
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, owner)| owned(&owner.lease.principal))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in keys {
+            if let Some(job) = key.strip_prefix("job:") {
+                self.jobs.lock().unwrap().remove(job);
+            }
+            if let Some(stream) = key.strip_prefix("stream:") {
+                self.streams.lock().unwrap().remove(stream);
+            }
+            self.resource_owners.lock().unwrap().remove(&key);
+        }
     }
     pub(crate) fn own_resource(&self, kind: &str, id: &str) {
         self.resource_owners.lock().unwrap().insert(
