@@ -22,9 +22,12 @@ Both browser cookies expire. Profiles, saved titles, progress and other accounts
 are preserved. Revocation and its audit event commit in one transaction.
 
 All routes revalidate the captured session/role/profile lease under the database
-lock through the account-management boundary. Paired viewing credentials cannot
-manage accounts; parent restrictions remain enforced. Cookie mutations require
-the existing exact-origin and CSRF protections. Responses are no-store.
+lock through the account-management boundary. A TV pairing credential cannot
+manage accounts; a session from `POST /auth/device/login` acts as its account's
+session and follows the same owner and member rules as a browser, so it reads
+this list and, when the account is the owner, signs devices out. Parent
+restrictions remain enforced. Cookie mutations require the existing exact-origin
+and CSRF protections. Responses are no-store.
 
 Creation timestamps are not last-activity timestamps. The client labels them
 “Signed in …” and does not invent operating-system or model information absent

@@ -45,7 +45,8 @@ pub(crate) use schema::{
 };
 pub(crate) use tokens::{
     acquire_auth_cpu, canonical, endpoint_global_limit, event, field, identifier, login_snapshot,
-    pairing_code, prepare_auth, rate, response, retry_after, session, username, PreparedAuth, AUTH_CPU,
+    pairing_code, prepare_auth, rate, response, retry_after, session, session_from, username,
+    PreparedAuth, AUTH_CPU,
 };
 
 #[cfg(test)]

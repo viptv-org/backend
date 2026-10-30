@@ -3,7 +3,27 @@ use axum::{body::Body, http::Request};
 use tower::ServiceExt;
 
 fn session(app: &App, id: &str, account: i64, kind: &str) {
-    app.db.lock().unwrap().execute("INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,kind,device_name,access_expires,refresh_expires,created_at) VALUES(?1,?2,?3,?4,'unused',?5,'Fixture device',?6,?6,1)",params![id,account,auth::hash(id),format!("refresh-{id}"),kind,auth::now()+3600]).unwrap();
+    session_with_origin(app, id, account, kind, None)
+}
+fn session_with_origin(app: &App, id: &str, account: i64, kind: &str, origin: Option<&str>) {
+    app.db.lock().unwrap().execute("INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,kind,origin,device_name,access_expires,refresh_expires,created_at) VALUES(?1,?2,?3,?4,'unused',?5,?6,'Fixture device',?7,?7,1)",params![id,account,auth::hash(id),format!("refresh-{id}"),kind,origin,auth::now()+3600]).unwrap();
+}
+
+#[tokio::test]
+async fn native_account_sessions_list_devices_while_paired_tvs_stay_limited() {
+    let app = fixture();
+    session_with_origin(&app, "paired-tv", 1, "device", Some("tv"));
+    session_with_origin(&app, "own-phone", 1, "device", Some("native"));
+    let (status, data) = request(&app, "own-phone", "GET", "/api/account/devices", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{data}");
+    let devices = data["devices"].as_array().unwrap();
+    assert!(devices
+        .iter()
+        .any(|device| device["id"] == "own-phone" && device["current"] == true));
+    assert!(devices.iter().any(|device| device["id"] == "paired-tv"));
+    let (status, error) = request(&app, "paired-tv", "GET", "/api/account/devices", Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "account_session_required");
 }
 
 #[tokio::test]

@@ -170,7 +170,7 @@ pub(crate) fn dispatch_devices(
                 .ok_or("Missing device_code")?;
             let device_hash = hash(device_code);
             let (account_id, device_name) = redeemable_pairing(db, &device_hash)?;
-            let (output, cookies) = session(db, account_id, None, "device", &device_name)?;
+            let (output, cookies) = session_from(db, account_id, None, "device", &device_name, Some("tv"))?;
             db.execute(
                 "DELETE FROM auth_pairings WHERE device_hash=?1",
                 [device_hash],

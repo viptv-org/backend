@@ -101,7 +101,7 @@ pub(crate) async fn info(
                 "profile_id":profile_id.map(|value| value.to_string()),
                 "restricted":crate::kids::restricted(&db,&p)?,
                 "profiles":profiles,
-                "capabilities":{"create_profiles":true,"can_create_profile":true,"manage_profiles":true,"can_manage_profiles":true},
+                "capabilities":{"create_profiles":true,"can_create_profile":true,"manage_profiles":true,"can_manage_profiles":true,"manage_account":role!="device"},
                 "can_create_profile":true,
                 "can_manage_profiles":true,
                 "profile_setup_required":presentation_required,

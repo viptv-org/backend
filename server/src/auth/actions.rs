@@ -353,12 +353,13 @@ pub(crate) fn dispatch_prepared(
             } else {
                 ""
             };
-            let (mut out, c) = session(
+            let (mut out, c) = session_from(
                 db,
                 id,
                 None,
                 if native { "device" } else { "browser" },
                 device_name,
+                if native { Some("native") } else { None },
             )?;
             if let Some(rc) = recovery {
                 out["recovery_code"] = json!(rc);

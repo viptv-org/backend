@@ -276,7 +276,7 @@ pub async fn authenticate(State(app): State<App>, mut req: Request, next: Next) 
             .or_else(|| cookie(&headers, "viptv_session"))
             .ok_or_else(unauthorized)?;
         let db = app.db.lock().map_err(|_| unauthorized())?;
-        let row=db.query_row("SELECT a.id,a.role,s.profile_id,s.csrf_hash,s.kind,s.id FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id WHERE s.access_hash=?1 AND s.access_expires>?2 AND a.disabled=0",params![hash(t),now()],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<i64>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?))).optional().map_err(crate::db_error)?.ok_or_else(unauthorized)?;
+        let row=db.query_row("SELECT a.id,a.role,s.profile_id,s.csrf_hash,s.kind,s.id,s.origin FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id WHERE s.access_hash=?1 AND s.access_expires>?2 AND a.disabled=0",params![hash(t),now()],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<i64>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?))).optional().map_err(crate::db_error)?.ok_or_else(unauthorized)?;
         if from_cookie && row.4 != "browser" {
             return Err(unauthorized());
         }
@@ -285,7 +285,8 @@ pub async fn authenticate(State(app): State<App>, mut req: Request, next: Next) 
         }
         Ok(Principal::Account {
             account_id: row.0,
-            role: if row.4 == "device" {
+            // Only /auth/device/login records a native origin; a device session without one stays a TV.
+            role: if row.4 == "device" && row.6.as_deref() != Some("native") {
                 "device".into()
             } else {
                 row.1
