@@ -36,11 +36,31 @@ pub(super) fn apply(
     entries: &[Entry],
     now: u64,
 ) -> Result<usize, ApiError> {
+    apply_canonical(db, profile, revision, entries, now, &std::collections::HashMap::new())
+}
+
+pub(super) fn apply_canonical(
+    db: &Connection,
+    profile: i64,
+    revision: u64,
+    entries: &[Entry],
+    now: u64,
+    canonical: &std::collections::HashMap<(String, String), viptv_engine::identity::MediaIdentity>,
+) -> Result<usize, ApiError> {
     let mut inserted = 0;
     for entry in entries {
-        let (id, kind) = local_identity(db, profile, &entry.card)?;
         let mut card = entry.card.clone();
         let external = card.identity.clone();
+        let show = canonical
+            .get(&(external.kind.clone(), external.id.clone()))
+            .cloned();
+        let (id, kind) = match &show {
+            Some(show) => (show.id.clone(), show.kind.clone()),
+            None => local_identity(db, profile, &entry.card)?,
+        };
+        if let Some(show) = show {
+            card.identity = show;
+        }
         card.identity.id = id.clone();
         card.identity.kind = kind.clone();
         card.progress = None;
@@ -58,7 +78,7 @@ pub(super) fn apply(
             source_updated_at_millis: statistics.last_watched_millis,
             link_revision: Some(revision),
         }];
-        db.execute("INSERT INTO simkl_import_entries VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(profile_id,remote_kind,remote_id) DO UPDATE SET card=excluded.card,statistics=excluded.statistics,link_revision=excluded.link_revision WHERE card!=excluded.card OR statistics!=excluded.statistics OR link_revision!=excluded.link_revision",params![profile,external.id,external.kind,id,kind,serde_json::to_string(&card).map_err(|_|ApiError::from("Invalid import card"))?,serde_json::to_string(&statistics).map_err(|_|ApiError::from("Invalid import statistics"))?,revision]).map_err(db_error)?;
+        db.execute("INSERT INTO simkl_import_entries VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(profile_id,remote_kind,remote_id) DO UPDATE SET local_id=excluded.local_id,local_kind=excluded.local_kind,card=excluded.card,statistics=excluded.statistics,link_revision=excluded.link_revision WHERE local_id!=excluded.local_id OR local_kind!=excluded.local_kind OR card!=excluded.card OR statistics!=excluded.statistics OR link_revision!=excluded.link_revision",params![profile,external.id,external.kind,id,kind,serde_json::to_string(&card).map_err(|_|ApiError::from("Invalid import card"))?,serde_json::to_string(&statistics).map_err(|_|ApiError::from("Invalid import statistics"))?,revision]).map_err(db_error)?;
         let removed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM library_removals WHERE profile_id=?1 AND type=?2 AND id=?3)",params![profile,kind,id],|r|r.get(0)).map_err(db_error)?;
         if removed {
             continue;

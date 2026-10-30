@@ -32,14 +32,16 @@ pub async fn toggle(
     axum::Json(item): axum::Json<Value>,
 ) -> ApiResult {
     let app = app.with_lease(lease);
+    let raw = text(&item, "id", 512)?.to_owned();
+    let kind = media_type(&item)?.to_owned();
+    let id = engine_v3::anime_show::canonical_id(&app, &kind, &raw)
+        .await
+        .unwrap_or(raw);
     blocking(move || {
-        let id = text(&item, "id", 512)?;
-        let kind = media_type(&item)?;
         let name = text(&item, "name", 512)?;
         let mut db = app.db.lock().unwrap();
         app.require_profile(&db, profile)?;
-        let id = id.to_owned();
-        kids::require_item(&db, &app.identity(), kind, &id)?;
+        kids::require_item(&db, &app.identity(), &kind, &id)?;
         let tx = db.transaction().map_err(db_error)?;
         let removed = tx
             .execute(
@@ -90,6 +92,7 @@ pub async fn correct(
 ) -> ApiResult {
     use rusqlite::OptionalExtension;
     let app = app.with_lease(lease);
+    let item=match engine_v3::anime_show::canonical_progress(&app,&item).await{Some(value)=>value,None=>item};
     let tracking_app = app.clone();
     let tracking_item = item.clone();
     let result=blocking(move || {

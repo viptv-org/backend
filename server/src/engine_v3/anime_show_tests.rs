@@ -442,3 +442,171 @@ async fn a_release_without_a_show_document_keeps_its_own_episode_list_with_tvdb_
     assert_eq!(body["episodes"][0]["identity"]["episode"]["season"], 1);
     task.abort();
 }
+
+#[tokio::test]
+async fn a_simkl_anime_release_resolves_to_the_show_for_write_time_canonicalisation() {
+    let (app, task) = stack().await;
+    let show = crate::engine_v3::anime_show::canonical_show(
+        &app,
+        &release("simkl:anime:5000", &[("simkl", "5000")]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(show.id, "tt2560140");
+    assert_eq!(id_of(&show, "tvdb"), Some("267440".into()));
+    let (show, tvdb) = crate::engine_v3::anime_show::canonical_episode(
+        &app,
+        &release("mal:38524", &[("mal", "38524")]),
+        &episode(3, 13),
+    )
+    .await
+    .unwrap();
+    assert_eq!(show.id, "tt2560140");
+    assert_eq!(
+        tvdb,
+        TvdbEpisode {
+            season: 3,
+            episode: 13
+        }
+    );
+    task.abort();
+}
+
+fn parent(id: &str, namespace: &str, value: &str) -> Value {
+    json!({"id":id,"kind":"series","ids":[{"namespace":namespace,"value":value}],"episode":null,"edition":null})
+}
+
+fn episode_write(id: &str, season: u64, episode: u64, parent: &Value) -> Value {
+    json!({
+        "record": {
+            "identity": {"id":id,"kind":"series","ids":[],"episode":{"order":"aired","season":season,"episode":episode},"edition":null},
+            "provider_id": "stremio",
+            "title": "Attack on Titan",
+            "poster": "/poster.jpg",
+            "landscape": null,
+            "position_millis": 60_000,
+            "duration_millis": 1_440_000,
+            "updated_at_millis": 0,
+            "completed_at_millis": null,
+            "parent_identity": parent,
+            "metadata_origin": null
+        },
+        "parent_identity": parent,
+        "ended": false,
+    })
+}
+
+fn progress_row(app: &App, id: &str) -> (String, String, Value) {
+    app.db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT id,title_id,context FROM progress WHERE profile_id=1 AND id=?1",
+            params![id],
+            |r| {
+                let context: String = r.get(2)?;
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    serde_json::from_str(&context).unwrap_or(Value::Null),
+                ))
+            },
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_release_episode_write_is_stored_under_the_show_and_its_tvdb_coordinates() {
+    let (app, task) = stack().await;
+    let parent = parent("mal:38524", "mal", "38524");
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/progress",
+        episode_write("kitsu:38524:1", 3, 13, &parent),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (id, title_id, context) = progress_row(&app, "tt2560140:3:13");
+    assert_eq!(id, "tt2560140:3:13");
+    assert_eq!(title_id, "tt2560140");
+    assert_eq!(context["season"], 3);
+    assert_eq!(context["episode"], 13);
+    assert_eq!(context["series_id"], "tt2560140");
+    assert_eq!(context["engine_identity"]["id"], "tt2560140:3:13");
+    assert_eq!(context["engine_parent_identity"]["id"], "tt2560140");
+    let ids = context["engine_parent_identity"]["ids"].as_array().unwrap();
+    assert!(ids.contains(&json!({"namespace":"imdb","value":"tt2560140"})), "{ids:?}");
+    assert!(ids.contains(&json!({"namespace":"tvdb","value":"267440"})), "{ids:?}");
+    let rows: i64 = app
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT count(*) FROM progress WHERE profile_id=1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(rows, 1);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_simkl_release_episode_write_is_stored_under_the_show() {
+    let (app, task) = stack().await;
+    let parent = parent("simkl:anime:5000", "simkl", "5000");
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/progress",
+        episode_write("simkl:anime:5000:3:14", 3, 14, &parent),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, title_id, context) = progress_row(&app, "tt2560140:3:14");
+    assert_eq!(title_id, "tt2560140");
+    assert_eq!(context["series_id"], "tt2560140");
+    assert_eq!(context["season"], 3);
+    assert_eq!(context["episode"], 14);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_saved_release_favorite_is_stored_under_the_show() {
+    let (app, task) = stack().await;
+    let card = json!({
+        "identity": parent("mal:38524", "mal", "38524"),
+        "provider_id": "stremio",
+        "title": "Attack on Titan",
+        "subtitle": null,
+        "description": null,
+        "poster": null,
+        "landscape": null,
+        "logo": null,
+        "progress": null,
+        "badges": [],
+        "parent_identity": null,
+        "added_at_millis": null,
+    });
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/library",
+        json!({"card": card}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let saved: Vec<String> = {
+        let db = app.db.lock().unwrap();
+        let mut query = db
+            .prepare("SELECT id FROM favorites WHERE profile_id=1 ORDER BY id")
+            .unwrap();
+        query
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert_eq!(saved, vec!["tt2560140"]);
+    task.abort();
+}

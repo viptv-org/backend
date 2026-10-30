@@ -62,6 +62,11 @@ pub(crate) async fn save(
     } else {
         None
     };
+    let canonical = if input.card.metadata_origin.is_none() {
+        super::anime_show::canonical_show(&app, &input.card.identity).await
+    } else {
+        None
+    };
     blocking(move || {
         if let Some(evidence) = evidence {
             let mut db=app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;
@@ -74,8 +79,12 @@ pub(crate) async fn save(
         }
         let mut db = app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;
         app.require_profile(&db, profile)?;
-        kids::require_item(&db, &app.identity(), &input.card.identity.kind, &input.card.identity.id)?;
         let mut card = input.card;
+        if let Some(show) = canonical {
+            card.identity = show;
+            card.parent_identity = None;
+        }
+        kids::require_item(&db, &app.identity(), &card.identity.kind, &card.identity.id)?;
         card.identity.id=membership::resolve(&db,profile,&card.identity.kind,&card.identity.id)?;
         card.progress = None;
         card.added_at_millis=None;
@@ -104,6 +113,11 @@ pub(crate) async fn remove(
     Query(selector): Query<Removal>,
 ) -> ApiResult {
     let app = app.with_lease(lease);
+    let canonical = if selector.metadata_origin.is_none() && selector.card.is_none() {
+        super::anime_show::canonical_id(&app, &kind, &id).await
+    } else {
+        None
+    };
     blocking(move || {
         if !["movie", "series"].contains(&kind.as_str())
             || id.is_empty()
@@ -148,6 +162,7 @@ pub(crate) async fn remove(
             ));
         }
         kids::require_item(&db, &app.identity(), &kind, &id)?;
+        let id = canonical.unwrap_or(id);
         let id = membership::resolve(&db, profile, &kind, &id)?;
         let tx = db.transaction().map_err(db_error)?;
         tx.execute(

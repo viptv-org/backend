@@ -18,6 +18,7 @@ pub(super) async fn pause(
     access: &store::Credential,
     value: &Value,
     entries: &[viptv_engine::library::Entry],
+    canonical: &std::collections::HashMap<(String, String), viptv_engine::identity::MediaIdentity>,
 ) -> Option<Pause> {
     let percentage = value["progress"]
         .as_f64()
@@ -71,9 +72,30 @@ pub(super) async fn pause(
         .as_ref()?
         .runtime_minutes
         .map(|n| f64::from(n) * 60.0)?;
+    let show = canonical
+        .get(&(verified.identity.kind.clone(), verified.identity.id.clone()))
+        .cloned()
+        .filter(|_| verified.identity.kind == "series");
+    let library_card = if let Some(show) = &show {
+        let mut card = verified.clone();
+        card.identity = show.clone();
+        card
+    } else {
+        verified.clone()
+    };
+    let mut card = card;
+    if let Some(show) = &show {
+        if let Some(episode) = card.identity.episode.clone() {
+            if let Some(season) = episode.season {
+                card.identity.id = format!("{}:{}:{}", show.id, season, episode.episode);
+            }
+        }
+        card.identity.ids = show.ids.clone();
+        card.parent_identity = Some(show.clone());
+    }
     Some(Pause {
-        library_card: verified.clone(),
-        parent: (verified.identity.kind == "series").then_some(verified),
+        parent: (library_card.identity.kind == "series").then_some(library_card.clone()),
+        library_card,
         card,
         position: duration * percentage / 100.0,
         duration,
