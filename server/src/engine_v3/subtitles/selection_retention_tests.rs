@@ -5,7 +5,7 @@ fn lease(profile: i64, session: &str) -> ResourceLease {
         principal: auth::Principal::Account {
             account_id: 1,
             profile_id: Some(profile),
-            role: "member".into(),
+            role: "owner".into(),
             session_id: Some(session.into()),
         },
         session_id: Some(session.into()),

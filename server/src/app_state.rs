@@ -30,10 +30,13 @@ pub(crate) const MSG_LAST_OWNER: &str =
 pub(crate) const MSG_ACCOUNT_CHANGED: &str = "This account changed. Try again.";
 pub(crate) const MSG_ACCOUNT_SESSION_REQUIRED: &str =
     "Manage account settings from an account session, not a paired TV.";
+pub(crate) const MSG_OWNER_REQUIRED: &str =
+    "Only the account owner can change household settings.";
 pub(crate) const CODE_ACCOUNT_DELETE_REJECTED: &str = "account_delete_rejected";
 pub(crate) const CODE_PARENT_PIN_INCORRECT: &str = "parent_pin_incorrect";
 pub(crate) const CODE_LAST_OWNER: &str = "last_owner";
 pub(crate) const CODE_ACCOUNT_SESSION_REQUIRED: &str = "account_session_required";
+pub(crate) const CODE_OWNER_REQUIRED: &str = "owner_required";
 pub(crate) const CODE_PASSWORD_INCORRECT: &str = "password_incorrect";
 pub(crate) const CODE_PASSWORD_TOO_SHORT: &str = "password_too_short";
 impl ApiError {
@@ -51,6 +54,7 @@ impl ApiError {
             MSG_ACCOUNT_DELETE_REJECTED => Some(CODE_ACCOUNT_DELETE_REJECTED),
             MSG_LAST_OWNER => Some(CODE_LAST_OWNER),
             MSG_ACCOUNT_SESSION_REQUIRED => Some(CODE_ACCOUNT_SESSION_REQUIRED),
+            MSG_OWNER_REQUIRED => Some(CODE_OWNER_REQUIRED),
             MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
             MSG_AUTHORIZATION_PENDING => Some(MSG_AUTHORIZATION_PENDING),
             MSG_ACCESS_DENIED => Some(MSG_ACCESS_DENIED),

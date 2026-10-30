@@ -67,7 +67,7 @@ async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
     let mut parent=entry["card"].clone();
     parent["identity"]=identity("opaque-parent",false);parent["parent_identity"]=Value::Null;
     parent["landscape"]=json!("https://images.example/series-background.jpg");
-    let mut lease=ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,profile_id:Some(1),role:"member".into(),session_id:Some("other-family".into())},session_id:Some("other-family".into())};
+    let mut lease=ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,profile_id:Some(1),role:"owner".into(),session_id:Some("other-family".into())},session_id:Some("other-family".into())};
     super::source_integrations::cache_card(&app,&lease,0,serde_json::from_value(parent.clone()).unwrap());
     assert_eq!(get(&app,"/api/profiles/1/home").await["rows"][0]["cards"][0]["view"]["preview"]["background"],"https://images.example/frame.jpg");
     let auth::Principal::Account{session_id,..}=&mut lease.principal;*session_id=Some("s1".into());lease.session_id=Some("s1".into());

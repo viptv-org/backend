@@ -43,7 +43,7 @@ Recovery retains profiles, saved titles and watch progress. The old password, us
 
 A new member has no profile. `GET /api/v3/profiles` and `POST /api/v3/profiles {name,avatar_style?,avatar_choice?}` (legacy `avatar_id?` still accepted) work with an account-only session. Create/select a real profile before media requests. Profile selection is `POST /api/auth/profile {profile_id}`. Existing onboarding state is available through `/api/auth/setup`; its accepted fields are household_name, timezone, language, completed, step and profile_id.
 
-Any browser member manages its own household; the household-manager check excludes paired-device roles rather than requiring an operator/owner role. Parent operations are:
+Household configuration is owner-only: the household PIN (`PUT /api/v3/parent/pin`), add-ons, IPTV connections and matches, gateways, source integrations and signing other devices out answer `403 owner_required` to a member session and `403 account_session_required` to a paired device. Profile and parental-policy routes stay with any browser account session. Parent operations are:
 
 - `GET /api/v3/parent/status` → `{pin_configured,unlocked,restricted}`.
 - `POST /api/v3/parent/unlock {pin}` → a session-bound, one-shot grant lasting 120 seconds. Wrong PIN is 403; five failures trigger a five-minute lockout (429).

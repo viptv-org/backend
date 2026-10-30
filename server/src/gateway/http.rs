@@ -30,7 +30,7 @@ pub(crate) async fn register(
     body: Result<Json<Registration>, JsonRejection>,
 ) -> Result<Json<Value>, Error> {
     let Json(value) = body.map_err(|_| Error::Code("invalid_gateway_configuration"))?;
-    account_api::run(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
+    account_api::owner(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
     let vault = app
         .secret_vault
         .clone()
@@ -43,7 +43,7 @@ pub(crate) async fn register(
             &value.namespace,
         )
         .await?;
-    account_api::work(app, lease, move |db, account| {
+    account_api::owner_work(app, lease, move |db, account| {
         Ok(json!(registry::register(db, &vault, account, value)?))
     })
     .await
@@ -53,12 +53,12 @@ pub(crate) async fn check(
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, Error> {
-    account_api::run(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
+    account_api::owner(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
     let vault = app
         .secret_vault
         .clone()
         .ok_or(Error::Code("secret_store_not_configured"))?;
-    let target = account_api::run(app.clone(), lease.clone(), move |db, account| {
+    let target = account_api::owner(app.clone(), lease.clone(), move |db, account| {
         Ok(registry::authorized(db, &vault, account, &id)?)
     })
     .await?;
@@ -70,7 +70,7 @@ pub(crate) async fn check(
             &target.gateway.namespace,
         )
         .await?;
-    account_api::work(app, lease, move |db, account| {
+    account_api::owner_work(app, lease, move |db, account| {
         if !registry::list(db, account)?.iter().any(|current| {
             current.id == target.gateway.id
                 && current.enabled
@@ -90,7 +90,7 @@ pub(crate) async fn replace(
 ) -> Result<Json<Value>, Error> {
     let Json(value) = body.map_err(|_| Error::Code("invalid_gateway_configuration"))?;
     let checked_id = id.clone();
-    account_api::run(app.clone(), lease.clone(), move |db, account| {
+    account_api::owner(app.clone(), lease.clone(), move |db, account| {
         if !registry::list(db, account)?
             .iter()
             .any(|gateway| gateway.id == checked_id && gateway.can_manage)
@@ -112,7 +112,7 @@ pub(crate) async fn replace(
             &value.namespace,
         )
         .await?;
-    account_api::work(app, lease, move |db, account| {
+    account_api::owner_work(app, lease, move |db, account| {
         Ok(json!(registry::replace(db, &vault, account, &id, value)?))
     })
     .await
@@ -124,7 +124,7 @@ pub(crate) async fn update(
     body: Result<Json<registry::Patch>, JsonRejection>,
 ) -> Result<Json<Value>, Error> {
     let Json(value) = body.map_err(|_| Error::Code("invalid_gateway_configuration"))?;
-    account_api::work(app, lease, move |db, account| {
+    account_api::owner_work(app, lease, move |db, account| {
         registry::update(db, account, &id, value)?;
         Ok(json!({"ok":true}))
     })
@@ -135,7 +135,7 @@ pub(crate) async fn delete(
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, Error> {
-    account_api::work(app, lease, move |db, account| {
+    account_api::owner_work(app, lease, move |db, account| {
         registry::delete(db, account, &id)?;
         Ok(json!({"ok":true}))
     })
@@ -169,7 +169,7 @@ pub(crate) async fn grants(
     }
     let principal = lease.principal.clone();
     account_api::work(app, lease, move |db, owner| {
-        principal.require_owner()?;
+        principal.require_account_owner()?;
         let after = if let Some(cursor) = query.cursor {
             if cursor.len() > 512 { return Err(Error::Code("invalid_cursor")); }
             let (account, gateway, after): (i64, String, i64) = serde_json::from_slice(
@@ -199,7 +199,7 @@ pub(crate) async fn grant(
     let Json(value) = body.map_err(|_| Error::Code("invalid_gateway_configuration"))?;
     let principal = lease.principal.clone();
     account_api::work(app, lease, move |db, owner| {
-        principal.require_owner()?;
+        principal.require_account_owner()?;
         registry::grant(db, owner, &id, value.account_id, value.enabled)?;
         Ok(json!({"ok":true}))
     })

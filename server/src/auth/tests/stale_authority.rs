@@ -12,7 +12,7 @@ async fn stale_approval_cannot_recreate_a_family(revoke: Option<bool>) {
         db.execute("INSERT INTO auth_pairings(code_hash,device_hash,device_name,expires) VALUES(?1,?2,'Queued TV',?3)",params![auth::hash("00000001"),auth::hash("fixture-device-code"),auth::now()+600]).unwrap();
         let captured = auth::Principal::Account {
             account_id: 1,
-            role: "member".into(),
+            role: "owner".into(),
             profile_id: None,
             session_id: Some("queued-browser".into()),
         };

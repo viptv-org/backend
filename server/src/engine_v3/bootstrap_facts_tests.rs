@@ -154,7 +154,7 @@ async fn navigation_uses_scoped_cached_catalogs_and_live_assignments() {
         {"connection_id":"addon:21","enabled":if enabled{json!(["Discovery","Metadata","Search"])}else{json!([])}},
         {"connection_id":"iptv:21","enabled":if enabled{json!(["LiveTv"])}else{json!([])}}
     ]});
-    let lease = ResourceLease { policy_revision:0, principal:auth::Principal::Account { account_id:1,role:"member".into(),profile_id:Some(1),session_id:Some("s1".into()) },session_id:Some("s1".into()) };
+    let lease = ResourceLease { policy_revision:0, principal:auth::Principal::Account { account_id:1,role:"owner".into(),profile_id:Some(1),session_id:Some("s1".into()) },session_id:Some("s1".into()) };
     let ids = |value:Value| value.as_array().unwrap().iter().map(|item|item["id"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
     for (revision, enabled) in [(0,true),(1,false)] {
         let (status,value)=request(&app,"member-token-1","PUT","/api/profiles/1/integrations",configure(revision,enabled)).await;
@@ -177,7 +177,7 @@ async fn restricted_navigation_keeps_approved_library_browse_and_omits_live_with
     let app=fixture();
     app.db.lock().unwrap().execute_batch("INSERT INTO kids_profiles(profile_id,enabled,max_age,revision) VALUES(1,1,12,1); INSERT INTO providers(id,name,url,username,password,enabled,enable_live,enable_movies,enable_series) VALUES(23,'Owned Live','https://fixture.invalid','fixture','fixture',1,1,0,0); INSERT INTO provider_ownership VALUES(23,1);").unwrap();
     crate::test_support::encrypt_fixture_sources(&app);
-    let lease=ResourceLease {policy_revision:1,principal:auth::Principal::Account{account_id:1,role:"member".into(),profile_id:Some(1),session_id:Some("s1".into())},session_id:Some("s1".into())};
+    let lease=ResourceLease {policy_revision:1,principal:auth::Principal::Account{account_id:1,role:"owner".into(),profile_id:Some(1),session_id:Some("s1".into())},session_id:Some("s1".into())};
     let nav=super::bootstrap_facts::navigation(&app,&lease,Some(1)).unwrap();
     let contract: Value = serde_json::from_str(include_str!("../../../fixtures/remote-viewing-v3.json")).unwrap();
     assert_eq!(nav, contract["navigation"]["restricted_without_parent"]);

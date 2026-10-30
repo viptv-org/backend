@@ -128,7 +128,7 @@ pub(crate) async fn create(
     body: Result<Json<Registration>, JsonRejection>,
 ) -> Result<Json<Value>, Error> {
     let Json(input) = body.map_err(|_| Error::Code("invalid_addon_endpoint"))?;
-    let account = account_api::shared(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
+    let account = account_api::owner(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
     let vault = app
         .secret_vault
         .clone()
@@ -150,14 +150,14 @@ pub(crate) async fn create(
         .to_string();
     let candidate = url.clone();
     let key = vault.clone();
-    let expected = account_api::shared(app.clone(), lease.clone(), move |db, account| {
+    let expected = account_api::owner(app.clone(), lease.clone(), move |db, account| {
         Ok(credentials_v2::snapshot(db, &key, account, &candidate)?)
     })
     .await?;
     let (url, manifest) = addons.prepare_manifest(&url).await.map_err(|e| {
         Error::Code(crate::service_errors::addon(&e).unwrap_or("addon_unavailable"))
     })?;
-    account_api::shared(app, lease, move |db, account| {
+    account_api::owner(app, lease, move |db, account| {
         let id = credentials_v2::store_checked(db, &vault, account, &url, &manifest, &expected)?;
         record(db, Some(&vault), account, id, fixture)
     })
@@ -244,7 +244,7 @@ pub(crate) async fn update(
     let Json(patch) = body.map_err(|_| Error::Code("invalid_addon_configuration"))?;
     let vault = app.secret_vault.clone();
     let fixture = app.addons.fixture_transport();
-    account_api::shared(app, lease, move |db, account| {
+    account_api::owner(app, lease, move |db, account| {
         own(db, account, id)?;
         db.execute(
             "UPDATE addons SET enabled=?2 WHERE id=?1 AND account_id=?3",
@@ -261,7 +261,7 @@ pub(crate) async fn delete(
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, Error> {
-    account_api::shared(app, lease, move |db, account| {
+    account_api::owner(app, lease, move |db, account| {
         let tx = db.unchecked_transaction().map_err(storage)?;
         own(&tx, account, id)?;
         tx.execute("DELETE FROM addon_credentials_v2 WHERE addon_id=?1", [id])

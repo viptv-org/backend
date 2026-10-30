@@ -303,7 +303,7 @@ async fn unsupported_required_header_events_are_safe_and_keep_healthy_siblings()
         policy_revision: 0,
         principal: auth::Principal::Account {
             account_id: 1,
-            role: "member".into(),
+            role: "owner".into(),
             profile_id: Some(1),
             session_id: Some("s1".into()),
         },

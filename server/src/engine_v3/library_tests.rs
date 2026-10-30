@@ -192,7 +192,7 @@ async fn library_and_home_reuse_exact_current_family_metadata_without_changing_p
  let app=fixture();let saved=input("opaque-title","Alpha");assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/library",saved.clone()).await.0,StatusCode::OK);
  let before=get(&app,"/api/profiles/1/library").await;let added=before["cards"][0]["added_at_millis"].clone();
  let mut full=saved["card"].clone();full["description"]=json!("Host full metadata");full["logo"]=json!("https://images.example/transparent.png");full["metadata"]=json!({"year":2026,"runtime_minutes":120,"genres":["Drama"],"rating":8.4,"rating_votes":100,"certification":null,"alternate_titles":[]});full["added_at_millis"]=json!(1);
- let mut lease=ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,profile_id:Some(1),role:"member".into(),session_id:Some("different-family".into())},session_id:Some("different-family".into())};
+ let mut lease=ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,profile_id:Some(1),role:"owner".into(),session_id:Some("different-family".into())},session_id:Some("different-family".into())};
  super::source_integrations::cache_card(&app,&lease,0,serde_json::from_value(full.clone()).unwrap());assert!(get(&app,"/api/profiles/1/library").await["cards"][0]["logo"].is_null());
  let auth::Principal::Account{session_id,..}=&mut lease.principal;*session_id=Some("s1".into());lease.session_id=Some("s1".into());
  super::source_integrations::cache_card(&app,&lease,99,serde_json::from_value(full.clone()).unwrap());assert!(get(&app,"/api/profiles/1/library").await["cards"][0]["logo"].is_null());

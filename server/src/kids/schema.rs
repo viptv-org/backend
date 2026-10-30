@@ -88,7 +88,7 @@ pub(super) fn manager(
     p: &auth::Principal,
     profile: Option<i64>,
 ) -> Result<i64, ApiError> {
-    auth::require_household_manager(p)?;
+    p.require_account_session()?;
     require_parent(db, p)?;
     let account = p.account_id().ok_or("Account required")?;
     if let Some(profile) = profile {

@@ -1,7 +1,7 @@
 use crate::{auth_integration_tests::fixture,test_support::request,*};
 #[tokio::test]
 async fn ranking_preserves_private_grants_checks_owner_and_uses_structured_quality(){
- let app=fixture();let owned=app.clone().with_lease(ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,role:"member".into(),profile_id:Some(1),session_id:Some("s1".into())},session_id:Some("s1".into())});
+ let app=fixture();let owned=app.clone().with_lease(ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,role:"owner".into(),profile_id:Some(1),session_id:Some("s1".into())},session_id:Some("s1".into())});
  {let db=app.db.lock().unwrap();crate::addon::credentials_v2::store_checked(&db,app.secret_vault.as_ref().unwrap(),1,"https://source.example/manifest.json",&json!({"id":"sources","name":"Sources","version":"1","resources":["stream"],"types":["movie"]}),&None).unwrap();}
  let connection=owned.addons.engine_connections(1).unwrap().into_iter().find(|c|c.capabilities.contains(&viptv_engine::capabilities::Capability::Sources)).unwrap();
  let(cards,error)=owned.register(&connection.id,vec![json!({"url":"https://media.example/high.mp4","name":"High","quality_height":2160}),json!({"url":"https://media.example/compatible.mp4","name":"Compatible","quality_height":1080}),json!({"url":"https://media.example/unknown.mp4","name":"Unknown"})],"movie");assert!(error.is_none());
@@ -10,7 +10,7 @@ async fn ranking_preserves_private_grants_checks_owner_and_uses_structured_quali
  let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();let(status,ranked)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids})).await;assert_eq!(status,StatusCode::OK,"{ranked}");assert_eq!(ranked["streams"][0]["name"],"Compatible");assert_eq!(ranked["streams"][1]["name"],"Unknown");assert!(!ranked.to_string().contains("https://"));assert_eq!(request(&app,"member-token-2","POST","/api/profiles/1/source-ranking",json!({"ids":ids})).await.0,StatusCode::FORBIDDEN);
 }
 fn rank_fixture(streams:Vec<Value>)->(App,Vec<Value>){
- let app=fixture();let owned=app.clone().with_lease(ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,role:"member".into(),profile_id:Some(1),session_id:Some("s1".into())},session_id:Some("s1".into())});
+ let app=fixture();let owned=app.clone().with_lease(ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,role:"owner".into(),profile_id:Some(1),session_id:Some("s1".into())},session_id:Some("s1".into())});
  {let db=app.db.lock().unwrap();crate::addon::credentials_v2::store_checked(&db,app.secret_vault.as_ref().unwrap(),1,"https://source.example/manifest.json",&json!({"id":"sources","name":"Sources","version":"1","resources":["stream"],"types":["movie"]}),&None).unwrap();}
  let connection=owned.addons.engine_connections(1).unwrap().into_iter().find(|c|c.capabilities.contains(&viptv_engine::capabilities::Capability::Sources)).unwrap();
  let(cards,error)=owned.register(&connection.id,streams,"movie");assert!(error.is_none(),"{error:?}");

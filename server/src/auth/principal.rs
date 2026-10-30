@@ -61,11 +61,32 @@ impl Principal {
     pub fn is_owner(&self) -> bool {
         matches!(self, Self::Account {role,..} if role == "owner")
     }
+    pub fn is_device(&self) -> bool {
+        matches!(self, Self::Account {role,..} if role == "device")
+    }
     pub fn require_owner(&self) -> Result<(), ApiError> {
         if self.is_owner() {
             Ok(())
         } else {
             Err(forbidden())
+        }
+    }
+    pub fn require_account_session(&self) -> Result<(), ApiError> {
+        if self.is_device() {
+            Err(ApiError(
+                StatusCode::FORBIDDEN,
+                MSG_ACCOUNT_SESSION_REQUIRED.into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+    pub fn require_account_owner(&self) -> Result<(), ApiError> {
+        self.require_account_session()?;
+        if self.is_owner() {
+            Ok(())
+        } else {
+            Err(ApiError(StatusCode::FORBIDDEN, MSG_OWNER_REQUIRED.into()))
         }
     }
     pub fn require_profile(&self, db: &Connection, profile: i64) -> Result<(), ApiError> {

@@ -138,7 +138,7 @@ pub(crate) async fn create(
     body: Result<Json<Input>, JsonRejection>,
 ) -> Result<Json<Value>, Error> {
     let Json(value) = body.map_err(|_| Error::Code("invalid_provider_configuration"))?;
-    account_api::run(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
+    account_api::owner(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
     let vault = app
         .secret_vault
         .clone()
@@ -156,7 +156,7 @@ pub(crate) async fn create(
         password: value.password.clone(),
     };
     let connection_limit = login(&app.providers, &credentials).await?;
-    account_api::work(app,lease,move |db,account| {
+    account_api::owner_work(app,lease,move |db,account| {
         let tx=db.unchecked_transaction().map_err(storage)?;
         let count:i64=tx.query_row("SELECT count(*) FROM provider_ownership WHERE account_id=?1",[account],|r|r.get(0)).map_err(storage)?;
         if count>=64 {return Err(Error::Code("too_many_providers"));}
@@ -260,7 +260,7 @@ pub(crate) async fn update(
     {
         return Err(Error::Code("invalid_provider_configuration"));
     }
-    account_api::work(app,lease,move |db,account| {
+    account_api::owner_work(app,lease,move |db,account| {
         let tx=db.unchecked_transaction().map_err(storage)?;
         managed(&tx,account,id)?;
         tx.execute("UPDATE providers SET name=COALESCE(?2,name),enabled=COALESCE(?3,enabled),enable_live=COALESCE(?4,enable_live),enable_movies=COALESCE(?5,enable_movies),enable_series=COALESCE(?6,enable_series) WHERE id=?1",params![id,p.name,p.enabled,p.enable_live,p.enable_movies,p.enable_series]).map_err(storage)?;
@@ -275,7 +275,7 @@ pub(crate) async fn delete(
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, Error> {
     let gates = app.providers.playback_gates.clone();
-    account_api::work(app, lease, move |db, account| {
+    account_api::owner_work(app, lease, move |db, account| {
         let tx = db.unchecked_transaction().map_err(storage)?;
         managed(&tx, account, id)?;
         let legacy_pool:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='provider_pools')",[],|row|row.get(0)).map_err(storage)?;
@@ -312,14 +312,14 @@ pub(crate) async fn renew(
     if !text_valid(&value.password, 2048) {
         return Err(Error::Code("invalid_provider_configuration"));
     }
-    account_api::run(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
+    account_api::owner(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
     let vault = app
         .secret_vault
         .clone()
         .ok_or(Error::Code("secret_store_not_configured"))?;
     let reading = vault.clone();
     let (mut credentials, prior) =
-        account_api::run(app.clone(), lease.clone(), move |db, account| {
+        account_api::owner(app.clone(), lease.clone(), move |db, account| {
             managed(db, account, id)?;
             let prior: String = db
                 .query_row(
@@ -334,7 +334,7 @@ pub(crate) async fn renew(
     credentials.password.zeroize();
     credentials.password = value.password.clone();
     let limit = login(&app.providers, &credentials).await?;
-    account_api::work(app,lease,move |db,account| {
+    account_api::owner_work(app,lease,move |db,account| {
         let tx=db.unchecked_transaction().map_err(storage)?;managed(&tx,account,id)?;
         let changed=tx.execute("UPDATE provider_credentials_v2 SET secret=?3 WHERE provider_id=?1 AND account_id=?2 AND secret=?4",params![id,account,seal(&vault,account,id,&credentials)?,prior]).map_err(storage)?;
         if changed!=1 {return Err(Error::Code("source_configuration_changed"));}

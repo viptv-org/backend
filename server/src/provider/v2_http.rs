@@ -1,7 +1,7 @@
 use super::catalog_v2::{self, Filter, Kind};
 use super::v2;
 use crate::{
-    account_api::{work, Error},
+    account_api::{owner_work, work, Error},
     app_state::{App, ResourceLease},
 };
 use axum::{
@@ -64,7 +64,7 @@ pub(crate) async fn override_match(
     body: Result<Json<MatchRequest>, JsonRejection>,
 ) -> Result<Json<Value>, Error> {
     let Json(value) = body.map_err(|_| Error::Code("invalid_match_request"))?;
-    work(app, lease, move |db, account| {
+    owner_work(app, lease, move |db, account| {
         v2::override_match(db, account, &value.vod_id, &value.metadata_id, &value.kind)?;
         Ok(json!({"ok":true}))
     })
@@ -90,7 +90,7 @@ pub(crate) async fn set_live_default(
     body: Result<Json<DefaultRequest>, JsonRejection>,
 ) -> Result<Json<Value>, Error> {
     let Json(value) = body.map_err(|_| Error::Code("catalog_unavailable"))?;
-    work(app, lease, move |db, account| {
+    owner_work(app, lease, move |db, account| {
         v2::set_live_default(db, account, value.catalog_id)?;
         Ok(json!({"catalog_id":value.catalog_id}))
     })

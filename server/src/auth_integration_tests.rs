@@ -15,7 +15,8 @@ pub(crate) fn fixture() -> App {
         let db = a.db.lock().unwrap();
         db.execute("DELETE FROM addons", []).unwrap();
         for id in 1..=2 {
-            db.execute("INSERT INTO auth_accounts(id,username,password_hash,role,recovery_hash,created_at) VALUES(?1,?2,'unused','member','unused',0)",params![id,format!("member{id}")]).unwrap();
+            let role = if id == 1 { "owner" } else { "member" };
+            db.execute("INSERT INTO auth_accounts(id,username,password_hash,role,recovery_hash,created_at) VALUES(?1,?2,'unused',?3,'unused',0)",params![id,format!("member{id}"),role]).unwrap();
             let token = format!("member-token-{id}");
             let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
             db.execute("INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,kind,device_name,access_expires,refresh_expires,created_at) VALUES(?1,?2,?3,?4,'unused','browser','test',?5,?5,0)",params![format!("s{id}"),id,hash,format!("refresh{id}"),util::now()+3600]).unwrap();
@@ -500,7 +501,7 @@ async fn members_cannot_administer_providers_addons_or_other_resources() {
     let mut owned = a.clone();
     owned.principal = Some(auth::Principal::Account {
         account_id: 1,
-        role: "member".into(),
+        role: "owner".into(),
         profile_id: Some(1),
         session_id: Some("s1".into()),
     });
@@ -544,7 +545,7 @@ async fn profile_scope_is_frozen_into_resource_ownership_and_revocation_is_immed
     let mut owned = a.clone();
     owned.principal = Some(auth::Principal::Account {
         account_id: 1,
-        role: "member".into(),
+        role: "owner".into(),
         profile_id: Some(1),
         session_id: Some("s1".into()),
     });
@@ -752,7 +753,7 @@ async fn media_resource_lease_rechecks_grants_account_state_and_session_expiry()
         policy_revision: 0,
         principal: auth::Principal::Account {
             account_id: 1,
-            role: "member".into(),
+            role: "owner".into(),
             profile_id: Some(1),
             session_id: Some("s1".into()),
         },
@@ -799,7 +800,7 @@ async fn playback_ownership_cleanup_preserves_live_and_concurrently_created_sess
     let mut owned = a.clone();
     let principal = auth::Principal::Account {
         account_id: 1,
-        role: "member".into(),
+        role: "owner".into(),
         profile_id: Some(1),
         session_id: Some("s1".into()),
     };
@@ -831,7 +832,7 @@ async fn stale_authenticated_profile_handlers_recheck_grants_before_db_access() 
     let a = fixture();
     let principal = auth::Principal::Account {
         account_id: 1,
-        role: "member".into(),
+        role: "owner".into(),
         profile_id: Some(1),
         session_id: Some("s1".into()),
     };
@@ -910,7 +911,7 @@ async fn same_account_and_profile_other_session_cannot_reuse_owned_resources() {
         policy_revision: 0,
         principal: auth::Principal::Account {
             account_id: 1,
-            role: "member".into(),
+            role: "owner".into(),
             profile_id: Some(1),
             session_id: Some("s1".into()),
         },
@@ -1188,7 +1189,7 @@ async fn household_profile_deletion_protects_primary_and_revokes_selected_resour
     let mut owned = a.clone();
     owned.principal = Some(auth::Principal::Account {
         account_id: 1,
-        role: "member".into(),
+        role: "owner".into(),
         profile_id: Some(id.parse().unwrap()),
         session_id: Some("s1".into()),
     });
@@ -3278,4 +3279,166 @@ async fn password_change_is_rate_limited_with_retry_after() {
     let body: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
     assert_eq!(body["error_code"], "rate_limited", "{body}");
+}
+
+fn secondary_session(a: &App, id: &str, account: i64, kind: &str) -> String {
+    let token = format!("{id}-token");
+    let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
+    a.db.lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,kind,device_name,access_expires,refresh_expires,created_at) VALUES(?1,?2,?3,?4,'unused',?5,'Fixture',?6,?6,0)",
+            params![id, account, hash, format!("{id}-refresh"), kind, util::now() + 3600],
+        )
+        .unwrap();
+    token
+}
+
+struct Guarded {
+    method: &'static str,
+    path: String,
+    body: Value,
+    owner: Option<StatusCode>,
+    tv: &'static str,
+}
+impl Guarded {
+    fn new(method: &'static str, path: &str, body: Value, owner: Option<StatusCode>) -> Self {
+        Self {
+            method,
+            path: path.into(),
+            body,
+            owner,
+            tv: "account_session_required",
+        }
+    }
+    fn tv_code(self, code: &'static str) -> Self {
+        Self { tv: code, ..self }
+    }
+}
+
+#[tokio::test]
+async fn household_writes_need_the_owner_browser_session() {
+    let a = fixture();
+    let tv = secondary_session(&a, "tv-one", 1, "device");
+    secondary_session(&a, "second-browser", 1, "browser");
+    secondary_session(&a, "second-tv", 1, "device");
+    {
+        let db = a.db.lock().unwrap();
+        for id in [10, 11] {
+            db.execute("INSERT INTO addons(id,account_id,name,manifest_url,manifest) VALUES(?1,1,?2,?3,'{}')", params![id, format!("Addon {id}"), format!("https://example.com/{id}/manifest.json")]).unwrap();
+        }
+    }
+    let gateway = json!({"name":"Living room","endpoint":"https://gateway.example","namespace":"main","integration_key":"pgk_short"});
+    let calls = vec![
+        Guarded::new("PUT", "/api/parent/pin", json!({"pin":"7248"}), Some(StatusCode::OK)),
+        Guarded::new("POST", "/api/addons", json!({"manifest_url":""}), Some(StatusCode::BAD_REQUEST)),
+        Guarded::new("PATCH", "/api/addons/10", json!({"enabled":false}), Some(StatusCode::OK)),
+        Guarded::new("DELETE", "/api/addons/11", Value::Null, Some(StatusCode::OK)),
+        Guarded::new("POST", "/api/iptv/connections", json!({"name":"Living room","url":"not-a-url","username":"viewer","password":"secret"}), Some(StatusCode::BAD_REQUEST)),
+        Guarded::new("PATCH", "/api/iptv/connections/999", json!({"enabled":false}), Some(StatusCode::NOT_FOUND)),
+        Guarded::new("DELETE", "/api/iptv/connections/999", Value::Null, Some(StatusCode::NOT_FOUND)),
+        Guarded::new("PUT", "/api/iptv/connections/999/credentials", json!({"password":"replacement"}), Some(StatusCode::NOT_FOUND)),
+        Guarded::new("POST", "/api/iptv/connections/999/refresh", Value::Null, Some(StatusCode::NOT_FOUND)),
+        Guarded::new("DELETE", "/api/iptv/connections/999/refresh", Value::Null, Some(StatusCode::NOT_FOUND)),
+        Guarded::new("PUT", "/api/iptv/matches", json!({"vod_id":"missing-vod","metadata_id":"tmdb:1","type":"movie"}), Some(StatusCode::NOT_FOUND)),
+        Guarded::new("PUT", "/api/iptv/live-default", json!({"catalog_id":999}), Some(StatusCode::NOT_FOUND)),
+        Guarded::new("POST", "/api/gateways", gateway.clone(), Some(StatusCode::BAD_REQUEST)),
+        Guarded::new("PUT", "/api/gateways/unknown", gateway, Some(StatusCode::NOT_FOUND)),
+        Guarded::new("PATCH", "/api/gateways/unknown", json!({"enabled":false}), Some(StatusCode::NOT_FOUND)),
+        Guarded::new("DELETE", "/api/gateways/unknown", Value::Null, Some(StatusCode::OK)),
+        Guarded::new("POST", "/api/gateways/unknown/check", Value::Null, Some(StatusCode::NOT_FOUND)),
+        Guarded::new("PUT", "/api/profiles/1/source-integrations", json!({"revision":0,"plugin_id":"vsources","configuration":{"tmdb_api_key":"fixture-write-only-key"}}), None),
+        Guarded::new("DELETE", "/api/profiles/1/source-integrations/addon:1?revision=0", Value::Null, None),
+        Guarded::new("DELETE", "/api/account/devices/second-browser", Value::Null, Some(StatusCode::OK)),
+        Guarded::new("DELETE", "/api/devices/second-tv", Value::Null, Some(StatusCode::OK)).tv_code("forbidden"),
+    ];
+    for call in calls {
+        for (token, code) in [
+            (tv.as_str(), call.tv),
+            ("member-token-2", "owner_required"),
+        ] {
+            let (status, error) = request(&a, token, call.method, &call.path, call.body.clone()).await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{} {} {token}",
+                call.method,
+                call.path
+            );
+            assert_eq!(
+                error["error_code"], code,
+                "{} {} {token}",
+                call.method, call.path
+            );
+        }
+        let (status, reply) = request(&a, "member-token-1", call.method, &call.path, call.body).await;
+        if let Some(owner) = call.owner {
+            assert_eq!(
+                status, owner,
+                "{} {} owner: {reply}",
+                call.method, call.path
+            );
+        }
+        assert_ne!(reply["error_code"], "owner_required", "{} {}", call.method, call.path);
+        assert_ne!(reply["error_code"], "account_session_required", "{} {}", call.method, call.path);
+    }
+    let (status, listed) = request(&a, "member-token-1", "GET", "/api/addons", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["items"][0]["id"], 10);
+    assert_eq!(listed["items"][0]["enabled"], false);
+}
+
+#[tokio::test]
+async fn signing_out_every_session_needs_the_owner() {
+    let a = fixture();
+    let tv = secondary_session(&a, "tv-one", 1, "device");
+    for (token, code) in [(tv.as_str(), "account_session_required"), ("member-token-2", "owner_required")] {
+        let (status, error) = request(&a, token, "DELETE", "/api/auth/sessions", Value::Null).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(error["error_code"], code);
+    }
+    assert_eq!(
+        request(&a, "member-token-1", "DELETE", "/api/auth/sessions", Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let b = fixture();
+    let tv = secondary_session(&b, "tv-one", 1, "device");
+    for (token, code) in [(tv.as_str(), "account_session_required"), ("member-token-2", "owner_required")] {
+        let (status, error) = request(&b, token, "DELETE", "/api/account/devices", Value::Null).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(error["error_code"], code);
+    }
+    assert_eq!(
+        request(&b, "member-token-1", "DELETE", "/api/account/devices", Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn account_credentials_are_self_service_for_account_sessions() {
+    let a = fixture();
+    let tv = secondary_session(&a, "tv-one", 1, "device");
+    let password = json!({"current_password":"wrong-password","new_password":"twelve-characters"});
+    for path in ["/api/auth/password", "/api/auth/recovery-codes"] {
+        let (status, error) = request(&a, &tv, "POST", path, password.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(error["error_code"], "account_session_required", "{path}");
+    }
+    let (status, error) = request(&a, "member-token-2", "POST", "/api/auth/password", password).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error_code"], "password_incorrect");
+    let (status, codes) = request(&a, "member-token-2", "POST", "/api/auth/recovery-codes", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(codes["recovery_codes"].as_array().unwrap().len(), 1);
+    let (status, error) = request(&a, &tv, "DELETE", "/api/auth/account", json!({"username":"member1","password":"wrong-password"})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "account_session_required");
+    let (status, error) = request(&a, "member-token-2", "DELETE", "/api/auth/account", json!({"username":"member1","password":"wrong-password"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error["error_code"], "account_delete_rejected");
 }
