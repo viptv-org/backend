@@ -117,12 +117,6 @@ pub(crate) fn validate_profile_payload(
     }
     Ok(())
 }
-pub(crate) fn require_household_manager(principal: &Principal) -> Result<(), ApiError> {
-    if matches!(principal, Principal::Account {role,..} if role == "device") {
-        return Err(forbidden());
-    }
-    Ok(())
-}
 pub(crate) fn primary_profile(db: &Connection, account: i64) -> Result<Option<i64>, ApiError> {
     db.query_row(
         "SELECT min(profile_id) FROM profile_owners WHERE account_id=?1",

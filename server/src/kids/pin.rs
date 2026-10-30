@@ -117,7 +117,7 @@ pub(crate) async fn set_pin(
     let (account, existing) = {
         let db = app.db.lock().unwrap();
         app.request_lease().validate(&db)?;
-        auth::require_household_manager(&app.identity())?;
+        app.identity().require_account_owner()?;
         let account = app.identity().account_id().ok_or("Account required")?;
         let existing = stored_pin(&db, account)?;
         if existing.is_none() {

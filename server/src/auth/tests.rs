@@ -488,7 +488,7 @@ fn password_change_verifies_current_password_and_keeps_sessions_signed_in() {
     .is_ok());
 }
 #[test]
-fn device_session_can_change_the_account_password() {
+fn device_session_cannot_change_the_account_password() {
     let db = db();
     claim(&db);
     let grant = session(&db, 1, Some(1), "device", "Living room TV").unwrap().0;
@@ -498,7 +498,7 @@ fn device_session_can_change_the_account_password() {
         profile_id: Some(1),
         session_id: Some(grant["session_id"].as_str().unwrap().to_owned()),
     };
-    let (out, cookies) = dispatch(
+    let error = dispatch(
         &db,
         "/auth/password",
         Some(principal),
@@ -506,9 +506,9 @@ fn device_session_can_change_the_account_password() {
         &json!({"current_password":"a-long-owner-password","new_password":"a-device-chosen-long-password"}),
         SESSION_TOKEN,
     )
-    .unwrap();
-    assert!(cookies.is_none());
-    assert!(out["csrf_token"].as_str().is_some());
+    .unwrap_err();
+    assert_eq!(error.0, StatusCode::FORBIDDEN);
+    assert_eq!(error.1, MSG_ACCOUNT_SESSION_REQUIRED);
     assert!(dispatch(
         &db,
         "/auth/login",
@@ -517,7 +517,7 @@ fn device_session_can_change_the_account_password() {
         &json!({"username":"owner","password":"a-device-chosen-long-password"}),
         SESSION_TOKEN
     )
-    .is_ok());
+    .is_err());
 }
 #[test]
 fn recovery_codes_regenerate_and_invalidate_the_previous_code() {

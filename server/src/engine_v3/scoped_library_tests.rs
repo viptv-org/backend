@@ -22,7 +22,7 @@ fn profile_app(app: &App) -> App {
         policy_revision: 0,
         principal: auth::Principal::Account {
             account_id: 1,
-            role: "member".into(),
+            role: "owner".into(),
             profile_id: Some(1),
             session_id: Some("s1".into()),
         },
@@ -376,7 +376,7 @@ async fn proof_configuration_change_between_fetch_and_commit_cannot_authorize_al
     let card: Card = serde_json::from_value(detail(&app, 101, "shared-a").await).unwrap();
     let principal = auth::Principal::Account {
         account_id: 1,
-        role: "member".into(),
+        role: "owner".into(),
         profile_id: Some(1),
         session_id: Some("s1".into()),
     };

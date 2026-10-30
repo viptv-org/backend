@@ -9,7 +9,7 @@ pub(crate) async fn remove(
         return Err(ApiError(StatusCode::BAD_REQUEST, "Invalid device identity".into()).into());
     }
     let current = lease.session_id.clone().ok_or_else(auth::unauthorized)?;
-    account_api::run(app, lease, move |db, account| {
+    account_api::owner(app, lease, move |db, account| {
         let tx = db.unchecked_transaction().map_err(db_error)?;
         let owned: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM auth_sessions WHERE id=?1 AND account_id=?2 AND kind IN ('browser','device'))",params![id,account],|row| row.get(0)).map_err(db_error)?;
         if !owned {
@@ -31,7 +31,7 @@ pub(crate) async fn remove_all(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
 ) -> Result<Response, account_api::Error> {
-    account_api::run(app, lease, move |db, account| {
+    account_api::owner(app, lease, move |db, account| {
         let tx = db.unchecked_transaction().map_err(db_error)?;
         tx.execute("DELETE FROM auth_sessions WHERE account_id=?1", [account])
             .map_err(db_error)?;

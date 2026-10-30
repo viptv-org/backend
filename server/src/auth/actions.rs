@@ -179,6 +179,7 @@ pub(crate) fn dispatch_prepared(
     v: &Value,
     prepared: &PreparedAuth,
 ) -> Result<(Value, Option<(String, String)>), ApiError> {
+    // The credential and session routes stay listed so a TV reaches their account_session_required reply.
     if matches!(p,Some(Principal::Account{ref role,..}) if role=="device")
         && !matches!(
             path,
@@ -191,6 +192,7 @@ pub(crate) fn dispatch_prepared(
                 | "/auth/device/revoke-own"
                 | "/auth/password"
                 | "/auth/recovery-codes"
+                | "/auth/sessions"
         )
     {
         return Err(forbidden());
@@ -202,11 +204,13 @@ pub(crate) fn dispatch_prepared(
     }
     match path {
         "/auth/password" => {
+            let principal = p.as_ref().ok_or_else(unauthorized)?;
+            principal.require_account_session()?;
             let Principal::Account {
                 account_id,
                 profile_id,
                 ..
-            } = p.as_ref().ok_or_else(unauthorized)?;
+            } = principal;
             let stored: Option<String> = db
                 .query_row(
                     "SELECT password_hash FROM auth_accounts WHERE id=?1 AND disabled=0",
@@ -255,6 +259,7 @@ pub(crate) fn dispatch_prepared(
         }
         "/auth/recovery-codes" => {
             let principal = p.as_ref().ok_or_else(unauthorized)?;
+            principal.require_account_session()?;
             let account_id = principal.account_id().ok_or_else(forbidden)?;
             let recovery = token();
             db.execute(

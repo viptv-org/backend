@@ -111,18 +111,16 @@ async fn connection_crud_encrypts_immediately_and_preserves_account_defaults() {
         .0,
         StatusCode::CONFLICT
     );
-    assert_eq!(
-        request(
-            &app,
-            "member-token-2",
-            "POST",
-            ROOT,
-            input(&base, "user-one", "private-password")
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
+    let (status, error) = request(
+        &app,
+        "member-token-2",
+        "POST",
+        ROOT,
+        input(&base, "user-one", "private-password"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
     let (_, second) = request(
         &app,
         "member-token-1",
@@ -164,24 +162,19 @@ async fn connection_crud_encrypts_immediately_and_preserves_account_defaults() {
         StatusCode::BAD_REQUEST
     );
     let path = format!("{ROOT}/{id}");
-    assert_eq!(
-        request(
-            &app,
-            "member-token-2",
-            "PATCH",
-            &path,
-            json!({"enabled":false})
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        request(&app, "member-token-2", "DELETE", &path, Value::Null)
-            .await
-            .0,
-        StatusCode::NOT_FOUND
-    );
+    let (status, error) = request(
+        &app,
+        "member-token-2",
+        "PATCH",
+        &path,
+        json!({"enabled":false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
+    let (status, error) = request(&app, "member-token-2", "DELETE", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
     assert_eq!(
         provider::v2::live_catalog(&app.db.lock().unwrap(), 1, None).unwrap(),
         Some(id)

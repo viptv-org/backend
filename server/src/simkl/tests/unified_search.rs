@@ -437,7 +437,7 @@ async fn source_metadata_cache_is_scoped_to_the_validated_origin_even_for_equal_
         principal: auth::Principal::Account {
             account_id: 1,
             profile_id: Some(1),
-            role: "member".into(),
+            role: "owner".into(),
             session_id: Some("s1".into()),
         },
         session_id: Some("s1".into()),

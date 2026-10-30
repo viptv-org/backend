@@ -118,6 +118,7 @@ pub(crate) async fn configure(
     Path(profile): Path<i64>,
     axum::Json(update): axum::Json<Configure>,
 ) -> ApiResult {
+    lease.principal.require_account_owner()?;
     if update.plugin_id == "xtream" || update.plugin_id == "m3u" {
         return super::live::configure(
             app,
@@ -247,6 +248,7 @@ pub(crate) async fn remove(
     Path((profile, id)): Path<(i64, String)>,
     Query(remove): Query<Remove>,
 ) -> ApiResult {
+    lease.principal.require_account_owner()?;
     if !id.starts_with("vsources:") {
         return super::live::remove(app, lease, profile, id, remove.revision).await;
     }

@@ -49,18 +49,16 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
     )
     .await;
     assert_eq!(again["id"], id);
-    assert_eq!(
-        request(
-            &app,
-            "member-token-2",
-            "POST",
-            ROOT,
-            json!({"manifest_url":url})
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
+    let (status, error) = request(
+        &app,
+        "member-token-2",
+        "POST",
+        ROOT,
+        json!({"manifest_url":url}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
     request(
         &app,
         "member-token-1",
@@ -103,18 +101,16 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
     assert!(!page.to_string().contains("private-token") && !page.to_string().contains(&base));
     let path = format!("{ROOT}/{id}");
     for method in ["PATCH", "DELETE"] {
-        assert_eq!(
-            request(
-                &app,
-                "member-token-2",
-                method,
-                &path,
-                json!({"enabled":false})
-            )
-            .await
-            .0,
-            StatusCode::NOT_FOUND
-        );
+        let (status, error) = request(
+            &app,
+            "member-token-2",
+            method,
+            &path,
+            json!({"enabled":false}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(error["error_code"], "owner_required");
     }
     let (_, disabled) = request(
         &app,
@@ -157,19 +153,16 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
             .0,
         StatusCode::OK
     );
-    assert_eq!(
-        request(
-            &app,
-            "member-token-1",
-            "POST",
-            ROOT,
-            json!({"manifest_url":url})
-        )
-        .await
-        .0,
-        StatusCode::OK,
-        "TV settings manage the account's shared addons"
-    );
+    let (status, error) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        ROOT,
+        json!({"manifest_url":url}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "account_session_required");
     app.db
         .lock()
         .unwrap()
@@ -190,7 +183,7 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "profile_required");
+    assert_eq!(error["error_code"], "account_session_required");
     app.db
         .lock()
         .unwrap()

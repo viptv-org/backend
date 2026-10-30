@@ -25,7 +25,7 @@ Browser authentication sets Secure, HttpOnly, SameSite=Strict access and refresh
 - `GET /auth/me` returns the authenticated account, active profile ID, capabilities, and current CSRF value.
 - `POST /auth/refresh {}` rotates browser cookies; replay revokes that credential family.
 - `POST /auth/password {current_password,new_password}` verifies the current password and replaces the hash after the register length rule (at least 12 characters). The current session stays signed in, other sessions are not revoked, and the response carries a fresh CSRF value; a wrong current password returns `400 password_incorrect` and a short new password `400 password_too_short`. Like login and recovery it is rate limited with `429 rate_limited` and `Retry-After`. Neither the password nor its hash appears in a response, request log or telemetry field.
-- `POST /auth/recovery-codes {}` regenerates the account's one-time recovery code and returns it once in `{"recovery_codes":[...]}`, invalidating the previous code. Browser and paired-device sessions can call both credential routes.
+- `POST /auth/recovery-codes {}` regenerates the account's one-time recovery code and returns it once in `{"recovery_codes":[...]}`, invalidating the previous code. Any account session (owner or member) can call both credential routes for its own account; a paired TV gets `403 account_session_required`.
 - `POST /auth/logout {}` revokes the current browser session.
 - `GET /profiles` lists only profiles owned by the current account.
 - `POST /profiles {name,avatar_style,avatar_choice?}` creates an owned profile atomically. Styles are the closed kid-friendly catalog worlds in `AVATAR_STYLES`; `avatar_choice` is the 1-based position within the world (at most 48, or the character world's size). The server owns the seed (`viptv-{style}-{choice}`, random without a choice) and emits the HTTPS `avatar_url`; profiles project `avatar_choice: null` when no catalog choice was made, and when a stored seed names a position its world does not have (data written before the per-world sizes, or by an import).
@@ -50,7 +50,7 @@ or approval from the viewing hostname is still forbidden.
 2. The QR contains only the complete dashboard activation URL. The server-generated PNG is bound to an unexpired user code and sent with `Cache-Control: no-store`.
 3. A signed-in browser uses `POST /device/lookup {user_code}`, then confirms `POST /device/approve {user_code}` or denies with `POST /device/deny {user_code}`. Approval always binds to the current account; no target account or profile subset is accepted.
 4. The TV polls `POST /device/token {device_code}`. Pending returns `authorization_pending`; approved one-time exchange returns a device access token and rotating refresh token. Exchange succeeds when the account has zero profiles.
-5. The device can list, select, create, edit and delete profiles owned by its account, and change playback preferences for its selected profile. The primary profile cannot be deleted. Deleting a selected secondary profile clears that selection while retaining the device pairing; other viewers remain unaffected. A restricted kids session needs a current parent PIN grant before every profile mutation, including creation. PIN setup and kids policy management retain their separate household-browser authorization. Leaving a selected kids profile or signing out requires parent PIN authority. It cannot manage accounts, providers, addons, matches, or other server settings—even when paired by the owner.
+5. The device can list, select, create, edit and delete profiles owned by its account, and change playback preferences for its selected profile. The primary profile cannot be deleted. Deleting a selected secondary profile clears that selection while retaining the device pairing; other viewers remain unaffected. A restricted kids session needs a current parent PIN grant before every profile mutation, including creation. PIN setup needs the owner; kids policy management stays with the household's account sessions. Leaving a selected kids profile or signing out requires parent PIN authority. It cannot manage accounts, providers, addons, matches, or other server settings—even when paired by the owner.
 6. `POST /device/refresh {refresh_token}` rotates the device credential family. `GET /devices` and `DELETE /devices/:id` let the current account list and revoke its TVs. A paired device revokes the grant it is presenting with `POST /device/revoke-own {session_id?}` (its own grant when no ID is named; the legacy `POST /auth/device/revoke` accepts the same body); it can never revoke a sibling session of the account.
 
 ## Session caps
@@ -78,11 +78,26 @@ when it is the server's only account. The one refusal is an owner whose server
 still holds other accounts: they would be left without an owner, so it answers
 `409 last_owner` until those accounts are deleted.
 
+## Household settings and the owner
+
+These writes belong to the server's owner and need an owner account session:
+
+- `PUT /parent/pin` — set, rotate or remove the household PIN.
+- `POST/PATCH/DELETE /addons` — the account's add-on inventory.
+- `POST/PATCH/DELETE /iptv/connections`, `PUT /iptv/connections/:id/credentials`, `POST/DELETE /iptv/connections/:id/refresh`, `PUT /iptv/matches`, `PUT /iptv/live-default` — IPTV connections and match overrides.
+- `POST/PUT/PATCH/DELETE /gateways`, `POST /gateways/:id/check`, `PUT /gateways/:id/grants` — playback gateways and their grants.
+- `PUT/DELETE /profiles/:id/source-integrations` — the profile's source wiring, which the account owns.
+- `DELETE /account/devices`, `DELETE /account/devices/:id`, `DELETE /auth/sessions`, `DELETE /devices/:id` for another session — signing other devices out.
+
+A member account session gets `403 owner_required`; a paired device gets `403 account_session_required`. A paired device may still revoke the grant it is presenting with `POST /device/revoke-own`. Pairing, profile routes and parental policy stay open to any account session, so a member keeps its own profiles, limits and devices; only the household configuration is closed to it.
+
+The credential routes stay self-service: `POST /auth/password`, `POST /auth/recovery-codes` and `DELETE /auth/account` act on the signed-in account for an owner or a member, and refuse a paired device with `403 account_session_required`. A member leaves the server by deleting its own account, and `409 last_owner` only refuses an owner while other accounts remain.
+
 ## Authorization and operations
 
 Discovery jobs, registered source handles, playback controls, SSE, and bearerless media capabilities carry a server-authored account/profile/session lease. Every use revalidates the exact credential family, enabled account, selected completed profile, and ownership grant. Revoking any link invalidates the resource. Foreign handles cannot be replayed across sessions.
 
-Provider, addon, match, account inventory, and status administration require the owner browser role. Ordinary accounts and paired devices receive a closed forbidden response.
+Status administration (`GET /auth/accounts`, `GET /auth/admin/devices`, `DELETE /admin/devices/:id`) requires the owner browser role and answers a closed forbidden response to anything else. Account inventory the account can read stays available to its own member sessions; a paired device reads only the add-on inventory.
 
 Back up SQLite before upgrading. Migration tests must preserve existing profile IDs, favorites, progress values/timestamps, provider rows, and addon rows. Ambiguous historical multi-account profile grants must never be silently assigned to one account. Keep the prior image and a private pre-upgrade database backup for rollback; do not publish backups, session cookies, recovery codes, device storage, or deployment logs containing secrets.
 

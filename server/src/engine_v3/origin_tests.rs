@@ -372,7 +372,7 @@ async fn captions_with_same_raw_id_require_the_exact_origin_and_assertion_contex
         policy_revision: 0,
         principal: auth::Principal::Account {
             account_id: 1,
-            role: "member".into(),
+            role: "owner".into(),
             profile_id: Some(1),
             session_id: Some("s1".into()),
         },
@@ -457,7 +457,7 @@ async fn delegated_metadata_proof_covers_the_actual_matching_producer_beyond_unr
         policy_revision: 0,
         principal: auth::Principal::Account {
             account_id: 1,
-            role: "member".into(),
+            role: "owner".into(),
             profile_id: Some(1),
             session_id: Some("s1".into()),
         },

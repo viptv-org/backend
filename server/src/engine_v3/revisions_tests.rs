@@ -411,7 +411,6 @@ async fn another_accounts_writes_do_not_move_this_accounts_tokens() {
         Value::Null,
     )
     .await;
-    ok(&app, other, "PUT", "/api/parent/pin", json!({"pin":"1357"})).await;
     ok(
         &app,
         other,

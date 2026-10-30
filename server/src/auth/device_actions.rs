@@ -182,8 +182,10 @@ pub(crate) fn dispatch_devices(
         "/auth/device/revoke" | "/auth/device/revoke-own" | "/auth/device/revoke-admin" => {
             let principal = p.as_ref().ok_or_else(unauthorized)?;
             let own = principal.session_id();
-            let device_principal =
-                matches!(principal, Principal::Account { role, .. } if role == "device");
+            let device_principal = principal.is_device();
+            if !device_principal {
+                principal.require_account_owner()?;
+            }
             let target = match v.get("session_id") {
                 Some(_) => field(v, "session_id", 100)?,
                 None if device_principal => own.ok_or_else(unauthorized)?,

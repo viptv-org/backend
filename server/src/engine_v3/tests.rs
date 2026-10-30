@@ -347,7 +347,7 @@ async fn delayed_metadata_is_cached_under_its_original_addon_revision() {
         principal: auth::Principal::Account {
             account_id: 1,
             profile_id: Some(1),
-            role: "member".into(),
+            role: "owner".into(),
             session_id: Some("s1".into()),
         },
         session_id: Some("s1".into()),

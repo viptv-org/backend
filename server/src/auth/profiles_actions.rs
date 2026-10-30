@@ -188,6 +188,7 @@ pub(crate) fn dispatch_profiles(
         }
         "/auth/sessions" => {
             let principal = p.as_ref().ok_or_else(unauthorized)?;
+            principal.require_account_owner()?;
             let id = principal.account_id().ok_or_else(forbidden)?;
             db.execute(
                 "DELETE FROM auth_sessions WHERE account_id=?1 AND kind='browser'",

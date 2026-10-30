@@ -68,7 +68,7 @@ pub(crate) async fn metadata_addon(app: &mut App) -> MetadataAddon {
 fn start(app: &App) -> bool {
     let principal = auth::Principal::Account {
         account_id: 1,
-        role: "member".into(),
+        role: "owner".into(),
         profile_id: Some(1),
         session_id: Some("s1".into()),
     };

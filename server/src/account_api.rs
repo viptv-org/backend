@@ -48,6 +48,30 @@ pub(crate) async fn run<T: Send + 'static>(
 ) -> Result<T, Error> {
     authorized(app, lease, false, action).await
 }
+pub(crate) async fn owner<T: Send + 'static>(
+    app: App,
+    lease: ResourceLease,
+    action: impl FnOnce(&rusqlite::Connection, i64) -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    tokio::task::spawn_blocking(move || {
+        let db = app
+            .db
+            .lock()
+            .map_err(|_| Error::Code("provider_storage_unavailable"))?;
+        lease.validate(&db)?;
+        lease.principal.require_account_owner()?;
+        kids::require_parent(&db, &lease.principal)?;
+        action(
+            &db,
+            lease
+                .principal
+                .account_id()
+                .ok_or_else(auth::unauthorized)?,
+        )
+    })
+    .await
+    .map_err(|_| Error::Code("provider_storage_unavailable"))?
+}
 async fn authorized<T: Send + 'static>(
     app: App,
     lease: ResourceLease,
@@ -124,6 +148,14 @@ pub(crate) async fn work(
     action: impl FnOnce(&rusqlite::Connection, i64) -> Result<Value, Error> + Send + 'static,
 ) -> Result<Json<Value>, Error> {
     run(app, lease, action).await.map(Json)
+}
+
+pub(crate) async fn owner_work(
+    app: App,
+    lease: ResourceLease,
+    action: impl FnOnce(&rusqlite::Connection, i64) -> Result<Value, Error> + Send + 'static,
+) -> Result<Json<Value>, Error> {
+    owner(app, lease, action).await.map(Json)
 }
 
 pub(crate) fn description(code: &str) -> &'static str {
