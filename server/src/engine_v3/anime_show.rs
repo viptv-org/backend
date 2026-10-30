@@ -1,5 +1,5 @@
 use super::*;
-use viptv_engine::identity::{EpisodeCoordinates, MediaIdentity};
+use viptv_engine::identity::{EpisodeCoordinates, ExternalId, MediaIdentity};
 use viptv_engine::presentation::{Card, DetailSnapshot};
 
 const ANIME_ADDONS: [&str; 4] = ["mal:", "kitsu:", "anilist:", "anidb:"];
@@ -70,6 +70,24 @@ impl AnimeShow {
                     })
             }
         }
+    }
+
+    pub(crate) fn canonical_episode(&self, release: &EpisodeCoordinates) -> Option<TvdbEpisode> {
+        if release.episode == 0 {
+            return None;
+        }
+        let season = release.season?;
+        if self
+            .document
+            .as_ref()
+            .is_some_and(|document| lists_episode(document, season, release.episode))
+        {
+            return Some(TvdbEpisode {
+                season,
+                episode: release.episode,
+            });
+        }
+        self.tvdb_episode(release)
     }
 
     #[allow(dead_code)]
@@ -283,6 +301,152 @@ fn video_coordinates(video: &Value) -> Option<EpisodeCoordinates> {
     })
 }
 
+pub(crate) fn anime_release(id: &str) -> bool {
+    simkl_anime(id).is_some()
+        || ANIME_ADDONS
+            .iter()
+            .any(|prefix| id.starts_with(*prefix))
+}
+
+fn lists_episode(document: &Value, season: u32, episode: u32) -> bool {
+    document["videos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(MAX_ROWS)
+        .any(|video| {
+            video["season"].as_u64() == Some(u64::from(season))
+                && video["episode"]
+                    .as_u64()
+                    .or_else(|| video["number"].as_u64())
+                    == Some(u64::from(episode))
+        })
+}
+
+pub(crate) async fn canonical_episode(
+    app: &App,
+    release: &MediaIdentity,
+    coordinates: &EpisodeCoordinates,
+) -> Option<(MediaIdentity, TvdbEpisode)> {
+    let show = resolve(app, release).await?;
+    let tvdb = show.canonical_episode(coordinates)?;
+    Some((show.identity().clone(), tvdb))
+}
+
+pub(crate) async fn canonical_show(
+    app: &App,
+    release: &MediaIdentity,
+) -> Option<MediaIdentity> {
+    resolve(app, release)
+        .await
+        .map(|show| show.identity().clone())
+}
+
+pub(crate) async fn canonical_id(app: &App, kind: &str, id: &str) -> Option<String> {
+    if kind != "series" {
+        return None;
+    }
+    let release = MediaIdentity {
+        id: id.to_owned(),
+        kind: kind.to_owned(),
+        ids: Vec::new(),
+        episode: None,
+        edition: None,
+    };
+    canonical_show(app, &release).await.map(|show| show.id)
+}
+
+pub(crate) async fn canonical_progress(app: &App, value: &Value) -> Option<Value> {
+    let coordinates = episode_coordinates(value)?;
+    let release = release_identity(value)?;
+    let id = value["id"].as_str()?;
+    let show = resolve(app, &release).await?;
+    let prefix = format!("{}:", show.identity().id);
+    let tvdb = if id.starts_with(&prefix) {
+        TvdbEpisode {
+            season: coordinates.season?,
+            episode: coordinates.episode,
+        }
+    } else {
+        show.canonical_episode(&coordinates)?
+    };
+    let id = format!("{0}:{1}:{2}", show.identity().id, tvdb.season, tvdb.episode);
+    let mut value = value.clone();
+    value["id"] = json!(id);
+    value["series_id"] = json!(show.identity().id);
+    value["season"] = json!(tvdb.season);
+    value["episode"] = json!(tvdb.episode);
+    value["engine_identity"] = episode_identity(&id, &show.identity().ids, tvdb);
+    value["engine_parent_identity"] = parent_identity(show.identity());
+    Some(value)
+}
+
+fn episode_coordinates(value: &Value) -> Option<EpisodeCoordinates> {
+    if let Some(episode) = value["engine_identity"]["episode"].as_object() {
+        return Some(EpisodeCoordinates {
+            order: episode["order"].as_str().unwrap_or("aired").to_owned(),
+            season: episode["season"]
+                .as_u64()
+                .and_then(|season| u32::try_from(season).ok()),
+            episode: episode["episode"]
+                .as_u64()
+                .and_then(|episode| u32::try_from(episode).ok())?,
+        });
+    }
+    Some(EpisodeCoordinates {
+        order: "aired".into(),
+        season: value["season"]
+            .as_u64()
+            .and_then(|season| u32::try_from(season).ok()),
+        episode: value["episode"]
+            .as_u64()
+            .and_then(|episode| u32::try_from(episode).ok())?,
+    })
+}
+
+fn release_identity(value: &Value) -> Option<MediaIdentity> {
+    if let Ok(parent) = serde_json::from_value::<MediaIdentity>(value["engine_parent_identity"].clone())
+    {
+        if parent.kind == "series" && parent.episode.is_none() && !parent.id.is_empty() {
+            return Some(parent);
+        }
+    }
+    let id = value["series_id"].as_str()?;
+    Some(MediaIdentity {
+        id: id.to_owned(),
+        kind: "series".into(),
+        ids: Vec::new(),
+        episode: None,
+        edition: None,
+    })
+}
+
+fn episode_identity(id: &str, ids: &[ExternalId], tvdb: TvdbEpisode) -> Value {
+    let mut identity = parent_identity(&MediaIdentity {
+        id: id.to_owned(),
+        kind: "series".into(),
+        ids: ids.to_vec(),
+        episode: None,
+        edition: None,
+    });
+    identity["episode"] = json!({
+        "order": "aired",
+        "season": tvdb.season,
+        "episode": tvdb.episode,
+    });
+    identity
+}
+
+fn parent_identity(show: &MediaIdentity) -> Value {
+    json!({
+        "id": show.id,
+        "kind": "series",
+        "ids": show.ids.clone(),
+        "episode": null,
+        "edition": null,
+    })
+}
+
 pub(crate) async fn resolve(app: &App, release: &MediaIdentity) -> Option<AnimeShow> {
     resolve_with(app, release, None).await
 }
@@ -293,11 +457,7 @@ async fn resolve_with(
     mut release_document: Option<Value>,
 ) -> Option<AnimeShow> {
     let simkl_identity = simkl_anime(&release.id);
-    let anime_addon = ANIME_ADDONS
-        .iter()
-        .any(|prefix| release.id.starts_with(*prefix));
-    if release.kind != "series" || release.episode.is_some() || simkl_identity.is_none() && !anime_addon
-    {
+    if release.kind != "series" || release.episode.is_some() || !anime_release(&release.id) {
         return None;
     }
     let mut identity = MediaIdentity {

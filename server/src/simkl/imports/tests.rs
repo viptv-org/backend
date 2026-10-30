@@ -120,6 +120,92 @@ async fn original_episode_import_maps_anime_tvdb_coordinates_and_stays_anidb_wit
 }
 
 #[tokio::test]
+async fn a_canonical_anime_import_keys_progress_favorites_and_receipts_on_the_show() {
+    use viptv_engine::identity::{ExternalId, MediaIdentity};
+    let app = crate::auth_integration_tests::fixture();
+    let mut canonical = std::collections::HashMap::new();
+    canonical.insert(
+        ("series".to_owned(), "simkl:anime:30".to_owned()),
+        MediaIdentity {
+            id: "tt2560140".into(),
+            kind: "series".into(),
+            ids: vec![
+                ExternalId {
+                    namespace: "imdb".into(),
+                    value: "tt2560140".into(),
+                },
+                ExternalId {
+                    namespace: "tvdb".into(),
+                    value: "267440".into(),
+                },
+                ExternalId {
+                    namespace: "simkl".into(),
+                    value: "30".into(),
+                },
+            ],
+            episode: None,
+            edition: None,
+        },
+    );
+    let db = app.db.lock().unwrap();
+    let items = json!({"anime":[{"show":{"title":"Mapped anime","ids":{"simkl":30}},"seasons":[{"number":1,"episodes":[{"number":4,"watched_at":"2020-01-01T00:00:00Z","tvdb":{"season":2,"episode":4}}]}]}]});
+    let entries = super::super::watchlists::projection::entries(&items).unwrap();
+    let counts =
+        history::original_canonical(&db, 1, 1, &items, &entries, &canonical).unwrap();
+    assert_eq!(counts.inserted, 1);
+    membership::apply_canonical(&db, 1, 1, &entries, 1000, &canonical).unwrap();
+    let progress: Vec<(String, String)> = {
+        let mut query = db
+            .prepare("SELECT id,title_id FROM progress WHERE profile_id=1 ORDER BY id")
+            .unwrap();
+        query
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert_eq!(progress, vec![("tt2560140:2:4".into(), "tt2560140".into())]);
+    let favorites: Vec<String> = {
+        let mut query = db
+            .prepare("SELECT id FROM favorites WHERE profile_id=1 ORDER BY id")
+            .unwrap();
+        query
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert_eq!(favorites, vec!["tt2560140"]);
+    let mapping: (String, String, String, String) = db
+        .query_row(
+            "SELECT remote_kind,remote_id,local_kind,local_id FROM simkl_import_entries WHERE profile_id=1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        mapping,
+        (
+            "series".into(),
+            "simkl:anime:30".into(),
+            "series".into(),
+            "tt2560140".into()
+        )
+    );
+    let receipts: Vec<(String, String)> = {
+        let mut query = db
+            .prepare("SELECT id,type FROM simkl_import_progress WHERE profile_id=1 ORDER BY id")
+            .unwrap();
+        query
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    assert_eq!(receipts, vec![("tt2560140:2:4".into(), "series".into())]);
+}
+
+#[tokio::test]
 async fn cheap_membership_contains_verified_aliases_and_alias_removal_targets_one_saved_row() {
     use crate::test_support::request;
     let app = crate::auth_integration_tests::fixture();

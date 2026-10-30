@@ -191,13 +191,16 @@ pub(crate) async fn save_favorite(
     Path(profile): Path<i64>,
     axum::Json(v): axum::Json<Value>,
 ) -> ApiResult {
+    let id = text(&v, "id", 512)?.to_owned();
+    let kind = media_type(&v)?.to_owned();
+    let stored = engine_v3::anime_show::canonical_id(&a, &kind, &id)
+        .await
+        .unwrap_or(id);
     blocking(move || {
-    let id = text(&v, "id", 512)?;
-    let kind = media_type(&v)?;
     let name = text(&v, "name", 512)?;
     let db = a.db.lock().unwrap();
     a.require_profile(&db, profile)?;
-    db.execute("INSERT INTO favorites(profile_id,id,type,name,poster,added_at_millis) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster",params![profile,id,kind,name,v["poster"].as_str(),util::now_millis()]).map_err(db_error)?;
+    db.execute("INSERT INTO favorites(profile_id,id,type,name,poster,added_at_millis) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=excluded.poster",params![profile,stored,kind,name,v["poster"].as_str(),util::now_millis()]).map_err(db_error)?;
     Ok(axum::Json(json!({"ok":true})))
     }).await
 }
@@ -205,6 +208,9 @@ pub(crate) async fn delete_favorite(
     State(a): State<App>,
     Path((profile, kind, id)): Path<(i64, String, String)>,
 ) -> ApiResult {
+    let id = engine_v3::anime_show::canonical_id(&a, &kind, &id)
+        .await
+        .unwrap_or(id);
     blocking(move || {
         let db = a.db.lock().unwrap();
         a.require_profile(&db, profile)?;
@@ -256,6 +262,7 @@ pub(crate) async fn save_progress(
 ) -> ApiResult {
     let tracking_app=a.clone();
     let tracking_value=v.clone();
+    let v=match engine_v3::anime_show::canonical_progress(&a,&v).await{Some(value)=>value,None=>v};
     let result=blocking(move || {
     let id = text(&v, "id", 512)?;
     let kind = media_type(&v)?;

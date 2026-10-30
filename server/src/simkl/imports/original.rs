@@ -29,6 +29,24 @@ pub(super) fn original(
     items: &Value,
     entries: &[viptv_engine::library::Entry],
 ) -> Result<Counts, ApiError> {
+    original_canonical(
+        db,
+        profile,
+        revision,
+        items,
+        entries,
+        &std::collections::HashMap::new(),
+    )
+}
+
+pub(super) fn original_canonical(
+    db: &Connection,
+    profile: i64,
+    revision: u64,
+    items: &Value,
+    entries: &[viptv_engine::library::Entry],
+    canonical: &std::collections::HashMap<(String, String), viptv_engine::identity::MediaIdentity>,
+) -> Result<Counts, ApiError> {
     let mut counts = Counts::default();
     for (key, field, category) in [
         ("movies", "movie", "movie"),
@@ -39,13 +57,17 @@ pub(super) fn original(
             let Some(id) = item[field]["ids"]["simkl"].as_u64() else {
                 continue;
             };
-            let Some(parent) = entries
+            let Some(entry) = entries
                 .iter()
                 .find(|e| e.card.identity.id == format!("simkl:{category}:{id}"))
-                .map(|e| &e.card)
             else {
                 continue;
             };
+            let mut parent = entry.card.clone();
+            if let Some(show) = canonical.get(&(parent.identity.kind.clone(), parent.identity.id.clone())) {
+                parent.identity = show.clone();
+            }
+            let parent = &parent;
             if parent.identity.kind == "movie" {
                 if item["status"] == "completed" {
                     if let Some(updated) = progress::millis(&item["last_watched_at"]) {

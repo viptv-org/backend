@@ -22,6 +22,7 @@ pub(super) async fn run(
         .map(|s| s.items.clone())
         .ok_or_else(|| ApiError::from("Import snapshot unavailable"))?;
     store::validate(app, profile, access)?;
+    let canonical = canonical_shows(app, &entries).await;
     let mut status = Status::default();
     {
         let mut db = app
@@ -30,15 +31,22 @@ pub(super) async fn run(
             .map_err(|_| ApiError::from("Database unavailable"))?;
         schema::validate_db(&db, app, profile, access, lease)?;
         let tx = db.transaction().map_err(db_error)?;
-        status.added = membership::apply(
+        status.added = membership::apply_canonical(
             &tx,
             profile,
             access.revision.unwrap_or(0),
             &entries,
             util::now_millis().max(0) as u64,
+            &canonical,
         )?;
-        let counts =
-            history::original(&tx, profile, access.revision.unwrap_or(0), &items, &entries)?;
+        let counts = history::original_canonical(
+            &tx,
+            profile,
+            access.revision.unwrap_or(0),
+            &items,
+            &entries,
+            &canonical,
+        )?;
         status.history = counts.inserted;
         status.preserved = counts.skipped;
         status.unresolved = counts.unresolved;
@@ -66,7 +74,8 @@ pub(super) async fn run(
     let mut reads = futures::stream::iter(playback.iter().take(100).cloned().collect::<Vec<_>>())
         .map(|value| {
             let entries = &entries;
-            async move { history::pause(app, profile, access, &value, entries).await }
+            let canonical = &canonical;
+            async move { history::pause(app, profile, access, &value, entries, canonical).await }
         })
         .buffer_unordered(3);
     while let Some(pause) = reads.next().await {
@@ -84,9 +93,9 @@ pub(super) async fn run(
         let mut statistics =
             viptv_engine::library::LibraryStatistics::empty(pause.library_card.identity.clone());
         statistics.last_watched_millis = Some(pause.updated);
-        let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM simkl_import_entries WHERE profile_id=?1 AND remote_kind=?2 AND remote_id=?3)",params![profile,pause.library_card.identity.kind,pause.library_card.identity.id],|r|r.get(0)).map_err(db_error)?;
+        let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM simkl_import_entries WHERE profile_id=?1 AND ((remote_kind=?2 AND remote_id=?3) OR (local_kind=?2 AND local_id=?3)))",params![profile,pause.library_card.identity.kind,pause.library_card.identity.id],|r|r.get(0)).map_err(db_error)?;
         if !exists {
-            status.added += membership::apply(
+            status.added += membership::apply_canonical(
                 &tx,
                 profile,
                 access.revision.unwrap_or(0),
@@ -95,6 +104,7 @@ pub(super) async fn run(
                     statistics,
                 }],
                 util::now_millis().max(0) as u64,
+                &canonical,
             )?;
         }
         if progress::apply(

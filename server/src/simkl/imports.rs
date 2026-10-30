@@ -137,12 +137,41 @@ pub(crate) async fn read(
 #[cfg(test)]
 mod tests;
 
-pub(crate) fn publish_membership(
+pub(super) async fn canonical_shows(
+    app: &App,
+    entries: &[viptv_engine::library::Entry],
+) -> std::collections::HashMap<(String, String), viptv_engine::identity::MediaIdentity> {
+    use futures::StreamExt;
+    let targets = entries
+        .iter()
+        .filter(|entry| {
+            entry.card.identity.kind == "series"
+                && crate::engine_v3::anime_show::anime_release(&entry.card.identity.id)
+        })
+        .take(2000)
+        .cloned()
+        .collect::<Vec<_>>();
+    futures::stream::iter(targets.into_iter().map(|entry| {
+        let app = app.clone();
+        async move {
+            let identity = entry.card.identity;
+            let show = crate::engine_v3::anime_show::canonical_show(&app, &identity).await?;
+            Some(((identity.kind, identity.id), show))
+        }
+    }))
+    .buffer_unordered(3)
+    .filter_map(|value| async move { value })
+    .collect()
+    .await
+}
+
+pub(crate) async fn publish_membership(
     app: &App,
     lease: &ResourceLease,
     profile: i64,
     entries: &[viptv_engine::library::Entry],
 ) -> Result<(), ApiError> {
+    let canonical = canonical_shows(app, entries).await;
     let access = store::credential(app, profile, Capability::Authorization)?;
     let mut db = app
         .db
@@ -150,12 +179,13 @@ pub(crate) fn publish_membership(
         .map_err(|_| ApiError::from("Database unavailable"))?;
     schema::validate_db(&db, app, profile, &access, lease)?;
     let tx = db.transaction().map_err(db_error)?;
-    membership::apply(
+    membership::apply_canonical(
         &tx,
         profile,
         access.revision.unwrap_or(0),
         entries,
         util::now_millis().max(0) as u64,
+        &canonical,
     )?;
     tx.commit().map_err(db_error)?;
     Ok(())

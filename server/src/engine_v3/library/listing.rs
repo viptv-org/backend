@@ -62,7 +62,7 @@ pub(crate) async fn list(
             known_genres = known;
             genre_total = total;
             genre_running = running;
-            crate::simkl::imports::publish_membership(&app, &lease, profile, &remote)?;
+            crate::simkl::imports::publish_membership(&app, &lease, profile, &remote).await?;
         }
     }
     let mut entries = if unavailable {
