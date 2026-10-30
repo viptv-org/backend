@@ -99,9 +99,12 @@ pub(crate) async fn action(
     if let Err((error, retry_seconds)) = enforce_rate_limit(app.clone(), bucket, subject_limit).await {
         return auth_error_with_retry(error, retry_seconds);
     }
+    if path == "/auth/account" {
+        return super::delete_account(app, p, v).await;
+    }
     let expensive = matches!(
         path.as_str(),
-        "/auth/register" | "/auth/login" | "/auth/device/login" | "/auth/recover"
+        "/auth/register" | "/auth/login" | "/auth/device/login" | "/auth/recover" | "/auth/password"
     );
     let permit =
         match acquire_auth_cpu(expensive, &AUTH_CPU, std::time::Duration::from_secs(2)).await {
@@ -111,7 +114,7 @@ pub(crate) async fn action(
     let result = tokio::task::spawn_blocking(move || {
         let snapshot = {
             let db = app.db.lock().map_err(|_| unauthorized())?;
-            login_snapshot(&db, &path, &v)?
+            login_snapshot(&db, &path, &v, p.as_ref().and_then(|value| value.0.account_id()))?
         };
         let prepared = prepare_auth(&path, &v, snapshot)?;
         drop(permit);
@@ -160,7 +163,11 @@ pub(crate) fn dispatch(
     v: &Value,
     _fixture_token: &str,
 ) -> Result<(Value, Option<(String, String)>), ApiError> {
-    let prepared = prepare_auth(path, v, login_snapshot(db, path, v)?)?;
+    let prepared = prepare_auth(
+        path,
+        v,
+        login_snapshot(db, path, v, p.as_ref().and_then(|value| value.account_id()))?,
+    )?;
     dispatch_prepared(db, path, p, h, v, &prepared)
 }
 
@@ -182,6 +189,8 @@ pub(crate) fn dispatch_prepared(
                 | "/auth/device/deny"
                 | "/auth/device/revoke"
                 | "/auth/device/revoke-own"
+                | "/auth/password"
+                | "/auth/recovery-codes"
         )
     {
         return Err(forbidden());
@@ -192,6 +201,70 @@ pub(crate) fn dispatch_prepared(
         }
     }
     match path {
+        "/auth/password" => {
+            let Principal::Account {
+                account_id,
+                profile_id,
+                ..
+            } = p.as_ref().ok_or_else(unauthorized)?;
+            let stored: Option<String> = db
+                .query_row(
+                    "SELECT password_hash FROM auth_accounts WHERE id=?1 AND disabled=0",
+                    params![account_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(crate::db_error)?;
+            if !prepared.login_valid || stored.as_deref() != prepared.login_hash.as_deref() {
+                return Err(ApiError(
+                    StatusCode::BAD_REQUEST,
+                    MSG_PASSWORD_INCORRECT.into(),
+                ));
+            }
+            let password_hash = prepared.new_hash.as_ref().ok_or_else(unauthorized)?;
+            let session_id = p
+                .as_ref()
+                .and_then(|value| value.session_id())
+                .ok_or_else(unauthorized)?;
+            let access_expires: i64 = db
+                .query_row(
+                    "SELECT access_expires FROM auth_sessions WHERE id=?1",
+                    [session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(crate::db_error)?
+                .ok_or_else(unauthorized)?;
+            db.execute(
+                "UPDATE auth_accounts SET password_hash=?1 WHERE id=?2",
+                params![password_hash, account_id],
+            )
+            .map_err(crate::db_error)?;
+            event(db, "password_changed", Some(*account_id))?;
+            let csrf_token = issue_csrf(db, session_id)?;
+            Ok((
+                json!({
+                    "session_id": session_id,
+                    "account_id": account_id,
+                    "profile_id": profile_id,
+                    "expires_in": (access_expires - now()).max(0),
+                    "csrf_token": csrf_token
+                }),
+                None,
+            ))
+        }
+        "/auth/recovery-codes" => {
+            let principal = p.as_ref().ok_or_else(unauthorized)?;
+            let account_id = principal.account_id().ok_or_else(forbidden)?;
+            let recovery = token();
+            db.execute(
+                "UPDATE auth_accounts SET recovery_hash=?1 WHERE id=?2",
+                params![hash(&recovery), account_id],
+            )
+            .map_err(crate::db_error)?;
+            event(db, "recovery_codes_regenerated", Some(account_id))?;
+            Ok((json!({"recovery_codes": [recovery]}), None))
+        }
         "/auth/register" => {
             let username = username(v)?;
             let display_name = v

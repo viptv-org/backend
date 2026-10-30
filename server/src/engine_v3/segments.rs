@@ -221,12 +221,16 @@ pub(crate) async fn target(
     if coordinates.episode == 0 {
         return None;
     }
-    let ids = if card.identity.ids.is_empty() {
-        card.parent_identity.as_ref().map_or(&[][..], |parent| parent.ids.as_slice())
-    } else {
-        card.identity.ids.as_slice()
-    };
-    let show = super::anime_show::resolve(&app.clone().with_lease(lease.clone()), &release(ids)?).await?;
+    let (release, ids) = [
+        Some(card.identity.ids.as_slice()),
+        card.parent_identity
+            .as_ref()
+            .map(|parent| parent.ids.as_slice()),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|ids| release(ids).map(|release| (release, ids)))?;
+    let show = super::anime_show::resolve(&app.clone().with_lease(lease.clone()), &release).await?;
     let release_episode = show.release_episode(super::anime_show::TvdbEpisode {
         season: coordinates.season?,
         episode: coordinates.episode,

@@ -24,6 +24,8 @@ Browser authentication sets Secure, HttpOnly, SameSite=Strict access and refresh
 - `GET /auth/status` reports public registration and current-session status without exposing account names.
 - `GET /auth/me` returns the authenticated account, active profile ID, capabilities, and current CSRF value.
 - `POST /auth/refresh {}` rotates browser cookies; replay revokes that credential family.
+- `POST /auth/password {current_password,new_password}` verifies the current password and replaces the hash after the register length rule (at least 12 characters). The current session stays signed in, other sessions are not revoked, and the response carries a fresh CSRF value; a wrong current password returns `400 password_incorrect` and a short new password `400 password_too_short`. Like login and recovery it is rate limited with `429 rate_limited` and `Retry-After`. Neither the password nor its hash appears in a response, request log or telemetry field.
+- `POST /auth/recovery-codes {}` regenerates the account's one-time recovery code and returns it once in `{"recovery_codes":[...]}`, invalidating the previous code. Browser and paired-device sessions can call both credential routes.
 - `POST /auth/logout {}` revokes the current browser session.
 - `GET /profiles` lists only profiles owned by the current account.
 - `POST /profiles {name,avatar_style,avatar_choice?}` creates an owned profile atomically. Styles are the closed kid-friendly catalog worlds in `AVATAR_STYLES`; `avatar_choice` is the 1-based position within the world (at most 48, or the character world's size). The server owns the seed (`viptv-{style}-{choice}`, random without a choice) and emits the HTTPS `avatar_url`; profiles project `avatar_choice: null` when no catalog choice was made, and when a stored seed names a position its world does not have (data written before the per-world sizes, or by an import).
@@ -56,6 +58,25 @@ or approval from the viewing hostname is still forbidden.
 An account holds at most 32 sessions, browser and paired-device together, so a client that pairs repeatedly cannot fill the table. A sign-in at that limit evicts the account's oldest session of its own kind first — a browser login prunes browser history and never kicks a paired TV, and a new pairing prunes the oldest TV — falling back to the oldest session of any kind only when the account holds none of its own kind. Expired sessions are deleted before the count, so they never hold a slot: an account whose stored grants have all aged out can always sign in again, and an account at the cap always has room for the sign-in that lets its owner revoke a device. A server-wide bound separately prunes the oldest member sessions of any kind and never the owner's; its `429` names server capacity, not an account state. A viewer signed out everywhere therefore always recovers through `POST /auth/login`, `GET /devices`, and `DELETE /devices/:id`.
 
 Store Roku access/refresh values only in private device storage and send access tokens in the Authorization header, never a query parameter. Pairing codes are short-lived, one-time, and not credentials by themselves. Revocation clears access immediately; there is no fallback credential.
+
+## Deleting an account
+
+`DELETE /auth/account {username,password,pin?}` deletes the signed-in account and
+everything it owns in one transaction: profiles and their owners, progress and
+history, favorites and library, approvals, per-profile and account preferences,
+add-ons, IPTV connections and their sealed secrets, device pairings, sessions and
+onboarding state. The typed `username` must equal the account's username and
+`password` must verify; anything else is `400 account_delete_rejected` with no
+row changed. When the account has a household PIN, `pin` must verify too:
+`400 parent_pin_incorrect`. A paired device is refused with
+`403 account_session_required` and the route shares the auth rate limit
+(`429 rate_limited` with `Retry-After`). Success returns `204` and expires both
+browser cookies.
+
+An owner deletes its own account and its household like anyone else, including
+when it is the server's only account. The one refusal is an owner whose server
+still holds other accounts: they would be left without an owner, so it answers
+`409 last_owner` until those accounts are deleted.
 
 ## Authorization and operations
 

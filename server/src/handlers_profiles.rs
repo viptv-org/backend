@@ -60,25 +60,9 @@ pub(crate) async fn delete_profile_authenticated(
         Ok(())
     })
     .await?;
-    let resources: Vec<String> = app
-        .resource_owners
-        .lock()
-        .unwrap()
-        .iter()
-        .filter_map(|(key, owner)| {
-            let auth::Principal::Account { profile_id, .. } = owner.lease.principal;
-            (profile_id == Some(id)).then(|| key.clone())
-        })
-        .collect();
-    for resource in resources {
-        if let Some(job) = resource.strip_prefix("job:") {
-            app.jobs.lock().unwrap().remove(job);
-        }
-        if let Some(stream) = resource.strip_prefix("stream:") {
-            app.streams.lock().unwrap().remove(stream);
-        }
-        app.resource_owners.lock().unwrap().remove(&resource);
-    }
+    app.release_resources(|principal| {
+        matches!(principal, auth::Principal::Account { profile_id, .. } if *profile_id == Some(id))
+    });
     Ok(axum::Json(json!({"deleted":true})))
 }
 pub(crate) async fn favorites_authenticated(

@@ -20,6 +20,22 @@ pub(crate) const MSG_PROFILE_POLICY_CHANGED: &str = "Profile policy changed";
 pub(crate) const MSG_AUTHORIZATION_PENDING: &str = "authorization_pending";
 pub(crate) const MSG_ACCESS_DENIED: &str = "access_denied";
 pub(crate) const MSG_EXPIRED_TOKEN: &str = "expired_token";
+pub(crate) const MSG_PASSWORD_INCORRECT: &str = "That password is not correct.";
+pub(crate) const MSG_PASSWORD_TOO_SHORT: &str =
+    "New password must contain at least 12 characters";
+pub(crate) const MSG_ACCOUNT_DELETE_REJECTED: &str = "The username or password is not correct.";
+pub(crate) const MSG_PARENT_PIN_INCORRECT: &str = "The parent PIN is not correct.";
+pub(crate) const MSG_LAST_OWNER: &str =
+    "Other accounts still need an owner. Have them delete their accounts first.";
+pub(crate) const MSG_ACCOUNT_CHANGED: &str = "This account changed. Try again.";
+pub(crate) const MSG_ACCOUNT_SESSION_REQUIRED: &str =
+    "Manage account settings from an account session, not a paired TV.";
+pub(crate) const CODE_ACCOUNT_DELETE_REJECTED: &str = "account_delete_rejected";
+pub(crate) const CODE_PARENT_PIN_INCORRECT: &str = "parent_pin_incorrect";
+pub(crate) const CODE_LAST_OWNER: &str = "last_owner";
+pub(crate) const CODE_ACCOUNT_SESSION_REQUIRED: &str = "account_session_required";
+pub(crate) const CODE_PASSWORD_INCORRECT: &str = "password_incorrect";
+pub(crate) const CODE_PASSWORD_TOO_SHORT: &str = "password_too_short";
 impl ApiError {
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
@@ -31,10 +47,16 @@ impl ApiError {
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),
             MSG_PARENT_PIN_INVALID => Some("parent_pin_invalid"),
+            MSG_PARENT_PIN_INCORRECT => Some(CODE_PARENT_PIN_INCORRECT),
+            MSG_ACCOUNT_DELETE_REJECTED => Some(CODE_ACCOUNT_DELETE_REJECTED),
+            MSG_LAST_OWNER => Some(CODE_LAST_OWNER),
+            MSG_ACCOUNT_SESSION_REQUIRED => Some(CODE_ACCOUNT_SESSION_REQUIRED),
             MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
             MSG_AUTHORIZATION_PENDING => Some(MSG_AUTHORIZATION_PENDING),
             MSG_ACCESS_DENIED => Some(MSG_ACCESS_DENIED),
             MSG_EXPIRED_TOKEN => Some(MSG_EXPIRED_TOKEN),
+            MSG_PASSWORD_INCORRECT => Some(CODE_PASSWORD_INCORRECT),
+            MSG_PASSWORD_TOO_SHORT => Some(CODE_PASSWORD_TOO_SHORT),
             "Provider connection limit reached" => Some("provider_connection_limit"),
             _ => None,
         }
@@ -404,6 +426,25 @@ impl App {
             principal: self.identity(),
             session_id: None,
         })
+    }
+    pub(crate) fn release_resources(&self, owned: impl Fn(&auth::Principal) -> bool) {
+        let keys: Vec<String> = self
+            .resource_owners
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, owner)| owned(&owner.lease.principal))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in keys {
+            if let Some(job) = key.strip_prefix("job:") {
+                self.jobs.lock().unwrap().remove(job);
+            }
+            if let Some(stream) = key.strip_prefix("stream:") {
+                self.streams.lock().unwrap().remove(stream);
+            }
+            self.resource_owners.lock().unwrap().remove(&key);
+        }
     }
     pub(crate) fn own_resource(&self, kind: &str, id: &str) {
         self.resource_owners.lock().unwrap().insert(
