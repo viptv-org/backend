@@ -3228,3 +3228,54 @@ async fn profile_rows_outside_the_world_size_project_no_choice() {
     assert_eq!(renamed["avatar_choice"], Value::Null, "{renamed}");
     assert_eq!(renamed["avatar_url"], first, "{renamed}");
 }
+
+#[tokio::test]
+async fn password_change_is_rate_limited_with_retry_after() {
+    let a = fixture();
+    let (status, body) = request(
+        &a,
+        "member-token-1",
+        "POST",
+        "/api/auth/password",
+        json!({"current_password":"fixture-current-password","new_password":"fixture-new-long-password"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error_code"], "password_incorrect", "{body}");
+    let bucket = format!("auth:subject:/auth/password:{}", auth::hash("account-1"));
+    a.db.lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO auth_limits(bucket,count,expires) VALUES(?1,30,?2) ON CONFLICT(bucket) DO UPDATE SET count=30,expires=excluded.expires",
+            params![bucket, util::now() + 300],
+        )
+        .unwrap();
+    let response = router(a.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/password")
+                .header("authorization", "Bearer member-token-1")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"current_password":"fixture-current-password","new_password":"fixture-new-long-password"})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let retry = response
+        .headers()
+        .get(header::RETRY_AFTER)
+        .expect("Retry-After")
+        .to_str()
+        .unwrap()
+        .parse::<i64>()
+        .unwrap();
+    assert!(retry >= 1);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(body["error_code"], "rate_limited", "{body}");
+}
