@@ -4,7 +4,7 @@ This experimental host contract serves KMP, TV-web and Roku. Existing v1/v2 APIs
 
 ## Startup and navigation budget
 
-Reuse the existing browser cookie session or paired-device bearer session. Cookie mutations require the CSRF token from `GET /api/auth/status`; never put credentials in media URLs. Pairing uses `/api/auth/device/code`, `/api/auth/device/token` and the existing refresh flow. A token poll that isn't granted answers 400 with `error` and `error_code` set to `authorization_pending` (keep polling), `access_denied` (the account holder declined) or `expired_token` (request a new code). `POST /api/auth/profile` selects a profile with its current lock authority. `GET /api/v3/profiles` and bootstrap `profile_management` advertise supported management/parent-lock operations; remote per-profile PIN is unavailable.
+Reuse the existing browser cookie session or paired-device bearer session. Cookie mutations require the CSRF token from `GET /api/auth/status`; never put credentials in media URLs. Pairing uses `/api/auth/device/code`, `/api/auth/device/token` and the existing refresh flow. A token poll that isn't granted answers 400 with `error` and `error_code` set to `authorization_pending` (keep polling), `access_denied` (the account holder declined) or `expired_token` (request a new code). `POST /api/auth/profile` selects a profile with its current lock authority. `GET /api/v3/profiles` and bootstrap `profile_management` advertise supported management/parent-lock operations, including per-profile leave PINs ([parental controls](PARENTAL_CONTROLS_V3.md)).
 
 After authentication/profile selection, **one** `GET /api/v3/bootstrap` supplies identity, profile management, Home, first Library page, complete lightweight `library_membership`, preferences, `library_import` and the first twelve typed continuation entries. An unselected session has nullable profile content. Do not immediately refetch Home, every Library page, every row, or every card's metadata. Library membership is for toggle state; it is not a requirement to hydrate all saved cards. Profile/connection replacement retires cached results and outstanding operations.
 
@@ -23,7 +23,7 @@ After authentication/profile selection, **one** `GET /api/v3/bootstrap` supplies
 | `addons` | the account's add-ons (same value as `GET /api/catalogs/revision`; the fixed kids value for a restricted profile) |
 | `policy` | this profile's kids setting or title approvals |
 | `preferences` | this profile's preferences |
-| `profiles` | any profile of the account is created, deleted, renamed or has presentation/avatar changes, a kids `enabled`/`max_age` change, the account parent PIN is set/changed/removed, or this session's parent unlock changes |
+| `profiles` | any profile of the account is created, deleted, renamed or has presentation/avatar changes, a kids `enabled`/`max_age`/rating/`allow_unrated` or blocked-title change, the account parent PIN is set/changed/removed, or this session's parent unlock changes |
 
 Compare values only for equality; never parse them or compare them by order. A missing row reads as a stable default. Authorization matches the other selected-profile routes: 401 without a session, 403 when no profile is selected or `:id` is not the session's selected profile (including another account's profile), 400 for a non-numeric id. Restricted kids sessions may poll without a parent grant. Responses are `Cache-Control: no-store`.
 

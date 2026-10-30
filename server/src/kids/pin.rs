@@ -5,14 +5,14 @@ use argon2::{
 };
 pub(crate) const PIN_CPU_PERMITS: usize = 2;
 
-fn pin_text(value: &Value, key: &str) -> Result<String, ApiError> {
+pub(super) fn pin_text(value: &Value, key: &str) -> Result<String, ApiError> {
     let pin = value[key].as_str().ok_or("PIN required")?;
     if !(4..=8).contains(&pin.len()) || !pin.bytes().all(|b| b.is_ascii_digit()) {
         return Err("PIN must contain 4 to 8 digits".into());
     }
     Ok(pin.into())
 }
-async fn pin_cpu<T: Send + 'static>(
+pub(super) async fn pin_cpu<T: Send + 'static>(
     app: &App,
     work: impl FnOnce() -> Result<T, ApiError> + Send + 'static,
 ) -> Result<T, ApiError> {
@@ -33,6 +33,19 @@ async fn pin_cpu<T: Send + 'static>(
         work()
     })
     .await
+}
+pub(super) fn verify_hash(pin: &str, hash: &str) -> bool {
+    PasswordHash::new(hash).ok().is_some_and(|hash| {
+        Argon2::default()
+            .verify_password(pin.as_bytes(), &hash)
+            .is_ok()
+    })
+}
+pub(super) fn new_hash(pin: &str) -> Result<String, ApiError> {
+    Argon2::default()
+        .hash_password(pin.as_bytes(), &SaltString::generate(&mut OsRng))
+        .map(|value| value.to_string())
+        .map_err(|_| ApiError::from("PIN could not be saved"))
 }
 async fn verify_pin(app: &App, pin: String) -> Result<String, ApiError> {
     let p = app.identity();
@@ -68,14 +81,7 @@ async fn verify_pin(app: &App, pin: String) -> Result<String, ApiError> {
         hash
     };
     let hash = snapshot.clone();
-    let valid = pin_cpu(app, move || {
-        Ok(PasswordHash::new(&hash).ok().is_some_and(|h| {
-            Argon2::default()
-                .verify_password(pin.as_bytes(), &h)
-                .is_ok()
-        }))
-    })
-    .await?;
+    let valid = pin_cpu(app, move || Ok(verify_hash(&pin, &hash))).await?;
     let db = app.db.lock().unwrap();
     app.request_lease().validate(&db)?;
     let current = stored_pin(&db, account)?;
@@ -133,15 +139,7 @@ pub(crate) async fn set_pin(
         None
     } else {
         let pin = pin_text(&value, "pin")?;
-        Some(
-            pin_cpu(&app, move || {
-                Argon2::default()
-                    .hash_password(pin.as_bytes(), &SaltString::generate(&mut OsRng))
-                    .map(|v| v.to_string())
-                    .map_err(|_| ApiError::from("PIN could not be saved"))
-            })
-            .await?,
-        )
+        Some(pin_cpu(&app, move || new_hash(&pin)).await?)
     };
     let mut db = app.db.lock().unwrap();
     let tx = db.transaction().map_err(db_error)?;

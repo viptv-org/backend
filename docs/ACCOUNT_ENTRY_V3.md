@@ -45,12 +45,13 @@ A new member has no profile. `GET /api/v3/profiles` and `POST /api/v3/profiles {
 
 Household configuration is owner-only: the household PIN (`PUT /api/v3/parent/pin`), add-ons, IPTV connections and matches, gateways, source integrations and signing other devices out answer `403 owner_required` to a member session and `403 account_session_required` to a paired device. Profile and parental-policy routes stay with any browser account session. Parent operations are:
 
-- `GET /api/v3/parent/status` → `{pin_configured,unlocked,restricted}`.
+- `GET /api/v3/parent/status` → `{pin_configured,unlocked,restricted,leave_pin_configured}`.
 - `POST /api/v3/parent/unlock {pin}` → a session-bound, one-shot grant lasting 120 seconds. Wrong PIN is 403; five failures trigger a five-minute lockout (429).
 - `PUT /api/v3/parent/pin {pin,current_pin?}` sets/rotates the PIN; an empty new PIN removes it only when no kids profiles remain. PINs contain 4–8 ASCII digits. Rotation/removal requires the current PIN and clears grants.
-- `GET/PUT /api/profiles/:id/kids` reads/changes `{enabled,max_age}`. Age ceilings are integers 0–17. Enabling requires a configured account PIN. Ownership and parent restrictions apply, policy revision changes invalidate old media leases, and the client must refresh selected-profile content.
+- `GET/PUT /api/profiles/:id/kids` reads/changes `{enabled,max_age,movie_rating,series_rating,allow_unrated}`. Age ceilings are integers 0–17; the per-kind rating labels and the `allow_unrated` toggle are defined in [parental controls](PARENTAL_CONTROLS_V3.md), together with the `ratings` mapping the response carries. Enabling requires a configured account PIN. Ownership and parent restrictions apply, policy revision changes invalidate old media leases, and the client must refresh selected-profile content.
+- `GET/POST /api/profiles/:id/blocked` and `GET/PUT /api/profiles/:id/pin` are the per-profile deny list and leave PIN; see [parental controls](PARENTAL_CONTROLS_V3.md).
 
-Selecting another profile consumes an unlock grant. An authenticated account session can change its own password and regenerate its recovery code, but there is no account-name editing API, email-delivery API, or forgotten-parent-PIN reset contract in this slice; do not present those operations as completed.
+Selecting another profile consumes an unlock grant and, when the selected profile has a leave PIN, needs that PIN in `POST /api/auth/profile {profile_id,pin?}`. An authenticated account session can change its own password and regenerate its recovery code, but there is no account-name editing API, email-delivery API, or forgotten-parent-PIN reset contract in this slice; do not present those operations as completed.
 
 The v3 profile-management projection preserves `kids` as a JSON boolean and returns the actual integer `max_age` alongside it. This is not a nested policy object. Older servers may omit `max_age`; clients should represent an unknown ceiling instead of fabricating one. A regression checks ordinary-profile `false/12` and an actual configured kids policy `true/7`.
 

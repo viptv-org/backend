@@ -11,7 +11,7 @@ pub(crate) fn forbidden() -> ApiError {
     ApiError(StatusCode::FORBIDDEN, "Forbidden".into())
 }
 // Compared by value: a &str const pattern matches the reference, not the text.
-const EXPOSED_CODES: [&str; 10] = [
+const EXPOSED_CODES: [&str; 12] = [
     MSG_AUTHORIZATION_PENDING,
     MSG_ACCESS_DENIED,
     MSG_EXPIRED_TOKEN,
@@ -22,6 +22,8 @@ const EXPOSED_CODES: [&str; 10] = [
     CODE_OWNER_REQUIRED,
     CODE_PASSWORD_INCORRECT,
     CODE_PASSWORD_TOO_SHORT,
+    "leave_pin_required",
+    "leave_pin_invalid",
 ];
 pub(crate) fn auth_error(error: ApiError) -> Response {
     auth_error_with_retry(error, None)

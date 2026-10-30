@@ -190,11 +190,12 @@ waiting and again before projection. Timeout yields the ordinary current event
 snapshot, never fabricated source success.
 
 `GET /api/v3/profiles` returns typed profile cards, CRUD/avatar availability,
-account parent-PIN state and explicit unsupported per-profile-PIN availability.
-Bootstrap includes the same object as `profile_management`. Restricted sessions
+account parent-PIN state and per-profile leave-PIN availability ([parental
+controls](PARENTAL_CONTROLS_V3.md)). Bootstrap includes the same object as
+`profile_management`. Restricted sessions
 mark other targets `locked: true`, `lock_kind: "parent"`, and
 `selection_requires_parent: true`; unlocking the existing account parent PIN
-permits the selection without claiming a local per-profile PIN. POST/PATCH use
+permits the selection. POST/PATCH use
 `name` plus an optional catalog avatar: `avatar_style` (one of the account
 `AVATAR_STYLES` worlds) and a 1-based `avatar_choice` bounded by that world's
 size, validated by the account profile rules. Cards project the account

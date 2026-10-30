@@ -1,6 +1,6 @@
 use super::*;
 
-fn known_age(value: &str) -> Option<i64> {
+pub(super) fn known_age(value: &str) -> Option<i64> {
     match value.trim().to_uppercase().as_str() {
         "G" | "TV-G" | "TV-Y" => Some(0),
         "TV-Y7" | "TV-Y7-FV" => Some(7),
@@ -118,6 +118,14 @@ fn compact_metadata(meta: &Value) -> Value {
     }
     out
 }
+fn tracks_unrated(db: &Connection, account: i64) -> Result<bool, ApiError> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM kids_profiles k JOIN profile_owners o ON o.profile_id=k.profile_id WHERE o.account_id=?1 AND k.allow_unrated=1)",
+        [account],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
 pub(crate) fn observe(
     db: &Connection,
     account: i64,
@@ -138,7 +146,7 @@ pub(crate) fn observe(
         return Ok(());
     }
     let (age, conflict) = assessment(meta);
-    if age.is_none() && !keep_unknown && !conflict {
+    if age.is_none() && !conflict && !keep_unknown && !tracks_unrated(db, account)? {
         return Ok(());
     }
     let mut metadata = compact_metadata(meta);

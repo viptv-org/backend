@@ -134,7 +134,7 @@ pub(crate) async fn list(
         let mut cards=auth::list_profiles(&db,account)?.iter().map(|p|project(&db,p)).collect::<Result<Vec<_>,_>>()?;
         let auth::Principal::Account {profile_id,..}=principal;
         if restricted&&!unlocked {for card in &mut cards {if card["id"].as_str().and_then(|s|s.parse::<i64>().ok())!=profile_id {card["locked"]=json!(true);card["selection_requires_parent"]=json!(true);card["lock_kind"]=json!("parent");}}}
-        Ok(axum::Json(json!({"profiles":cards,"avatar_ids":LEGACY_AVATAR_IDS,"capabilities":{"create":available,"rename":available,"delete":available,"avatar":available,"profile_pin":state(Availability::Unsupported,Some("This server uses account parent PINs; per-profile PINs are unavailable")),"parent_unlock":state(if configured{Availability::Available}else{Availability::NeedsConfiguration},None)},"parent":{"pin_configured":configured,"unlocked":unlocked,"restricted":restricted}})))
+        Ok(axum::Json(json!({"profiles":cards,"avatar_ids":LEGACY_AVATAR_IDS,"capabilities":{"create":available,"rename":available,"delete":available,"avatar":available,"profile_pin":state(Availability::Available,None),"parent_unlock":state(if configured{Availability::Available}else{Availability::NeedsConfiguration},None)},"parent":{"pin_configured":configured,"unlocked":unlocked,"restricted":restricted}})))
     }).await
 }
 pub(crate) async fn create(
@@ -207,38 +207,6 @@ pub(crate) async fn update(
         let profile = project(&tx, &profile)?;
         tx.commit().map_err(db_error)?;
         Ok(axum::Json(profile))
-    })
-    .await
-}
-pub(crate) async fn pin_status(
-    State(app): State<App>,
-    Extension(lease): Extension<ResourceLease>,
-    Path(id): Path<i64>,
-) -> ApiResult {
-    let app = app.with_lease(lease);
-    blocking(move || {
-        let db = app.db.lock().unwrap();
-        owns(&db, &app, id)?;
-        Ok(axum::Json(state(
-            Availability::Unsupported,
-            Some("This server uses account parent PINs; per-profile PINs are unavailable"),
-        )))
-    })
-    .await
-}
-pub(crate) async fn unsupported_pin(
-    State(app): State<App>,
-    Extension(lease): Extension<ResourceLease>,
-    Path(id): Path<i64>,
-) -> ApiResult {
-    let app = app.with_lease(lease);
-    blocking(move || {
-        let db = app.db.lock().unwrap();
-        owns(&db, &app, id)?;
-        Err(ApiError(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Per-profile PINs are unavailable on this server".into(),
-        ))
     })
     .await
 }

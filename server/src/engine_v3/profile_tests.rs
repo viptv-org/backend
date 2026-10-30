@@ -7,7 +7,7 @@ async fn typed_profile_crud_preserves_ownership_avatar_and_primary_protection() 
     assert_eq!(status, StatusCode::OK, "{list}");
     assert_eq!(
         list["capabilities"]["profile_pin"]["availability"],
-        "Unsupported"
+        "Available"
     );
     assert_eq!(list["profiles"][0]["locked"], false);
     let (status, profile) = request(

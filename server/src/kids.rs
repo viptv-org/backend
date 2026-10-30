@@ -1,13 +1,16 @@
 use super::*;
 
+pub(crate) mod blocked;
 pub(crate) mod consumers;
-pub(crate) mod scoped;
+pub(crate) mod limits;
+pub(crate) mod parent_scope;
 mod metadata;
 mod pin;
 mod policy;
+pub(crate) mod profile_pin;
 mod schema;
+pub(crate) mod scoped;
 pub(crate) mod titles;
-pub(crate) mod parent_scope;
 pub(crate) fn adult(meta: &Value) -> bool {
     metadata::assessment(meta).0.is_some_and(|age| age >= 18)
 }
