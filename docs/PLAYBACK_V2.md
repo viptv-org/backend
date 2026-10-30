@@ -109,6 +109,39 @@ failure prevents release, the independent gateway lease remains the final bound.
 Direct URLs already disclosed to a device cannot be remotely erased; clients
 must stop native playback when their control authorization is lost.
 
+## Skip segments
+
+GET /api/v2/playback/:id/segments answers the playing episode's opening, recap
+and credits intervals in milliseconds on the original media timeline:
+
+```json
+{
+  "segments": [
+    {"kind": "recap", "start_ms": 0, "end_ms": 30000},
+    {"kind": "intro", "start_ms": 310571, "end_ms": 400571},
+    {"kind": "credits", "start_ms": 1290000, "end_ms": 1380000}
+  ]
+}
+```
+
+`kind` is `intro`, `recap` or `credits`; at most one of each is returned. The
+array is empty when no source knows the episode, when the item is not a series
+episode with a verified anime mapping, or when the lookup fails. An empty answer
+is normal and never blocks playback. The route reads the playback's own item and
+follows the existing playback authorization, lease and error contract; live
+playback and non-anime items answer with no segments.
+
+The server always returns the segments it knows: the profile's "Skip intros and
+recaps" preference is applied by the client, which also uses `credits.start_ms`
+to time the next-episode panel. Segments come from AniSkip lookups of the
+episode's MAL release number and are cached per episode for 24 hours on a hit,
+one hour on no data and 60 seconds after a failure, with upstream requests
+spaced to at most 30 per minute per deployment. The adapter is off unless the
+operator sets `VIPTV_ANISKIP=1`; `VIPTV_ANISKIP_BASE` overrides the upstream
+origin for testing. Episode numbering comes from the resolved release layout, so
+an episode whose mapping is missing or ambiguous answers with no segments
+instead of a guess.
+
 ## Evidence and limitations
 
 Native torrent admission is enabled by default for every authenticated supported

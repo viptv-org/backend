@@ -164,3 +164,43 @@ async fn conflicting_parent_is_rejected_and_legacy_context_is_projected_without_
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn history_reports_a_legacy_completion_with_an_unknown_watch_date() {
+    let app = fixture();
+    app.db.lock().unwrap().execute("INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at,context,title_id) VALUES(1,'imported-movie','movie','Imported movie',0,0,0,'{\"watched_override\":true,\"stremio_import_watched\":true,\"stremio_completion_only\":true,\"stremio_watch_date_unknown\":true}','imported-movie')",[]).unwrap();
+    let entry = get(&app, "/api/profiles/1/history").await[0].clone();
+    assert_eq!(entry["card"]["identity"]["id"], "imported-movie");
+    assert_eq!(entry["watched"], json!(true));
+    assert_eq!(entry["completion_only"], json!(true));
+    assert_eq!(entry["watch_date_known"], json!(false));
+    assert_eq!(entry["resume_active"], json!(false));
+    assert_eq!(entry["position"], json!(0.0));
+    assert_eq!(entry["duration"], json!(0.0));
+    assert!(entry["completed_at_millis"].is_null());
+}
+
+#[tokio::test]
+async fn history_reports_position_and_watch_state_from_an_engine_record() {
+    let app = fixture();
+    let payload = |position: u64, completed: Option<u64>| {
+        json!({"identity":identity("engine-episode",true),"parent_identity":identity("engine-parent",false),"provider_id":"stremio","title":"Engine episode","poster":null,"landscape":null,"position_millis":position,"duration_millis":100_000,"updated_at_millis":5_000,"completed_at_millis":completed})
+    };
+    app.db.lock().unwrap().execute("INSERT INTO engine_scoped_records VALUES(1,'playback','legacy','series','engine-episode','shared','engine-parent','',?1,NULL,5000,0)",[payload(30_000,None).to_string()]).unwrap();
+    let entry = get(&app, "/api/profiles/1/history").await[0].clone();
+    assert_eq!(entry["card"]["identity"], identity("engine-episode", true));
+    assert_eq!(entry["position"], json!(30.0));
+    assert_eq!(entry["duration"], json!(100.0));
+    assert_eq!(entry["watched"], json!(false));
+    assert_eq!(entry["resume_active"], json!(true));
+    assert_eq!(entry["completion_only"], json!(false));
+    assert_eq!(entry["watch_date_known"], json!(true));
+    assert!(entry["completed_at_millis"].is_null());
+    app.db.lock().unwrap().execute("UPDATE engine_scoped_records SET value=?1 WHERE profile_id=1 AND record_kind='playback'",[payload(95_000,Some(5_000)).to_string()]).unwrap();
+    let completed = get(&app, "/api/profiles/1/history").await[0].clone();
+    assert_eq!(completed["position"], json!(95.0));
+    assert_eq!(completed["watched"], json!(true));
+    assert_eq!(completed["resume_active"], json!(false));
+    assert_eq!(completed["completion_only"], json!(false));
+    assert_eq!(completed["completed_at_millis"], json!(5_000));
+}

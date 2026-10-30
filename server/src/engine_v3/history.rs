@@ -137,20 +137,66 @@ fn history_limit() -> u32 {
     20
 }
 
+struct Row {
+    record: PlaybackRecord,
+    watch: Option<Watch>,
+}
+
+#[derive(Clone, Copy)]
+struct Watch {
+    position: f64,
+    duration: f64,
+    watched: bool,
+    resume_active: bool,
+    completion_only: bool,
+    watch_date_known: bool,
+}
+
+impl Watch {
+    fn legacy(item: &Value) -> Self {
+        Self {
+            position: item["position"].as_f64().unwrap_or(0.0),
+            duration: item["duration"].as_f64().unwrap_or(0.0),
+            watched: item["watched"] == true,
+            resume_active: item["resume_active"] == true,
+            completion_only: item["completion_only"] == true,
+            watch_date_known: item["watch_date_known"] == true,
+        }
+    }
+    fn engine(record: &PlaybackRecord) -> Self {
+        Self {
+            position: record.position_millis as f64 / 1000.0,
+            duration: record.duration_millis as f64 / 1000.0,
+            watched: record.completed_at_millis.is_some(),
+            resume_active: record.can_resume(),
+            completion_only: false,
+            watch_date_known: true,
+        }
+    }
+    fn insert(self, item: &mut Value) {
+        item["position"] = json!(self.position);
+        item["duration"] = json!(self.duration);
+        item["watched"] = json!(self.watched);
+        item["resume_active"] = json!(self.resume_active);
+        item["completion_only"] = json!(self.completion_only);
+        item["watch_date_known"] = json!(self.watch_date_known);
+    }
+}
+
 fn keep_newest(
-    records: &mut std::collections::BTreeMap<scoped_library::Key, PlaybackRecord>,
-    mut record: PlaybackRecord,
+    rows: &mut std::collections::BTreeMap<scoped_library::Key, Row>,
+    mut row: Row,
 ) -> Result<(), ApiError> {
-    crate::simkl::key::identity(&mut record.identity);
-    if let Some(parent) = record.parent_identity.as_mut() {
+    crate::simkl::key::identity(&mut row.record.identity);
+    if let Some(parent) = row.record.parent_identity.as_mut() {
         crate::simkl::key::identity(parent);
     }
-    let key = scoped_library::raw_key(&record.card())?;
-    if records
+    let key = scoped_library::raw_key(&row.record.card())?;
+    if rows
         .get(&key)
-        .is_none_or(|old| old.updated_at_millis < record.updated_at_millis)
+        .is_none_or(|old| old.record.updated_at_millis < row.record.updated_at_millis)
     {
-        records.insert(key, record);
+        rows.insert(key, row);
     }
     Ok(())
 }
@@ -177,31 +223,45 @@ pub(crate) async fn list(
     if items.len() > 50000 {
         return Err("History exceeds its bounded item limit".into());
     }
-    let mut records = std::collections::BTreeMap::new();
+    let mut rows = std::collections::BTreeMap::new();
     for item in kids::filter_items(&db, &app.identity(), items)? {
         if let Some(record) = record(&item) {
-            keep_newest(&mut records, record)?;
+            keep_newest(
+                &mut rows,
+                Row {
+                    record,
+                    watch: Some(Watch::legacy(&item)),
+                },
+            )?;
         }
     }
     for saved in scoped_library::playback_db(&db, &app, profile)? {
-        keep_newest(&mut records, saved.value)?;
+        keep_newest(
+            &mut rows,
+            Row {
+                record: saved.value,
+                watch: None,
+            },
+        )?;
     }
-    let mut records = records.into_values().collect::<Vec<_>>();
-    records.sort_by(|a, b| {
-        b.updated_at_millis
-            .cmp(&a.updated_at_millis)
-            .then_with(|| a.identity.id.cmp(&b.identity.id))
+    let mut rows = rows.into_values().collect::<Vec<_>>();
+    rows.sort_by(|a, b| {
+        b.record
+            .updated_at_millis
+            .cmp(&a.record.updated_at_millis)
+            .then_with(|| a.record.identity.id.cmp(&b.record.identity.id))
     });
-    let entries = records
-        .iter()
-        .skip(offset)
-        .take(limit)
-        .map(HistoryEntry::from)
-        .collect::<Vec<_>>();
+    let mut entries = Vec::new();
+    for row in rows.iter().skip(offset).take(limit) {
+        let mut entry = serde_json::to_value(HistoryEntry::from(&row.record))
+            .map_err(|_| ApiError::from("History unavailable"))?;
+        row.watch
+            .unwrap_or_else(|| Watch::engine(&row.record))
+            .insert(&mut entry);
+        entries.push(entry);
+    }
 
-    Ok(axum::Json(
-        serde_json::to_value(entries).map_err(|_| ApiError::from("History unavailable"))?,
-    ))
+    Ok(axum::Json(Value::Array(entries)))
 }
 
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
