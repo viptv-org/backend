@@ -361,6 +361,12 @@ pub(crate) async fn canonical_progress(app: &App, value: &Value) -> Option<Value
             season: coordinates.season?,
             episode: coordinates.episode,
         }
+    } else if let Some(episode) = episode_suffix(id, &release.id) {
+        show.tvdb_episode(&EpisodeCoordinates {
+            order: coordinates.order,
+            season: coordinates.season,
+            episode,
+        })?
     } else {
         show.canonical_episode(&coordinates)?
     };
@@ -497,17 +503,16 @@ async fn resolve_with(
     let layout = if simkl_identity.is_some() {
         Layout::Aired
     } else {
-        let segments = if spans_seasons(&videos) {
-            Vec::new()
-        } else {
-            match simkl {
-                Some(id) => simkl_episodes(app, id)
-                    .await
-                    .map(|rows| segments(&rows))
-                    .unwrap_or_default(),
-                None => Vec::new(),
-            }
+        let mut segments = match simkl {
+            Some(id) if !spans_seasons(&videos) => simkl_episodes(app, id)
+                .await
+                .map(|rows| segments(&rows))
+                .unwrap_or_default(),
+            _ => Vec::new(),
         };
+        if segments.is_empty() && simkl.is_none() {
+            segments = release_segments(&release.id, &videos);
+        }
         Layout::Segments {
             release_season: single_season(&videos),
             segments,
@@ -544,25 +549,47 @@ fn season_numbers(videos: &[Value]) -> std::collections::BTreeSet<u64> {
 
 /// Release episode numbers count the way Simkl's `episode` numbers do inside one anime title.
 fn segments(rows: &[Value]) -> Vec<Segment> {
+    segments_from(rows.iter().take(MAX_ROWS).filter_map(|row| {
+        if row["type"].as_str() != Some("episode") || row["aired"] == false {
+            return None;
+        }
+        let number = u32::try_from(row["episode"].as_u64()?).ok()?;
+        let season = u32::try_from(row["tvdb"]["season"].as_u64()?).ok()?;
+        let episode = u32::try_from(row["tvdb"]["episode"].as_u64()?).ok()?;
+        Some((number, season, episode))
+    }))
+}
+
+fn release_segments(release: &str, videos: &[Value]) -> Vec<Segment> {
+    segments_from(videos.iter().take(MAX_ROWS).filter_map(|video| {
+        let number = episode_suffix(video["id"].as_str()?, release)?;
+        let (season, episode) = show_coordinates(video)?;
+        Some((number, season, episode))
+    }))
+}
+
+fn episode_suffix(id: &str, release: &str) -> Option<u32> {
+    let suffix = id.strip_prefix(release)?.strip_prefix(':')?;
+    if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse().ok()
+}
+
+fn show_coordinates(video: &Value) -> Option<(u32, u32)> {
+    let season = video["imdbSeason"]
+        .as_u64()
+        .or_else(|| video["season"].as_u64())?;
+    let episode = video["imdbEpisode"]
+        .as_u64()
+        .or_else(|| video["episode"].as_u64())?;
+    Some((u32::try_from(season).ok()?, u32::try_from(episode).ok()?))
+}
+
+fn segments_from(items: impl Iterator<Item = (u32, u32, u32)>) -> Vec<Segment> {
     let mut pairs = std::collections::BTreeMap::new();
     let mut conflicting = HashSet::new();
-    for row in rows.iter().take(MAX_ROWS) {
-        if row["type"].as_str() != Some("episode") || row["aired"] == false {
-            continue;
-        }
-        let (Some(number), Some(season), Some(episode)) = (
-            row["episode"]
-                .as_u64()
-                .and_then(|number| u32::try_from(number).ok()),
-            row["tvdb"]["season"]
-                .as_u64()
-                .and_then(|season| u32::try_from(season).ok()),
-            row["tvdb"]["episode"]
-                .as_u64()
-                .and_then(|episode| u32::try_from(episode).ok()),
-        ) else {
-            continue;
-        };
+    for (number, season, episode) in items {
         if !(1..=MAX_EPISODES).contains(&number) || episode == 0 {
             continue;
         }

@@ -269,6 +269,55 @@ async fn a_release_without_a_tvdb_or_tmdb_mapping_stays_as_it_is() {
 }
 
 #[tokio::test]
+async fn kitsu_release_episodes_move_to_the_show_and_unmapped_ones_stay() {
+    let (app, task) = stack().await;
+    saved(&app, "kitsu:41982", 1);
+    saved(&app, "kitsu:9", 2);
+    imported(&app, "kitsu:41982:1", "kitsu:41982", 1, 1, 24.0, 100);
+    imported(&app, "kitsu:41982:7", "kitsu:41982", 1, 7, 12.0, 200);
+    imported(&app, "kitsu:9:1", "kitsu:9", 1, 1, 5.0, 300);
+
+    run(&app).await.unwrap();
+
+    assert_eq!(saved_titles(&app), vec!["kitsu:9", SHOW]);
+    assert_eq!(
+        episodes(&app),
+        vec![
+            ("kitsu:9:1".into(), "kitsu:9".into()),
+            ("tt2560140:3:13".into(), SHOW.into()),
+            ("tt2560140:3:19".into(), SHOW.into()),
+        ]
+    );
+    let first = context_of(&app, "tt2560140:3:13");
+    assert_eq!(first["season"], 3);
+    assert_eq!(first["episode"], 13);
+    assert_eq!(first["series_id"], SHOW);
+    assert_eq!(first["engine_identity"]["episode"]["season"], 3);
+    assert_eq!(first["engine_identity"]["episode"]["episode"], 13);
+    assert_eq!(first["engine_parent_identity"]["id"], SHOW);
+    let ids = first["engine_identity"]["ids"].as_array().unwrap();
+    assert!(ids.contains(&json!({"namespace":"tvdb","value":"267440"})), "{ids:?}");
+    task.abort();
+}
+
+#[tokio::test]
+async fn running_the_migration_again_changes_no_kitsu_episode() {
+    let (app, task) = stack().await;
+    saved(&app, "kitsu:41982", 1);
+    saved(&app, "kitsu:9", 2);
+    imported(&app, "kitsu:41982:1", "kitsu:41982", 1, 1, 24.0, 100);
+    imported(&app, "kitsu:9:1", "kitsu:9", 1, 1, 5.0, 100);
+
+    run(&app).await.unwrap();
+    let before = snapshot(&app);
+    run(&app).await.unwrap();
+
+    assert_eq!(snapshot(&app), before);
+    assert_eq!(saved_titles(&app), vec!["kitsu:9", SHOW]);
+    task.abort();
+}
+
+#[tokio::test]
 async fn a_title_hidden_from_continue_watching_stays_hidden_under_the_show() {
     let (app, task) = stack().await;
     {
