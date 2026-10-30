@@ -17,7 +17,7 @@ pub(crate) struct CalendarQuery {
 fn default_kind() -> String {
     "series".into()
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct Entry {
     id: String,
     card: Card,
@@ -62,10 +62,11 @@ pub(crate) async fn get(
             "Calendar is unavailable for this browsing integration".into(),
         ));
     }
-    let (category, file) = match q.kind.as_str() {
-        "movie" => ("movie", "movie_release"),
-        "series" => ("tv", "tv"),
-        "anime" => ("anime", "anime"),
+    let categories: &[(&str, &str)] = match q.kind.as_str() {
+        "movie" => &[("movie", "movie_release")],
+        "series" => &[("tv", "tv")],
+        "anime" => &[("anime", "anime")],
+        "all" => &[("tv", "tv"), ("anime", "anime"), ("movie", "movie_release")],
         _ => return Err("Invalid calendar type".into()),
     };
     let today = DateTime::from_timestamp(util::now(), 0)
@@ -88,51 +89,88 @@ pub(crate) async fn get(
     if !(1..=500).contains(&limit) {
         return Err("Invalid calendar page size".into());
     }
-    let mut entries = Vec::new();
-    let mut sources = Vec::new();
+    let mut library = Vec::new();
     let mut pending = false;
-    let mut own = Vec::new();
-    if library_series && category != "movie" {
+    let mut library_answered = false;
+    if library_series && categories.iter().any(|(category, _)| *category != "movie") {
         match your_shows::episodes(&app, &lease, profile, public).await {
             Ok(found) => {
+                library_answered = true;
                 pending = found.pending;
                 for episode in &found.episodes {
-                    let Some(entry) = library_entry(episode, start, end)? else {
-                        continue;
-                    };
-                    if episode.series.identity.id.starts_with("simkl:anime:") == (category == "anime") {
-                        entries.push(entry);
-                    } else {
-                        own.push(entry);
+                    if let Some(entry) = library_entry(episode, start, end)? {
+                        library.push(entry);
                     }
                 }
-                sources.push("library");
             }
             Err(error) if public && !fatal(&error) => {}
             Err(error) => return Err(error),
         }
     }
-    if public {
-        match public_entries(&app, profile, category, file, start, end).await {
-            Ok(schedule) => {
-                let shown = entries.len();
+    let mut public_answered = false;
+    let schedules: Vec<Option<Result<Vec<Entry>, ApiError>>> = if public {
+        futures::future::join_all(
+            categories
+                .iter()
+                .map(|(category, file)| public_entries(&app, profile, category, file, start, end)),
+        )
+        .await
+        .into_iter()
+        .map(Some)
+        .collect()
+    } else {
+        categories.iter().map(|_| None).collect()
+    };
+    let mut failure = None;
+    let mut entries = Vec::new();
+    for ((category, _), schedule) in categories.iter().zip(schedules) {
+        let (matching, own): (Vec<&Entry>, Vec<&Entry>) = if *category == "movie" {
+            (Vec::new(), Vec::new())
+        } else {
+            library.iter().partition(|entry| {
+                entry.card.identity.id.starts_with("simkl:anime:") == (*category == "anime")
+            })
+        };
+        let shown = matching.len();
+        let mut found: Vec<Entry> = matching.into_iter().cloned().collect();
+        match schedule {
+            None => {}
+            Some(Ok(schedule)) => {
+                public_answered = true;
                 for entry in schedule {
-                    let duplicate = entries[..shown]
+                    let duplicate = found[..shown]
                         .iter()
-                        .chain(&own)
+                        .chain(own.iter().copied())
                         .any(|library| same_episode(library, &entry));
                     if !duplicate {
-                        entries.push(entry);
+                        found.push(entry);
                     }
                 }
-                sources.push("public");
             }
-            Err(error) if !sources.is_empty() && !fatal(&error) => {}
-            Err(error) => return Err(error),
+            Some(Err(error)) if fatal(&error) => return Err(error),
+            Some(Err(error)) => {
+                failure.get_or_insert(error);
+            }
         }
+        entries.extend(found);
+    }
+    if !library_answered && !public_answered {
+        if let Some(error) = failure {
+            return Err(error);
+        }
+    }
+    let mut sources = Vec::new();
+    if library_answered {
+        sources.push("library");
+    }
+    if public_answered {
+        sources.push("public");
     }
     let mut seen = std::collections::HashSet::new();
     entries.retain(|entry| seen.insert(entry.id.clone()));
+    if categories.len() > 1 {
+        entries = distinct_releases(entries);
+    }
     entries.sort_by(|a, b| a.date.cmp(&b.date).then(a.id.cmp(&b.id)));
     let total = entries.len();
     let entries: Vec<_> = entries.into_iter().skip(q.skip).take(limit).collect();
@@ -149,6 +187,22 @@ pub(crate) async fn get(
         page["refresh_after_millis"] = json!(your_shows::PARTIAL_TTL.as_millis() as u64);
     }
     Ok(axum::Json(page))
+}
+
+fn distinct_releases(entries: Vec<Entry>) -> Vec<Entry> {
+    let mut seen = std::collections::HashSet::new();
+    entries
+        .into_iter()
+        .filter(|entry| {
+            seen.insert((
+                entry.card.identity.kind.clone(),
+                entry.card.identity.id.clone(),
+                entry.date.clone(),
+                entry.season,
+                entry.episode,
+            ))
+        })
+        .collect()
 }
 
 fn fatal(error: &ApiError) -> bool {
@@ -315,4 +369,51 @@ async fn public_entries(
     }
     store::validate(&app, profile, &access)?;
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(
+        id: &str,
+        source: &'static str,
+        date: &str,
+        season: Option<u32>,
+        episode: Option<u32>,
+    ) -> Entry {
+        Entry {
+            id: id.into(),
+            card: viptv_engine::simkl::card(
+                &serde_json::json!({"title":"Shared title","ids":{"simkl_id":20}}),
+                "tv",
+            )
+            .unwrap(),
+            date: date.into(),
+            episode_title: None,
+            season,
+            episode,
+            source,
+            episode_card: None,
+            keys: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_release_listed_under_more_than_one_type_appears_once() {
+        let releases = distinct_releases(vec![
+            entry("series", "public", "2026-10-13T04:00:00Z", Some(2), Some(3)),
+            entry("anime", "library", "2026-10-13T04:00:00Z", Some(2), Some(3)),
+            entry("other", "public", "2026-10-13T04:00:00Z", Some(2), Some(4)),
+            entry("day", "public", "2026-10-14T04:00:00Z", Some(2), Some(3)),
+        ]);
+        assert_eq!(
+            releases
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["series", "other", "day"]
+        );
+        assert_eq!(releases[0].source, "public");
+    }
 }

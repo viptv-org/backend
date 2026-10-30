@@ -83,7 +83,7 @@ and fence the selected profile. Kids profiles store and read only approved
 presentation data. Home's My List row uses the same typed cards. The local shared
 engine has matching persistent, paged library operations and UniFFI methods.
 
-`GET /api/v3/calendar?type=series|movie|anime&start=YYYY-MM-DD&end=YYYY-MM-DD&skip=0`
+`GET /api/v3/calendar?type=series|movie|anime|all&start=YYYY-MM-DD&end=YYYY-MM-DD&skip=0`
 returns `{ entries, next_cursor, complete }`, with 100 entries by default and an optional `limit` of 1–500 per page.
 Each entry contains a stable calendar `id`, a typed title `card`, UTC `date`,
 `episode_title`, `season`, and `episode`. Calendar row IDs are separate from
@@ -122,6 +122,10 @@ matching bootstrap navigation's `calendar` destination and the
 discovery-controls `calendar` availability; otherwise it returns 422. When one
 source fails (other than session, permission or configuration changes), the
 other source's entries are returned and `sources` omits the failed one.
+`type=all` answers all three types in one merged, paged list: a release that
+more than one type lists appears once (same card identity, release timestamp,
+season and episode), `sources` is the union and the ordering is still date,
+then id, with each type's row ids unchanged.
 
 Wire shape. All additions are optional for older clients; existing fields and
 public entry ids are unchanged:
