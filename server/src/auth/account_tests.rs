@@ -701,11 +701,50 @@ async fn device_sessions_and_unverified_cookie_writes_cannot_delete_an_account()
 }
 
 #[tokio::test]
-async fn the_last_owner_cannot_delete_itself() {
+async fn a_sole_owner_deletes_its_account_and_the_household() {
     let mut a = app();
     configure_vault(&mut a);
     let owner = account(&a, 1, "owner", "owner");
     seed(&a, 1);
+    let (status, headers, text) = delete(
+        &a,
+        &owner,
+        json!({"username":"owner","password":PASSWORD,"pin":PIN}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{text}");
+    assert_eq!(headers["cache-control"].to_str().unwrap(), "no-store");
+    let db = a.db.lock().unwrap();
+    assert_eq!(
+        owned_counts(&db, 1)
+            .into_iter()
+            .filter(|(_, count)| *count > 0)
+            .collect::<Vec<_>>(),
+        Vec::new()
+    );
+    for table in ["auth_accounts", "profiles", "profile_owners"] {
+        assert_eq!(
+            db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "{table} kept a row"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_owner_is_refused_while_other_accounts_still_need_one() {
+    let mut a = app();
+    configure_vault(&mut a);
+    let owner = account(&a, 1, "owner", "owner");
+    let member = account(&a, 2, "member2", "member");
+    seed(&a, 1);
+    seed(&a, 2);
+    let before = {
+        let db = a.db.lock().unwrap();
+        owned_counts(&db, 1)
+    };
     let (status, _, text) = delete(
         &a,
         &owner,
@@ -714,14 +753,38 @@ async fn the_last_owner_cannot_delete_itself() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{text}");
     assert_eq!(code(&text), "last_owner");
-    assert!(text.contains("Create another owner"));
+    assert!(text.contains("Have them delete their accounts first"), "{text}");
+    {
+        let db = a.db.lock().unwrap();
+        assert_eq!(owned_counts(&db, 1), before);
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM auth_accounts WHERE id=1", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+    let (status, _, text) = delete(
+        &a,
+        &member,
+        json!({"username":"member2","password":PASSWORD,"pin":PIN}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{text}");
+    let (status, _, text) = delete(
+        &a,
+        &owner,
+        json!({"username":"owner","password":PASSWORD,"pin":PIN}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{text}");
     assert_eq!(
         a.db.lock()
             .unwrap()
-            .query_row("SELECT count(*) FROM auth_accounts WHERE id=1", [], |row| row
+            .query_row("SELECT count(*) FROM auth_accounts", [], |row| row
                 .get::<_, i64>(0))
             .unwrap(),
-        1
+        0
     );
 }
 

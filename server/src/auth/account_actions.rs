@@ -96,14 +96,14 @@ fn cleared_session() -> Response {
 }
 
 fn delete_owned(tx: &Connection, snapshot: &Snapshot) -> Result<(), ApiError> {
-    let owners: i64 = tx
+    let stranded: i64 = tx
         .query_row(
-            "SELECT count(*) FROM auth_accounts WHERE role='owner' AND disabled=0",
-            [],
+            "SELECT count(*) FROM auth_accounts WHERE id<>?1 AND disabled=0",
+            [snapshot.account],
             |row| row.get(0),
         )
         .map_err(crate::db_error)?;
-    if snapshot.role == "owner" && owners <= 1 {
+    if snapshot.role == "owner" && stranded > 0 {
         return Err(ApiError(StatusCode::CONFLICT, MSG_LAST_OWNER.into()));
     }
     let current: Option<(String, Option<String>)> = tx

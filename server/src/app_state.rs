@@ -23,7 +23,7 @@ pub(crate) const MSG_EXPIRED_TOKEN: &str = "expired_token";
 pub(crate) const MSG_ACCOUNT_DELETE_REJECTED: &str = "The username or password is not correct.";
 pub(crate) const MSG_PARENT_PIN_INCORRECT: &str = "The parent PIN is not correct.";
 pub(crate) const MSG_LAST_OWNER: &str =
-    "This is the server's last owner account. Create another owner before deleting it.";
+    "Other accounts still need an owner. Have them delete their accounts first.";
 pub(crate) const MSG_ACCOUNT_CHANGED: &str = "This account changed. Try again.";
 pub(crate) const MSG_ACCOUNT_SESSION_REQUIRED: &str =
     "Manage account settings from an account session, not a paired TV.";

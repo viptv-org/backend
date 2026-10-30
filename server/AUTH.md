@@ -67,9 +67,14 @@ onboarding state. The typed `username` must equal the account's username and
 `password` must verify; anything else is `400 account_delete_rejected` with no
 row changed. When the account has a household PIN, `pin` must verify too:
 `400 parent_pin_incorrect`. A paired device is refused with
-`403 account_session_required`, an owner cannot delete itself (`409 last_owner`),
-and the route shares the auth rate limit (`429 rate_limited` with `Retry-After`).
-Success returns `204` and expires both browser cookies.
+`403 account_session_required` and the route shares the auth rate limit
+(`429 rate_limited` with `Retry-After`). Success returns `204` and expires both
+browser cookies.
+
+An owner deletes its own account and its household like anyone else, including
+when it is the server's only account. The one refusal is an owner whose server
+still holds other accounts: they would be left without an owner, so it answers
+`409 last_owner` until those accounts are deleted.
 
 ## Authorization and operations
 
