@@ -524,3 +524,37 @@ async fn a_profile_leave_pin_gates_switching_away_from_it() {
     assert_eq!(leave(&a, None).await.0, StatusCode::OK);
     task.abort();
 }
+
+#[tokio::test]
+async fn restricted_catalogs_are_empty_and_discover_stays_filtered() {
+    let (a, task) = fixture().await;
+    let movies = catalog(&a, "movie").await;
+    let series = catalog(&a, "series").await;
+    for id in ["pg", "pg13", "r", "adult", "unrated", "conflict"] {
+        observe(&a, "movie", &movies, id).await;
+    }
+    for id in ["cartoon", "teen-series"] {
+        observe(&a, "series", &series, id).await;
+    }
+    let (status, body) = request(&a, "member-token-1", "GET", "/api/catalogs", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let ids: Vec<&str> = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["top", "top-series"]);
+    let id = create_kids(
+        &a,
+        json!({"max_age":17,"movie_rating":"PG","series_rating":"TV-Y"}),
+    )
+    .await;
+    switch(&a, &id).await;
+    let (status, body) = request(&a, "member-token-1", "GET", "/api/catalogs", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!([]));
+    assert_eq!(catalog_ids(&a, "movie").await, vec!["pg"]);
+    assert_eq!(catalog_ids(&a, "series").await, vec!["cartoon"]);
+    task.abort();
+}

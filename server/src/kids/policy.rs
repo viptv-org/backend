@@ -166,55 +166,12 @@ fn decide_request(
             }
             ["profiles", _, "favorites" | "progress" | "continue", ..] => {}
             ["catalogs"] => {
-                return Ok(PolicyDecision::Respond(
-                    json!([{"addon_id":0,"id":"kids-movies","type":"movie","name":"Family movies","supports_search":true,"supports_skip":true,"extra":[],"genres":[]},{"addon_id":0,"id":"kids-series","type":"series","name":"Family series","supports_search":true,"supports_skip":true,"extra":[],"genres":[]}]),
-                ))
+                return Ok(PolicyDecision::Respond(json!([])))
             }
             ["catalogs", "revision"] => {
                 return Ok(PolicyDecision::Respond(
                     json!({"revision":"00000000000000000000000000000000"}),
                 ))
-            }
-            ["discover"] => {
-                let kind = q.get("type").map(String::as_str).unwrap_or("movie");
-                let search = q
-                    .get("search")
-                    .map(|v| v.to_lowercase())
-                    .unwrap_or_default();
-                let offset = q
-                    .get("skip")
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(0)
-                    .min(10000);
-                let auth::Principal::Account { profile_id, .. } = p;
-                let allowed = sql_allowed("catalog.kind", "catalog.id", "?3");
-                let predicate = format!("catalog.account_id=?1 AND catalog.kind=?2 AND catalog.id=catalog.parent_id AND instr(lower(json_extract(catalog.metadata,'$.name')),?4)>0 AND {allowed}");
-                let total: usize = db
-                    .query_row(
-                        &format!("SELECT count(*) FROM kids_media catalog WHERE {predicate}"),
-                        params![p.account_id(), kind, profile_id, search],
-                        |r| r.get(0),
-                    )
-                    .map_err(db_error)?;
-                let mut stmt = db.prepare(&format!("SELECT json_remove(metadata,'$.videos','$.links','$.recommendations') FROM kids_media catalog WHERE {predicate} ORDER BY updated_at DESC,id LIMIT 80 OFFSET ?5")).map_err(db_error)?;
-                let values = stmt
-                    .query_map(
-                        params![p.account_id(), kind, profile_id, search, offset],
-                        |r| r.get::<_, String>(0),
-                    )
-                    .map_err(db_error)?
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(db_error)?
-                    .into_iter()
-                    .filter_map(|s| serde_json::from_str::<Value>(&s).ok())
-                    .map(|mut v| {
-                        v["type"] = json!(kind);
-                        v
-                    })
-                    .collect::<Vec<_>>();
-                return Ok(PolicyDecision::Respond(
-                    json!({"metas":values,"has_more":offset+80<total,"next_skip":offset+80,"total":total}),
-                ));
             }
             ["meta", kind, id] => {
                 let id = decode_path(id)?;
