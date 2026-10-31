@@ -149,6 +149,7 @@ pub(crate) async fn rank(
     let filters=heights.into_iter().rev().map(|(height,count)|json!({"height":height,"label":if height==2160{"4K".into()}else{format!("{height}p")},"count":count})).collect::<Vec<_>>();
     let best_match_ids = ranking.best_match_ids;
     let best_match_id = ranking.best_match_id;
+    let best_match_fully_matches = ranking.best_match_fully_matches;
     let total = ranked.len();
     let selection_note = if preferences.preferences.source_selection
         == viptv_engine::preferences::SourceSelection::Best
@@ -166,7 +167,7 @@ pub(crate) async fn rank(
         })
         .collect::<Vec<_>>();
     Ok(axum::Json(
-        json!({"streams":streams,"best_match_id":best_match_id,"best_match_ids":best_match_ids,"quality_filters":filters,"total":total,"selection_note":selection_note}),
+        json!({"streams":streams,"best_match_id":best_match_id,"best_match_ids":best_match_ids,"best_match_fully_matches":best_match_fully_matches,"quality_filters":filters,"total":total,"selection_note":selection_note}),
     ))
 }
 
