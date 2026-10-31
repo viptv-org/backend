@@ -18,6 +18,9 @@ pub(crate) mod configuration;
 pub(crate) mod anime_show;
 #[cfg(test)]
 mod anime_show_tests;
+pub(crate) mod cross_ids;
+#[cfg(test)]
+mod cross_ids_tests;
 pub(crate) mod anime_show_migration;
 #[cfg(test)]
 mod anime_show_migration_tests;
