@@ -286,3 +286,121 @@ async fn a_simkl_profile_merges_library_and_public_entries_once() {
             .unwrap()["id"]
     );
 }
+#[tokio::test]
+async fn a_library_only_profile_merges_series_and_anime_in_one_request() {
+    let mut app = fixture();
+    let t = now();
+    let _served = addon(&mut app, vec![(1, 2, t + DAY)]).await;
+    save_series(&app, "tt100");
+    save_series(&app, "simkl:anime:40");
+    let (status, page) = calendar(&app, "?type=all").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["sources"], json!(["library"]));
+    let entries = page["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().all(|entry| entry["source"] == "library"));
+    assert_eq!(coordinates(&page), vec![(1, 2), (1, 2)]);
+    for (kind, query) in [("series", "?type=series"), ("anime", "?type=anime")] {
+        let (status, single) = calendar(&app, query).await;
+        assert_eq!(status, StatusCode::OK, "{kind}: {single}");
+        let single = single["entries"].as_array().unwrap();
+        assert_eq!(single.len(), 1, "{kind}: {single:?}");
+        let merged = entries
+            .iter()
+            .find(|entry| entry["card"]["identity"]["id"] == single[0]["card"]["identity"]["id"])
+            .unwrap_or_else(|| panic!("{kind} is missing from the merged page"));
+        assert_eq!(merged["id"], single[0]["id"], "{kind} keeps its row id");
+    }
+    let (status, movies) = calendar(&app, "?type=movie").await;
+    assert_eq!(status, StatusCode::OK, "{movies}");
+    assert!(movies["entries"].as_array().unwrap().is_empty(), "{movies}");
+}
+
+#[tokio::test]
+async fn a_merged_request_keeps_library_rows_over_public_on_every_type() {
+    let t = now();
+    let shared = t + DAY;
+    let router = Router::new()
+        .route(
+            "/calendar/v2/tv.json",
+            get(move || async move {
+                axum::Json(json!({"calendar":[
+                    {"simkl_id":20,"date":iso(shared + 3_600_000),"episode":{"season":2,"episode":3,"title":"Public title"}},
+                    {"simkl_id":30,"date":iso(t + 2 * DAY),"episode":{"season":1,"episode":1,"title":"Other show"}}
+                ],"metadata":{
+                    "20":{"title":"Shared series","ids":{"simkl_id":20,"imdb":"tt1234567"}},
+                    "30":{"title":"Public only","ids":{"simkl_id":30}}
+                }}))
+            }),
+        )
+        .route(
+            "/calendar/v2/anime.json",
+            get(move || async move {
+                axum::Json(json!({"calendar":[
+                    {"simkl_id":40,"date":iso(shared),"episode":{"season":2,"episode":3}}
+                ],"metadata":{"40":{"title":"Shared anime","ids":{"simkl_id":40,"imdb":"tt1234567"}}}}))
+            }),
+        )
+        .route(
+            "/calendar/v2/movie_release.json",
+            get(move || async move {
+                axum::Json(json!({"calendar":[
+                    {"simkl_id":50,"date":iso(t + 2 * DAY)}
+                ],"metadata":{"50":{"title":"Movie premiere","ids":{"simkl_id":50,"imdb":"tt9999999"}}}}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut app = fixture();
+    app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
+    let mut served = addon(&mut app, vec![(2, 3, shared), (2, 4, t + 3 * DAY)]).await;
+    served.tasks.push(task);
+    save_series(&app, "tt1234567");
+
+    let (status, page) = calendar(&app, "?type=all").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["sources"], json!(["library", "public"]));
+    assert_eq!(page["complete"], true);
+    let entries = page["entries"].as_array().unwrap();
+    let summary = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry["card"]["identity"]["id"].as_str().unwrap(),
+                entry["season"].as_u64(),
+                entry["episode"].as_u64(),
+                entry["source"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        vec![summary[0].clone(), summary[3].clone()],
+        vec![
+            ("tt1234567", Some(2), Some(3), "library"),
+            ("tt1234567", Some(2), Some(4), "library"),
+        ],
+        "{page}"
+    );
+    assert_eq!(summary.len(), 4, "{page}");
+    assert!(summary[1..3].contains(&("simkl:tv:30", Some(1), Some(1), "public")), "{page}");
+    assert!(summary[1..3].contains(&("simkl:movie:50", None, None, "public")), "{page}");
+    assert_eq!(entries[0]["card"]["identity"]["id"], "tt1234567");
+    assert_eq!(entries[3]["card"]["identity"]["id"], "tt1234567");
+    assert_eq!(entries[0]["date"], iso(shared));
+    assert_eq!(entries[3]["date"], iso(t + 3 * DAY));
+    assert!(entries[0].get("episode_card").is_some());
+    assert!(entries[1].get("episode_card").is_none());
+
+    for query in ["?type=series", "?type=anime", "?type=movie"] {
+        let (status, single) = calendar(&app, query).await;
+        assert_eq!(status, StatusCode::OK, "{query}: {single}");
+        for entry in single["entries"].as_array().unwrap() {
+            let merged = entries
+                .iter()
+                .find(|other| other["id"] == entry["id"])
+                .unwrap_or_else(|| panic!("{query}: {entry} is missing from the merged page"));
+            assert_eq!(merged["card"], entry["card"], "{query} keeps its row");
+        }
+    }
+}

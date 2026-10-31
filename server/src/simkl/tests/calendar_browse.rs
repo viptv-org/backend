@@ -327,3 +327,125 @@ async fn a_cold_calendar_does_not_block_genres_and_identical_fetches_coalesce() 
     assert_eq!(reads.load(Ordering::SeqCst), 1);
     task.abort();
 }
+#[tokio::test]
+async fn every_type_in_one_request_merges_the_cached_calendars_and_pages_them() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let doc = |reads: &Arc<AtomicUsize>, body: Value| {
+        let reads = reads.clone();
+        get(move || {
+            let reads = reads.clone();
+            let body = body.clone();
+            async move {
+                reads.fetch_add(1, Ordering::SeqCst);
+                axum::Json(body)
+            }
+        })
+    };
+    let router = Router::new()
+        .route("/calendar/v2/tv.json", doc(&reads, json!({"calendar":[{"simkl_id":20,"date":"2026-10-13T04:00:00Z","episode":{"season":2,"episode":3,"title":"Series chapter"}}],"metadata":{"20":{"title":"Merged series","ids":{"simkl_id":20}}}})))
+        .route("/calendar/v2/anime.json", doc(&reads, json!({"calendar":[{"simkl_id":30,"date":"2026-10-14T04:00:00Z","episode":{"season":1,"episode":1}}],"metadata":{"30":{"title":"Merged anime","ids":{"simkl_id":30}}}})))
+        .route("/calendar/v2/movie_release.json", doc(&reads, json!({"calendar":[{"simkl_id":40,"date":"2026-10-12T04:00:00Z"}],"metadata":{"40":{"title":"Merged movie","ids":{"simkl_id":40}}}})));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut app = fixture();
+    app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
+    let path = "/api/calendar?type=all&start=2026-10-12&end=2026-10-18";
+    let (status, page) = request(&app, "member-token-1", "GET", path, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["sources"], json!(["public"]));
+    assert_eq!(page["complete"], true);
+    assert!(page["next_cursor"].is_null());
+    assert!(page.get("refresh_after_millis").is_none());
+    let entries = page["entries"].as_array().unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry["card"]["identity"]["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["simkl:movie:40", "simkl:tv:20", "simkl:anime:30"],
+        "{page}"
+    );
+    assert!(entries.iter().all(|entry| entry["source"] == "public"));
+    assert_eq!(entries[1]["episode"], 3);
+    assert_eq!(entries[1]["episode_title"], "Series chapter");
+    for (kind, path) in [
+        ("series", "/api/calendar?type=series&start=2026-10-12&end=2026-10-18"),
+        ("anime", "/api/calendar?type=anime&start=2026-10-12&end=2026-10-18"),
+        ("movie", "/api/calendar?type=movie&start=2026-10-12&end=2026-10-18"),
+    ] {
+        let (status, single) = request(&app, "member-token-1", "GET", path, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{single}");
+        let single = single["entries"].as_array().unwrap();
+        assert_eq!(single.len(), 1, "{kind}");
+        let merged = entries
+            .iter()
+            .find(|entry| entry["card"]["identity"]["id"] == single[0]["card"]["identity"]["id"])
+            .unwrap_or_else(|| panic!("{kind} is missing from the merged page"));
+        assert_eq!(merged["id"], single[0]["id"], "{kind} keeps its row id");
+    }
+    assert_eq!(reads.load(Ordering::SeqCst), 3);
+    let (status, first) = request(&app, "member-token-1", "GET", &format!("{path}&limit=2"), json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(first["next_cursor"], "2");
+    assert_eq!(first["complete"], false);
+    let (status, second) = request(&app, "member-token-1", "GET", &format!("{path}&skip=2&limit=2"), json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    let second = second["entries"].as_array().unwrap();
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0]["card"]["identity"]["id"], "simkl:anime:30");
+    assert_eq!(second[0]["id"], entries[2]["id"]);
+    assert_eq!(reads.load(Ordering::SeqCst), 3, "one cached document per type");
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_failing_type_leaves_the_others_in_the_merged_page() {
+    let router = Router::new()
+        .route("/calendar/v2/tv.json", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }))
+        .route("/calendar/v2/anime.json", get(|| async { axum::Json(json!({"calendar":[{"simkl_id":30,"date":"2026-10-14T04:00:00Z","episode":{"season":1,"episode":1}}],"metadata":{"30":{"title":"Merged anime","ids":{"simkl_id":30}}}})) }))
+        .route("/calendar/v2/movie_release.json", get(|| async { axum::Json(json!({"calendar":[{"simkl_id":40,"date":"2026-10-12T04:00:00Z"}],"metadata":{"40":{"title":"Merged movie","ids":{"simkl_id":40}}}})) }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut app = fixture();
+    app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
+    let path = "/api/calendar?type=all&start=2026-10-12&end=2026-10-18";
+    let (status, page) = request(&app, "member-token-1", "GET", path, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(
+        page["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["card"]["identity"]["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["simkl:movie:40", "simkl:anime:30"]
+    );
+    assert_eq!(page["sources"], json!(["public"]));
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_merged_page_fails_only_when_no_type_answers() {
+    let router = Router::new()
+        .route("/calendar/v2/tv.json", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }))
+        .route("/calendar/v2/anime.json", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }))
+        .route("/calendar/v2/movie_release.json", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut app = fixture();
+    app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/calendar?type=all&start=2026-10-12&end=2026-10-18",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    task.abort();
+}
