@@ -108,9 +108,9 @@ pub async fn correct(
         kids::require_item(&db,&app.identity(),kind,id)?;
         let tx=db.transaction().map_err(db_error)?;
         let previous:Option<(f64,String)>=tx.query_row("SELECT duration,context FROM progress WHERE profile_id=?1 AND type=?2 AND id=?3",params![profile,kind,id],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(db_error)?;
-        let duration=previous.as_ref().map(|v|v.0).filter(|v|*v>0.0).unwrap_or_else(||item["duration"].as_f64().unwrap_or(0.0));
+        let mut duration=previous.as_ref().map(|v|v.0).filter(|v|*v>0.0).unwrap_or_else(||item["duration"].as_f64().unwrap_or(0.0));
         if !duration.is_finite() || !(0.0..=1e9).contains(&duration){return Err("Invalid duration".into());}
-        let position=match action {
+        let mut position=match action {
             "watched"=>duration,
             "unwatched"=>0.0,
             "position"=>item["position"].as_f64().ok_or("Invalid position")?,
@@ -128,7 +128,10 @@ pub async fn correct(
         let title=continuation::title_id(&identity);
         // A correction made in the same second must become the series' newest activity.
         let updated=activity_time(&tx,profile)?;
-        engine_v3::library_stats::observe(&tx,profile,kind,id,action=="watched"||duration>0.0&&position/duration>=0.95)?;
+        let settled=engine_v3::scoped_library::correct_db(&tx,profile,kind,id,(position*1000.0).round() as u64,(duration*1000.0).round() as u64,action=="watched",updated.max(0) as u64*1000)?;
+        if let Some((at,total))=settled {position=at;duration=total;}
+        let completed = action=="watched"||duration>0.0&&position/duration>=0.95;
+        engine_v3::library_stats::observe(&tx,profile,kind,id,completed)?;
         tx.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=COALESCE(excluded.poster,progress.poster),position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,context=excluded.context,title_id=excluded.title_id",params![profile,id,kind,name,item["poster"].as_str(),position,duration,updated,merged.to_string(),title]).map_err(db_error)?;
         tx.execute("DELETE FROM continuation_cache WHERE profile_id=?1 AND series_id=?2",params![profile,title]).map_err(db_error)?;
         continuation::show(&tx,profile,kind,&title).map_err(db_error)?;

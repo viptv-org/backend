@@ -651,6 +651,62 @@ pub(crate) fn record_db(
         verified || old.is_some_and(|o| o.verified),
     )
 }
+/// A correction rewrites the title's engine record; the returned seconds are what the correction settled on.
+pub(crate) fn correct_db(
+    db: &Connection,
+    profile: i64,
+    kind: &str,
+    id: &str,
+    position_millis: u64,
+    duration_millis: u64,
+    watched: bool,
+    at_millis: u64,
+) -> Result<Option<(f64, f64)>, ApiError> {
+    let mut query = db.prepare("SELECT identity_scope,kind,identity_id,value FROM engine_scoped_records WHERE profile_id=?1 AND record_kind='playback' AND kind=?2 AND (identity_id=?3 OR lookup_id=?3) ORDER BY updated_at_millis DESC LIMIT 32").map_err(db_error)?;
+    let rows = query
+        .query_map(params![profile, kind, id], |r| {
+            Ok((Key(r.get(0)?, r.get(1)?, r.get(2)?), r.get::<_, String>(3)?))
+        })
+        .map_err(db_error)?;
+    let mut settled = None;
+    for row in rows {
+        let (key, raw) = row.map_err(db_error)?;
+        let mut record: PlaybackRecord = decode(&raw)?;
+        let was_completed = record.completed_at_millis.is_some();
+        let duration = if duration_millis > 0 {
+            duration_millis
+        } else {
+            record.duration_millis
+        };
+        let mut position = position_millis;
+        if watched && position == 0 {
+            position = duration;
+        }
+        if duration > 0 {
+            position = position.min(duration);
+        }
+        let completed =
+            watched || (duration > 0 && position.saturating_mul(100) >= duration.saturating_mul(95));
+        record.times_watched = record.times_watched.map(|n| match (was_completed, completed) {
+            (false, true) => n.saturating_add(1),
+            (true, false) => n.saturating_sub(1),
+            _ => n,
+        });
+        record.completed_at_millis = if completed {
+            record.completed_at_millis.or(Some(at_millis))
+        } else {
+            None
+        };
+        record.position_millis = position;
+        record.duration_millis = duration;
+        record.updated_at_millis = at_millis;
+        let mut value = serde_json::to_value(&record).map_err(|_| invalid())?;
+        value["_current_completed"] = Value::Bool(completed);
+        db.execute("UPDATE engine_scoped_records SET value=?1,updated_at_millis=?2 WHERE profile_id=?3 AND record_kind='playback' AND identity_scope=?4 AND kind=?5 AND identity_id=?6",params![value.to_string(),at_millis,profile,key.0,key.1,key.2]).map_err(db_error)?;
+        settled.get_or_insert((position as f64 / 1000.0, duration as f64 / 1000.0));
+    }
+    Ok(settled)
+}
 pub(crate) fn playback_db(
     db: &Connection,
     app: &App,
@@ -937,8 +993,12 @@ pub(crate) fn continuation_db(
         let mut card = record.card();
         let mut status = if record.can_resume() {
             ContinuationStatus::Resume
-        } else if record.identity.episode.is_some() {
+        } else if record.identity.episode.is_some()
+            && (record.completed_at_millis.is_some() || record.position_millis > 0)
+        {
             ContinuationStatus::Pending
+        } else if record.identity.episode.is_some() {
+            ContinuationStatus::Resume
         } else {
             continue;
         };

@@ -10,6 +10,8 @@ mod bootstrap_facts;
 mod bootstrap_facts_tests;
 mod catalog;
 mod controls;
+#[cfg(test)]
+mod correction_tests;
 pub(crate) mod live;
 pub(crate) mod search;
 pub(crate) mod source_integrations;
