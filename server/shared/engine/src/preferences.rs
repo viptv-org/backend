@@ -340,6 +340,7 @@ pub const BEST_MATCHES_LIMIT: usize = 5;
 pub struct SourceRanking {
     pub best_match_ids: Vec<String>,
     pub best_match_id: Option<String>,
+    pub best_match_fully_matches: bool,
 }
 
 /// Cam, 3D and torrents reporting fewer than five seeders never join the Best
@@ -416,8 +417,49 @@ pub fn rank_sources(
         .map(|candidate| candidate.id.clone())
         .collect::<Vec<_>>();
     let best_match_id = best_match_ids.first().cloned();
+    let best_match_fully_matches = candidates
+        .iter()
+        .find(|candidate| !fails_hard_filter(candidate))
+        .is_some_and(|candidate| {
+            best_match_fully_matches(candidate, preferences, original_language, cap)
+        });
     SourceRanking {
         best_match_ids,
         best_match_id,
+        best_match_fully_matches,
     }
+}
+
+fn best_match_fully_matches(
+    candidate: &crate::stremio::SourceCandidate,
+    preferences: &ProfilePreferences,
+    original_language: Option<&str>,
+    cap: Option<u32>,
+) -> bool {
+    let quality = match cap {
+        None => candidate.quality_height.is_some(),
+        Some(cap) => candidate.quality_height == Some(cap),
+    };
+    let language = match preferences
+        .preferred_audio_language
+        .as_deref()
+        .or(original_language)
+    {
+        None => true,
+        Some(target) => {
+            candidate.audio_languages.is_empty()
+                || candidate
+                    .audio_languages
+                    .iter()
+                    .any(|tag| same_language(tag, target))
+        }
+    };
+    let has_hdr = !candidate.dynamic_range.is_empty();
+    let hdr = match preferences.hdr_preference {
+        HdrPreference::Any => true,
+        HdrPreference::Prefer => has_hdr,
+        HdrPreference::Avoid => !has_hdr,
+    };
+    let delivered = candidate.delivery.as_deref() != Some("torrent");
+    quality && language && hdr && delivered
 }

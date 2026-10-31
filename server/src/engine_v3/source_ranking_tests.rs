@@ -105,6 +105,7 @@ async fn hard_filtered_rows_supply_no_best_match() {
     assert_eq!(body["streams"].as_array().unwrap().len(),3);
     assert_eq!(body["best_match_ids"],json!([]));
     assert!(body["best_match_id"].is_null(),"{body}");
+    assert_eq!(body["best_match_fully_matches"],json!(false));
 }
 
 #[tokio::test]
@@ -117,4 +118,25 @@ async fn the_quality_filter_hides_rows_without_changing_group_membership() {
     assert_eq!(body["streams"][0]["id"],ids[1]);
     assert_eq!(body["best_match_ids"],json!([ids[0].clone(),ids[1].clone()]));
     assert_eq!(body["best_match_id"],ids[0]);
+}
+
+#[tokio::test]
+async fn best_match_fully_matches_reports_whether_every_preference_is_met() {
+    let (app,cards)=rank_fixture(vec![
+        json!({"url":"https://media.example/direct.mp4","name":"direct","title":"Thing.2024.1080p.WEB-DL.x264-GRP","quality_height":1080}),
+        json!({"infoHash":"0123456789abcdef0123456789abcdef01234567","name":"torrent","title":"Thing.2024.1080p.WEB-DL.x264-GRP","seeders":7}),
+    ]);
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    let(status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids})).await;
+    assert_eq!(status,StatusCode::OK,"{body}");
+    assert_eq!(body["streams"][0]["name"],"direct");
+    assert_eq!(body["best_match_fully_matches"],json!(true));
+    let (app,cards)=rank_fixture(vec![
+        json!({"infoHash":"0123456789abcdef0123456789abcdef01234567","name":"torrent","title":"Thing.2024.1080p.WEB-DL.x264-GRP","seeders":7}),
+    ]);
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    let(status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids})).await;
+    assert_eq!(status,StatusCode::OK,"{body}");
+    assert_eq!(body["best_match_id"],ids[0]);
+    assert_eq!(body["best_match_fully_matches"],json!(false));
 }
