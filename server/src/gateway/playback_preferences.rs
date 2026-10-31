@@ -37,8 +37,8 @@ fn apply_v3(
         match preferences.subtitle_mode {
             SubtitleMode::Never => request.subtitles_off = true,
             SubtitleMode::Always => request.preferred_subtitle_language = preferences.preferred_subtitle_language.clone(),
-            SubtitleMode::Foreign => return Err(ApiError(StatusCode::CONFLICT,
-                "Foreign-audio subtitles are unavailable on this gateway. Choose Always, Never, or an explicit subtitle track.".into()).into()),
+            SubtitleMode::Foreign if request.client.can_play_direct => {}
+            SubtitleMode::Foreign => request.preferred_subtitle_language = preferences.preferred_subtitle_language.clone(),
         }
     }
     request.subtitle_appearance = Some(
@@ -73,7 +73,21 @@ mod tests {
         assert!(!start.subtitles_off);
         assert_eq!(start.subtitle_track, Some(3));
         prefs.subtitle_mode = viptv_engine::preferences::SubtitleMode::Foreign;
-        assert!(apply_v3(&mut request(), &prefs).is_err());
         assert!(apply_v3(&mut start, &prefs).is_ok());
+        assert_eq!(start.subtitle_track, Some(3));
+    }
+    #[test]
+    fn foreign_mode_is_admitted_and_left_to_direct_clients() {
+        let mut prefs = viptv_engine::preferences::ProfilePreferences::default();
+        prefs.preferred_subtitle_language = Some("en".into());
+        prefs.subtitle_mode = viptv_engine::preferences::SubtitleMode::Foreign;
+        let mut gateway = request();
+        apply_v3(&mut gateway, &prefs).unwrap_or_else(|_| panic!("foreign admitted on a gateway"));
+        assert_eq!(gateway.preferred_subtitle_language.as_deref(), Some("en"));
+        assert!(!gateway.subtitles_off);
+        let mut direct: Start = serde_json::from_value(json!({"request_id":"preferences","stream_id":"source","client":{"platform":"android","can_play_direct":true,"max_width":1080,"max_height":2412,"video_codecs":["h264"],"audio_codecs":["aac"]}})).unwrap();
+        apply_v3(&mut direct, &prefs).unwrap_or_else(|_| panic!("foreign admitted for direct play"));
+        assert!(direct.preferred_subtitle_language.is_none());
+        assert!(!direct.subtitles_off);
     }
 }
