@@ -64,6 +64,7 @@ pub(super) fn apply_canonical(
         card.identity.id = id.clone();
         card.identity.kind = kind.clone();
         card.progress = None;
+        crate::engine_v3::art::fill(&mut card);
         let mut statistics = entry.statistics.clone();
         statistics.identity = card.identity.clone();
         let original:Option<String>=db.query_row("SELECT statistics FROM simkl_import_entries WHERE profile_id=?1 AND remote_kind=?2 AND remote_id=?3",params![profile,external.kind,external.id],|r|r.get(0)).optional().map_err(db_error)?;

@@ -444,6 +444,7 @@ pub(crate) fn save_db(
             c.parent_identity = old.value.parent_identity.clone();
         }
     }
+    super::art::fill(&mut c);
     let prior:Option<Option<u64>>=db.query_row("SELECT added_at_millis FROM engine_scoped_records WHERE profile_id=?1 AND record_kind='favorite' AND identity_scope=?2 AND kind=?3 AND identity_id=?4",params![profile,key.0,key.1,key.2],|r|r.get(0)).optional().map_err(db_error)?;
     let legacy: Option<Option<u64>> = if key.0 == "shared" {
         db.query_row(
@@ -592,6 +593,7 @@ pub(crate) fn record_db(
             c.parent_identity = old.value.parent_identity.clone();
         }
     }
+    super::art::fill(&mut c);
     let count = match &prior {
         None => Some(u64::from(completed)),
         Some(old) => old.value.times_watched.map(|n| {
@@ -668,6 +670,7 @@ pub(crate) fn favorites_db(
     for s in &mut records {
         s.value.added_at_millis = s.added;
         s.value.progress = None;
+        super::art::fill(&mut s.value);
     }
     Ok(records)
 }

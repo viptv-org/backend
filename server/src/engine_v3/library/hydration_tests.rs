@@ -158,9 +158,13 @@ async fn thin_rows_gain_the_details_card_in_the_background_without_overwriting_r
     let movie = card(&page, "tt0000002");
     assert_eq!(
         movie["poster"],
-        "https://images.example/tt0000002/poster.jpg"
+        "https://images.metahub.space/poster/small/tt0000002/img"
     );
     assert_eq!(movie["metadata"]["year"], 2019);
+    assert_eq!(
+        movie["landscape"],
+        "https://images.example/tt0000002/background.jpg"
+    );
 
     let kept = card(&page, "tt0000003");
     assert_eq!(kept["title"], "My name");

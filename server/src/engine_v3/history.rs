@@ -123,7 +123,6 @@ pub(super) fn record(item: &Value) -> Option<PlaybackRecord> {
             .then_some(updated),
     })
 }
-
 #[derive(Deserialize)]
 pub(crate) struct Page {
     #[serde(default)]
@@ -218,6 +217,9 @@ pub(crate) async fn list(
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
     app.require_profile(&db, profile)?;
+    if !kids::restricted(&db, &app.identity())? {
+        super::art::backfill(&db, profile, super::art::READ_BATCH)?;
+    }
     let mut q=db.prepare("SELECT id,type,name,poster,position,duration,updated_at,context,title_id FROM progress WHERE profile_id=?1 AND type IN ('movie','series') ORDER BY updated_at DESC LIMIT 50001").map_err(db_error)?;
     let items=q.query_map([profile],|r|{let context=serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(Value::Null);let mut item=json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"position":r.get::<_,f64>(4)?,"duration":r.get::<_,f64>(5)?,"updated_at":r.get::<_,u64>(6)?,"series_id":r.get::<_,Option<String>>(8)?});restore(&mut item,&context);crate::library::add_watch_fields(&mut item,&context);if let Ok(context)=matching_context(&context){item.as_object_mut().unwrap().extend(context.as_object().unwrap().clone());}Ok(item)}).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
     if items.len() > 50000 {
@@ -251,6 +253,9 @@ pub(crate) async fn list(
             .cmp(&a.record.updated_at_millis)
             .then_with(|| a.record.identity.id.cmp(&b.record.identity.id))
     });
+    for row in &mut rows {
+        super::art::fill_record(&mut row.record);
+    }
     let mut entries = Vec::new();
     for row in rows.iter().skip(offset).take(limit) {
         let mut entry = serde_json::to_value(HistoryEntry::from(&row.record))

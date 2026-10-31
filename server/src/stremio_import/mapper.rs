@@ -97,7 +97,7 @@ fn imdb(id: &str) -> bool {
     })
 }
 pub(super) fn poster(title: &str) -> Option<String> {
-    imdb(title).then(|| format!("https://images.metahub.space/poster/small/{title}/img"))
+    crate::engine_v3::art::poster_url(title)
 }
 fn episode(id: &str, title: &str) -> Option<(i64, i64)> {
     let parts: Vec<_> = id.split(':').collect();

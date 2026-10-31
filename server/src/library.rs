@@ -50,9 +50,13 @@ pub async fn toggle(
             )
             .map_err(db_error)?;
         if removed == 0 {
+            let poster = item["poster"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| engine_v3::art::poster_url(&id));
             tx.execute(
                 "INSERT INTO favorites(profile_id,id,type,name,poster,added_at_millis) VALUES(?1,?2,?3,?4,?5,?6)",
-                params![profile, id, kind, name, item["poster"].as_str(),util::now_millis()],
+                params![profile, id, kind, name, poster,util::now_millis()],
             )
             .map_err(db_error)?;
         }

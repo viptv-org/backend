@@ -63,6 +63,17 @@ struct Target {
     show: String,
     ids: Vec<ExternalId>,
 }
+impl Target {
+    fn identity(&self) -> MediaIdentity {
+        MediaIdentity {
+            id: self.show.clone(),
+            kind: "series".into(),
+            ids: self.ids.clone(),
+            episode: None,
+            edition: None,
+        }
+    }
+}
 
 async fn migrate(app: &App, profile: i64) -> Result<(), ApiError> {
     let mut shows = HashMap::new();
@@ -333,13 +344,14 @@ fn apply_episode(
             .map_err(db_error)?;
     }
     tx.execute(
-        "UPDATE progress SET id=?2,title_id=?3,context=?4 WHERE rowid=?1 AND id=?5",
+        "UPDATE progress SET id=?2,title_id=?3,context=?4,poster=COALESCE(NULLIF(poster,''),?6) WHERE rowid=?1 AND id=?5",
         params![
             row.rowid,
             target.id,
             target.show,
             episode_context(&row.context, target, tvdb).to_string(),
-            row.id
+            row.id,
+            super::art::identity_poster(&target.identity())
         ],
     )
     .map_err(db_error)?;
@@ -389,8 +401,14 @@ fn apply_saved_title(
             .map_err(db_error)?;
     }
     tx.execute(
-        "UPDATE favorites SET id=?2,context=?3 WHERE rowid=?1 AND id=?4",
-        params![row.rowid, target.id, context.to_string(), row.id],
+        "UPDATE favorites SET id=?2,context=?3,poster=COALESCE(NULLIF(poster,''),?5) WHERE rowid=?1 AND id=?4",
+        params![
+            row.rowid,
+            target.id,
+            context.to_string(),
+            row.id,
+            super::art::identity_poster(&target.identity())
+        ],
     )
     .map_err(db_error)?;
     tx.commit().map_err(db_error)?;

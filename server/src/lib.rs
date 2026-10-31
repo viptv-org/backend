@@ -72,6 +72,10 @@ pub fn start_anime_show_migration(app: App) {
     engine_v3::anime_show_migration::start(app);
 }
 
+pub fn start_card_art_backfill(app: App) {
+    engine_v3::art::start(app);
+}
+
 pub use routes::{router, router_with_viewers, validate_tv_dist};
 
 #[cfg(test)]
