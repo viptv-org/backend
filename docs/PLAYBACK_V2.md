@@ -126,20 +126,27 @@ and credits intervals in milliseconds on the original media timeline:
 
 `kind` is `intro`, `recap` or `credits`; at most one of each is returned. The
 array is empty when no source knows the episode, when the item is not a series
-episode with a verified anime mapping, or when the lookup fails. An empty answer
-is normal and never blocks playback. The route reads the playback's own item and
-follows the existing playback authorization, lease and error contract; live
-playback and non-anime items answer with no segments.
+episode, or when the lookup fails. An empty answer is normal and never blocks
+playback. The route reads the playback's own item and follows the existing
+playback authorization, lease and error contract; live playback answers with no
+segments.
 
 The server always returns the segments it knows: the profile's "Skip intros and
 recaps" preference is applied by the client, which also uses `credits.start_ms`
-to time the next-episode panel. Segments come from AniSkip lookups of the
-episode's MAL release number and are cached per episode for 24 hours on a hit,
-one hour on no data and 60 seconds after a failure, with upstream requests
-spaced to at most 30 per minute per deployment. The adapter is off unless the
-operator sets `VIPTV_ANISKIP=1`; `VIPTV_ANISKIP_BASE` overrides the upstream
-origin for testing. Episode numbering comes from the resolved release layout, so
-an episode whose mapping is missing or ambiguous answers with no segments
+to time the next-episode panel. Segments come from three upstream sources,
+queried most-specific first and merged so the first confident answer per kind
+wins: AniSkip (MAL release number), TheIntroDB (TVDB/TMDB/IMDb + season and
+episode) and SkipDB (IMDb + season and episode). Cached answers live 24 hours on
+a hit, one hour on no data and 60 seconds after a failure; each source spaces
+its upstream requests to a deployment-bound rate cap. Each source is off unless
+the operator sets `VIPTV_ANISKIP=1`, `VIPTV_THEINTRODB=1` or `VIPTV_SKIPDB=1`;
+the `_BASE` spelling of each (`VIPTV_ANISKIP_BASE`, `VIPTV_THEINTRODB_BASE`,
+`VIPTV_SKIPDB_BASE`) overrides that source's upstream origin for testing. A
+release that carries only a MAL, AniDB, AniList or Kitsu id is resolved to its
+TVDB, TMDB and IMDb ids through a pinned, daily-refreshed Fribb anime-lists
+mapping (`VIPTV_FRIBB_BASE` overrides the origin), so the TVDB- and IMDb-keyed
+sources can answer it. Episode numbering comes from the resolved release layout,
+so an episode whose mapping is missing or ambiguous answers with no segments
 instead of a guess.
 
 ## Evidence and limitations
