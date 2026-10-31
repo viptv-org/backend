@@ -351,7 +351,7 @@ fn apply_episode(
             target.show,
             episode_context(&row.context, target, tvdb).to_string(),
             row.id,
-            super::art::identity_art(&target.identity()).0
+            super::art::identity_poster(&target.identity())
         ],
     )
     .map_err(db_error)?;
@@ -407,7 +407,7 @@ fn apply_saved_title(
             target.id,
             context.to_string(),
             row.id,
-            super::art::identity_art(&target.identity()).0
+            super::art::identity_poster(&target.identity())
         ],
     )
     .map_err(db_error)?;

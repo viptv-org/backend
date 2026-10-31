@@ -52,9 +52,11 @@ pub(crate) fn snapshot(
         .map_err(|_| ApiError::from("Database unavailable"))?;
     app.require_profile(&db, profile)?;
     lease.validate(&db)?;
-    super::super::art::backfill(&db, profile, super::super::art::READ_BATCH)?;
-    let configuration_revision = configuration_revision(&db, profile)?;
     let restricted = kids::restricted(&db, &lease.principal)?;
+    if !restricted {
+        super::super::art::backfill(&db, profile, super::super::art::READ_BATCH)?;
+    }
+    let configuration_revision = configuration_revision(&db, profile)?;
     let queue = crate::continuation::queue_items(&db, profile, 0, 50000, true)?;
     let now = util::now_millis().max(0) as u64;
     let items = kids::filter_items(

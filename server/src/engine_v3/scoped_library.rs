@@ -657,9 +657,6 @@ pub(crate) fn playback_db(
     profile: i64,
 ) -> Result<Vec<Saved<PlaybackRecord>>, ApiError> {
     let mut records = rows::<PlaybackRecord>(db, profile, "playback", 50000)?;
-    for record in &mut records {
-        super::art::fill_record(&mut record.value);
-    }
     records.retain(|s| kids::scoped::require_card_db(db, &app.identity(), &s.value.card()).is_ok());
     Ok(records)
 }

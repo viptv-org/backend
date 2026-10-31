@@ -50,7 +50,9 @@ pub(crate) fn entries(
         .lock()
         .map_err(|_| ApiError::from("Database unavailable"))?;
     app.require_profile(&db, profile)?;
-    super::art::backfill(&db, profile, super::art::READ_BATCH)?;
+    if !kids::restricted(&db, &app.identity())? {
+        super::art::backfill(&db, profile, super::art::READ_BATCH)?;
+    }
     let allowed = kids::sql_allowed("favorites.type", "favorites.id", "?1");
     let mut query=db.prepare(&format!("SELECT id,type,name,poster,context,added_at_millis FROM favorites WHERE profile_id=?1 AND type IN ('movie','series') AND {allowed} ORDER BY type,id LIMIT 10001")).map_err(db_error)?;
     let items=query.query_map([profile],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"added_at_millis":r.get::<_,Option<u64>>(5)?,"engine_favorite":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null)}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;

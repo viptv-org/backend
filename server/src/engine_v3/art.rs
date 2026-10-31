@@ -34,7 +34,10 @@ fn identity_imdb(identity: &MediaIdentity) -> Option<&str> {
             .find_map(|id| imdb(&id.value))
     })
 }
-fn title_identity<'a>(identity: &'a MediaIdentity, parent: Option<&'a MediaIdentity>) -> Option<&'a str> {
+fn title_identity<'a>(
+    identity: &'a MediaIdentity,
+    parent: Option<&'a MediaIdentity>,
+) -> Option<&'a str> {
     let parent = parent.and_then(identity_imdb);
     if identity.episode.is_some() {
         parent.or_else(|| identity_imdb(identity))
@@ -77,11 +80,8 @@ pub(crate) fn fill(card: &mut Card) -> bool {
     )
 }
 
-pub(crate) fn identity_art(identity: &MediaIdentity) -> (Option<String>, Option<String>) {
-    let Some(title) = title_identity(identity, None) else {
-        return (None, None);
-    };
-    (poster_url(title), background_url(title))
+pub(crate) fn identity_poster(identity: &MediaIdentity) -> Option<String> {
+    title_identity(identity, None).and_then(poster_url)
 }
 
 pub(crate) fn fill_record(record: &mut PlaybackRecord) -> bool {
@@ -194,10 +194,8 @@ fn saved_titles(db: &Connection, profile: i64, limit: usize) -> Result<usize, Ap
 fn progress_rows(db: &Connection, profile: i64, limit: usize) -> Result<usize, ApiError> {
     let rows = db
         .prepare(
-            "SELECT rowid,id,poster,context,title_id FROM progress \
-             WHERE profile_id=?1 AND type IN ('movie','series') \
-             AND (poster IS NULL OR poster='' \
-                  OR (context LIKE '{%' AND context NOT LIKE '%\"background\":\"%')) \
+            "SELECT rowid,id,context,title_id FROM progress \
+             WHERE profile_id=?1 AND type IN ('movie','series') AND (poster IS NULL OR poster='') \
              AND (COALESCE(NULLIF(title_id,''),id) LIKE 'tt%' OR context LIKE '%\"imdb\"%') \
              ORDER BY rowid LIMIT ?2",
         )
@@ -206,41 +204,26 @@ fn progress_rows(db: &Connection, profile: i64, limit: usize) -> Result<usize, A
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
-                r.get::<_, Option<String>>(2)?,
+                r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
-                r.get::<_, String>(4)?,
             ))
         })
         .map_err(db_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
     let mut update = db
-        .prepare(
-            "UPDATE progress SET poster=CASE WHEN poster IS NULL OR poster='' THEN ?2 ELSE poster END,context=?3 \
-             WHERE rowid=?1 AND context=?4",
-        )
+        .prepare("UPDATE progress SET poster=?2 WHERE rowid=?1 AND (poster IS NULL OR poster='')")
         .map_err(db_error)?;
     let mut filled = 0;
-    for (row, id, stored, raw, title_id) in rows {
+    for (row, id, raw, title_id) in rows {
         let context: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
         let Some(title) = progress_title(&id, &title_id, &context) else {
             continue;
         };
-        let stored = stored.filter(|poster| !poster.is_empty());
-        let poster = stored.clone().or_else(|| poster_url(&title));
-        let mut next = context.clone();
-        if next.is_object() && next["background"].as_str().is_none_or(str::is_empty) {
-            if let Some(url) = background_url(&title) {
-                next["background"] = json!(url);
-            }
-        }
-        let changed = next != context;
-        if !changed && (stored.is_some() || poster.is_none()) {
+        let Some(poster) = poster_url(&title) else {
             continue;
-        }
-        let updated = update
-            .execute(params![row, poster, next.to_string(), raw])
-            .map_err(db_error)?;
+        };
+        let updated = update.execute(params![row, poster]).map_err(db_error)?;
         filled += usize::from(updated == 1);
     }
     Ok(filled)

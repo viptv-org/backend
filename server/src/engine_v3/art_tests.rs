@@ -124,9 +124,10 @@ async fn history_and_continue_watching_cards_get_a_poster_and_backdrop() {
     let entry = &continuation["entries"][0]["card"];
     assert_eq!(entry["poster"], poster("tt1234567"));
     assert_eq!(entry["landscape"], background("tt1234567"));
-    assert_eq!(stored_poster(&app, "progress", "tt1234567:1:2"), Some(poster("tt1234567")));
-    let context = stored_context(&app, "progress", "tt1234567:1:2");
-    assert_eq!(context["background"], background("tt1234567"));
+    assert_eq!(
+        stored_poster(&app, "progress", "tt1234567:1:2"),
+        Some(poster("tt1234567"))
+    );
 }
 
 #[tokio::test]
