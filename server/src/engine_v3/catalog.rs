@@ -1,4 +1,5 @@
 use super::*;
+use crate::gateway::diagnostics::{timed, timed_sync};
 use viptv_engine::presentation::{CatalogPage, DetailSnapshot};
 
 pub(crate) async fn discover(
@@ -302,26 +303,32 @@ async fn resolve(
     };
     let expected = expected.or(scoped_policy);
     if simkl && !stremio_fallback {
-        let mut result = super::simkl_catalog::detail(
-            app.clone(),
-            lease.clone(),
-            profile,
-            kind,
-            id,
-            page.offset,
-            page.limit,
+        let mut result = timed(
+            "simkl_detail",
+            super::simkl_catalog::detail(
+                app.clone(),
+                lease.clone(),
+                profile,
+                kind,
+                id,
+                page.offset,
+                page.limit,
+            ),
         )
         .await?;
         let mut detail: DetailSnapshot =
             serde_json::from_value(result.0).map_err(|_| ApiError::from("Metadata unavailable"))?;
-        let show = super::anime_show::detail(
-            &app,
-            &lease,
-            profile,
-            &detail.item,
-            "simkl",
-            page.offset,
-            page.limit.unwrap_or(24),
+        let show = timed(
+            "anime_show",
+            super::anime_show::detail(
+                &app,
+                &lease,
+                profile,
+                &detail.item,
+                "simkl",
+                page.offset,
+                page.limit.unwrap_or(24),
+            ),
         )
         .await;
         if let Some(show) = show {
@@ -380,11 +387,14 @@ async fn resolve(
             kids::require_item(&db, &app.identity(), &kind, &id)?;
         }
     }
-    let (value, issuer) = if page.addon_id.is_some() {
-        app.addons.meta_from_selected_addon(&kind, lookup).await
-    } else {
-        app.addons.meta_with_origin(&kind, lookup).await
-    }
+    let (value, issuer) = timed("addons_meta", async {
+        if page.addon_id.is_some() {
+            app.addons.meta_from_selected_addon(&kind, lookup).await
+        } else {
+            app.addons.meta_with_origin(&kind, lookup).await
+        }
+    })
+    .await
     .map_err(|error| {
         if page.addon_id.is_some() && error == "Metadata not found" {
             ApiError(
@@ -424,7 +434,11 @@ async fn resolve(
     parent["type"] = json!(kind);
     parent["id"] = json!(lookup);
     if kind == "series" {
-        let document = super::anime_show::tvdb_document(&app, &lease, profile, &parent).await;
+        let document = timed(
+            "tvdb_document",
+            super::anime_show::tvdb_document(&app, &lease, profile, &parent),
+        )
+        .await;
         if let Some(document) = document {
             parent = document;
         }
@@ -458,13 +472,18 @@ async fn resolve(
             json!(kids::filter_items(&db, &app.identity(), videos)?)
         };
     }
-    let mut projected = viptv_engine::stremio::detail_page(
-        &json!({"meta":parent.clone()}).to_string(),
-        &origin,
-        &kind,
-        &lookup,
-        page.offset,
-        page.limit.unwrap_or(24),
+    let mut projected = timed_sync(
+        "detail_page",
+        || {
+            viptv_engine::stremio::detail_page(
+                &json!({"meta":parent.clone()}).to_string(),
+                &origin,
+                &kind,
+                &lookup,
+                page.offset,
+                page.limit.unwrap_or(24),
+            )
+        },
     )
     .map_err(|_| ApiError::from("Invalid episode metadata"))?;
     let seasons = projected.seasons;
@@ -478,8 +497,11 @@ async fn resolve(
     super::origins::stamp(&app, &mut episodes, &origin)?;
     super::origins::check_expected_at(&app, expected.as_ref(), &item)?;
     if requested_origin.is_some() {
-        let mut all_episodes = viptv_engine::stremio::episode_cards(&parent, &origin, &item)
-            .map_err(|_| ApiError::from("Invalid episode metadata"))?;
+        let mut all_episodes = timed_sync(
+            "episode_cards",
+            || viptv_engine::stremio::episode_cards(&parent, &origin, &item),
+        )
+        .map_err(|_| ApiError::from("Invalid episode metadata"))?;
         super::origins::stamp(&app, &mut all_episodes, &origin)?;
         let mut db = app
             .db
@@ -516,15 +538,18 @@ async fn resolve(
                 profile,
                 viptv_engine::capabilities::Capability::Discovery,
             ) {
-                if let Ok(Ok(result)) = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    discovery.addons.discover(
-                        kind.clone(),
-                        None,
-                        None,
-                        0,
-                        None,
-                        Some(genre.clone()),
+                if let Ok(Ok(result)) = timed(
+                    "recommendations",
+                    tokio::time::timeout(
+                        Duration::from_secs(2),
+                        discovery.addons.discover(
+                            kind.clone(),
+                            None,
+                            None,
+                            0,
+                            None,
+                            Some(genre.clone()),
+                        ),
                     ),
                 )
                 .await
