@@ -134,7 +134,12 @@ async fn discover_one(
     let profile = profile_id.ok_or_else(auth::forbidden)?;
     let scoped = app.with_lease(lease.clone());
     let (configuration, _) = configuration::read(&scoped, &lease, profile)?;
-    if configuration.browsing_plugin == "simkl" {
+    let simkl = configuration.browsing_plugin == "simkl";
+    let simkl_browse = q.addon_id.is_none()
+        && q.catalog
+            .as_deref()
+            .is_none_or(|catalog| catalog == "simkl-trending" || catalog == "trending");
+    if simkl && (q.is_search() || simkl_browse) {
         let result = super::simkl_catalog::discover(scoped.clone(), lease, profile, q).await?;
         configuration::validate_revision(&scoped, profile, configuration.scope.revision)?;
         return Ok(result);

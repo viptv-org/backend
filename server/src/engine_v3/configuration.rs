@@ -20,9 +20,27 @@ pub(crate) fn apply(
     effective
         .assignments
         .retain(|a| connections.iter().any(|c| c.id == a.connection_id));
-    let allowed = Registry::builtin()
-        .connections_for(&effective, &connections, cap)
-        .map_err(|_| ApiError::from("Integration unavailable"))?;
+    // Discovery adds add-on rows to the browsing plugin's own; it never replaces them.
+    let allowed: Vec<&IntegrationConnection> =
+        if cap == viptv_engine::capabilities::Capability::Discovery {
+            Registry::builtin()
+                .validate(&effective, &connections)
+                .map_err(|_| ApiError::from("Integration unavailable"))?;
+            connections
+                .iter()
+                .filter(|c| {
+                    c.enabled
+                        && effective
+                            .assignments
+                            .iter()
+                            .any(|a| a.connection_id == c.id && a.enabled.contains(&cap))
+                })
+                .collect()
+        } else {
+            Registry::builtin()
+                .connections_for(&effective, &connections, cap)
+                .map_err(|_| ApiError::from("Integration unavailable"))?
+        };
     let mut ids: Vec<i64> = allowed
         .iter()
         .filter_map(|c| c.id.strip_prefix("addon:")?.parse().ok())
