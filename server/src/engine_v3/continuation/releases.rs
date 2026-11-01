@@ -478,6 +478,21 @@ fn runs() -> &'static std::sync::Mutex<HashMap<(usize, i64), bool>> {
         std::sync::OnceLock::new();
     RUNS.get_or_init(Default::default)
 }
+
+#[cfg(test)]
+pub(crate) async fn wait(app: &App, profile: i64) {
+    let key = (Arc::as_ptr(&app.db) as usize, profile);
+    loop {
+        let running = runs()
+            .lock()
+            .is_ok_and(|runs| runs.contains_key(&key));
+        if !running {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
 fn lookups() -> &'static tokio::sync::Semaphore {
     static LOOKUPS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
     LOOKUPS.get_or_init(|| tokio::sync::Semaphore::new(SERVER_LOOKUPS))
