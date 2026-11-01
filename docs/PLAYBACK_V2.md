@@ -133,15 +133,23 @@ segments.
 
 The server always returns the segments it knows: the profile's "Skip intros and
 recaps" preference is applied by the client, which also uses `credits.start_ms`
-to time the next-episode panel. Segments come from three upstream sources,
+to time the next-episode panel. Segments come from four upstream sources,
 queried most-specific first and merged so the first confident answer per kind
-wins: AniSkip (MAL release number), TheIntroDB (TVDB/TMDB/IMDb + season and
-episode) and SkipDB (IMDb + season and episode). Cached answers live 24 hours on
-a hit, one hour on no data and 60 seconds after a failure; each source spaces
-its upstream requests to a deployment-bound rate cap. Each source is off unless
-the operator sets `VIPTV_ANISKIP=1`, `VIPTV_THEINTRODB=1` or `VIPTV_SKIPDB=1`;
-the `_BASE` spelling of each (`VIPTV_ANISKIP_BASE`, `VIPTV_THEINTRODB_BASE`,
-`VIPTV_SKIPDB_BASE`) overrides that source's upstream origin for testing. A
+wins: AniSkip (MAL release number), Anime Skip (AniList id and release number),
+TheIntroDB (TVDB/TMDB/IMDb + season and episode) and SkipDB (IMDb + season and
+episode). Cached answers live 24 hours on a hit, one hour on no data and 60
+seconds after a failure; each source spaces its upstream requests to a
+deployment-bound rate cap. Each source is off unless the operator sets
+`VIPTV_ANISKIP=1`, `VIPTV_ANIMESKIP=1`, `VIPTV_THEINTRODB=1` or
+`VIPTV_SKIPDB=1`; the `_BASE` spelling of each (`VIPTV_ANISKIP_BASE`,
+`VIPTV_ANIMESKIP_BASE`, `VIPTV_THEINTRODB_BASE`, `VIPTV_SKIPDB_BASE`)
+overrides that source's upstream origin for testing. Anime Skip is a GraphQL
+endpoint that only answers with an `X-Client-ID`; `VIPTV_ANIMESKIP_CLIENT_ID`
+sets it and defaults to the shared public client id the project publishes, which
+is limited to 60 requests per minute, so a deployment should register its own.
+Its timestamps mark only where a section starts, so an interval ends at the next
+timestamp, spans longer than ten minutes are dropped rather than guessed, and its
+mixed and preview markers contribute nothing. A
 release that carries only a MAL, AniDB, AniList or Kitsu id is resolved to its
 TVDB, TMDB and IMDb ids through a pinned, daily-refreshed Fribb anime-lists
 mapping (`VIPTV_FRIBB_BASE` overrides the origin), so the TVDB- and IMDb-keyed

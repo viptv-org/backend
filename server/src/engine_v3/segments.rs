@@ -4,17 +4,24 @@ use viptv_engine::identity::{ExternalId, MediaIdentity};
 use viptv_engine::presentation::Card;
 
 const ANISKIP_BASE: &str = "https://api.aniskip.com";
+const ANIMESKIP_BASE: &str = "https://api.anime-skip.com/graphql";
+pub(crate) const ANIMESKIP_CLIENT_ID: &str = "ZGfO0sMF3eCwLYf8yMSCJjlynwNGRXWE";
 const THEINTRODB_BASE: &str = "https://api.theintrodb.org/v4";
 const SKIPDB_BASE: &str = "https://skipdb.tv";
+const ANIMESKIP_SHOWS_QUERY: &str = "query Shows($serviceId: String!) { findShowsByExternalId(service: ANILIST, serviceId: $serviceId) { id deletedAt } }";
+const ANIMESKIP_EPISODES_QUERY: &str = "query Episodes($showId: ID!) { findEpisodesByShowId(showId: $showId) { season number absoluteNumber deletedAt timestamps { at type { name } } } }";
 const RELEASE_NAMESPACES: [&str; 4] = ["mal", "kitsu", "anilist", "anidb"];
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const ANISKIP_SPACING: Duration = Duration::from_millis(2000);
+const ANIMESKIP_SPACING: Duration = Duration::from_millis(1500);
 const THEINTRODB_SPACING: Duration = Duration::from_millis(1000);
 const SKIPDB_SPACING: Duration = Duration::from_millis(600);
 const MAX_RESPONSE: usize = 256 * 1024;
+const MAX_GRAPHQL_RESPONSE: usize = 1024 * 1024;
 const MAX_RESULTS: usize = 64;
 const MAX_SECONDS: f64 = 86_400.0;
 const MAX_MILLISECONDS: f64 = 86_400_000.0;
+const MAX_INFERRED_MS: u64 = 600_000;
 const MAX_CACHED: usize = 4096;
 const FRESH: Duration = Duration::from_secs(24 * 60 * 60);
 const NO_DATA: Duration = Duration::from_secs(60 * 60);
@@ -34,7 +41,7 @@ struct Cached {
 }
 
 enum Fetched {
-    Segments(Vec<Segment>),
+    Document(Value),
     None,
     Failed,
 }
@@ -43,7 +50,8 @@ pub(crate) struct Target {
     pub(crate) season: Option<u32>,
     pub(crate) episode: u32,
     pub(crate) mal: Option<u64>,
-    pub(crate) mal_episode: Option<u32>,
+    pub(crate) anilist: Option<u64>,
+    pub(crate) release_episode: Option<u32>,
     pub(crate) tvdb: Option<u64>,
     pub(crate) tmdb: Option<u64>,
     pub(crate) imdb: Option<String>,
@@ -52,6 +60,7 @@ pub(crate) struct Target {
 struct Adapter {
     enabled: bool,
     base: String,
+    client_id: String,
     cache: Mutex<HashMap<String, Cached>>,
     next: tokio::sync::Mutex<tokio::time::Instant>,
     inflight: tokio::sync::Semaphore,
@@ -59,10 +68,11 @@ struct Adapter {
 }
 
 impl Adapter {
-    fn new(enabled: bool, base: String, spacing: Duration) -> Self {
+    fn new(enabled: bool, base: String, client_id: String, spacing: Duration) -> Self {
         Self {
             enabled,
             base,
+            client_id,
             cache: Mutex::new(HashMap::new()),
             next: tokio::sync::Mutex::new(tokio::time::Instant::now()),
             inflight: tokio::sync::Semaphore::new(2),
@@ -108,8 +118,8 @@ impl Adapter {
         if let Some(segments) = self.cached(key) {
             return segments;
         }
-        let (segments, ttl) = match self.request(client, &url, parse).await {
-            Fetched::Segments(segments) => (Some(segments), FRESH),
+        let (segments, ttl) = match self.exchange(client.get(url), MAX_RESPONSE).await {
+            Fetched::Document(document) => (Some(parse(&document)), FRESH),
             Fetched::None => (None, NO_DATA),
             Fetched::Failed => (None, BACKOFF),
         };
@@ -117,12 +127,18 @@ impl Adapter {
         segments.unwrap_or_default()
     }
 
-    async fn request(
-        &self,
-        client: &reqwest::Client,
-        url: &str,
-        parse: fn(&Value) -> Vec<Segment>,
-    ) -> Fetched {
+    async fn graphql(&self, client: &reqwest::Client, query: &str, variables: Value) -> Fetched {
+        if !self.enabled {
+            return Fetched::Failed;
+        }
+        let request = client
+            .post(self.base.trim_end_matches('/'))
+            .header("X-Client-ID", self.client_id.as_str())
+            .json(&json!({"query": query, "variables": variables}));
+        self.exchange(request, MAX_GRAPHQL_RESPONSE).await
+    }
+
+    async fn exchange(&self, request: reqwest::RequestBuilder, max_response: usize) -> Fetched {
         let Ok(_permit) = self.inflight.try_acquire() else {
             return Fetched::Failed;
         };
@@ -131,19 +147,19 @@ impl Adapter {
             tokio::time::sleep_until(*next).await;
             *next = tokio::time::Instant::now() + self.spacing;
         }
-        let Ok(response) = client.get(url).send().await else {
+        let Ok(response) = request.send().await else {
             return Fetched::Failed;
         };
         let status = response.status().as_u16();
         let Ok(Ok(body)) = tokio::time::timeout(REQUEST_TIMEOUT, response.bytes()).await else {
             return Fetched::Failed;
         };
-        if body.len() > MAX_RESPONSE {
+        if body.len() > max_response {
             return Fetched::Failed;
         }
         match status {
             200 => match serde_json::from_slice::<Value>(&body) {
-                Ok(document) => Fetched::Segments(parse(&document)),
+                Ok(document) => Fetched::Document(document),
                 Err(_) => Fetched::Failed,
             },
             404 => Fetched::None,
@@ -155,6 +171,7 @@ impl Adapter {
 pub(crate) struct Service {
     client: reqwest::Client,
     aniskip: Adapter,
+    animeskip: Adapter,
     theintrodb: Adapter,
     skipdb: Adapter,
 }
@@ -169,16 +186,25 @@ impl Service {
             .user_agent(concat!("VIPTV/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|_| "Skip segment HTTP client unavailable")?;
+        let animeskip_client_id = std::env::var("VIPTV_ANIMESKIP_CLIENT_ID")
+            .unwrap_or_else(|_| ANIMESKIP_CLIENT_ID.into());
+        let animeskip_client_id = animeskip_client_id.trim().to_owned();
         Ok(Self {
             client,
-            aniskip: Adapter::new(flag("VIPTV_ANISKIP"), var_or("VIPTV_ANISKIP_BASE", ANISKIP_BASE), ANISKIP_SPACING),
-            theintrodb: Adapter::new(flag("VIPTV_THEINTRODB"), var_or("VIPTV_THEINTRODB_BASE", THEINTRODB_BASE), THEINTRODB_SPACING),
-            skipdb: Adapter::new(flag("VIPTV_SKIPDB"), var_or("VIPTV_SKIPDB_BASE", SKIPDB_BASE), SKIPDB_SPACING),
+            aniskip: Adapter::new(flag("VIPTV_ANISKIP"), var_or("VIPTV_ANISKIP_BASE", ANISKIP_BASE), String::new(), ANISKIP_SPACING),
+            animeskip: Adapter::new(
+                flag("VIPTV_ANIMESKIP") && !animeskip_client_id.is_empty(),
+                var_or("VIPTV_ANIMESKIP_BASE", ANIMESKIP_BASE),
+                animeskip_client_id,
+                ANIMESKIP_SPACING,
+            ),
+            theintrodb: Adapter::new(flag("VIPTV_THEINTRODB"), var_or("VIPTV_THEINTRODB_BASE", THEINTRODB_BASE), String::new(), THEINTRODB_SPACING),
+            skipdb: Adapter::new(flag("VIPTV_SKIPDB"), var_or("VIPTV_SKIPDB_BASE", SKIPDB_BASE), String::new(), SKIPDB_SPACING),
         })
     }
 
     #[cfg(test)]
-    pub(crate) fn fixture(aniskip: Option<&str>, theintrodb: Option<&str>, skipdb: Option<&str>) -> Self {
+    pub(crate) fn fixture(aniskip: Option<&str>, animeskip: Option<&str>, theintrodb: Option<&str>, skipdb: Option<&str>) -> Self {
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -189,17 +215,25 @@ impl Service {
             .unwrap();
         Self {
             client,
-            aniskip: Adapter::new(aniskip.is_some(), aniskip.unwrap_or_default().into(), ANISKIP_SPACING),
-            theintrodb: Adapter::new(theintrodb.is_some(), theintrodb.unwrap_or_default().into(), THEINTRODB_SPACING),
-            skipdb: Adapter::new(skipdb.is_some(), skipdb.unwrap_or_default().into(), SKIPDB_SPACING),
+            aniskip: Adapter::new(aniskip.is_some(), aniskip.unwrap_or_default().into(), String::new(), ANISKIP_SPACING),
+            animeskip: Adapter::new(animeskip.is_some(), animeskip.unwrap_or_default().into(), ANIMESKIP_CLIENT_ID.into(), ANIMESKIP_SPACING),
+            theintrodb: Adapter::new(theintrodb.is_some(), theintrodb.unwrap_or_default().into(), String::new(), THEINTRODB_SPACING),
+            skipdb: Adapter::new(skipdb.is_some(), skipdb.unwrap_or_default().into(), String::new(), SKIPDB_SPACING),
         }
     }
 
     pub(crate) async fn lookup(&self, target: &Target) -> Vec<Segment> {
+        let (aniskip, animeskip, theintrodb, skipdb) = tokio::join!(
+            self.aniskip_lookup(target),
+            self.animeskip_lookup(target),
+            self.theintrodb_lookup(target),
+            self.skipdb_lookup(target)
+        );
         let mut merged: Vec<Segment> = Vec::new();
-        self.merge(&mut merged, self.aniskip_lookup(target).await);
-        self.merge(&mut merged, self.theintrodb_lookup(target).await);
-        self.merge(&mut merged, self.skipdb_lookup(target).await);
+        self.merge(&mut merged, aniskip);
+        self.merge(&mut merged, animeskip);
+        self.merge(&mut merged, theintrodb);
+        self.merge(&mut merged, skipdb);
         merged.sort_by_key(|segment| segment.start_ms);
         merged
     }
@@ -213,7 +247,7 @@ impl Service {
     }
 
     async fn aniskip_lookup(&self, target: &Target) -> Vec<Segment> {
-        let (Some(mal), Some(episode)) = (target.mal, target.mal_episode) else {
+        let (Some(mal), Some(episode)) = (target.mal, target.release_episode) else {
             return Vec::new();
         };
         if mal == 0 || episode == 0 {
@@ -226,6 +260,59 @@ impl Service {
         self.aniskip
             .fetch(&self.client, &format!("{mal}/{episode}"), url, parse)
             .await
+    }
+
+    async fn animeskip_lookup(&self, target: &Target) -> Vec<Segment> {
+        if !self.animeskip.enabled {
+            return Vec::new();
+        }
+        let Some(anilist) = target.anilist else {
+            return Vec::new();
+        };
+        let key = format!(
+            "animeskip:{anilist}:{}:{}:{}",
+            target.season.map(|season| season.to_string()).unwrap_or_default(),
+            target.episode,
+            target.release_episode.map(|episode| episode.to_string()).unwrap_or_default()
+        );
+        if let Some(segments) = self.animeskip.cached(&key) {
+            return segments;
+        }
+        let (segments, ttl) = self.animeskip_episode(anilist, target).await;
+        self.animeskip.remember(key, segments.clone(), ttl);
+        segments.unwrap_or_default()
+    }
+
+    async fn animeskip_episode(&self, anilist: u64, target: &Target) -> (Option<Vec<Segment>>, Duration) {
+        let shows = match self
+            .animeskip
+            .graphql(
+                &self.client,
+                ANIMESKIP_SHOWS_QUERY,
+                json!({"serviceId": anilist.to_string()}),
+            )
+            .await
+        {
+            Fetched::Document(document) => document,
+            Fetched::None => return (None, NO_DATA),
+            Fetched::Failed => return (None, BACKOFF),
+        };
+        let Some(show) = animeskip_show(&shows) else {
+            return (None, NO_DATA);
+        };
+        let episodes = match self
+            .animeskip
+            .graphql(&self.client, ANIMESKIP_EPISODES_QUERY, json!({"showId": show}))
+            .await
+        {
+            Fetched::Document(document) => document,
+            Fetched::None => return (None, NO_DATA),
+            Fetched::Failed => return (None, BACKOFF),
+        };
+        match animeskip_segments(&episodes, target) {
+            Some(segments) => (Some(segments), FRESH),
+            None => (None, NO_DATA),
+        }
     }
 
     async fn theintrodb_lookup(&self, target: &Target) -> Vec<Segment> {
@@ -373,6 +460,91 @@ pub(crate) fn parse_skipdb(document: &Value) -> Vec<Segment> {
     segments
 }
 
+pub(crate) fn animeskip_show(document: &Value) -> Option<String> {
+    document["data"]["findShowsByExternalId"]
+        .as_array()?
+        .iter()
+        .find(|show| show["deletedAt"].is_null())
+        .and_then(|show| show["id"].as_str())
+        .map(str::to_owned)
+}
+
+pub(crate) fn animeskip_segments(document: &Value, target: &Target) -> Option<Vec<Segment>> {
+    let episodes = document["data"]["findEpisodesByShowId"].as_array()?;
+    let timestamps = animeskip_episode(episodes, target)?.get("timestamps")?;
+    let segments = animeskip_timestamps(timestamps);
+    (!segments.is_empty()).then_some(segments)
+}
+
+fn animeskip_episode<'a>(episodes: &'a [Value], target: &Target) -> Option<&'a Value> {
+    let live = |episode: &&Value| episode["deletedAt"].is_null();
+    if let Some(release) = target.release_episode.map(|episode| episode.to_string()) {
+        if let Some(episode) = episodes
+            .iter()
+            .filter(live)
+            .find(|episode| episode["absoluteNumber"].as_str() == Some(release.as_str()))
+        {
+            return Some(episode);
+        }
+        if let Some(episode) = episodes
+            .iter()
+            .filter(live)
+            .find(|episode| episode["number"].as_str() == Some(release.as_str()))
+        {
+            return Some(episode);
+        }
+    }
+    let season = target.season?.to_string();
+    let number = target.episode.to_string();
+    episodes.iter().filter(live).find(|episode| {
+        episode["season"].as_str() == Some(season.as_str())
+            && episode["number"].as_str() == Some(number.as_str())
+    })
+}
+
+fn animeskip_timestamps(timestamps: &Value) -> Vec<Segment> {
+    let mut points: Vec<(u64, Option<&'static str>)> = Vec::new();
+    for timestamp in timestamps
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(MAX_RESULTS)
+    {
+        let Some(at) = seconds_ms(&timestamp["at"]) else {
+            continue;
+        };
+        let kind = match timestamp["type"]["name"].as_str() {
+            Some("Intro") | Some("New Intro") => Some("intro"),
+            Some("Recap") => Some("recap"),
+            Some("Credits") | Some("New Credits") => Some("credits"),
+            _ => None,
+        };
+        points.push((at, kind));
+    }
+    points.sort_by_key(|point| point.0);
+    let mut segments: Vec<Segment> = Vec::new();
+    for (position, (start_ms, kind)) in points.iter().enumerate() {
+        let Some(kind) = kind else {
+            continue;
+        };
+        let Some((end_ms, _)) = points.get(position + 1) else {
+            continue;
+        };
+        if *end_ms <= *start_ms || *end_ms - *start_ms > MAX_INFERRED_MS {
+            continue;
+        }
+        if segments.iter().any(|segment| segment.kind == *kind) {
+            continue;
+        }
+        segments.push(Segment {
+            kind,
+            start_ms: *start_ms,
+            end_ms: *end_ms,
+        });
+    }
+    segments
+}
+
 fn seconds_ms(value: &Value) -> Option<u64> {
     let seconds = value.as_f64()?;
     (seconds.is_finite() && (0.0..=MAX_SECONDS).contains(&seconds))
@@ -436,7 +608,7 @@ pub(crate) async fn target(app: &App, lease: &ResourceLease, card: &Card) -> Opt
     let ids = ids_of(card);
     let cross = app.cross_ids.resolve(&ids).await;
 
-    let mut mal_episode = None;
+    let mut release_episode = None;
     let mut tvdb = cross.tvdb;
     let mut tmdb = cross.tmdb;
     let mut imdb = cross.imdb;
@@ -445,7 +617,7 @@ pub(crate) async fn target(app: &App, lease: &ResourceLease, card: &Card) -> Opt
             super::anime_show::resolve(&app.clone().with_lease(lease.clone()), release).await
         {
             if let Some(season) = coordinates.season {
-                mal_episode = show
+                release_episode = show
                     .release_episode(super::anime_show::TvdbEpisode {
                         season,
                         episode: coordinates.episode,
@@ -462,7 +634,8 @@ pub(crate) async fn target(app: &App, lease: &ResourceLease, card: &Card) -> Opt
         season: coordinates.season,
         episode: coordinates.episode,
         mal: cross.mal.or_else(|| id_u64(&ids, "mal")),
-        mal_episode,
+        anilist: cross.anilist.or_else(|| id_u64(&ids, "anilist")),
+        release_episode,
         tvdb,
         tmdb,
         imdb,
