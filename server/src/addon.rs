@@ -32,8 +32,21 @@ pub(super) use extras::MAX_EXTRA_OPTION;
 use extras::{bounded_exact_text, bounded_text, catalog_extras, CatalogExtra};
 
 type CachedResponses = Arc<Mutex<HashMap<String, (i64, Value, usize)>>>;
+#[derive(Hash, PartialEq, Eq, Clone)]
+struct MetaLookupKey {
+    account: i64,
+    revision: String,
+    selected: bool,
+    kind: String,
+    id: String,
+    scoped: String,
+}
+type CachedMetaResults = Arc<Mutex<HashMap<MetaLookupKey, (i64, Value, i64)>>>;
+type CachedFailures = Arc<Mutex<HashMap<String, (i64, String)>>>;
 type FetchFlight = tokio::sync::OnceCell<Result<Value, String>>;
 pub use viptv_provider::discover::{DiscoveryPlan, DiscoveryRequest as DiscoverOptions};
+
+const NEGATIVE_TTL: i64 = 60;
 #[derive(Clone)]
 pub struct Addons {
     db: Arc<Mutex<Connection>>,
@@ -47,6 +60,8 @@ pub struct Addons {
     pub(crate) vault: Option<Arc<crate::secret_store::Vault>>,
     pub(crate) logos: Arc<logo::Cache>,
     protected_fetch: bool,
+    meta_results: CachedMetaResults,
+    fetch_failures: CachedFailures,
     #[cfg(test)]
     pub(crate) allow_test_loopback: bool,
 }
@@ -102,6 +117,8 @@ impl Addons {
             vault: None,
             logos: Arc::new(logo::Cache::new()),
             protected_fetch: false,
+            meta_results: Default::default(),
+            fetch_failures: Default::default(),
             #[cfg(test)]
             allow_test_loopback: false,
         })
@@ -130,6 +147,8 @@ impl Addons {
     #[cfg(test)]
     pub(crate) fn forget_responses(&self) {
         self.cache.lock().unwrap().clear();
+        self.meta_results.lock().unwrap().clear();
+        self.fetch_failures.lock().unwrap().clear();
     }
     pub(crate) fn revision(&self) -> Result<String, String> {
         let db = self.db.lock().map_err(|_| "Database unavailable")?;
@@ -344,6 +363,11 @@ impl Addons {
                 return Ok(v.clone());
             }
         }
+        if let Some((retry, error)) = self.fetch_failures.lock().unwrap().get(&key) {
+            if *retry > now() {
+                return Err(error.clone());
+            }
+        }
         let flight = {
             let mut flights = self.flights.lock().unwrap();
             flights.retain(|_, flight| flight.strong_count() > 0);
@@ -377,11 +401,21 @@ impl Addons {
                 true,
             )
             .await
-            .map_err(|e| e.addon_code().to_owned())?
+            .map_err(|e| e.addon_code().to_owned())
         } else {
-            tokio::time::timeout(Duration::from_secs(25), json_get(&self.client, url))
-                .await
-                .map_err(|_| "Upstream timed out")??
+            match tokio::time::timeout(Duration::from_secs(25), json_get(&self.client, url)).await {
+                Err(_) => Err("Upstream timed out".to_owned()),
+                Ok(result) => result,
+            }
+        };
+        let v = match v {
+            Err(error) => {
+                let mut failures = self.fetch_failures.lock().unwrap();
+                failures.retain(|_, (retry, _)| *retry > now());
+                failures.insert(key.to_owned(), (now() + NEGATIVE_TTL, error.clone()));
+                return Err(error);
+            }
+            Ok(v) => v,
         };
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|_, (e, _, _)| *e > now());

@@ -184,6 +184,11 @@ impl Addons {
                 cache.remove(&key);
             }
         }
+        drop(cache);
+        self.meta_results
+            .lock()
+            .map_err(|_| "Add-on cache unavailable")?
+            .retain(|key, _| key.kind != kind || key.id != id);
         Ok(())
     }
     pub async fn meta(&self, kind: &str, id: &str) -> Result<Value, String> {
@@ -211,6 +216,34 @@ impl Addons {
         id: &str,
         selected: bool,
     ) -> Result<(Value, i64), String> {
+        let revision = self.revision()?;
+        let scoped = match &self.engine_ids {
+            None => "all".to_owned(),
+            Some(ids) => {
+                let mut ids: Vec<i64> = ids.iter().copied().collect();
+                ids.sort_unstable();
+                format!(
+                    "{}",
+                    ids.iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            }
+        };
+        let result_key = super::MetaLookupKey {
+            account: self.account_id,
+            revision,
+            selected,
+            kind: kind.to_owned(),
+            id: id.to_owned(),
+            scoped,
+        };
+        if let Some((expiry, value, issuer)) = self.meta_results.lock().unwrap().get(&result_key) {
+            if *expiry > now() {
+                return Ok((value.clone(), *issuer));
+            }
+        }
         let endpoints = self
             .async_entries()
             .await?
@@ -237,24 +270,39 @@ impl Addons {
                 if v["meta"].is_object() {
                     let mut primary = v;
                     if kind == "series" && primary["meta"]["videos"].is_array() {
-                        let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
-                        while needs_episode_art(&primary["meta"]) {
-                            let Ok(Some((_, next))) =
-                                tokio::time::timeout_at(deadline, results.next()).await
-                            else {
-                                break;
-                            };
-                            if let Ok(other) = next {
-                                enrich_episode_art(&mut primary["meta"], &other["meta"]);
-                            }
-                        }
-                        if let Some(videos) = primary["meta"]["videos"].as_array_mut() {
-                            for video in videos.iter_mut().take(2000) {
-                                if let Some(image) = episode_art_url(&video["thumbnail"]) {
-                                    video["thumbnail"] = json!(image);
+                        crate::gateway::diagnostics::timed("episode_enrich", async {
+                            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                            while needs_episode_art(&primary["meta"]) {
+                                let Ok(Some((_, next))) =
+                                    tokio::time::timeout_at(deadline, results.next()).await
+                                else {
+                                    break;
+                                };
+                                if let Ok(other) = next {
+                                    enrich_episode_art(&mut primary["meta"], &other["meta"]);
                                 }
                             }
+                            if let Some(videos) = primary["meta"]["videos"].as_array_mut() {
+                                for video in videos.iter_mut().take(2000) {
+                                    if let Some(image) = episode_art_url(&video["thumbnail"]) {
+                                        video["thumbnail"] = json!(image);
+                                    }
+                                }
+                            }
+                        })
+                        .await;
+                    }
+                    {
+                        let mut cache = self.meta_results.lock().unwrap();
+                        cache.retain(|_, (expiry, _, _)| *expiry > now());
+                        let expiry = now() + 3600;
+                        if cache.len() >= 256 {
+                            let drop: Vec<_> = cache.keys().take(64).cloned().collect();
+                            for key in drop {
+                                cache.remove(&key);
+                            }
                         }
+                        cache.insert(result_key, (expiry, primary.clone(), issuer));
                     }
                     return Ok((primary, issuer));
                 }

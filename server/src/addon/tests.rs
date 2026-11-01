@@ -283,6 +283,58 @@ async fn complete_episode_art_does_not_wait_for_slow_secondary_metadata() {
         .contains("wsrv.nl"));
     server.abort();
 }
+#[tokio::test]
+async fn assembled_meta_is_cached_so_a_slow_alternate_is_probed_once() {
+    use axum::{routing::get, Router};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let alternate_hits = Arc::new(AtomicUsize::new(0));
+    let counter = alternate_hits.clone();
+    let primary = json!({"meta": {"id": "tt-series", "type": "series", "name": "Series", "videos": [{"id": "tt-series:1:1", "season": 1, "episode": 1, "thumbnail": "https://episodes.metahub.space/tt-series/1/1/w780.jpg"}]}});
+    let mock = Router::new()
+        .route(
+            "/primary/meta/series/tt-series.json",
+            get(move || {
+                let primary = primary.clone();
+                async move { axum::Json(primary) }
+            }),
+        )
+        .route(
+            "/alternate/meta/series/tt-series.json",
+            get(move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_secs(4)).await;
+                    axum::Json(json!({"meta": {}}))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let addons = test_addons();
+    let manifest = json!({"resources": ["meta"], "types": ["series"]});
+    insert(
+        &addons,
+        "Primary",
+        &format!("http://{host}/primary/manifest.json"),
+        manifest.clone(),
+        0,
+    );
+    insert(
+        &addons,
+        "Alternate",
+        &format!("http://{host}/alternate/manifest.json"),
+        manifest,
+        1,
+    );
+    for _ in 0..2 {
+        let result = addons.meta("series", "tt-series").await.unwrap();
+        assert_eq!(result["meta"]["id"], "tt-series");
+    }
+    assert_eq!(alternate_hits.load(Ordering::SeqCst), 1);
+    server.abort();
+}
 fn insert(addons: &Addons, name: &str, url: &str, manifest: Value, priority: i64) -> i64 {
     let db = addons.db.lock().unwrap();
     db.execute(
