@@ -480,7 +480,7 @@ async fn imported_history_gets_a_durable_next_episode_verdict_for_the_watched_ba
     let app = &show.app;
     import(app, "tt100", start - 10 * DAY);
     request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
-    until(|| verdict(app, "tt100").is_some()).await;
+    super::releases::wait(app, 1).await;
     assert_eq!(verdict(app, "tt100"), Some(("tt100:1:1".to_owned(), "upcoming")));
     let cached: i64 = app.db.lock().unwrap().query_row("SELECT COUNT(*) FROM continuation_cache", [], |r| r.get(0)).unwrap();
     assert_eq!(cached, 0);
@@ -503,7 +503,8 @@ async fn imported_history_gets_a_durable_next_episode_verdict_for_the_watched_ba
     assert_eq!(show_entry(&queue(app).await)["card"]["badges"], json!(["+1"]));
     app.db.lock().unwrap().execute("UPDATE continuation_releases SET next_check_at=0", []).unwrap();
     request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
-    until(|| show.calls.load(Ordering::SeqCst) > calls).await;
+    super::releases::wait(app, 1).await;
+    assert!(show.calls.load(Ordering::SeqCst) > calls);
 }
 
 #[tokio::test]
