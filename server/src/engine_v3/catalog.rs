@@ -286,22 +286,48 @@ async fn resolve(
     let selected_addon_serves_meta = page
         .addon_id
         .is_some_and(|addon| super::anime_show::addon_serves_meta(&app, addon, &kind));
-    let canonical_show = if kind == "series" && page.addon_id.is_some() && !selected_addon_serves_meta {
-        super::anime_show::release_document(&app, lookup).await
-    } else {
-        None
-    };
-    let is_canonical = canonical_show.is_some();
-    if page.addon_id.is_some()
+    let mut canonical = None;
+    let mut base_title = String::new();
+    let mut parsed_season = None;
+    let mut focus_season = None;
+    let mut focus_episode = None;
+    if kind == "series" && page.addon_id.is_some() && !selected_addon_serves_meta {
+        let card_title = expected
+            .as_ref()
+            .map(|card| card.title.trim().to_owned())
+            .filter(|title| !title.is_empty());
+        let card_year = expected
+            .as_ref()
+            .and_then(|card| card.metadata.as_ref().and_then(|metadata| metadata.year));
+        let (title_base, season) = match card_title.as_deref() {
+            Some(title) => super::anime_show::split_title_season(title),
+            None => (String::new(), None),
+        };
+        base_title = title_base;
+        parsed_season = season;
+        canonical = super::anime_show::release_document(&app, lookup).await;
+        if canonical.is_none() && !base_title.is_empty() {
+            canonical = super::anime_show::title_document(
+                &app,
+                &lease,
+                profile,
+                lookup,
+                &base_title,
+                card_year,
+                parsed_season,
+            )
+            .await;
+        }
+        focus_season = canonical.as_ref().and_then(|canonical| canonical.focus_season);
+        focus_episode = canonical.as_ref().and_then(|canonical| canonical.focus_episode);
+    }
+    let is_canonical = canonical.is_some();
+    if kind == "series"
+        && page.addon_id.is_some()
         && !selected_addon_serves_meta
         && !is_canonical
-        && kind == "series"
-        && super::anime_show::anime_release(lookup)
     {
-        return Err(ApiError(
-            StatusCode::NOT_FOUND,
-            "This title has no details yet".into(),
-        ));
+        return Err(ApiError::title_needs_search(&base_title, &kind, parsed_season));
     }
     let explicit = if is_canonical {
         None
@@ -431,11 +457,11 @@ async fn resolve(
         ));
     }
     configuration::validate_revision(&app, profile, revision)?;
-    let (issuer, mut parent, meta) = if let Some(document) = canonical_show {
+    let (issuer, mut parent, meta) = if let Some(canonical) = canonical {
         (
             page.addon_id.expect("canonical add-on id"),
-            document.clone(),
-            document,
+            canonical.document.clone(),
+            canonical.document,
         )
     } else {
         let (value, issuer) = timed("addons_meta", async {
@@ -639,6 +665,12 @@ async fn resolve(
     super::source_integrations::cache_detail(&app, &lease, revision, &addon_revision, &value);
     // Private watch state goes in after the shared verified-card cache.
     super::episode_progress::mark(&app, profile, &mut value);
+    if let Some(season) = focus_season {
+        value["focus_season"] = json!(season);
+    }
+    if let Some(episode) = focus_episode {
+        value["focus_episode"] = json!(episode);
+    }
     Ok(axum::Json(value))
 }
 

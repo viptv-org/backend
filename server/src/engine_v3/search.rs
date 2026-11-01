@@ -323,6 +323,42 @@ async fn load(
     }
 }
 
+pub(crate) async fn canonical_search(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    query: &str,
+    kind: &str,
+) -> Result<Vec<Card>, ApiError> {
+    let registry = Registry::builtin();
+    let (configuration, connections) = configuration::read(app, lease, profile)?;
+    let selected = registry
+        .connections_for(&configuration, &connections, Capability::Search)
+        .map_err(|_| ApiError::from("Integration unavailable"))?;
+    let ids = selected
+        .iter()
+        .filter_map(|connection| connection.id.strip_prefix("addon:")?.parse::<i64>().ok())
+        .take(32)
+        .collect::<Vec<_>>();
+    let mut scoped = app.clone();
+    scoped.addons = scoped.addons.with_engine_ids(ids.clone());
+    let mut cards = Vec::new();
+    for id in ids {
+        let (items, _) = scoped
+            .addons
+            .search_results(id, vec![kind.to_owned()], None, query.to_owned(), ROW_BUDGET)
+            .await?;
+        for batch in items.chunks(24) {
+            cards.extend(projection::cards(
+                &scoped,
+                batch.to_vec(),
+                &format!("addon:{id}"),
+            )?);
+        }
+    }
+    Ok(cards)
+}
+
 fn display_title(title: &str) -> String {
     title
         .chars()

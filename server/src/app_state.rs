@@ -41,6 +41,7 @@ pub(crate) const CODE_ACCOUNT_SESSION_REQUIRED: &str = "account_session_required
 pub(crate) const CODE_OWNER_REQUIRED: &str = "owner_required";
 pub(crate) const CODE_PASSWORD_INCORRECT: &str = "password_incorrect";
 pub(crate) const CODE_PASSWORD_TOO_SHORT: &str = "password_too_short";
+const STRUCTURED_PREFIX: &str = "\u{1f}";
 impl ApiError {
     pub(crate) fn api_error_code(&self) -> Option<&'static str> {
         match self.1.as_str() {
@@ -69,6 +70,23 @@ impl ApiError {
             _ => None,
         }
     }
+
+    pub(crate) fn structured(status: StatusCode, body: Value) -> Self {
+        ApiError(status, format!("{STRUCTURED_PREFIX}{}", body.to_string()))
+    }
+
+    pub(crate) fn title_needs_search(query: &str, kind: &str, season: Option<u32>) -> Self {
+        let season = season.map(|season| json!(season)).unwrap_or(Value::Null);
+        Self::structured(
+            StatusCode::NOT_FOUND,
+            json!({
+                "error_code": "title_needs_search",
+                "query": query,
+                "type": kind,
+                "season": season,
+            }),
+        )
+    }
 }
 impl From<String> for ApiError {
     fn from(s: String) -> Self {
@@ -87,6 +105,11 @@ impl From<&str> for ApiError {
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if let Some(payload) = self.1.strip_prefix(STRUCTURED_PREFIX) {
+            let body: Value = serde_json::from_str(payload)
+                .unwrap_or_else(|_| json!({"error": self.1}));
+            return (self.0, axum::Json(body)).into_response();
+        }
         let secret_code = match self.1.as_str() {
             "secret_store_not_configured" => Some("secret_store_not_configured"),
             "secret_key_unavailable" => Some("secret_key_unavailable"),

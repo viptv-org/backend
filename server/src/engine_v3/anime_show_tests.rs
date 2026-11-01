@@ -103,6 +103,10 @@ fn meta_of(addon: i64, id: &str) -> Value {
             "videos":tvdb_videos("tt2560140", &ATTACK_ON_TITAN_SEASONS)}}),
         (4, "tt0388629") => json!({"meta":{"id":"tt0388629","type":"series","name":"One Piece","tvdb":"81797","moviedb_id":"37854",
             "videos":tvdb_videos("tt0388629", &[(1,2),(2,2)])}}),
+        (4, "tt5550001") => json!({"meta":{"id":"tt5550001","type":"series","name":"Seasoned Show","tvdb_id":"70973","moviedb_id":"5551",
+            "videos":tvdb_videos("tt5550001", &[(1,2),(2,3)])}}),
+        (4, "tt9876543") => json!({"meta":{"id":"tt9876543","type":"series","name":"Mob Psycho 100","tvdb_id":"79999","moviedb_id":"7999",
+            "videos":tvdb_videos("tt9876543", &[(1,1),(2,1),(3,1)])}}),
         (15, "mal:20") => json!({"meta":{"id":"mal:20","type":"series","name":"Naruto","imdb_id":"tt0409591","_tmdbId":"46260","_tvdbId":"78857","_malId":"20","_kitsuId":"11",
             "videos":videos("kitsu:11", &[1,2,3])}}),
         (15, "mal:16498") => json!({"meta":{"id":"mal:16498","type":"series","name":"Attack on Titan","imdb_id":"tt2560140","_tvdbId":"267440","_tmdbId":"1429","_malId":"16498",
@@ -127,6 +131,38 @@ fn meta_of(addon: i64, id: &str) -> Value {
 
 async fn addons_meta(Path((addon, _, id)): Path<(i64, String, String)>) -> axum::Json<Value> {
     axum::Json(meta_of(addon, &id))
+}
+
+async fn addon_catalog_search(
+    Path((_, kind, _, extras)): Path<(i64, String, String, String)>,
+) -> axum::Json<Value> {
+    let query = extras
+        .trim_end_matches(".json")
+        .split('&')
+        .find_map(|part| part.strip_prefix("search="))
+        .unwrap_or("")
+        .replace('+', " ");
+    axum::Json(catalog_search_metas(&kind, &query))
+}
+
+fn catalog_search_metas(kind: &str, query: &str) -> Value {
+    if kind != "series" {
+        return json!({"metas": []});
+    }
+    let metas = match query {
+        "Mob Psycho 100" => {
+            vec![json!({"id":"tt9876543","type":"series","name":"Mob Psycho 100","releaseInfo":"2016"})]
+        }
+        "Ambiguous Anime" => vec![
+            json!({"id":"tt5550002","type":"series","name":"Ambiguous Anime"}),
+            json!({"id":"tt5550003","type":"series","name":"Ambiguous Anime"}),
+        ],
+        "Old Anime" => {
+            vec![json!({"id":"tt5550004","type":"series","name":"Old Anime","releaseInfo":"2018"})]
+        }
+        _ => vec![],
+    };
+    json!({"metas": metas})
 }
 
 async fn simkl_search(Query(query): Query<HashMap<String, String>>) -> axum::Json<Value> {
@@ -185,13 +221,15 @@ async fn simkl_episodes(Path(id): Path<String>) -> axum::Json<Value> {
 
 fn fribb_body() -> Value {
     json!([
-        {"type":"TV","anidb_id":69,"anilist_id":21,"mal_id":21,"kitsu_id":12,"tvdb_id":81797,"themoviedb_id":{"tv":37854},"imdb_id":["tt0388629"]}
+        {"type":"TV","anidb_id":69,"anilist_id":21,"mal_id":21,"kitsu_id":12,"tvdb_id":81797,"themoviedb_id":{"tv":37854},"imdb_id":["tt0388629"]},
+        {"type":"TV","anilist_id":1225,"mal_id":1225,"tvdb_id":70973,"themoviedb_id":{"tv":5551},"imdb_id":["tt5550001"],"season":{"tvdb":2},"episode_offset":{"tvdb":13}}
     ])
 }
 
 pub(super) async fn stack() -> (App, tokio::task::JoinHandle<()>) {
     let routes = Router::new()
         .route("/a/:addon/meta/:kind/:id", get(addons_meta))
+        .route("/a/:addon/catalog/:kind/:catalog_id/:extras", get(addon_catalog_search))
         .route("/search/id", get(simkl_search))
         .route("/anime/:id", get(simkl_title))
         .route("/anime/episodes/:id", get(simkl_episodes))
@@ -215,7 +253,7 @@ pub(super) async fn stack() -> (App, tokio::task::JoinHandle<()>) {
         (
             4i64,
             "Cinemeta",
-            json!({"id":"cinemeta","name":"Cinemeta","resources":["meta"],"types":["movie","series"],"idPrefixes":["tt"]}),
+            json!({"id":"cinemeta","name":"Cinemeta","resources":["meta","catalog"],"types":["movie","series"],"idPrefixes":["tt"],"catalogs":[{"type":"series","id":"top","name":"Popular series","extra":[{"name":"search"}]}]}),
         ),
         (
             15i64,
@@ -446,6 +484,33 @@ async fn detail(app: &App, path: &str) -> Value {
     let (status, body) = request(app, "member-token-1", "GET", path, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{path}: {body}");
     body
+}
+
+fn addon_origin(app: &App, addon: i64) -> Value {
+    let db = app.db.lock().unwrap();
+    let origin = super::origins::for_provider_db(&db, 1, &format!("addon:{addon}"))
+        .unwrap()
+        .unwrap();
+    serde_json::to_value(origin).unwrap()
+}
+
+fn card_selector(id: &str, title: &str, year: Option<u32>) -> Value {
+    json!({
+        "identity": {"id": id, "kind": "series", "ids": []},
+        "provider_id": "addon:17",
+        "title": title,
+        "badges": [],
+        "metadata": {"year": year},
+    })
+}
+
+fn card_query(path: &str, origin: &Value, card: &Value) -> String {
+    let mut q = url::form_urlencoded::Serializer::new(String::new());
+    q.append_pair("provider_id", "stremio");
+    q.append_pair("addon_id", "17");
+    q.append_pair("metadata_origin", &origin.to_string());
+    q.append_pair("card", &card.to_string());
+    format!("{path}?{}", q.finish())
 }
 
 #[tokio::test]
@@ -754,7 +819,7 @@ async fn an_unmapped_anilist_id_falls_back_to_the_addons_meta_resource() {
 }
 
 #[tokio::test]
-async fn an_unmapped_anilist_id_without_a_meta_resource_returns_404() {
+async fn an_unmapped_anilist_id_without_a_meta_resource_returns_title_needs_search() {
     let (app, task) = stack().await;
     let (status, body) = request(
         &app,
@@ -766,7 +831,10 @@ async fn an_unmapped_anilist_id_without_a_meta_resource_returns_404() {
     .await;
     task.abort();
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
-    assert_eq!(body["error"], "This title has no details yet");
+    assert_eq!(body["error_code"], "title_needs_search");
+    assert_eq!(body["type"], "series");
+    assert_eq!(body["query"], "");
+    assert!(body["season"].is_null());
 }
 
 #[tokio::test]
@@ -803,4 +871,116 @@ async fn an_anilist_card_with_a_foreign_origin_is_refused() {
     .await;
     task.abort();
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn an_anilist_mapping_with_a_season_returns_focus_season() {
+    let (app, task) = stack().await;
+    let body = detail(
+        &app,
+        "/api/meta/series/anilist:1225?provider_id=stremio&addon_id=17",
+    )
+    .await;
+    assert_eq!(body["item"]["identity"]["id"], "anilist:1225");
+    assert_eq!(body["focus_season"], 2);
+    assert_eq!(body["focus_episode"], 13);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_roman_numeral_season_on_the_card_title_focuses_the_matched_show() {
+    let (app, task) = stack().await;
+    let origin = addon_origin(&app, 17);
+    let card = card_selector("anilist:9999", "Mob Psycho 100 III", None);
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &card_query("/api/meta/series/anilist:9999", &origin, &card),
+        Value::Null,
+    )
+    .await;
+    task.abort();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["item"]["identity"]["id"], "anilist:9999");
+    assert_eq!(body["item"]["title"], "Mob Psycho 100");
+    assert_eq!(body["focus_season"], 3);
+    assert!(body["focus_episode"].is_null());
+}
+
+#[tokio::test]
+async fn a_parsed_season_absent_from_the_matched_show_focuses_nothing() {
+    let (app, task) = stack().await;
+    let origin = addon_origin(&app, 17);
+    let card = card_selector("anilist:9999", "Mob Psycho 100 V", None);
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &card_query("/api/meta/series/anilist:9999", &origin, &card),
+        Value::Null,
+    )
+    .await;
+    task.abort();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["item"]["title"], "Mob Psycho 100");
+    assert!(body["focus_season"].is_null());
+}
+
+#[tokio::test]
+async fn title_needs_search_carries_the_base_query_and_season() {
+    let (app, task) = stack().await;
+    let origin = addon_origin(&app, 17);
+    let card = card_selector("anilist:9998", "Some Unknown Anime S2", None);
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &card_query("/api/meta/series/anilist:9998", &origin, &card),
+        Value::Null,
+    )
+    .await;
+    task.abort();
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error_code"], "title_needs_search");
+    assert_eq!(body["query"], "Some Unknown Anime");
+    assert_eq!(body["season"], 2);
+    assert_eq!(body["type"], "series");
+}
+
+#[tokio::test]
+async fn two_equally_good_title_matches_return_title_needs_search() {
+    let (app, task) = stack().await;
+    let origin = addon_origin(&app, 17);
+    let card = card_selector("anilist:9998", "Ambiguous Anime", None);
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &card_query("/api/meta/series/anilist:9998", &origin, &card),
+        Value::Null,
+    )
+    .await;
+    task.abort();
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error_code"], "title_needs_search");
+    assert_eq!(body["query"], "Ambiguous Anime");
+}
+
+#[tokio::test]
+async fn a_year_mismatch_does_not_resolve() {
+    let (app, task) = stack().await;
+    let origin = addon_origin(&app, 17);
+    let card = card_selector("anilist:9998", "Old Anime", Some(2016));
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &card_query("/api/meta/series/anilist:9998", &origin, &card),
+        Value::Null,
+    )
+    .await;
+    task.abort();
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error_code"], "title_needs_search");
 }

@@ -325,7 +325,13 @@ pub(crate) fn addon_serves_meta(app: &App, addon: i64, kind: &str) -> bool {
     })
 }
 
-pub(crate) async fn release_document(app: &App, id: &str) -> Option<Value> {
+pub(crate) struct CanonicalDocument {
+    pub(crate) document: Value,
+    pub(crate) focus_season: Option<u32>,
+    pub(crate) focus_episode: Option<u32>,
+}
+
+pub(crate) async fn release_document(app: &App, id: &str) -> Option<CanonicalDocument> {
     if !anime_release(id) {
         return None;
     }
@@ -349,7 +355,214 @@ pub(crate) async fn release_document(app: &App, id: &str) -> Option<Value> {
     document["id"] = json!(id);
     document["type"] = json!("series");
     document["ids"] = identity_ids(show.identity());
-    Some(document)
+    Some(CanonicalDocument {
+        document,
+        focus_season: cross.season,
+        focus_episode: cross.episode_offset,
+    })
+}
+
+pub(crate) async fn title_document(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    id: &str,
+    title: &str,
+    year: Option<u32>,
+    season: Option<u32>,
+) -> Option<CanonicalDocument> {
+    let cards = crate::engine_v3::search::canonical_search(app, lease, profile, title, "series")
+        .await
+        .ok()?;
+    let candidate = title_match(&cards, title, year)?;
+    let mut identity = candidate.identity.clone();
+    ensure_canonical_id(&mut identity);
+    let mut identity = show_identity(identity)?;
+    let mut document = show_document(app, &mut identity).await?;
+    document["id"] = json!(id);
+    document["type"] = json!("series");
+    document["ids"] = identity_ids(&identity);
+    let focus_season = season.filter(|season| season_exists(&document, *season));
+    Some(CanonicalDocument {
+        document,
+        focus_season,
+        focus_episode: None,
+    })
+}
+
+fn title_match<'a>(
+    cards: &'a [Card],
+    title: &str,
+    year: Option<u32>,
+) -> Option<&'a Card> {
+    let needle = normalized_title(title);
+    let mut found = None;
+    for card in cards {
+        if card.identity.kind != "series" || !canonical_identity(&card.identity) {
+            continue;
+        }
+        if let (Some(needle_year), Some(candidate_year)) =
+            (year, card.metadata.as_ref().and_then(|metadata| metadata.year))
+        {
+            if needle_year.abs_diff(candidate_year) > 1 {
+                continue;
+            }
+        }
+        let matches = normalized_title(&card.title) == needle
+            || card.metadata.as_ref().is_some_and(|metadata| {
+                metadata
+                    .alternate_titles
+                    .iter()
+                    .any(|alternate| normalized_title(alternate) == needle)
+            });
+        if matches {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(card);
+        }
+    }
+    found
+}
+
+fn canonical_identity(identity: &MediaIdentity) -> bool {
+    ["imdb", "tvdb", "tmdb"]
+        .into_iter()
+        .any(|namespace| id_of(identity, namespace).is_some())
+        || identity.id.starts_with("tvdb:")
+        || identity.id.starts_with("tmdb:")
+        || identity.id.strip_prefix("tt").is_some_and(|digits| {
+            !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
+fn ensure_canonical_id(identity: &mut MediaIdentity) {
+    let (namespace, value) = if identity
+        .id
+        .strip_prefix("tt")
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        ("imdb", identity.id.as_str())
+    } else if let Some(value) = identity.id.strip_prefix("tvdb:") {
+        ("tvdb", value)
+    } else if let Some(value) = identity.id.strip_prefix("tmdb:") {
+        ("tmdb", value)
+    } else {
+        return;
+    };
+    let id = ExternalId {
+        namespace: namespace.into(),
+        value: value.to_owned(),
+    };
+    if !identity.ids.contains(&id) {
+        identity.ids.push(id);
+    }
+}
+
+fn season_exists(document: &Value, season: u32) -> bool {
+    document["videos"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|video| video["season"].as_u64() == Some(u64::from(season)))
+}
+
+pub(crate) fn split_title_season(title: &str) -> (String, Option<u32>) {
+    let words: Vec<String> = title.split_whitespace().map(str::to_owned).collect();
+    if words.is_empty() {
+        return (title.to_owned(), None);
+    }
+    for index in 0..words.len() {
+        if words[index].eq_ignore_ascii_case("season")
+            || words[index].eq_ignore_ascii_case("part")
+        {
+            if let Some(season) = words.get(index + 1).and_then(|word| parse_season(word)) {
+                return (join_without(&words, index, index + 1), Some(season));
+            }
+        }
+        if let Some(season) = ordinal_number(&words[index]) {
+            if words
+                .get(index + 1)
+                .is_some_and(|word| word.eq_ignore_ascii_case("season"))
+            {
+                return (join_without(&words, index, index + 1), Some(season));
+            }
+        }
+        if let Some(season) = s_number(&words[index]) {
+            return (join_without(&words, index, index), Some(season));
+        }
+    }
+    let last = words.len() - 1;
+    if let Some(season) = roman_number(&words[last]) {
+        return (join_without(&words, last, last), Some(season));
+    }
+    if let Some(season) = small_season_number(&words[last]) {
+        return (join_without(&words, last, last), Some(season));
+    }
+    (title.to_owned(), None)
+}
+
+fn parse_season(word: &str) -> Option<u32> {
+    word.parse::<u32>().ok().filter(|season| (1..=999).contains(season))
+}
+
+fn ordinal_number(word: &str) -> Option<u32> {
+    let lower = word.to_lowercase();
+    ["st", "nd", "rd", "th"].iter().find_map(|suffix| {
+        lower
+            .strip_suffix(suffix)
+            .and_then(|prefix| prefix.parse::<u32>().ok())
+            .filter(|season| (1..=999).contains(season))
+    })
+}
+
+fn roman_number(word: &str) -> Option<u32> {
+    let value = match word.to_uppercase().as_str() {
+        "II" => 2,
+        "III" => 3,
+        "IV" => 4,
+        "V" => 5,
+        "VI" => 6,
+        "VII" => 7,
+        "VIII" => 8,
+        "IX" => 9,
+        "X" => 10,
+        _ => return None,
+    };
+    Some(value)
+}
+
+fn s_number(word: &str) -> Option<u32> {
+    let rest = word.strip_prefix('S').or_else(|| word.strip_prefix('s'))?;
+    if rest.is_empty() || !rest.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    rest.parse::<u32>().ok().filter(|season| (1..=999).contains(season))
+}
+
+fn small_season_number(word: &str) -> Option<u32> {
+    word.parse::<u32>().ok().filter(|season| (2..=13).contains(season))
+}
+
+fn join_without(words: &[String], from: usize, to: usize) -> String {
+    words
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index < from || *index > to)
+        .map(|(_, word)| word.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalized_title(title: &str) -> String {
+    title
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn identity_ids(identity: &MediaIdentity) -> Value {
@@ -783,4 +996,68 @@ fn show_identity(mut identity: MediaIdentity) -> Option<MediaIdentity> {
     })?;
     identity.id = id;
     Some(identity)
+}
+
+#[cfg(test)]
+mod season_tests {
+    use super::*;
+    use crate::*;
+    use viptv_engine::presentation::Card;
+
+    #[test]
+    fn season_markers_split_off_the_base_title() {
+        assert_eq!(
+            super::split_title_season("Mob Psycho 100 III"),
+            ("Mob Psycho 100".to_owned(), Some(3))
+        );
+        assert_eq!(
+            super::split_title_season("Attack on Titan Season 2"),
+            ("Attack on Titan".to_owned(), Some(2))
+        );
+        assert_eq!(
+            super::split_title_season("One Punch Man 2"),
+            ("One Punch Man".to_owned(), Some(2))
+        );
+        assert_eq!(
+            super::split_title_season("Bleach S3"),
+            ("Bleach".to_owned(), Some(3))
+        );
+        assert_eq!(
+            super::split_title_season("Naruto Part 2"),
+            ("Naruto".to_owned(), Some(2))
+        );
+        assert_eq!(
+            super::split_title_season("Tower of God"),
+            ("Tower of God".to_owned(), None)
+        );
+    }
+
+    fn card(id: &str, title: &str, alt: &[&str], year: Option<u32>) -> Card {
+        serde_json::from_value(json!({
+            "identity": {"id": id, "kind": "series", "ids": [{"namespace": "imdb", "value": id}], "episode": null, "edition": null},
+            "provider_id": "stremio",
+            "title": title,
+            "badges": [],
+            "metadata": {"alternate_titles": alt, "year": year},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn title_match_accepts_one_exact_or_alternate_match_with_a_close_year() {
+        let hero = card("tt1111111", "Hero Show", &["Brave Story"], Some(2020));
+        assert_eq!(
+            super::title_match(&[hero.clone()], "Hero Show", Some(2020))
+                .map(|card| card.identity.id.as_str()),
+            Some("tt1111111")
+        );
+        assert_eq!(
+            super::title_match(&[hero.clone()], "Brave Story", Some(2020))
+                .map(|card| card.identity.id.as_str()),
+            Some("tt1111111")
+        );
+        assert!(super::title_match(&[hero.clone()], "Brave Story", Some(2022)).is_none());
+        let twin = card("tt2222222", "Hero Show", &[], Some(2020));
+        assert!(super::title_match(&[hero, twin], "Hero Show", Some(2020)).is_none());
+    }
 }

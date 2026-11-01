@@ -18,6 +18,8 @@ pub(crate) struct CrossIds {
     pub(crate) tvdb: Option<u64>,
     pub(crate) tmdb: Option<u64>,
     pub(crate) imdb: Option<String>,
+    pub(crate) season: Option<u32>,
+    pub(crate) episode_offset: Option<u32>,
 }
 
 impl CrossIds {
@@ -78,6 +80,8 @@ impl CrossIds {
             self.imdb = entry.imdb.clone();
         }
         self.mal = self.mal.or(entry.mal);
+        self.season = self.season.or(entry.season);
+        self.episode_offset = self.episode_offset.or(entry.episode_offset);
     }
 }
 
@@ -89,6 +93,8 @@ struct Entry {
     tvdb: Option<u64>,
     tmdb: Option<u64>,
     imdb: Option<String>,
+    season: Option<u32>,
+    episode_offset: Option<u32>,
 }
 
 impl Entry {
@@ -121,6 +127,11 @@ impl Entry {
             tvdb: raw.tvdb_id,
             tmdb,
             imdb,
+            season: raw.season.and_then(|season| season.tvdb).filter(|season| *season > 0),
+            episode_offset: raw
+                .episode_offset
+                .and_then(|offset| offset.tvdb)
+                .filter(|offset| *offset > 0),
         })
     }
 }
@@ -135,6 +146,20 @@ struct RawEntry {
     tvdb_id: Option<u64>,
     themoviedb_id: Option<RawTmdb>,
     imdb_id: Vec<String>,
+    season: Option<RawSeason>,
+    episode_offset: Option<RawOffset>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawSeason {
+    tvdb: Option<u32>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawOffset {
+    tvdb: Option<u32>,
 }
 
 #[derive(Deserialize, Default)]
