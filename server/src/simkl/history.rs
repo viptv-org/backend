@@ -49,9 +49,11 @@ pub(crate) async fn progress(
     value["duration"] = json!(q.record.duration_millis as f64 / 1000.0);
     let app = app.with_lease(lease);
     if q.record.identity.id.starts_with("simkl:") {
-        let target = tracking::Watched::canonical(&value)?;
+        let target = tracking::Target::Simkl(tracking::Watched::canonical(&value)?);
         let credential = store::credential(&app, profile, Capability::Metadata)?;
-        let card = tracking::verify(&app, profile, &target, &credential).await?;
+        let card = tracking::verify(&app, profile, &target, &credential)
+            .await?
+            .ok_or("Simkl episode could not be verified")?;
         value["name"] = json!(card.title);
         if card.poster.is_some() {
             value["poster"] = json!(card.poster);
@@ -94,7 +96,7 @@ pub(crate) async fn progress(
             tx.commit().map_err(db_error)?;
         }
         if tracking {
-            schedule_progress(app.clone(), profile, value, false);
+            schedule_progress(app.clone(), profile, value, false).await;
         }
         return Ok(axum::Json(json!({"ok":true})));
     }

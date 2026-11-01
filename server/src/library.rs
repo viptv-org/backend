@@ -141,7 +141,7 @@ pub async fn correct(
         Ok(axum::Json(response))
     }).await?;
     if tracking_item["action"] == "watched" {
-        crate::simkl::schedule_progress(tracking_app, profile, tracking_item, true);
+        crate::simkl::schedule_progress(tracking_app, profile, tracking_item, true).await;
     }
     Ok(result)
 }
