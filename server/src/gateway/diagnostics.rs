@@ -1,13 +1,37 @@
 use axum::{extract::Request, middleware::Next, response::Response};
 use sha2::{Digest, Sha256};
 use std::{
+    cell::RefCell,
+    future::Future,
     sync::atomic::{AtomicU64, Ordering},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tracing::Instrument;
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(1);
-tokio::task_local! { pub(crate) static TRACE: String; }
+tokio::task_local! {
+    pub(crate) static TRACE: String;
+    pub(crate) static STAGES: RefCell<Vec<(&'static str, Duration)>>;
+}
+
+/// Times one named stage of a request handler and records it for the
+/// slowest-stage diagnostic. Outside the observe scope this is a passthrough.
+pub(crate) async fn timed<T>(stage: &'static str, future: impl Future<Output = T>) -> T {
+    let started = Instant::now();
+    let output = future.await;
+    let elapsed = started.elapsed();
+    let _ = STAGES.try_with(|stages| stages.borrow_mut().push((stage, elapsed)));
+    output
+}
+
+/// Sync counterpart of [`timed`] for stages that are plain function calls.
+pub(crate) fn timed_sync<T>(stage: &'static str, work: impl FnOnce() -> T) -> T {
+    let started = Instant::now();
+    let output = work();
+    let elapsed = started.elapsed();
+    let _ = STAGES.try_with(|stages| stages.borrow_mut().push((stage, elapsed)));
+    output
+}
 
 pub(crate) fn tag(value: &str) -> String {
     Sha256::digest(value.as_bytes())[..8]
@@ -26,6 +50,8 @@ pub(crate) fn operation(path: &str) -> &'static str {
         "playback_session"
     } else if path.starts_with("/streams") {
         "source_discovery"
+    } else if path.starts_with("/meta/") {
+        "meta_detail"
     } else {
         "api_other"
     }
@@ -50,21 +76,42 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
     let event_trace = trace.clone();
     let started = Instant::now();
     let span = tracing::info_span!("playback_api", %trace, operation = op, session_tag = %session, %method);
-    TRACE
+    STAGES
         .scope(
-            trace,
+            RefCell::new(Vec::new()),
             async move {
-                let response = next.run(request).await;
-                let status = response.status().as_u16();
-                let elapsed_ms = started.elapsed().as_millis() as u64;
-                if status >= 400 {
-                    tracing::warn!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, "API request failed");
-                } else if op != "api_other" {
-                    tracing::info!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, "API request completed");
-                }
+                let response = TRACE
+                    .scope(
+                        trace,
+                        async move {
+                            let response = next.run(request).await;
+                            let status = response.status().as_u16();
+                            let elapsed_ms = started.elapsed().as_millis() as u64;
+                            let slowest = STAGES.with(|stages| {
+                                stages
+                                    .borrow()
+                                    .iter()
+                                    .max_by_key(|(_, took)| *took)
+                                    .map(|(stage, took)| (*stage, took.as_millis() as u64))
+                            });
+                            if status >= 400 {
+                                match slowest {
+                                    Some((stage, stage_ms)) => tracing::warn!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, slowest_stage=stage, slowest_stage_ms=stage_ms, "API request failed"),
+                                    None => tracing::warn!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, "API request failed"),
+                                }
+                            } else if op != "api_other" {
+                                match slowest {
+                                    Some((stage, stage_ms)) => tracing::info!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, slowest_stage=stage, slowest_stage_ms=stage_ms, "API request completed"),
+                                    None => tracing::info!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, "API request completed"),
+                                }
+                            }
+                            response
+                        }
+                        .instrument(span),
+                    )
+                    .await;
                 response
-            }
-            .instrument(span),
+            },
         )
         .await
 }
