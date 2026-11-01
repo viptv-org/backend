@@ -33,7 +33,7 @@ pub(crate) const MSG_ACCOUNT_CHANGED: &str = "This account changed. Try again.";
 pub(crate) const MSG_ACCOUNT_SESSION_REQUIRED: &str =
     "Manage account settings from an account session, not a paired TV.";
 pub(crate) const MSG_OWNER_REQUIRED: &str =
-    "Only the account owner can change household settings.";
+    "Only the server owner can manage accounts and devices.";
 pub(crate) const CODE_ACCOUNT_DELETE_REJECTED: &str = "account_delete_rejected";
 pub(crate) const CODE_PARENT_PIN_INCORRECT: &str = "parent_pin_incorrect";
 pub(crate) const CODE_LAST_OWNER: &str = "last_owner";

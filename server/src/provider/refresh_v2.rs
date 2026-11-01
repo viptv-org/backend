@@ -341,8 +341,8 @@ mod tests {
         );
         for method in ["POST", "DELETE"] {
             let (status, error) = http(&f.app, "member-token-2", method, &path, Value::Null).await;
-            assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
-            assert_eq!(error["error_code"], "owner_required");
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+            assert_eq!(error["error_code"], "provider_not_found");
         }
         let (_, before) = http(
             &f.app,

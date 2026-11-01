@@ -50,12 +50,12 @@ or approval from the viewing hostname is still forbidden.
 2. The QR contains only the complete dashboard activation URL. The server-generated PNG is bound to an unexpired user code and sent with `Cache-Control: no-store`.
 3. A signed-in browser uses `POST /device/lookup {user_code}`, then confirms `POST /device/approve {user_code}` or denies with `POST /device/deny {user_code}`. Approval always binds to the current account; no target account or profile subset is accepted.
 4. The TV polls `POST /device/token {device_code}`. Pending returns `authorization_pending`; approved one-time exchange returns a device access token and rotating refresh token. Exchange succeeds when the account has zero profiles.
-5. The device can list, select, create, edit and delete profiles owned by its account, and change playback preferences for its selected profile. The primary profile cannot be deleted. Deleting a selected secondary profile clears that selection while retaining the device pairing; other viewers remain unaffected. A restricted kids session needs a current parent PIN grant before every profile mutation, including creation. PIN setup needs the owner; kids policy management stays with the household's account sessions. Leaving a selected kids profile or signing out requires parent PIN authority. It cannot manage accounts, providers, addons, matches, or other server settings—even when paired by the owner.
+5. The device can list, select, create, edit and delete profiles owned by its account, and change playback preferences for its selected profile. The primary profile cannot be deleted. Deleting a selected secondary profile clears that selection while retaining the device pairing; other viewers remain unaffected. A restricted kids session needs a current parent PIN grant before every profile mutation, including creation. PIN setup and other household configuration need an account session; kids policy management stays with the household's account sessions. Leaving a selected kids profile or signing out requires parent PIN authority. It cannot manage accounts, providers, addons, matches, or other server settings—even when paired by the owner.
 6. `POST /device/refresh {refresh_token}` rotates the device credential family. `GET /devices` and `DELETE /devices/:id` let the current account list and revoke its TVs. A paired device revokes the grant it is presenting with `POST /device/revoke-own {session_id?}` (its own grant when no ID is named; the legacy `POST /auth/device/revoke` accepts the same body); it can never revoke a sibling session of the account.
 
 ## Native account sessions
 
-`POST /auth/device/login {username,password,device_name}` issues a bearer device credential, but records the session as a native sign-in: it acts as the account's own session, so the owner and member rules above apply exactly as they do to a browser session. A native owner can read `GET /account/devices` and change the household PIN; a native member reads devices and gets `403 owner_required` for household writes. A session created by the pairing flow (`POST /device/token`) stays a TV and keeps `403 account_session_required` on those routes. Sessions stored before the server recorded the origin have none and stay TV-limited; sign in again to gain the capability. `GET /auth/me` reports `capabilities.manage_account`, true for browser and native account sessions and false for a paired TV.
+`POST /auth/device/login {username,password,device_name}` issues a bearer device credential, but records the session as a native sign-in: it acts as the account's own session, so the account-session rules above apply exactly as they do to a browser session. Any native account, owner or member, manages its own household: `GET /account/devices`, the household PIN, add-ons, connections and gateways are all scoped to its `account_id`. A session created by the pairing flow (`POST /device/token`) stays a TV and keeps `403 account_session_required` on those routes. Sessions stored before the server recorded the origin have none and stay TV-limited; sign in again to gain the capability. `GET /auth/me` reports `capabilities.manage_account`, true for browser and native account sessions and false for a paired TV.
 
 ## Session caps
 
@@ -82,18 +82,18 @@ when it is the server's only account. The one refusal is an owner whose server
 still holds other accounts: they would be left without an owner, so it answers
 `409 last_owner` until those accounts are deleted.
 
-## Household settings and the owner
+## Household settings and account scope
 
-These writes belong to the server's owner and need an owner account session:
+Every account is its own household, so these writes need an account session and stay scoped to that session's `account_id`:
 
-- `PUT /parent/pin` — set, rotate or remove the household PIN.
+- `PUT /parent/pin` — set, rotate or remove the account's household PIN.
 - `POST/PATCH/DELETE /addons` — the account's add-on inventory.
 - `POST/PATCH/DELETE /iptv/connections`, `PUT /iptv/connections/:id/credentials`, `POST/DELETE /iptv/connections/:id/refresh`, `PUT /iptv/matches`, `PUT /iptv/live-default` — IPTV connections and match overrides.
 - `POST/PUT/PATCH/DELETE /gateways`, `POST /gateways/:id/check`, `PUT /gateways/:id/grants` — playback gateways and their grants.
 - `PUT/DELETE /profiles/:id/source-integrations` — the profile's source wiring, which the account owns.
-- `DELETE /account/devices`, `DELETE /account/devices/:id`, `DELETE /auth/sessions`, `DELETE /devices/:id` for another session — signing other devices out.
+- `DELETE /account/devices`, `DELETE /account/devices/:id`, `DELETE /auth/sessions`, `DELETE /devices/:id` for another session — signing that account's other devices out.
 
-A member account session gets `403 owner_required`; a paired TV gets `403 account_session_required`. A paired device may still revoke the grant it is presenting with `POST /device/revoke-own`. Pairing, profile routes and parental policy stay open to any account session, so a member keeps its own profiles, limits and devices; only the household configuration is closed to it.
+A paired TV gets `403 account_session_required` on every one. A member account session acts only on its own `account_id`: another account's add-on, connection or gateway answers that route's own not-found, never `owner_required`. A paired device may still revoke the grant it is presenting with `POST /device/revoke-own`. Pairing, profile routes and parental policy stay open to any account session.
 
 The credential routes stay self-service: `POST /auth/password`, `POST /auth/recovery-codes` and `DELETE /auth/account` act on the signed-in account for an owner or a member, whether the session came from a browser or a native sign-in, and refuse a paired TV with `403 account_session_required`. A member leaves the server by deleting its own account, and `409 last_owner` only refuses an owner while other accounts remain.
 
@@ -101,7 +101,7 @@ The credential routes stay self-service: `POST /auth/password`, `POST /auth/reco
 
 Discovery jobs, registered source handles, playback controls, SSE, and bearerless media capabilities carry a server-authored account/profile/session lease. Every use revalidates the exact credential family, enabled account, selected completed profile, and ownership grant. Revoking any link invalidates the resource. Foreign handles cannot be replayed across sessions.
 
-Status administration (`GET /auth/accounts`, `GET /auth/admin/devices`, `DELETE /admin/devices/:id`) requires the owner browser role and answers a closed forbidden response to anything else. Account inventory the account can read stays available to its own member sessions; a paired device reads only the add-on inventory.
+Status administration (`GET /auth/accounts`, `GET /auth/admin/devices`, `DELETE /admin/devices/:id`) requires the server owner and answers `403 owner_required` to any other session. Account inventory the account can read stays available to its own member sessions; a paired device reads only the add-on inventory.
 
 Back up SQLite before upgrading. Migration tests must preserve existing profile IDs, favorites, progress values/timestamps, provider rows, and addon rows. Ambiguous historical multi-account profile grants must never be silently assigned to one account. Keep the prior image and a private pre-upgrade database backup for rollback; do not publish backups, session cookies, recovery codes, device storage, or deployment logs containing secrets.
 

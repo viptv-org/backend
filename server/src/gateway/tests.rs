@@ -172,8 +172,8 @@ async fn grant_recipient_pages_require_operator_and_own_registration() {
     let id = added["id"].as_str().unwrap();
     let root = format!("/api/gateways/{id}/grants");
     let (status, error) = request(&app, "member-token-2", "GET", &root, Value::Null).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "gateway_not_found");
     {
         let db = app.db.lock().unwrap();
         for account in 3..=253 {
@@ -261,7 +261,7 @@ async fn grant_recipient_pages_require_operator_and_own_registration() {
         request(&app, "member-token-2", "GET", &root, Value::Null)
             .await
             .0,
-        StatusCode::FORBIDDEN
+        StatusCode::NOT_FOUND
     );
     app.db.lock().unwrap().execute_batch("UPDATE auth_accounts SET role='member' WHERE id=1; UPDATE auth_accounts SET role='owner' WHERE id=2;").unwrap();
     let (status, error) = request(&app, "member-token-2", "GET", &root, Value::Null).await;
@@ -344,10 +344,9 @@ async fn saved_gateway_checks_expose_scoped_capacity_and_revalidate_revoked_gran
         json!({"account_id":2,"enabled":true}),
     )
     .await;
-    let (status, error) = request(&app, "member-token-2", "POST", &path, Value::Null).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
-    assert!(error.get("available").is_none());
+    let (status, checked) = request(&app, "member-token-2", "POST", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{checked}");
+    assert_eq!(checked, json!({"ready":true,"version":1,"available":{"inputs":0,"outputs":2,"viewers":3}}));
     peer.mode.store(7, Ordering::SeqCst);
     request(
         &app,
@@ -429,21 +428,19 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "gateway_not_found");
     assert_eq!(peer.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        request(
-            &app,
-            "member-token-2",
-            "PUT",
-            &format!("/api/gateways/{id}/grants"),
-            json!({"account_id":2,"enabled":true})
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
+    let (status, error) = request(
+        &app,
+        "member-token-2",
+        "PUT",
+        &format!("/api/gateways/{id}/grants"),
+        json!({"account_id":2,"enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "gateway_not_found");
     assert_eq!(
         request(
             &app,
@@ -466,7 +463,7 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
     .await;
     assert_eq!(other["items"][0]["id"], id);
     assert_eq!(other["items"][0]["can_manage"], false);
-    let (status, error) = request(
+    let (status, checked) = request(
         &app,
         "member-token-2",
         "POST",
@@ -474,8 +471,8 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::OK, "{checked}");
+    assert_eq!(checked, json!({"ready":true,"version":1,"available":null}));
     let (status, error) = request(
         &app,
         "member-token-2",
@@ -484,8 +481,8 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         json!({"enabled":false}),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "gateway_not_found");
     app.db
         .lock()
         .unwrap()
@@ -560,8 +557,8 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "gateway_not_found");
 }
 
 #[tokio::test]
