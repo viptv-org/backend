@@ -58,6 +58,18 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
             "/profiles/:id/live/:channel/sources",
             post(engine_v3::live::sources),
         )
+        .route(
+            "/crash-reports",
+            post(crash_reports::upload)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    crash_reports::MAX_REPORT_BYTES,
+                ))
+                .get(crash_reports::list),
+        )
+        .route(
+            "/crash-reports/:id",
+            get(crash_reports::get_one).delete(crash_reports::remove),
+        )
         .route("/bootstrap", get(engine_v3::bootstrap))
         .route(
             "/profiles",
