@@ -291,7 +291,11 @@ async fn resolve(
     let mut parsed_season = None;
     let mut focus_season = None;
     let mut focus_episode = None;
-    if kind == "series" && page.addon_id.is_some() && !selected_addon_serves_meta {
+    if kind == "series"
+        && page.addon_id.is_some()
+        && !selected_addon_serves_meta
+        && super::anime_show::anime_release(lookup)
+    {
         let card_title = expected
             .as_ref()
             .map(|card| card.title.trim().to_owned())
@@ -326,6 +330,7 @@ async fn resolve(
         && page.addon_id.is_some()
         && !selected_addon_serves_meta
         && !is_canonical
+        && super::anime_show::anime_release(lookup)
     {
         return Err(ApiError::title_needs_search(&base_title, &kind, parsed_season));
     }

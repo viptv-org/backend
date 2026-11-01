@@ -14,6 +14,7 @@ const MAX_RESPONSE: usize = 32 * 1024 * 1024;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CrossIds {
     pub(crate) mal: Option<u64>,
+    pub(crate) anilist: Option<u64>,
     pub(crate) anidb: Option<u64>,
     pub(crate) tvdb: Option<u64>,
     pub(crate) tmdb: Option<u64>,
@@ -53,6 +54,7 @@ impl CrossIds {
             "tmdb" => id.value.parse().ok().map(|value| (3, value, None)),
             "imdb" => Some((4, 0, Some(id.value.clone()))),
             "mal" => id.value.parse().ok().map(|value| (5, value, None)),
+            "anilist" => id.value.parse().ok().map(|value| (6, value, None)),
             _ => None,
         };
         let Some((namespace, value, imdb)) = parsed else {
@@ -80,6 +82,7 @@ impl CrossIds {
             self.imdb = entry.imdb.clone();
         }
         self.mal = self.mal.or(entry.mal);
+        self.anilist = self.anilist.or(entry.anilist);
         self.season = self.season.or(entry.season);
         self.episode_offset = self.episode_offset.or(entry.episode_offset);
     }
@@ -89,6 +92,7 @@ impl CrossIds {
 struct Entry {
     keys: Vec<String>,
     mal: Option<u64>,
+    anilist: Option<u64>,
     anidb: Option<u64>,
     tvdb: Option<u64>,
     tmdb: Option<u64>,
@@ -123,6 +127,7 @@ impl Entry {
         Some(Self {
             keys,
             mal: raw.mal_id,
+            anilist: raw.anilist_id,
             anidb: raw.anidb_id,
             tvdb: raw.tvdb_id,
             tmdb,
