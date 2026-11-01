@@ -277,13 +277,42 @@ async fn resolve(
     if page.provider_id.is_none() && page.addon_id.is_some() {
         return Err("Metadata provider is required".into());
     }
-    let explicit = page
-        .provider_id
-        .as_deref()
-        .map(|provider| {
-            super::search::metadata_scope(app.clone(), &lease, profile, provider, page.addon_id)
-        })
-        .transpose()?;
+    let lookup = if kind == "series" {
+        episode_parent(&id).unwrap_or(&id)
+    } else {
+        id.as_str()
+    };
+    let selected_addon_serves_meta = page
+        .addon_id
+        .is_some_and(|addon| super::anime_show::addon_serves_meta(&app, addon, &kind));
+    let canonical_show = if kind == "series" && page.addon_id.is_some() && !selected_addon_serves_meta {
+        super::anime_show::release_document(&app, lookup).await
+    } else {
+        None
+    };
+    let is_canonical = canonical_show.is_some();
+    if page.addon_id.is_some()
+        && !selected_addon_serves_meta
+        && !is_canonical
+        && kind == "series"
+        && super::anime_show::anime_release(lookup)
+    {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "This title has no details yet".into(),
+        ));
+    }
+    let explicit = if is_canonical {
+        None
+    } else {
+        page
+            .provider_id
+            .as_deref()
+            .map(|provider| {
+                super::search::metadata_scope(app.clone(), &lease, profile, provider, page.addon_id)
+            })
+            .transpose()?
+    };
     let simkl = page
         .provider_id
         .as_deref()
@@ -357,7 +386,15 @@ async fn resolve(
         super::episode_progress::mark(&app, profile, &mut result.0);
         return Ok(result);
     }
-    let (app, origin, revision) = if let Some(explicit) = explicit {
+    let (app, origin, revision) = if is_canonical {
+        let (app, _, revision) =
+            super::search::metadata_scope(app, &lease, profile, "stremio", None)?;
+        (
+            app,
+            format!("addon:{}", page.addon_id.expect("canonical add-on id")),
+            revision,
+        )
+    } else if let Some(explicit) = explicit {
         explicit
     } else if stremio_fallback {
         super::search::metadata_scope(app, &lease, profile, "stremio", None)?
@@ -370,11 +407,6 @@ async fn resolve(
         )?;
         (app, "stremio".to_owned(), revision)
     };
-    let lookup = if kind == "series" {
-        episode_parent(&id).unwrap_or(&id)
-    } else {
-        id.as_str()
-    };
     {
         let db = app
             .db
@@ -385,50 +417,59 @@ async fn resolve(
             kids::require_item(&db, &app.identity(), &kind, &id)?;
         }
     }
-    let (value, issuer) = if page.addon_id.is_some() {
-        app.addons.meta_from_selected_addon(&kind, lookup).await
-    } else {
-        app.addons.meta_with_origin(&kind, lookup).await
-    }
-    .map_err(|error| {
-        if page.addon_id.is_some() && error == "Metadata not found" {
-            ApiError(
-                StatusCode::BAD_GATEWAY,
-                "The selected metadata add-on did not return this title".into(),
-            )
-        } else {
-            ApiError::from(error)
-        }
-    })?;
     if app.addons.revision()? != addon_revision {
         return Err(ApiError(
             StatusCode::CONFLICT,
             "Metadata integrations changed. Try again.".into(),
         ));
     }
+    configuration::validate_revision(&app, profile, revision)?;
+    let (issuer, mut parent, meta) = if let Some(document) = canonical_show {
+        (
+            page.addon_id.expect("canonical add-on id"),
+            document.clone(),
+            document,
+        )
+    } else {
+        let (value, issuer) = if page.addon_id.is_some() {
+            app.addons.meta_from_selected_addon(&kind, lookup).await
+        } else {
+            app.addons.meta_with_origin(&kind, lookup).await
+        }
+        .map_err(|error| {
+            if page.addon_id.is_some() && error == "Metadata not found" {
+                ApiError(
+                    StatusCode::BAD_GATEWAY,
+                    "The selected metadata add-on did not return this title".into(),
+                )
+            } else {
+                ApiError::from(error)
+            }
+        })?;
+        let meta = if value["meta"].is_object() {
+            value["meta"].clone()
+        } else {
+            value
+        };
+        if meta["type"].as_str().is_some_and(|actual| actual != kind)
+            || !provider_identity::same_title(&meta, lookup)
+        {
+            return Err(ApiError(
+                StatusCode::BAD_GATEWAY,
+                "Provider returned a different title".into(),
+            ));
+        }
+        let mut parent = meta.clone();
+        parent["type"] = json!(kind);
+        parent["id"] = json!(lookup);
+        (issuer, parent, meta)
+    };
     let origin = if origin == "stremio" {
         format!("addon:{issuer}")
     } else {
         origin
     };
-    configuration::validate_revision(&app, profile, revision)?;
-    let meta = if value["meta"].is_object() {
-        value["meta"].clone()
-    } else {
-        value
-    };
-    if meta["type"].as_str().is_some_and(|actual| actual != kind)
-        || !provider_identity::same_title(&meta, lookup)
-    {
-        return Err(ApiError(
-            StatusCode::BAD_GATEWAY,
-            "Provider returned a different title".into(),
-        ));
-    }
-    let mut parent = meta.clone();
-    parent["type"] = json!(kind);
-    parent["id"] = json!(lookup);
-    if kind == "series" {
+    if kind == "series" && !is_canonical {
         let document = super::anime_show::tvdb_document(&app, &lease, profile, &parent).await;
         if let Some(document) = document {
             parent = document;
@@ -553,7 +594,8 @@ async fn resolve(
     }
     configuration::validate_revision(&app, profile, revision)?;
     if let Some(provider) = page.provider_id.as_deref() {
-        super::search::metadata_scope(app.clone(), &lease, profile, provider, page.addon_id)?;
+        let addon = if is_canonical { None } else { page.addon_id };
+        super::search::metadata_scope(app.clone(), &lease, profile, provider, addon)?;
     }
     if app.addons.revision()? != addon_revision {
         return Err(ApiError(

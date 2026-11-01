@@ -101,6 +101,8 @@ fn meta_of(addon: i64, id: &str) -> Value {
             "videos":tvdb_videos("tt0409591", &[(1,2),(2,2),(3,2)])}}),
         (4, "tt2560140") => json!({"meta":{"id":"tt2560140","type":"series","name":"Attack on Titan","tvdb_id":"267440","moviedb_id":"1429",
             "videos":tvdb_videos("tt2560140", &ATTACK_ON_TITAN_SEASONS)}}),
+        (4, "tt0388629") => json!({"meta":{"id":"tt0388629","type":"series","name":"One Piece","tvdb":"81797","moviedb_id":"37854",
+            "videos":tvdb_videos("tt0388629", &[(1,2),(2,2)])}}),
         (15, "mal:20") => json!({"meta":{"id":"mal:20","type":"series","name":"Naruto","imdb_id":"tt0409591","_tmdbId":"46260","_tvdbId":"78857","_malId":"20","_kitsuId":"11",
             "videos":videos("kitsu:11", &[1,2,3])}}),
         (15, "mal:16498") => json!({"meta":{"id":"mal:16498","type":"series","name":"Attack on Titan","imdb_id":"tt2560140","_tvdbId":"267440","_tmdbId":"1429","_malId":"16498",
@@ -117,6 +119,8 @@ fn meta_of(addon: i64, id: &str) -> Value {
         (16, "kitsu:41982") => json!({"meta":{"id":"kitsu:41982","type":"series","name":"Attack on Titan Season 3 Part 2","imdb_id":"tt2560140","kitsu_id":"41982",
             "videos":kitsu_videos("kitsu:41982", 10, 3, 12)}}),
         (16, "kitsu:9") => json!({"meta":{"id":"kitsu:9","type":"series","name":"Unmapped Kitsu","kitsu_id":"9"}}),
+        (18, "anilist:6702") => json!({"meta":{"id":"anilist:6702","type":"series","name":"Fairy Tail","anilist_id":"6702",
+            "videos":[{"id":"anilist:6702:1:1","season":1,"episode":1,"name":"The Fairy Tail","released":"2009-10-12T00:00:00.000Z"},{"id":"anilist:6702:1:2","season":1,"episode":2,"name":"Fire Dragon, Monkey, and Bull","released":"2009-10-19T00:00:00.000Z"}]}}),
         _ => json!({}),
     }
 }
@@ -179,12 +183,19 @@ async fn simkl_episodes(Path(id): Path<String>) -> axum::Json<Value> {
     axum::Json(Value::Array(rows))
 }
 
+fn fribb_body() -> Value {
+    json!([
+        {"type":"TV","anidb_id":69,"anilist_id":21,"mal_id":21,"kitsu_id":12,"tvdb_id":81797,"themoviedb_id":{"tv":37854},"imdb_id":["tt0388629"]}
+    ])
+}
+
 pub(super) async fn stack() -> (App, tokio::task::JoinHandle<()>) {
     let routes = Router::new()
         .route("/a/:addon/meta/:kind/:id", get(addons_meta))
         .route("/search/id", get(simkl_search))
         .route("/anime/:id", get(simkl_title))
         .route("/anime/episodes/:id", get(simkl_episodes))
+        .route("/", get(|| async { axum::Json(fribb_body()) }))
         .fallback(|method: axum::http::Method| async move {
             if method.is_safe() {
                 StatusCode::OK
@@ -199,6 +210,7 @@ pub(super) async fn stack() -> (App, tokio::task::JoinHandle<()>) {
     app.addons = app.addons.clone().for_account(1);
     app.addons.allow_test_loopback = true;
     app.simkl = Arc::new(crate::simkl::Service::fixture(&format!("http://{address}")));
+    app.cross_ids = Arc::new(super::cross_ids::Service::fixture(&format!("http://{address}")));
     for (id, name, manifest) in [
         (
             4i64,
@@ -214,6 +226,16 @@ pub(super) async fn stack() -> (App, tokio::task::JoinHandle<()>) {
             16i64,
             "Anime Kitsu",
             json!({"id":"kitsu","name":"Anime Kitsu","resources":["meta"],"types":["movie","series"],"idPrefixes":["kitsu"]}),
+        ),
+        (
+            17i64,
+            "Anime Catalogs",
+            json!({"id":"animecatalogs","name":"Anime Catalogs","resources":["catalog"],"types":["movie","series"],"catalogs":[{"type":"series","id":"anime:CURRENT","name":"Currently watching Anime"}],"idPrefixes":["anilist"]}),
+        ),
+        (
+            18i64,
+            "Animeo Meta",
+            json!({"id":"animeometa","name":"Animeo Meta","resources":["meta"],"types":["movie","series"],"idPrefixes":["anilist"]}),
         ),
     ] {
         app.db
@@ -690,4 +712,95 @@ async fn a_saved_release_favorite_is_stored_under_the_show() {
     };
     assert_eq!(saved, vec!["tt2560140"]);
     task.abort();
+}
+
+#[tokio::test]
+async fn an_anilist_catalog_card_opens_the_canonical_show_through_the_fribb_mapping() {
+    let (app, task) = stack().await;
+    let body = detail(
+        &app,
+        "/api/meta/series/anilist:21?provider_id=stremio&addon_id=17",
+    )
+    .await;
+    assert_eq!(body["item"]["identity"]["id"], "anilist:21");
+    assert_eq!(body["item"]["title"], "One Piece");
+    assert_eq!(body["item"]["metadata_origin"]["connection_id"], "addon:17");
+    let ids = body["item"]["identity"]["ids"].as_array().unwrap();
+    assert!(
+        ids.contains(&json!({"namespace":"tvdb","value":"81797"})),
+        "{ids:?}"
+    );
+    assert!(
+        ids.contains(&json!({"namespace":"imdb","value":"tt0388629"})),
+        "{ids:?}"
+    );
+    assert_eq!(body["episodes"][0]["identity"]["id"], "tt0388629:1:1");
+    task.abort();
+}
+
+#[tokio::test]
+async fn an_unmapped_anilist_id_falls_back_to_the_addons_meta_resource() {
+    let (app, task) = stack().await;
+    let body = detail(
+        &app,
+        "/api/meta/series/anilist:6702?provider_id=stremio&addon_id=18",
+    )
+    .await;
+    assert_eq!(body["item"]["identity"]["id"], "anilist:6702");
+    assert_eq!(body["item"]["title"], "Fairy Tail");
+    assert_eq!(body["item"]["metadata_origin"]["connection_id"], "addon:18");
+    assert_eq!(body["episodes"][0]["identity"]["id"], "anilist:6702:1:1");
+    task.abort();
+}
+
+#[tokio::test]
+async fn an_unmapped_anilist_id_without_a_meta_resource_returns_404() {
+    let (app, task) = stack().await;
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/meta/series/anilist:9998?provider_id=stremio&addon_id=17",
+        Value::Null,
+    )
+    .await;
+    task.abort();
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "This title has no details yet");
+}
+
+#[tokio::test]
+async fn an_anilist_card_with_a_foreign_origin_is_refused() {
+    let (app, task) = stack().await;
+    app.db
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "INSERT INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Two','two',1);
+             INSERT INTO profile_owners(profile_id,account_id,created_at) VALUES(2,2,0);
+             UPDATE auth_sessions SET profile_id=2 WHERE account_id=2;",
+        )
+        .unwrap();
+    let first = detail(
+        &app,
+        "/api/meta/series/anilist:21?provider_id=stremio&addon_id=17",
+    )
+    .await;
+    let origin = first["item"]["metadata_origin"].clone();
+    let card = first["item"].clone();
+    let mut q = url::form_urlencoded::Serializer::new(String::new());
+    q.append_pair("provider_id", "stremio");
+    q.append_pair("addon_id", "17");
+    q.append_pair("metadata_origin", &origin.to_string());
+    q.append_pair("card", &card.to_string());
+    let (status, body) = request(
+        &app,
+        "member-token-2",
+        "GET",
+        &format!("/api/meta/series/anilist:21?{}", q.finish()),
+        Value::Null,
+    )
+    .await;
+    task.abort();
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }

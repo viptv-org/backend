@@ -301,6 +301,66 @@ pub(crate) fn anime_release(id: &str) -> bool {
             .any(|prefix| id.starts_with(*prefix))
 }
 
+fn cross_ids_of(identity: &MediaIdentity) -> Vec<ExternalId> {
+    let mut ids = identity.ids.clone();
+    let (namespace, value) = match identity.id.split_once(':') {
+        Some((namespace, value)) if ANIME_SOURCES.contains(&namespace) => (namespace, value),
+        _ => return ids,
+    };
+    let id = ExternalId {
+        namespace: namespace.into(),
+        value: value.into(),
+    };
+    if !ids.contains(&id) {
+        ids.push(id);
+    }
+    ids
+}
+
+pub(crate) fn addon_serves_meta(app: &App, addon: i64, kind: &str) -> bool {
+    app.addons.entries().ok().is_some_and(|entries| {
+        entries
+            .into_iter()
+            .any(|(candidate, _, manifest)| candidate == addon && crate::addon::declares_meta(&manifest, kind))
+    })
+}
+
+pub(crate) async fn release_document(app: &App, id: &str) -> Option<Value> {
+    if !anime_release(id) {
+        return None;
+    }
+    let release = MediaIdentity {
+        id: id.to_owned(),
+        kind: "series".into(),
+        ids: Vec::new(),
+        episode: None,
+        edition: None,
+    };
+    let cross = app.cross_ids.resolve(&cross_ids_of(&release)).await;
+    let release = MediaIdentity {
+        id: release.id,
+        kind: release.kind,
+        ids: cross.external_ids(),
+        episode: None,
+        edition: None,
+    };
+    let show = resolve(app, &release).await?;
+    let mut document = show.document.as_ref()?.clone();
+    document["id"] = json!(id);
+    document["type"] = json!("series");
+    document["ids"] = identity_ids(show.identity());
+    Some(document)
+}
+
+fn identity_ids(identity: &MediaIdentity) -> Value {
+    let mut ids = serde_json::Map::new();
+    for id in &identity.ids {
+        ids.entry(id.namespace.clone())
+            .or_insert_with(|| json!(id.value));
+    }
+    Value::Object(ids)
+}
+
 fn lists_episode(document: &Value, season: u32, episode: u32) -> bool {
     document["videos"]
         .as_array()

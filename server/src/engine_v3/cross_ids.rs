@@ -21,6 +21,29 @@ pub(crate) struct CrossIds {
 }
 
 impl CrossIds {
+    pub(crate) fn external_ids(&self) -> Vec<ExternalId> {
+        let mut ids = Vec::new();
+        for (namespace, value) in [
+            ("anidb", self.anidb.map(|v| v.to_string())),
+            ("tvdb", self.tvdb.map(|v| v.to_string())),
+            ("tmdb", self.tmdb.map(|v| v.to_string())),
+            ("imdb", self.imdb.clone()),
+            ("mal", self.mal.map(|v| v.to_string())),
+        ] {
+            let Some(value) = value else {
+                continue;
+            };
+            let id = ExternalId {
+                namespace: namespace.into(),
+                value,
+            };
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    }
+
     fn add(&mut self, id: &ExternalId) {
         let parsed = match id.namespace.as_str() {
             "anidb" => id.value.parse().ok().map(|value| (1, value, None)),
