@@ -3330,7 +3330,7 @@ impl Guarded {
 }
 
 #[tokio::test]
-async fn household_writes_need_the_owner_browser_session() {
+async fn household_writes_need_an_account_session() {
     let a = fixture();
     let tv = secondary_session(&a, "tv-one", 1, "device");
     secondary_session(&a, "second-browser", 1, "browser");
@@ -3366,24 +3366,12 @@ async fn household_writes_need_the_owner_browser_session() {
         Guarded::new("DELETE", "/api/devices/second-tv", Value::Null, Some(StatusCode::OK)).tv_code("forbidden"),
     ];
     for call in calls {
-        for (token, code) in [
-            (tv.as_str(), call.tv),
-            ("member-token-2", "owner_required"),
-        ] {
-            let (status, error) = request(&a, token, call.method, &call.path, call.body.clone()).await;
-            assert_eq!(
-                status,
-                StatusCode::FORBIDDEN,
-                "{} {} {token}",
-                call.method,
-                call.path
-            );
-            assert_eq!(
-                error["error_code"], code,
-                "{} {} {token}",
-                call.method, call.path
-            );
-        }
+        let (status, error) = request(&a, &tv, call.method, &call.path, call.body.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{} {} tv", call.method, call.path);
+        assert_eq!(error["error_code"], call.tv, "{} {} tv", call.method, call.path);
+        let (status, error) = request(&a, "member-token-2", call.method, &call.path, call.body.clone()).await;
+        assert_ne!(error["error_code"], "owner_required", "{} {} member", call.method, call.path);
+        assert_ne!(error["error_code"], "account_session_required", "{} {} member {status}", call.method, call.path);
         let (status, reply) = request(&a, "member-token-1", call.method, &call.path, call.body).await;
         if let Some(owner) = call.owner {
             assert_eq!(
@@ -3403,29 +3391,43 @@ async fn household_writes_need_the_owner_browser_session() {
 }
 
 #[tokio::test]
-async fn signing_out_every_session_needs_the_owner() {
+async fn signing_out_sessions_stays_scoped_to_the_owning_account() {
     let a = fixture();
+    secondary_session(&a, "second-browser", 1, "browser");
     let tv = secondary_session(&a, "tv-one", 1, "device");
-    for (token, code) in [(tv.as_str(), "account_session_required"), ("member-token-2", "owner_required")] {
-        let (status, error) = request(&a, token, "DELETE", "/api/auth/sessions", Value::Null).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(error["error_code"], code);
-    }
+    let (status, error) = request(&a, &tv, "DELETE", "/api/auth/sessions", Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "account_session_required");
+    assert_eq!(
+        request(&a, "member-token-2", "DELETE", "/api/auth/sessions", Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(a.db.lock().unwrap().query_row("SELECT count(*) FROM auth_sessions WHERE id='second-browser'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     assert_eq!(
         request(&a, "member-token-1", "DELETE", "/api/auth/sessions", Value::Null)
             .await
             .0,
         StatusCode::OK
     );
+    assert_eq!(a.db.lock().unwrap().query_row("SELECT count(*) FROM auth_sessions WHERE id='second-browser'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+
     let b = fixture();
+    secondary_session(&b, "second-browser", 1, "browser");
     let tv = secondary_session(&b, "tv-one", 1, "device");
-    for (token, code) in [(tv.as_str(), "account_session_required"), ("member-token-2", "owner_required")] {
-        let (status, error) = request(&b, token, "DELETE", "/api/account/devices", Value::Null).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(error["error_code"], code);
-    }
+    let (status, error) = request(&b, &tv, "DELETE", "/api/account/devices", Value::Null).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "account_session_required");
     assert_eq!(
-        request(&b, "member-token-1", "DELETE", "/api/account/devices", Value::Null)
+        request(&b, "member-token-2", "DELETE", "/api/account/devices/second-browser", Value::Null)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(b.db.lock().unwrap().query_row("SELECT count(*) FROM auth_sessions WHERE id='second-browser'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    assert_eq!(
+        request(&b, "member-token-1", "DELETE", "/api/account/devices/second-browser", Value::Null)
             .await
             .0,
         StatusCode::OK
@@ -3457,7 +3459,7 @@ async fn account_credentials_are_self_service_for_account_sessions() {
 }
 
 #[tokio::test]
-async fn native_account_sessions_manage_devices_and_the_household_pin_by_role() {
+async fn native_account_sessions_manage_devices_and_the_household_pin() {
     let a = fixture();
     let native_owner = native_session(&a, "native-owner", 1);
     let native_member = native_session(&a, "native-member", 2);
@@ -3488,17 +3490,17 @@ async fn native_account_sessions_manage_devices_and_the_household_pin_by_role() 
         );
     }
     let pin = json!({"pin":"7248","current_pin":"7248"});
-    for (token, expected) in [
-        (tv.as_str(), "account_session_required"),
-        (legacy.as_str(), "account_session_required"),
-        (native_member.as_str(), "owner_required"),
-        ("member-token-2", "owner_required"),
-    ] {
+    for token in [tv.as_str(), legacy.as_str()] {
         let (status, error) = request(&a, token, "PUT", "/api/parent/pin", pin.clone()).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{token}");
-        assert_eq!(error["error_code"], expected, "{token}");
+        assert_eq!(error["error_code"], "account_session_required", "{token}");
     }
     for token in [native_owner.as_str(), "member-token-1"] {
+        let (status, reply) = request(&a, token, "PUT", "/api/parent/pin", pin.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{token} {reply}");
+        assert_eq!(reply["pin_configured"], true, "{token}");
+    }
+    for token in [native_member.as_str(), "member-token-2"] {
         let (status, reply) = request(&a, token, "PUT", "/api/parent/pin", pin.clone()).await;
         assert_eq!(status, StatusCode::OK, "{token} {reply}");
         assert_eq!(reply["pin_configured"], true, "{token}");
@@ -3519,6 +3521,21 @@ async fn native_account_sessions_manage_devices_and_the_household_pin_by_role() 
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(error["error_code"], "account_session_required");
     let (status, error) = request(&a, &native_member, "PATCH", "/api/addons/10", json!({"enabled":false})).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "addon_not_found");
+}
+
+#[tokio::test]
+async fn server_admin_routes_stay_owner_only() {
+    let a = fixture();
+    for path in ["/api/auth/accounts", "/api/admin/devices"] {
+        let (status, error) = request(&a, "member-token-2", "GET", path, Value::Null).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(error["error_code"], "owner_required", "{path}");
+        assert_eq!(
+            request(&a, "member-token-1", "GET", path, Value::Null).await.0,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
 }

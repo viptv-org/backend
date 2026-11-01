@@ -49,7 +49,7 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
     )
     .await;
     assert_eq!(again["id"], id);
-    let (status, error) = request(
+    let (status, member_addon) = request(
         &app,
         "member-token-2",
         "POST",
@@ -57,8 +57,12 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
         json!({"manifest_url":url}),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::OK, "{member_addon}");
+    let member_id = member_addon["id"].as_i64().unwrap();
+    assert_ne!(member_id, id);
+    let (_, member_page) = request(&app, "member-token-2", "GET", ROOT, Value::Null).await;
+    assert_eq!(member_page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(member_page["items"][0]["id"], member_id);
     request(
         &app,
         "member-token-1",
@@ -109,8 +113,8 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
             json!({"enabled":false}),
         )
         .await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(error["error_code"], "owner_required");
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method}");
+        assert_eq!(error["error_code"], "addon_not_found", "{method}");
     }
     let (_, disabled) = request(
         &app,
