@@ -659,9 +659,6 @@ pub(crate) async fn canonical_progress(app: &App, value: &Value) -> Option<Value
     Some(value)
 }
 
-/// The show and TVDB episode behind a record that carries the show's own
-/// episode id: the parent identity is the release the episode was opened from,
-/// or the show itself once its watch state moved to the show identity.
 pub(crate) async fn show_episode(
     app: &App,
     parent: &MediaIdentity,
@@ -685,8 +682,6 @@ pub(crate) async fn show_episode(
     Some((show.identity().clone(), tvdb))
 }
 
-/// The anime release a show identity still names, for a parent that Path A has
-/// already reduced to the show.
 fn anime_source(identity: &MediaIdentity) -> Option<MediaIdentity> {
     let (namespace, value) = identity.ids.iter().find_map(|id| {
         ANIME_SOURCES
@@ -868,7 +863,6 @@ fn season_numbers(videos: &[Value]) -> std::collections::BTreeSet<u64> {
         .collect()
 }
 
-/// Release episode numbers count the way Simkl's `episode` numbers do inside one anime title.
 fn segments(rows: &[Value]) -> Vec<Segment> {
     segments_from(rows.iter().take(MAX_ROWS).filter_map(|row| {
         if row["type"].as_str() != Some("episode") || row["aired"] == false {
