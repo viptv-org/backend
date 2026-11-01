@@ -68,7 +68,7 @@ impl Principal {
         if self.is_owner() {
             Ok(())
         } else {
-            Err(forbidden())
+            Err(ApiError(StatusCode::FORBIDDEN, MSG_OWNER_REQUIRED.into()))
         }
     }
     pub fn require_account_session(&self) -> Result<(), ApiError> {
@@ -82,12 +82,7 @@ impl Principal {
         }
     }
     pub fn require_account_owner(&self) -> Result<(), ApiError> {
-        self.require_account_session()?;
-        if self.is_owner() {
-            Ok(())
-        } else {
-            Err(ApiError(StatusCode::FORBIDDEN, MSG_OWNER_REQUIRED.into()))
-        }
+        self.require_account_session()
     }
     pub fn require_profile(&self, db: &Connection, profile: i64) -> Result<(), ApiError> {
         let ok = self.can_profile(db, profile)?;
