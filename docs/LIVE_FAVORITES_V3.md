@@ -2,8 +2,8 @@
 
 Channel stars are profile-owned live preferences, separate from VOD favorites, Simkl lists and watch history.
 
-- `GET /api/v3/profiles/:profile/live/favorites` returns `{ "channel_ids": ["host-issued-opaque-id"] }`.
-- `PUT /api/v3/profiles/:profile/live/:channel/favorite` saves the current host-issued channel.
+- `GET /api/profiles/:profile/live/favorites` returns `{ "channel_ids": ["host-issued-opaque-id"] }`.
+- `PUT /api/profiles/:profile/live/:channel/favorite` saves the current host-issued channel.
 - `DELETE` on that path removes the selected profile's saved preference, including when that channel/connection is temporarily absent.
 
 Mutations return the same current snapshot. Repeated save/remove requests for an available channel are idempotent. Unknown/foreign/disabled channels cannot be saved. Reads exclude removed, disabled or unassigned connections and channels missing from the current host registry; stored preferences are retained so they can be explicitly removed. Native M3U/Xtream rows also bind the connection revision, so an old preference does not authorize a reconfigured input.

@@ -1,6 +1,6 @@
 # Scoped external subtitles
 
-`GET /api/v3/subtitles/:kind/:id` returns canonical `SubtitleSnapshot` candidates with opaque IDs, language and labels; it never exposes an addon URL. `GET /api/v3/subtitle-content/:id` remains the authenticated normalized WebVTT path for browser clients. Existing native raw ASS/styling/legacy-byte transport remains separate.
+`GET /api/subtitles/:kind/:id` returns canonical `SubtitleSnapshot` candidates with opaque IDs, language and labels; it never exposes an addon URL. `GET /api/subtitle-content/:id` remains the authenticated normalized WebVTT path for browser clients. Existing native raw ASS/styling/legacy-byte transport remains separate.
 
 Bootstrap includes `subtitle_availability:{available:boolean,provider_count:number}` for a selected profile, or null without one. It counts only enabled, owned connections with an actual Subtitle capability enabled by that profile's effective assignments. Removed/stale connections do not count. This reads cached configuration/manifests only, makes no provider request and does not change the selected metadata owner. Clients may hide the provider-caption action when `available` is false without another startup call; discovery still determines actual title candidates and provider health.
 

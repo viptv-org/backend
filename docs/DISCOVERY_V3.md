@@ -1,6 +1,6 @@
 # Profile-scoped discovery controls
 
-`GET /api/v3/discovery-controls?type=movie|series|anime` describes the selected profile's single metadata owner. Stremio catalogs carry raw `id`, `type`, `connection_id`, numeric `addon_id`, friendly `name` and additive `connection_name`. IDs are unique only within a connection and media type. Select the explicit tuple; never infer provider identity from labels or an opaque ID.
+`GET /api/discovery-controls?type=movie|series|anime` describes the selected profile's single metadata owner. Stremio catalogs carry raw `id`, `type`, `connection_id`, numeric `addon_id`, friendly `name` and additive `connection_name`. IDs are unique only within a connection and media type. Select the explicit tuple; never infer provider identity from labels or an opaque ID.
 
 Catalog `controls` use canonical `QueryControl`. `maximum_selections:null` adds no provider-specific constraint; MultiChoice has a global64-value bound and SingleChoice always allows at most1. Stremio missing `optionsLimit` means1, explicit0 is not selectable, and advertised lists with limit>1 become MultiChoice with effective cap min(limit,64). Required flags and advertised defaults survive both original and normalized manifests. Empty advertised lists remain Text, rather than fabricated multi-choice menus.
 
@@ -10,7 +10,7 @@ Existing scalar `genre` and JSON `extras:{"sort":"year"}` remain valid. New clie
 [{"id":"genre","values":["Action & Adventure","Drama, Crime"]}]
 ```
 
-Use `/api/v3/discover?type=movie&catalog=<raw-id>&addon_id=<advertised-number>&skip=0&values=<encoded-json>`. Native `LocalEngine.planDiscover(profile,queryJson)` accepts the same optional array inside its JSON object, with `connection_id` instead of numeric `addon_id`. Method signatures are unchanged. Empty/missing array preserves scalar behavior. The parameter has an8192-byte decoded bound; native query JSON has a16384-byte bound. At most16 custom selection IDs and64 values per selection; individual values max1024bytes and must match advertised options where present.
+Use `/api/discover?type=movie&catalog=<raw-id>&addon_id=<advertised-number>&skip=0&values=<encoded-json>`. Native `LocalEngine.planDiscover(profile,queryJson)` accepts the same optional array inside its JSON object, with `connection_id` instead of numeric `addon_id`. Method signatures are unchanged. Empty/missing array preserves scalar behavior. The parameter has an8192-byte decoded bound; native query JSON has a16384-byte bound. At most16 custom selection IDs and64 values per selection; individual values max1024bytes and must match advertised options where present.
 
 Arrays require an explicit catalog and connection owner. Hosts reject duplicate IDs/values, unknown or foreign controls, scalar/vector conflicts, excessive selections and missing required inputs before provider fetches. Catalog switches must clear incompatible selection/search state or submit freshly validated controls. Optional empty selections are removed; a verified advertised default is supplied when present. Keep the complete selected query unchanged while advancing skip using the returned cursor.
 
