@@ -273,6 +273,6 @@ pub(crate) async fn save_progress(
     tx.commit().map_err(db_error)?;
     Ok(axum::Json(json!({"ok":true})))
     }).await?;
-    crate::simkl::schedule_progress(tracking_app,profile,tracking_value,false);
+    crate::simkl::schedule_progress(tracking_app,profile,tracking_value,false).await;
     Ok(result)
 }

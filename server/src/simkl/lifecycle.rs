@@ -1,4 +1,5 @@
 use super::*;
+use tracking::Target;
 use viptv_engine::identity::MediaIdentity;
 
 #[derive(Deserialize)]
@@ -94,9 +95,9 @@ pub(crate) async fn playback(
         ));
     }
     let value = identity_value(&q.identity, q.parent_identity.as_ref())?;
-    let target = match tracking::Watched::canonical(&value) {
-        Ok(target) => target,
-        Err(_) => {
+    let target = match tracking::target(&app, &value).await {
+        Some(target) => target,
+        None => {
             return Ok(axum::Json(
                 json!({"state":"unavailable","provider_id":"simkl","reason":"metadata_mapping_unavailable"}),
             ))
@@ -156,24 +157,34 @@ pub(crate) async fn playback(
         } else {
             (q.position_millis as f64 / q.duration_millis as f64 * 100.0).min(100.0)
         };
-        let mapped = if target.category == "anime" && target.episode.is_some() {
-            tracking::path_a(&app, target.id, target.season, target.episode).await
-        } else {
-            None
+        let mapped = match &target {
+            Target::Show(path) => Some(path.clone()),
+            Target::Simkl(t) if t.category == "anime" && t.episode.is_some() => {
+                tracking::path_a(&app, t.id, t.season, t.episode).await
+            }
+            Target::Simkl(_) => None,
         };
-        let anime_number=if mapped.is_none()&&target.category=="anime"&&target.episode.is_some(){Some(tracking::anime_number(&app,profile,&target,&credential,&verified).await?)}else{None};
+        let anime_number = match (&target, &mapped) {
+            (Target::Simkl(t), None) if t.category == "anime" && t.episode.is_some() => {
+                let verified = verified.as_ref().ok_or("Simkl episode could not be verified")?;
+                Some(tracking::anime_number(&app, profile, t, &credential, verified).await?)
+            }
+            _ => None,
+        };
         let mut body = json!({"progress":progress});
-        if target.category == "movie" {
-            body["movie"] = json!({"ids":{"simkl":target.id}});
-        } else if let Some(mapped)=&mapped {
+        if let Some(mapped) = &mapped {
             body["show"]=json!({"ids":mapped.ids});
             body["episode"]=json!({"season":mapped.season,"number":mapped.episode});
-        } else if target.category=="anime" {
-            body["anime"]=json!({"ids":{"simkl":target.id}});
-            if let Some(number)=anime_number {body["episode"]=json!({"season":1,"number":number});}
-        } else {
-            body["show"] = json!({"ids":{"simkl":target.id}});
-            body["episode"] = json!({"season":target.season,"number":target.episode});
+        } else if let Target::Simkl(t) = &target {
+            if t.category == "movie" {
+                body["movie"] = json!({"ids":{"simkl":t.id}});
+            } else if t.category == "anime" {
+                body["anime"]=json!({"ids":{"simkl":t.id}});
+                if let Some(number)=anime_number {body["episode"]=json!({"season":1,"number":number});}
+            } else {
+                body["show"] = json!({"ids":{"simkl":t.id}});
+                body["episode"] = json!({"season":t.season,"number":t.episode});
+            }
         }
         let token = tokens::access(&app,profile,&credential).await?.ok_or_else(unavailable)?;
         let result = app
@@ -194,11 +205,13 @@ pub(crate) async fn playback(
             mapped.ids.as_object().is_some_and(|ids| ids.iter().all(|(key,value)| result["show"]["ids"][key]==*value))
                 && (result["episode"]["season"].as_u64()==Some(u64::from(mapped.season))&&result["episode"]["number"].as_u64()==Some(u64::from(mapped.episode))
                     || result["episode"]["tvdb_season"].as_u64()==Some(u64::from(mapped.season))&&result["episode"]["tvdb_number"].as_u64()==Some(u64::from(mapped.episode)))
+        } else if let Target::Simkl(t) = &target {
+            let media_key=if t.category=="movie" {"movie"}else if t.category=="anime"{"anime"} else {"show"};
+            viptv_engine::simkl::id(&result[media_key])==Some(t.id)
+                && (if t.category=="anime" {if let Some(number)=anime_number{result["episode"]["season"].as_u64()==Some(1)&&result["episode"]["number"].as_u64()==Some(u64::from(number))}else{result["episode"].is_null()}}else{t.category=="movie" || (result["episode"]["season"].as_u64()==t.season.map(u64::from)
+                    && result["episode"]["number"].as_u64()==t.episode.map(u64::from))})
         } else {
-            let media_key=if target.category=="movie" {"movie"}else if target.category=="anime"{"anime"} else {"show"};
-            viptv_engine::simkl::id(&result[media_key])==Some(target.id)
-                && (if target.category=="anime" {if let Some(number)=anime_number{result["episode"]["season"].as_u64()==Some(1)&&result["episode"]["number"].as_u64()==Some(u64::from(number))}else{result["episode"].is_null()}}else{target.category=="movie" || (result["episode"]["season"].as_u64()==target.season.map(u64::from)
-                    && result["episode"]["number"].as_u64()==target.episode.map(u64::from))})
+            false
         };
         if !correct_identity {return Err(ApiError(StatusCode::BAD_GATEWAY,"Simkl returned a different playback item".into()));}
         let expected = if action == "stop" { "scrobble" } else { action };

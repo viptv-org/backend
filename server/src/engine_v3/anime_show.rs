@@ -72,6 +72,12 @@ impl AnimeShow {
         }
     }
 
+    pub(crate) fn lists(&self, tvdb: TvdbEpisode) -> bool {
+        self.document
+            .as_ref()
+            .is_some_and(|document| lists_episode(document, tvdb.season, tvdb.episode))
+    }
+
     pub(crate) fn canonical_episode(&self, release: &EpisodeCoordinates) -> Option<TvdbEpisode> {
         if release.episode == 0 {
             return None;
@@ -380,6 +386,49 @@ pub(crate) async fn canonical_progress(app: &App, value: &Value) -> Option<Value
     Some(value)
 }
 
+/// The show and TVDB episode behind a record that carries the show's own
+/// episode id: the parent identity is the release the episode was opened from,
+/// or the show itself once its watch state moved to the show identity.
+pub(crate) async fn show_episode(
+    app: &App,
+    parent: &MediaIdentity,
+    episode: &str,
+    coordinates: &EpisodeCoordinates,
+) -> Option<(MediaIdentity, TvdbEpisode)> {
+    if parent.kind != "series" || parent.episode.is_some() || coordinates.episode == 0 {
+        return None;
+    }
+    let show = match resolve(app, parent).await {
+        Some(show) => show,
+        None => resolve(app, &anime_source(parent)?).await?,
+    };
+    let tvdb = TvdbEpisode {
+        season: coordinates.season?,
+        episode: coordinates.episode,
+    };
+    if !episode.starts_with(&format!("{}:", show.identity().id)) || !show.lists(tvdb) {
+        return None;
+    }
+    Some((show.identity().clone(), tvdb))
+}
+
+/// The anime release a show identity still names, for a parent that Path A has
+/// already reduced to the show.
+fn anime_source(identity: &MediaIdentity) -> Option<MediaIdentity> {
+    let (namespace, value) = identity.ids.iter().find_map(|id| {
+        ANIME_SOURCES
+            .contains(&id.namespace.as_str())
+            .then_some((id.namespace.as_str(), id.value.as_str()))
+    })?;
+    Some(MediaIdentity {
+        id: format!("{namespace}:{value}"),
+        kind: "series".into(),
+        ids: identity.ids.clone(),
+        episode: None,
+        edition: None,
+    })
+}
+
 fn episode_coordinates(value: &Value) -> Option<EpisodeCoordinates> {
     if let Some(episode) = value["engine_identity"]["episode"].as_object() {
         return Some(EpisodeCoordinates {
@@ -403,7 +452,7 @@ fn episode_coordinates(value: &Value) -> Option<EpisodeCoordinates> {
     })
 }
 
-fn release_identity(value: &Value) -> Option<MediaIdentity> {
+pub(crate) fn release_identity(value: &Value) -> Option<MediaIdentity> {
     if let Ok(parent) = serde_json::from_value::<MediaIdentity>(value["engine_parent_identity"].clone())
     {
         if parent.kind == "series" && parent.episode.is_none() && !parent.id.is_empty() {

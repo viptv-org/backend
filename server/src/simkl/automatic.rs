@@ -70,7 +70,7 @@ pub(super) fn reserve(service: Arc<Service>, key: String) -> Option<Reservation>
         .then(|| Reservation { service, key })
 }
 
-pub(crate) fn schedule_progress(app: App, profile: i64, value: Value, explicit_watched: bool) {
+pub(crate) async fn schedule_progress(app: App, profile: i64, value: Value, explicit_watched: bool) {
     let completed = value["position"]
         .as_f64()
         .zip(value["duration"].as_f64())
@@ -78,9 +78,6 @@ pub(crate) fn schedule_progress(app: App, profile: i64, value: Value, explicit_w
     if !completed && !explicit_watched {
         return;
     }
-    let Ok(q) = tracking::Watched::canonical(&value) else {
-        return;
-    };
     let Ok(credential) = store::credential(&app, profile, Capability::Tracking) else {
         return;
     };
@@ -103,6 +100,9 @@ pub(crate) fn schedule_progress(app: App, profile: i64, value: Value, explicit_w
     };
     let key = format!("history:{profile}:{receipt_id}:{revision}");
     let Some(reservation) = reserve(app.simkl.clone(), key) else {
+        return;
+    };
+    let Some(target) = tracking::target(&app, &value).await else {
         return;
     };
     let queued = (|| -> Result<bool, ApiError> {
@@ -141,7 +141,7 @@ pub(crate) fn schedule_progress(app: App, profile: i64, value: Value, explicit_w
             if !explicit_watched && completion::confirmed(&app, profile, &id, revision)? {
                 return Ok(());
             }
-            tracking::record(&app, profile, &q, &credential, watched_at.as_deref()).await?;
+            tracking::record(&app, profile, target, &credential, watched_at.as_deref()).await?;
             completion::confirm(&app, profile, &id, revision)?;
             if receipt_id != id {
                 completion::confirm(&app, profile, &receipt_id, revision)?;
