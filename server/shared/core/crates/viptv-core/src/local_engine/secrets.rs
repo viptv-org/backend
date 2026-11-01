@@ -8,10 +8,10 @@ pub trait SecretStore: Send + Sync {
     fn remove(&self, key: String) -> Result<(), CoreError>;
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(all(feature = "os-secrets", not(target_os = "android")))]
 struct SystemSecrets;
 
-#[cfg(not(any(target_os = "android", target_os = "linux")))]
+#[cfg(all(feature = "os-secrets", not(any(target_os = "android", target_os = "linux"))))]
 impl SecretStore for SystemSecrets {
     fn get(&self, key: String) -> Result<Option<String>, CoreError> {
         let entry =
@@ -39,13 +39,13 @@ impl SecretStore for SystemSecrets {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "os-secrets", target_os = "linux"))]
 mod linux;
 
-#[cfg(target_os = "android")]
+#[cfg(not(all(feature = "os-secrets", not(target_os = "android"))))]
 struct UnavailableSecrets;
 
-#[cfg(target_os = "android")]
+#[cfg(not(all(feature = "os-secrets", not(target_os = "android"))))]
 impl SecretStore for UnavailableSecrets {
     fn get(&self, _key: String) -> Result<Option<String>, CoreError> {
         Err(CoreError::Bridge)
@@ -60,11 +60,11 @@ impl SecretStore for UnavailableSecrets {
 
 #[uniffi::export]
 pub fn system_secret_store() -> Arc<dyn SecretStore> {
-    #[cfg(not(target_os = "android"))]
+    #[cfg(all(feature = "os-secrets", not(target_os = "android")))]
     {
         Arc::new(SystemSecrets)
     }
-    #[cfg(target_os = "android")]
+    #[cfg(not(all(feature = "os-secrets", not(target_os = "android"))))]
     {
         Arc::new(UnavailableSecrets)
     }

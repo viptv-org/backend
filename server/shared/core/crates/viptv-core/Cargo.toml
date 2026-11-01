@@ -16,6 +16,7 @@ live-runtime = ["native", "viptv-engine/source-runtime", "dep:tokio"]
 vsources-runtime = ["native", "viptv-engine/vsources-runtime", "dep:tokio"]
 native = ["dep:uniffi", "viptv-engine/runtime"]
 bindgen = ["native", "uniffi/cli"]
+os-secrets = ["dep:keyring", "dep:dbus-secret-service"]
 
 [dependencies]
 viptv-engine = { path = "../../../engine" }
@@ -37,10 +38,10 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync"], optional = true }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
-keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+keyring = { version = "3.6.3", optional = true, default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-dbus-secret-service = { version = "=4.1.0", default-features = false, features = ["crypto-rust"] }
+dbus-secret-service = { version = "=4.1.0", optional = true, default-features = false, features = ["crypto-rust"] }
 
 [[bin]]
 name = "viptv-uniffi-bindgen"
