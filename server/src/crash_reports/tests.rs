@@ -294,7 +294,7 @@ async fn unauthenticated_callers_get_401() {
 }
 
 #[tokio::test]
-async fn restricted_profiles_and_paired_devices_cannot_read_and_only_devices_upload() {
+async fn restricted_profiles_and_paired_devices_cannot_read_but_can_upload() {
     let app = fixture();
     let (_, created) = upload(&app, OWNER, report("Pixel")).await;
     let id = created["id"].as_str().unwrap().to_owned();
@@ -332,10 +332,12 @@ async fn restricted_profiles_and_paired_devices_cannot_read_and_only_devices_upl
         assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
         assert_eq!(error["error_code"], "parent_required");
     }
-    let (status, error) = upload(&app, OWNER, report("Kid tablet")).await;
+    let (status, data) = upload(&app, OWNER, report("Kid tablet")).await;
+    assert_eq!(status, StatusCode::CREATED, "{data}");
+    assert_eq!(stored_count(&app), 3);
+    let (status, error) = request(&app, OWNER, "GET", "/api/crash-reports", Value::Null).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(error["error_code"], "parent_required");
-    assert_eq!(stored_count(&app), 2);
 }
 
 #[tokio::test]

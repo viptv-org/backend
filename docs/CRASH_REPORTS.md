@@ -2,7 +2,7 @@
 
 `POST /api/crash-reports` stores one client crash report for the calling account and
 returns `201 {id, received_at}`. Any signed-in session may upload, including a paired
-TV; a restricted profile is refused like any other unlisted route. The body must be a
+TV; a restricted profile may upload but not read or delete. The body must be a
 JSON object of at most 64 KB (larger is 413, anything else 400). It is stored as an
 opaque blob after every string and key is scrubbed: URLs shrink to `scheme://host`
 (userinfo, path, query and fragment dropped), `Bearer`/`Basic` values, values of

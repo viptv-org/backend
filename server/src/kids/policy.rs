@@ -107,6 +107,9 @@ fn decide_request(
         let p = app.identity();
         match parts.as_slice() {
             ["parent", ..] => return Ok(PolicyDecision::Pass),
+            ["crash-reports"] if method == axum::http::Method::POST => {
+                return Ok(PolicyDecision::Pass)
+            }
             ["bootstrap"] if method == axum::http::Method::GET => {
                 return Ok(PolicyDecision::Pass)
             }
