@@ -81,6 +81,10 @@ pub struct SourceCandidate {
     pub quality_height: Option<u32>,
     #[serde(default)]
     pub audio_languages: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub subbed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtitle_languages: Vec<String>,
     #[serde(default)]
     pub presentation: Option<SourcePresentation>,
     /// `web_dl`, `webrip`, `bluray`, `remux`, `hdtv`, `dvd`, `other_rip` or `cam`.

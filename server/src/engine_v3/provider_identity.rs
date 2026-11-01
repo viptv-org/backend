@@ -1,14 +1,13 @@
 use super::*;
 use viptv_engine::identity::{ExternalId, MediaIdentity};
 
-const FIELDS: [(&str, &[&str]); 7] = [
+const FIELDS: [(&str, &[&str]); 6] = [
     ("imdb", &["imdb_id", "imdbId", "imdbID", "_imdbId"]),
     ("tmdb", &["tmdb_id", "tmdbId", "moviedb_id", "_tmdbId"]),
     ("tvdb", &["tvdb_id", "tvdbId", "_tvdbId", "tvdb"]),
     ("mal", &["mal_id", "malId", "_malId"]),
     ("kitsu", &["kitsu_id", "kitsuId", "_kitsuId"]),
     ("anilist", &["anilist_id", "anilistId", "_anilistId"]),
-    ("anidb", &["anidb_id", "anidbId", "_anidbId"]),
 ];
 
 fn bounded(namespace: &str, value: &Value) -> Option<ExternalId> {
@@ -54,6 +53,28 @@ pub(crate) fn ids(meta: &Value) -> Vec<ExternalId> {
             }
         }
     }
+    if let (Some(kind), Some(id)) = (meta["type"].as_str(), meta["id"].as_str()) {
+        if let Ok(detail) = viptv_engine::stremio::detail_page(
+            &json!({"meta": meta}).to_string(),
+            "metadata",
+            kind,
+            id,
+            0,
+            1,
+        ) {
+            if let Some(id) = detail
+                .item
+                .identity
+                .ids
+                .into_iter()
+                .find(|id| id.namespace == "anidb")
+            {
+                if found.len() < 32 && !found.contains(&id) {
+                    found.push(id);
+                }
+            }
+        }
+    }
     found
 }
 
@@ -74,7 +95,9 @@ fn namespace(raw: &str) -> (&str, &str) {
         return ("imdb", raw);
     }
     match raw.split_once(':') {
-        Some((namespace, value)) if FIELDS.iter().any(|(known, _)| *known == namespace) => {
+        Some((namespace, value))
+            if FIELDS.iter().any(|(known, _)| *known == namespace) || namespace == "anidb" =>
+        {
             (namespace, value)
         }
         _ => ("opaque", raw),

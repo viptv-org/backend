@@ -237,13 +237,14 @@ pub fn recommendations(meta: &Value, provider: &str, original: &str) -> Result<V
 /// Recognize bounded, explicit provider assertions, preserving disagreements so
 /// resolvers can reject them instead of selecting an arbitrary first mapping.
 fn authoritative_external_ids(meta: &Value) -> Vec<ExternalId> {
-    let fields: [(&str, &[&str]); 6] = [
+    let fields: [(&str, &[&str]); 7] = [
         ("imdb", &["imdb_id", "imdbId", "imdbID"]),
-        ("tmdb", &["tmdb_id", "tmdbId", "moviedb_id"]),
-        ("tvdb", &["tvdb_id", "tvdbId"]),
-        ("mal", &["mal_id", "malId"]),
-        ("anilist", &["anilist_id", "anilistId"]),
-        ("kitsu", &["kitsu_id", "kitsuId"]),
+        ("tmdb", &["tmdb_id", "tmdbId", "moviedb_id", "_tmdbId"]),
+        ("tvdb", &["tvdb_id", "tvdbId", "_tvdbId"]),
+        ("mal", &["mal_id", "malId", "_malId"]),
+        ("anilist", &["anilist_id", "anilistId", "_anilistId"]),
+        ("kitsu", &["kitsu_id", "kitsuId", "_kitsuId"]),
+        ("anidb", &["anidb", "anidb_id", "anidbId", "_anidbId"]),
     ];
     let mut result = Vec::new();
     for (namespace, aliases) in fields {
@@ -388,5 +389,33 @@ mod identity_proof_tests {
         );
         assert_eq!(detail.item.identity.ids.len(), 3);
         assert!(crate::identity::resolve(&detail.item.identity, "imdb", &[]).is_err());
+    }
+
+    #[test]
+    fn aiometadata_cross_ids_are_authoritative_for_mal_ids() {
+        let detail = detail_page(
+            r#"{"meta":{"id":"mal:20","type":"movie","name":"Example","_tmdbId":30,"_tvdbId":40,"_malId":20,"_kitsuId":50,"_anilistId":60,"_anidbId":70,"anidb":71}}"#,
+            "addon:one",
+            "movie",
+            "mal:20",
+            0,
+            24,
+        )
+        .unwrap();
+
+        for (namespace, value) in [
+            ("tmdb", "30"),
+            ("tvdb", "40"),
+            ("mal", "20"),
+            ("kitsu", "50"),
+            ("anilist", "60"),
+            ("anidb", "70"),
+            ("anidb", "71"),
+        ] {
+            assert!(detail.item.identity.ids.contains(&ExternalId {
+                namespace: namespace.into(),
+                value: value.into(),
+            }));
+        }
     }
 }
