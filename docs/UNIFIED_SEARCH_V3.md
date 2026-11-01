@@ -4,7 +4,7 @@ Unified search uses every enabled Search capability assigned to the selected pro
 
 ## Search
 
-`GET /api/v3/search?query=<encoded text>` requires an authenticated session and selected profile. Trimmed text must contain 1–256 characters and no control characters. Unknown query parameters are rejected.
+`GET /api/search?query=<encoded text>` requires an authenticated session and selected profile. Trimmed text must contain 1–256 characters and no control characters. Unknown query parameters are rejected.
 
 The response is `{ "rows": [...], "complete": true|false }`. Each row contains:
 
@@ -30,9 +30,9 @@ Cards in Simkl rows retain `provider_id=simkl`. Cards in add-on rows use `provid
 
 Request details with:
 
-- `GET /api/v3/meta/<kind>/<id>?provider_id=simkl`
-- `GET /api/v3/meta/<kind>/<id>?provider_id=stremio&addon_id=<id>`
-- `GET /api/v3/meta/<kind>/<id>?provider_id=stremio` for generic Stremio metadata, including aggregated fallback recommendations.
+- `GET /api/meta/<kind>/<id>?provider_id=simkl`
+- `GET /api/meta/<kind>/<id>?provider_id=stremio&addon_id=<id>`
+- `GET /api/meta/<kind>/<id>?provider_id=stremio` for generic Stremio metadata, including aggregated fallback recommendations.
 
 `offset` and `limit` remain available. Without explicit provenance, the existing browsing-plugin routing remains unchanged. Details also accept `metadata_provider_id` and `metadata_addon_id` as aliases of `provider_id` and `addon_id`.
 
@@ -77,11 +77,11 @@ The source metadata batch covered 942 cases; the final recorded run took 284 ms.
 
 ## Continuation and subtitle provenance
 
-`POST /api/v3/profiles/:profile/continue/next` accepts the existing `identity` and `parent_identity`, plus optional `metadata_provider_id` and `metadata_addon_id` as on source discovery. Explicit origins use assigned metadata even when the browsing default differs. The returned next Card retains its origin. Current episode/parent coordinates must agree with provider metadata; upcoming, ambiguous, unknown or exhausted episodes do not manufacture a successor or start playback.
+`POST /api/profiles/:profile/continue/next` accepts the existing `identity` and `parent_identity`, plus optional `metadata_provider_id` and `metadata_addon_id` as on source discovery. Explicit origins use assigned metadata even when the browsing default differs. The returned next Card retains its origin. Current episode/parent coordinates must agree with provider metadata; upcoming, ambiguous, unknown or exhausted episodes do not manufacture a successor or start playback.
 
 The shared continuation cache records metadata origin and captured profile/add-on revisions. A cached next episode from another add-on with the same opaque IDs, or from old configuration, cannot replace the current provider's continuation entry. Legacy cache records remain readable under their prior contract.
 
-`GET /api/v3/subtitles/:kind/:id` accepts the same optional metadata-origin fields alongside existing `videoHash`, `videoSize` and `filename` options. Subtitle-provider capability selection remains independent. An explicitly Stremio-owned ID resembling `simkl:` does not invoke Simkl identity mapping. Foreign/disabled/unassigned metadata origins are refused before provider access.
+`GET /api/subtitles/:kind/:id` accepts the same optional metadata-origin fields alongside existing `videoHash`, `videoSize` and `filename` options. Subtitle-provider capability selection remains independent. An explicitly Stremio-owned ID resembling `simkl:` does not invoke Simkl identity mapping. Foreign/disabled/unassigned metadata origins are refused before provider access.
 
 KMP uses a dedicated optional next-episode job, fenced by playback input, profile, connection, metadata origin and parent. It keeps playback running on lookup failure. Old-server 404 fallback and local paging use actual loaded/provider metadata identities only; no successor IDs are synthesized. An ended stream may retry unavailable next metadata, but playback always waits for an explicit user action.
 

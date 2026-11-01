@@ -1,6 +1,6 @@
 # Account device management
 
-`GET /api/v3/account/devices` returns the authenticated account’s identity and all
+`GET /api/account/devices` returns the authenticated account’s identity and all
 its unexpired browser and paired-app session families in one response. Each entry
 contains a stable family ID, supplied display name, session kind, creation time,
 current-browser flag and per-device sign-out availability. No credential, hash,
@@ -12,11 +12,11 @@ an older paired app), falling back to the oldest family of either kind only when
 the account holds none of its own kind, so a sign-in is never refused for the
 account's own cap. Expired families never count.
 
-`DELETE /api/v3/account/devices/:id` revokes one owned family and its used-refresh
+`DELETE /api/account/devices/:id` revokes one owned family and its used-refresh
 tombstones. Foreign or missing identities return 404. Per-device removal of the
 current browser returns 409; ordinary Sign out remains its single-session action.
 
-`DELETE /api/v3/account/devices` explicitly signs out every owned browser and
+`DELETE /api/account/devices` explicitly signs out every owned browser and
 paired family, including the caller, and cancels its pending approved pairings.
 Both browser cookies expire. Profiles, saved titles, progress and other accounts
 are preserved. Revocation and its audit event commit in one transaction.

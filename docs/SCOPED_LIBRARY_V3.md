@@ -14,11 +14,11 @@ Host-verified canonical Simkl import provenance remains a shared membership alia
 
 Existing methods and routes remain:
 
-- `PUT /api/v3/profiles/:profile/library` with `{ "card": Card }`.
-- `PUT /api/v3/profiles/:profile/progress` with `{ "record": PlaybackRecord, "ended": false }`.
-- `GET /api/v3/profiles/:profile/library/membership` returns complete shared, scoped and legacy membership plus revision.
-- `DELETE /api/v3/profiles/:profile/library/:kind/:id?metadata_origin=<JSON>&card=<JSON>` selects an exact stored origin-bearing favorite. Both values are URL-encoded and must agree with the path and each other. A stale or removed installation can select its own stored record. It cannot delete the reinstalled connector's unrelated private record or fall back to ambiguous/private legacy rows. An origin-only or mismatched selector is rejected. A DELETE with neither selector retains the old legacy-only behavior.
-- `PUT /api/v3/profiles/:profile/continue/visibility` accepts optional `metadata_origin` and `card` alongside the existing `identity`, `parent_identity`, and `hidden`. Both new selectors are required together. Only saved history or a current bounded prepared-next result can identify the scoped queue group. Legacy raw `queue_hidden` rows never hide origin-bearing records. This additive server capability currently has no KMP UI caller.
+- `PUT /api/profiles/:profile/library` with `{ "card": Card }`.
+- `PUT /api/profiles/:profile/progress` with `{ "record": PlaybackRecord, "ended": false }`.
+- `GET /api/profiles/:profile/library/membership` returns complete shared, scoped and legacy membership plus revision.
+- `DELETE /api/profiles/:profile/library/:kind/:id?metadata_origin=<JSON>&card=<JSON>` selects an exact stored origin-bearing favorite. Both values are URL-encoded and must agree with the path and each other. A stale or removed installation can select its own stored record. It cannot delete the reinstalled connector's unrelated private record or fall back to ambiguous/private legacy rows. An origin-only or mismatched selector is rejected. A DELETE with neither selector retains the old legacy-only behavior.
+- `PUT /api/profiles/:profile/continue/visibility` accepts optional `metadata_origin` and `card` alongside the existing `identity`, `parent_identity`, and `hidden`. Both new selectors are required together. Only saved history or a current bounded prepared-next result can identify the scoped queue group. Legacy raw `queue_hidden` rows never hide origin-bearing records. This additive server capability currently has no KMP UI caller.
 
 A scoped removal does not remove a separate ambiguous/private legacy favorite with the same raw ID. An exact trusted shared storage key does remove its canonical legacy backing row together, matching the qualified Store contract and the single logical saved-state toggle. Intrinsic public canonical selectors can remove their canonical legacy-only row. Known Simkl import aliases use the existing authoritative import receipt, never posted external-ID hints; origin-bearing save, resume, statistics and removal preserve that canonical mapping. Ambiguous legacy records stay explicitly visible as legacy membership.
 

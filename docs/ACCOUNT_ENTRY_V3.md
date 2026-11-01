@@ -41,13 +41,13 @@ Recovery retains profiles, saved titles and watch progress. The old password, us
 
 ## First profile and parent administration
 
-A new member has no profile. `GET /api/v3/profiles` and `POST /api/v3/profiles {name,avatar_style?,avatar_choice?}` (legacy `avatar_id?` still accepted) work with an account-only session. Create/select a real profile before media requests. Profile selection is `POST /api/auth/profile {profile_id}`. Existing onboarding state is available through `/api/auth/setup`; its accepted fields are household_name, timezone, language, completed, step and profile_id.
+A new member has no profile. `GET /api/profiles` and `POST /api/profiles {name,avatar_style?,avatar_choice?}` (legacy `avatar_id?` still accepted) work with an account-only session. Create/select a real profile before media requests. Profile selection is `POST /api/auth/profile {profile_id}`. Existing onboarding state is available through `/api/auth/setup`; its accepted fields are household_name, timezone, language, completed, step and profile_id.
 
-Household configuration is account-scoped: the household PIN (`PUT /api/v3/parent/pin`), add-ons, IPTV connections and matches, gateways, source integrations and signing other devices out need an account session and answer `403 account_session_required` to a paired TV. A native sign-in session counts as an account session and manages its own account: a native owner and a native member each change their own household PIN, add-ons and connections. Profile and parental-policy routes stay with any account session. Parent operations are:
+Household configuration is account-scoped: the household PIN (`PUT /api/parent/pin`), add-ons, IPTV connections and matches, gateways, source integrations and signing other devices out need an account session and answer `403 account_session_required` to a paired TV. A native sign-in session counts as an account session and manages its own account: a native owner and a native member each change their own household PIN, add-ons and connections. Profile and parental-policy routes stay with any account session. Parent operations are:
 
-- `GET /api/v3/parent/status` → `{pin_configured,unlocked,restricted,leave_pin_configured}`.
-- `POST /api/v3/parent/unlock {pin}` → a session-bound, one-shot grant lasting 120 seconds. Wrong PIN is 403; five failures trigger a five-minute lockout (429).
-- `PUT /api/v3/parent/pin {pin,current_pin?}` sets/rotates the PIN; an empty new PIN removes it only when no kids profiles remain. PINs contain 4–8 ASCII digits. Rotation/removal requires the current PIN and clears grants.
+- `GET /api/parent/status` → `{pin_configured,unlocked,restricted,leave_pin_configured}`.
+- `POST /api/parent/unlock {pin}` → a session-bound, one-shot grant lasting 120 seconds. Wrong PIN is 403; five failures trigger a five-minute lockout (429).
+- `PUT /api/parent/pin {pin,current_pin?}` sets/rotates the PIN; an empty new PIN removes it only when no kids profiles remain. PINs contain 4–8 ASCII digits. Rotation/removal requires the current PIN and clears grants.
 - `GET/PUT /api/profiles/:id/kids` reads/changes `{enabled,max_age,movie_rating,series_rating,allow_unrated}`. Age ceilings are integers 0–17; the per-kind rating labels and the `allow_unrated` toggle are defined in [parental controls](PARENTAL_CONTROLS_V3.md), together with the `ratings` mapping the response carries. Enabling requires a configured account PIN. Ownership and parent restrictions apply, policy revision changes invalidate old media leases, and the client must refresh selected-profile content.
 - `GET/POST /api/profiles/:id/blocked` and `GET/PUT /api/profiles/:id/pin` are the per-profile deny list and leave PIN; see [parental controls](PARENTAL_CONTROLS_V3.md).
 
