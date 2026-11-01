@@ -76,3 +76,25 @@ async fn simkl_never_silently_ignores_array_filters_or_malformed_values() {
         assert_eq!(status,StatusCode::BAD_REQUEST);
     }
 }
+#[tokio::test]
+async fn discovery_catalogs_carry_the_home_row_title_computed_over_every_type() {
+    let mut app=fixture();app.addons.allow_test_loopback=true;
+    let manifest=json!({"id":"fixture","name":"Friendly provider","resources":["catalog","meta"],"types":["movie","series"],"catalogs":[{"id":"top","name":"Popular","type":"movie"},{"id":"odd","name":"Popular","type":"Movies"},{"id":"shows","name":"Popular","type":"series"},{"id":"new","name":"New Releases","type":"movie"}]});
+    {
+        let db=app.db.lock().unwrap();
+        db.execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Friendly provider','http://127.0.0.1:1/manifest.json',?1,1)",params![manifest.to_string()]).unwrap();
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    let(status,body)=request(&app,"member-token-1","PUT","/api/profiles/1/integrations",json!({"revision":0,"browsing_plugin":"stremio","assignments":[{"connection_id":"addon:1","enabled":["Metadata","Discovery"]}]})).await;
+    assert_eq!(status,StatusCode::OK,"{body}");
+    let(status,controls)=request(&app,"member-token-1","GET","/api/discovery-controls?type=movie",Value::Null).await;
+    assert_eq!(status,StatusCode::OK,"{controls}");
+    let catalogs=controls["catalogs"].as_array().unwrap();
+    assert_eq!(catalogs.len(),2);
+    assert_eq!(catalogs[0]["name"],"Popular");
+    assert_eq!(catalogs[0]["title"],"Popular Movies · Friendly provider");
+    assert_eq!(catalogs[1]["title"],"New Releases Movies");
+    let(status,controls)=request(&app,"member-token-1","GET","/api/discovery-controls?type=series",Value::Null).await;
+    assert_eq!(status,StatusCode::OK,"{controls}");
+    assert_eq!(controls["catalogs"][0]["title"],"Popular Series");
+}

@@ -147,6 +147,11 @@ pub(crate) async fn get(
         catalogs.push(json!({
             "id":"simkl-trending",
             "name":"Simkl Trending",
+            "title":match kind.as_str() {
+                "movie" => "Simkl Trending Movies",
+                "series" => "Simkl Trending TV Shows",
+                _ => "Simkl Trending Anime",
+            },
             "type":kind,
             "connection_id":format!("simkl:{profile}"),
             "connection_name":"Simkl",
@@ -157,20 +162,30 @@ pub(crate) async fn get(
     }
     let (scoped, _) =
         configuration::apply(app.clone(), &lease, profile, Capability::Discovery)?;
-    for catalog in scoped
-        .addons
-        .catalogs()?
+    let scoped_catalogs = scoped.addons.catalogs()?;
+    let scoped_catalogs = scoped_catalogs
         .as_array()
         .into_iter()
         .flatten()
         .take(100)
-    {
+        .collect::<Vec<_>>();
+    let titles = super::home_titles::catalog_row_titles(
+        &scoped_catalogs
+            .iter()
+            .map(|c| super::home_titles::CatalogRow {
+                name: c["name"].as_str().or(c["id"].as_str()).unwrap_or_default(),
+                kind: c["type"].as_str().unwrap_or_default(),
+                addon: c["addon_name"].as_str().unwrap_or_default(),
+            })
+            .collect::<Vec<_>>(),
+    );
+    for (catalog, title) in scoped_catalogs.into_iter().zip(titles) {
         if catalog["type"] != kind {
             continue;
         }
         let options = viptv_engine::stremio::catalog_controls(catalog)
             .into_iter().filter(|c| c.id != "search").collect::<Vec<_>>();
-        catalogs.push(json!({"id":catalog["id"],"name":catalog["name"],"type":catalog["type"],"addon_id":catalog["addon_id"],"connection_name":catalog["addon_name"],"connection_id":catalog["addon_id"].as_i64().map(|id|format!("addon:{id}")),"supports_search":catalog["supports_search"],"supports_skip":catalog["supports_skip"],"controls":options}));
+        catalogs.push(json!({"id":catalog["id"],"name":catalog["name"],"title":title,"type":catalog["type"],"addon_id":catalog["addon_id"],"connection_name":catalog["addon_name"],"connection_id":catalog["addon_id"].as_i64().map(|id|format!("addon:{id}")),"supports_search":catalog["supports_search"],"supports_skip":catalog["supports_skip"],"controls":options}));
     }
     if !is_simkl && !catalogs.is_empty() {
         filter_state = state(Availability::Available, None);
