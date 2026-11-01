@@ -120,6 +120,8 @@ pub fn api_error(v: &Value) -> Value {
         ) => "provider_connection_limit",
         ("", "Playback capacity reached") => "playback_capacity",
         ("", "Stream expired; discover again") => "source_expired",
+        ("", "Parent PIN required") => "parent_required",
+        ("", "Incorrect parent PIN") => "parent_pin_invalid",
         _ => supplied,
     };
     let known = match code {
@@ -326,6 +328,25 @@ mod tests {
                 .unwrap()
                 .contains("Too many requests")
         );
+    }
+    #[test]
+    fn parent_pin_prompts_follow_the_code_not_the_message_text() {
+        for (raw, code) in [
+            ("Parent PIN required", "parent_required"),
+            ("Incorrect parent PIN", "parent_pin_invalid"),
+        ] {
+            let legacy = api_error(&json!({"status":403,"error":raw}));
+            let coded = api_error(&json!({"status":403,"error":raw,"error_code":code}));
+            assert_eq!(legacy, coded);
+            assert_eq!(coded["code"], code);
+        }
+        // Other refusals that mention a PIN or a parent never request one.
+        for raw in [
+            "Set a parent PIN before enabling a kids profile",
+            "This title is unavailable in this kids profile",
+        ] {
+            assert_eq!(api_error(&json!({"status":403,"error":raw}))["code"], "");
+        }
     }
     #[test]
     fn unknown_errors_are_useful_without_leaking_transport_details() {

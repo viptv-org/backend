@@ -29,17 +29,6 @@ fn malformed_rows_do_not_blank_valid_items() {
     assert_eq!(out["items"].as_array().unwrap().len(), 1);
 }
 #[test]
-fn playback_request_never_introduces_profile_identity() {
-    let out = call(
-        "request",
-        json!({"operation":"playback","profileId":"private","playback":{"streamId":"opaque","capabilities":{"directPlay":true,"maxWidth":1920}}}),
-    );
-    assert_eq!(out["path"], "/api/playback");
-    assert!(out["body"].get("profile_id").is_none());
-    assert_eq!(out["body"]["capabilities"]["direct_play"], true);
-}
-
-#[test]
 fn episode_metadata_request_targets_its_parent_series() {
     let out = call(
         "request",
@@ -54,6 +43,78 @@ fn episode_metadata_request_targets_its_parent_series() {
     );
     assert_eq!(out["method"], "GET");
     assert_eq!(out["path"], "/api/meta/series/bleach");
+}
+#[test]
+fn metadata_targets_follow_one_rule_for_single_batch_and_cache_identity() {
+    let items = json!([
+        {"id":"bleach:1:3","type":"episode","seriesId":"bleach"},
+        {"id":"tt0213338:1:5","type":"episode"},
+        {"id":"tt0213338:1:5","type":"series","seriesId":"tt0213338","season":1,"episode":5},
+        {"id":"tt0111161","type":"movie"},
+        {"id":"chan","type":"live"},
+        {"id":"x","type":"anime"},
+        {"id":" ","type":"movie"}
+    ]);
+    let targets = call("metadataTargets", json!({"items":items}));
+    assert_eq!(
+        targets,
+        json!([
+            {"type":"series","id":"bleach"},
+            {"type":"series","id":"tt0213338:1:5"},
+            {"type":"series","id":"tt0213338"},
+            {"type":"movie","id":"tt0111161"},
+            null, null, null
+        ])
+    );
+    // An episode without a series id still asks for a served kind.
+    let single = call("request", json!({"operation":"metadata","item":items[1]}));
+    assert_eq!(single["path"], "/api/meta/series/tt0213338%3A1%3A5");
+    // Live keeps a path so callers branching on live afterwards do not fail.
+    let live = call("request", json!({"operation":"metadata","item":items[4]}));
+    assert_eq!(live["path"], "/api/meta/live/chan");
+
+    let batch = call(
+        "request",
+        json!({"operation":"metadataBatch","items":items}),
+    );
+    assert_eq!(batch["method"], "POST");
+    assert_eq!(batch["path"], "/api/meta/batch");
+    assert_eq!(
+        batch["body"]["items"],
+        json!([
+            {"type":"series","id":"bleach"},
+            {"type":"series","id":"tt0213338:1:5"},
+            {"type":"series","id":"tt0213338"},
+            {"type":"movie","id":"tt0111161"}
+        ])
+    );
+}
+#[test]
+fn metadata_batch_deduplicates_targets_and_respects_the_backend_limit() {
+    let duplicates = json!([
+        {"id":"s:1:1","type":"episode","seriesId":"s"},
+        {"id":"s:1:2","type":"episode","seriesId":"s"},
+        {"id":"s","type":"series"}
+    ]);
+    let batch = call(
+        "request",
+        json!({"operation":"metadataBatch","items":duplicates}),
+    );
+    assert_eq!(batch["body"]["items"], json!([{"type":"series","id":"s"}]));
+    let many: Vec<_> = (0..40)
+        .map(|n| json!({"id":format!("m{n}"),"type":"movie"}))
+        .collect();
+    let batch = call("request", json!({"operation":"metadataBatch","items":many}));
+    assert_eq!(batch["body"]["items"].as_array().unwrap().len(), 16);
+    let none = viptv_core::normalize(
+        "request".into(),
+        json!({"operation":"metadataBatch","items":[{"id":"c","type":"live"}]}).to_string(),
+        String::new(),
+    );
+    assert!(
+        none.is_err(),
+        "a batch with no served title is not a request"
+    );
 }
 #[test]
 fn exact_resume_does_not_cross_provider() {
@@ -339,4 +400,68 @@ fn source_groups_do_not_collapse_missing_provider_ids() {
     assert_ne!(iptv["providerKey"], other["providerKey"]);
     assert_eq!(addon["providerLabel"], "Torrent Addon");
     assert_eq!(other["providerLabel"], "IPTV Two");
+}
+
+const BEBOP_POSTER: &str = "https://images.metahub.space/poster/medium/tt0213338/img";
+
+#[test]
+fn imdb_titles_without_art_use_the_cinemeta_poster() {
+    // An imported My List entry stores no artwork.
+    let card = call(
+        "cardPresentation",
+        json!({"item":{"id":"tt0213338","type":"series","name":"Cowboy Bebop"},"context":"catalog"}),
+    );
+    assert_eq!(card["image"], BEBOP_POSTER);
+    assert_eq!(card["imageRole"], "poster");
+    // History rows name the episode; the series id still identifies the title.
+    let card = call(
+        "cardPresentation",
+        json!({"item":{"id":"tt0213338:1:5","seriesId":"tt0213338","type":"series","name":"Cowboy Bebop","season":1,"episode":5},"context":"catalog"}),
+    );
+    assert_eq!(card["image"], BEBOP_POSTER);
+    let detail = call(
+        "presentation",
+        json!({"item":{"id":"tt0213338","type":"series","name":"Cowboy Bebop"}}),
+    );
+    assert_eq!(detail["posterImage"], BEBOP_POSTER);
+    assert!(
+        detail["heroImage"].is_null(),
+        "a hero never falls back to a portrait poster"
+    );
+}
+
+#[test]
+fn derived_poster_never_replaces_provider_art_or_breaks_role_rules() {
+    let provided = call(
+        "cardPresentation",
+        json!({"item":{"id":"tt0213338","type":"series","name":"X","poster":"provider.jpg"},"context":"catalog"}),
+    );
+    assert_eq!(provided["image"], "provider.jpg");
+    let queue = call(
+        "cardPresentation",
+        json!({"item":{"id":"tt0213338:1:5","type":"series","name":"X","season":1,"episode":5},"context":"queue"}),
+    );
+    assert!(
+        queue["image"].is_null(),
+        "a queue episode card never uses a series poster"
+    );
+    let live = call(
+        "cardPresentation",
+        json!({"item":{"id":"tt0213338","type":"live","name":"X"},"context":"catalog"}),
+    );
+    assert!(live["image"].is_null());
+    let opaque = call(
+        "cardPresentation",
+        json!({"item":{"id":"kitsu:1","type":"series","name":"X"},"context":"catalog"}),
+    );
+    assert!(
+        opaque["image"].is_null(),
+        "only validated IMDb ids derive a poster"
+    );
+    let failed = call(
+        "cardPresentation",
+        json!({"item":{"id":"tt0213338","type":"series","name":"X"},"context":"catalog","failedImages":[BEBOP_POSTER]}),
+    );
+    assert!(failed["image"].is_null());
+    assert_eq!(failed["imageRole"], "none");
 }

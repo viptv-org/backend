@@ -4,9 +4,14 @@ use viptv_engine::{capabilities::Capability, stremio};
 
 pub(super) struct PendingDetail {
     pub(super) scope: viptv_engine::profile::Scope,
+    created: std::time::Instant,
     pub(super) kind: String,
     pub(super) id: String,
     pub(super) provider: String,
+    pub(super) origin: MetadataOrigin,
+    pub(super) producer_revision: u64,
+    issuer: Option<origins::MetadataFence>,
+    pub(super) expected: Option<viptv_engine::presentation::Card>,
 }
 
 #[uniffi::export]
@@ -18,54 +23,28 @@ impl LocalEngine {
         id: String,
         preferred: String,
     ) -> Result<String, CoreError> {
-        let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
-        let selected = store
-            .profile(&local_scope(&profile))
-            .map_err(|_| CoreError::Bridge)?
-            .ok_or(CoreError::InvalidInput)?;
-        let connections = store.connections("local").map_err(|_| CoreError::Bridge)?;
-        let mut eligible = connections
-            .iter()
-            .filter(|c| {
-                c.enabled
-                    && c.plugin_id == selected.browsing_plugin
-                    && selected.assignments.iter().any(|a| {
-                        a.connection_id == c.id && a.enabled.contains(&Capability::Metadata)
-                    })
-            })
-            .collect::<Vec<_>>();
-        if preferred.starts_with("addon:") {
-            // A provider-owned opaque ID must never fall through to a sibling.
-            eligible.retain(|c| c.id == preferred);
-        } else if !preferred.is_empty() && preferred != selected.browsing_plugin {
+        if !origins::shared_lookup(&kind, &id) {
             return Err(CoreError::InvalidInput);
         }
-        eligible.sort_by_key(|c| if c.id == preferred { 0 } else { 1 });
-        for connection in eligible {
-            let Ok(stored) = self.addon(&connection.id) else {
-                continue;
-            };
-            if let Some(url) = stremio::meta_url(&stored.manifest_url, &stored.manifest, &kind, &id)
-            {
-                let operation = uuid::Uuid::new_v4().to_string();
-                let mut pending = self.details.lock().map_err(|_| CoreError::Bridge)?;
-                pending.retain(|_, p| p.scope.profile_id != profile);
-                if pending.len() >= 64 {
-                    return Err(CoreError::Bridge);
-                }
-                pending.insert(
-                    operation.clone(),
-                    PendingDetail {
-                        scope: selected.scope.clone(),
-                        kind: kind.clone(),
-                        id: id.clone(),
-                        provider: connection.id.clone(),
-                    },
-                );
-                return Ok(json!({"operation":operation,"url":url}).to_string());
-            }
-        }
-        Err(CoreError::InvalidInput)
+        self.plan_detail_owned(profile, kind, id, preferred, None)
+    }
+    pub fn plan_detail_for_origin(
+        &self,
+        profile: String,
+        kind: String,
+        id: String,
+        card_json: String,
+    ) -> Result<String, CoreError> {
+        let expected = origins::expected_card(&card_json)?;
+        let origin = expected
+            .metadata_origin
+            .clone()
+            .ok_or(CoreError::InvalidInput)?;
+        let preferred = origin
+            .connection_id
+            .clone()
+            .ok_or(CoreError::InvalidInput)?;
+        self.plan_detail_owned(profile, kind, id, preferred, Some(expected))
     }
 
     pub fn project_detail(
@@ -92,25 +71,97 @@ impl LocalEngine {
             .map_err(|_| CoreError::Bridge)?
             .remove(&operation)
             .ok_or(CoreError::InvalidInput)?;
-        let current = self
-            .store
-            .lock()
-            .map_err(|_| CoreError::Bridge)?
-            .profile(&pending.scope)
-            .map_err(|_| CoreError::Bridge)?
-            .ok_or(CoreError::Bridge)?;
-        if current.scope.revision != pending.scope.revision {
-            return Err(CoreError::Bridge);
+        if !self.metadata_request_current(&pending, &operation)? {
+            return Err(CoreError::InvalidInput);
         }
-        let mut detail = stremio::detail_page(
+        {
+            let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
+            self.validate_metadata_producers(&store, &pending)?;
+        }
+        let parsed = stremio::detail_page(
             &body,
             &pending.provider,
             &pending.kind,
             &pending.id,
             offset as usize,
             limit as usize,
-        )
-        .map_err(|_| CoreError::InvalidInput)?;
+        );
+        let mut detail = match parsed {
+            Ok(detail) => detail,
+            Err(error) => {
+                if matches!(error, viptv_engine::Error::Unresolved) {
+                    let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
+                    if store
+                        .profile(&pending.scope)
+                        .map_err(|_| CoreError::Bridge)?
+                        .is_some_and(|profile| profile.scope == pending.scope)
+                        && store
+                            .validate_metadata_origin(&pending.scope, &pending.origin)
+                            .is_ok()
+                        && self.validate_metadata_producers(&store, &pending).is_ok()
+                        && self.metadata_request_current(&pending, &operation)?
+                    {
+                        self.forget_metadata_target(
+                            &pending.scope,
+                            &pending.provider,
+                            &pending.kind,
+                            &pending.id,
+                        )?;
+                    }
+                }
+                return Err(CoreError::InvalidInput);
+            }
+        };
+        if !origins::stremio_card_allowed(&detail.item) {
+            return Err(CoreError::InvalidInput);
+        }
+        detail.episodes.retain(origins::stremio_card_allowed);
+        detail.recommendations.retain(origins::stremio_card_allowed);
+        origins::stamp_card(&mut detail.item, &pending.origin);
+        for card in detail
+            .episodes
+            .iter_mut()
+            .chain(detail.recommendations.iter_mut())
+        {
+            origins::stamp_card(card, &pending.origin);
+        }
+        let expected_episode =
+            (|| -> Result<Option<viptv_engine::presentation::Card>, CoreError> {
+                let expected_episode = if let Some(expected) = pending.expected.as_ref() {
+                    if expected.identity.id == detail.item.identity.id {
+                        origins::consistent_metadata_card(
+                            expected,
+                            &detail.item,
+                            origins::public_metadata_identity(expected),
+                        )?;
+                        None
+                    } else {
+                        let root: Value =
+                            serde_json::from_str(&body).map_err(|_| CoreError::InvalidInput)?;
+                        let meta = if root["meta"].is_object() {
+                            &root["meta"]
+                        } else {
+                            &root
+                        };
+                        let mut episode =
+                            stremio::episode_cards(meta, &pending.provider, &detail.item)
+                                .map_err(|_| CoreError::InvalidInput)?
+                                .into_iter()
+                                .find(|card| card.identity.id == expected.identity.id)
+                                .ok_or(CoreError::InvalidInput)?;
+                        origins::stamp_card(&mut episode, &pending.origin);
+                        origins::consistent_metadata_card(
+                            expected,
+                            &episode,
+                            origins::public_metadata_identity(expected),
+                        )?;
+                        Some(episode)
+                    }
+                } else {
+                    None
+                };
+                Ok(expected_episode)
+            })();
         if detail.recommendations.is_empty() {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -122,30 +173,55 @@ impl LocalEngine {
                 .related_catalog_cards(&pending.scope, &detail.item, now)
                 .unwrap_or_default();
         }
-        if !self
-            .store
-            .lock()
-            .map_err(|_| CoreError::Bridge)?
+        let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
+        if !store
             .profile(&pending.scope)
             .map_err(|_| CoreError::Bridge)?
             .is_some_and(|profile| profile.scope == pending.scope)
         {
             return Err(CoreError::Bridge);
         }
-        self.remember_detail_cards(&pending.scope, &detail)?;
+        if !self.metadata_request_current(&pending, &operation)? {
+            return Err(CoreError::InvalidInput);
+        }
+        self.validate_metadata_producers(&store, &pending)?;
+        let expected_episode = match expected_episode {
+            Ok(value) => value,
+            Err(error) => {
+                self.forget_metadata_target(
+                    &pending.scope,
+                    &pending.provider,
+                    &pending.kind,
+                    &pending.id,
+                )?;
+                return Err(error);
+            }
+        };
         self.remember_detail_document(
             &pending.scope,
             &pending.kind,
             &pending.id,
             &pending.provider,
+            pending.producer_revision,
             body,
             &detail,
         )?;
+        self.remember_detail_cards(&pending.scope, &detail)?;
+        if let Some(episode) = expected_episode {
+            let proof = viptv_engine::presentation::DetailSnapshot {
+                item: episode,
+                recommendations: vec![],
+                episodes: vec![],
+                next_cursor: None,
+                seasons: vec![],
+            };
+            self.remember_detail_cards(&pending.scope, &proof)?;
+        }
         let mut snapshots = self
             .detail_snapshots
             .lock()
             .map_err(|_| CoreError::Bridge)?;
-        snapshots.retain(|_, (scope, created, _)| {
+        snapshots.retain(|_, (scope, created, _, _)| {
             created.elapsed() < std::time::Duration::from_secs(300)
                 && (scope.profile_id != pending.scope.profile_id
                     || scope.revision == pending.scope.revision)
@@ -162,7 +238,12 @@ impl LocalEngine {
                 offset,
                 limit,
             ),
-            (pending.scope, std::time::Instant::now(), detail.clone()),
+            (
+                pending.scope,
+                std::time::Instant::now(),
+                detail.clone(),
+                pending.producer_revision,
+            ),
         );
         serde_json::to_string(&detail).map_err(|_| CoreError::Bridge)
     }
@@ -189,10 +270,14 @@ fn enrich_snapshot(
             .unwrap_or(&original.identity);
         if let Some(metadata) = cards.iter().find(|c| {
             c.provider_id == original.provider_id
+                && (c.metadata_origin == original.metadata_origin
+                    || original.metadata_origin.is_none()
+                        && origins::shared_lookup(&identity.kind, &identity.id))
+                && origins::presentation_matches(original, c)
                 && c.identity.id == identity.id
                 && c.identity.kind == identity.kind
         }) {
-            *original = viptv_engine::presentation::enrich_card(original, metadata);
+            *original = origins::enrich_verified_card(original, metadata);
         }
     }
 }
@@ -234,7 +319,10 @@ impl LocalEngine {
                         .flat_map(|row| row.cards.iter_mut()),
                 )
             {
-                if card.provider_id == current.browsing_plugin {
+                let identity = card.parent_identity.as_ref().unwrap_or(&card.identity);
+                if card.provider_id == current.browsing_plugin
+                    && origins::shared_lookup(&identity.kind, &identity.id)
+                {
                     card.provider_id = eligible[0].id.clone();
                 }
             }
@@ -286,7 +374,12 @@ impl LocalEngine {
                 let _ = scope;
                 cached.push(metadata.clone());
             } else {
-                needed.push((identity.clone(), card.provider_id));
+                let expected = if card.metadata_origin.is_some() {
+                    Some(card.clone())
+                } else {
+                    None
+                };
+                needed.push((identity.clone(), card.provider_id.clone(), expected));
             }
         }
         drop(verified);
@@ -312,10 +405,14 @@ impl LocalEngine {
         let mut staged = Vec::new();
         let mut requests = Vec::new();
         let mut operations = Vec::new();
-        for (identity, provider) in needed.into_iter().take(17) {
-            if let Ok(plan) =
-                self.plan_detail(profile.clone(), identity.kind, identity.id, provider)
-            {
+        for (identity, provider, origin) in needed.into_iter().take(17) {
+            if let Ok(plan) = self.plan_detail_owned(
+                profile.clone(),
+                identity.kind,
+                identity.id,
+                provider,
+                origin,
+            ) {
                 let request: Value = serde_json::from_str(&plan).map_err(|_| CoreError::Bridge)?;
                 if let Some(operation) = request["operation"].as_str() {
                     if let Some(pending) = self
@@ -330,6 +427,14 @@ impl LocalEngine {
                     requests.push(request);
                 }
             }
+        }
+        let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
+        if !store
+            .profile(&current.scope)
+            .map_err(|_| CoreError::Bridge)?
+            .is_some_and(|profile| profile.scope == current.scope)
+        {
+            return Err(CoreError::InvalidInput);
         }
         self.details
             .lock()
@@ -422,8 +527,18 @@ impl LocalEngine {
                     identity.kind.clone(),
                     identity.id.clone(),
                 ))
-                .filter(|(cached_scope, _)| cached_scope == scope);
-            let legacy = if exact.is_none() && card.provider_id == "stremio" {
+                .filter(|(cached_scope, metadata)| {
+                    cached_scope == scope
+                        && origins::presentation_matches(card, metadata)
+                        && (metadata.metadata_origin == card.metadata_origin
+                            || card.metadata_origin.is_none()
+                                && origins::shared_lookup(&identity.kind, &identity.id))
+                });
+            let legacy = if exact.is_none()
+                && card.provider_id == "stremio"
+                && card.metadata_origin.is_none()
+                && origins::shared_lookup(&identity.kind, &identity.id)
+            {
                 let mut matches = verified
                     .iter()
                     .filter(|((profile, _, kind, id), (cached_scope, _))| {
@@ -444,10 +559,200 @@ impl LocalEngine {
             };
             if let Some((cached_scope, metadata)) = exact.or(legacy) {
                 let _ = cached_scope;
+                if !origins::presentation_matches(card, metadata) {
+                    continue;
+                }
                 card.provider_id = metadata.provider_id.clone();
-                *card = viptv_engine::presentation::enrich_card(card, metadata);
+                *card = origins::enrich_verified_card(card, metadata);
             }
         }
         Ok(())
+    }
+}
+
+impl LocalEngine {
+    pub(super) fn forget_metadata_profile(&self, profile: &str) -> Result<(), CoreError> {
+        self.details
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .retain(|_, pending| pending.scope.profile_id != profile);
+        self.metadata_requests
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .retain(|(owner, _, _, _), _| owner != profile);
+        self.enrichments
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .retain(|_, pending| pending.scope.profile_id != profile);
+        self.detail_documents
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .retain(|(owner, _, _, _), _| owner != profile);
+        self.detail_snapshots
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .retain(|(owner, _, _, _, _, _), _| owner != profile);
+        self.verified_cards
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .retain(|(owner, _, _, _), _| owner != profile);
+        Ok(())
+    }
+}
+
+impl LocalEngine {
+    fn plan_detail_owned(
+        &self,
+        profile: String,
+        kind: String,
+        id: String,
+        preferred: String,
+        expected: Option<viptv_engine::presentation::Card>,
+    ) -> Result<String, CoreError> {
+        if id.starts_with("simkl:") {
+            return Err(CoreError::InvalidInput);
+        }
+        let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
+        let selected = store
+            .profile(&local_scope(&profile))
+            .map_err(|_| CoreError::Bridge)?
+            .ok_or(CoreError::InvalidInput)?;
+        let issuer = if let Some(card) = expected.as_ref() {
+            let target = card.parent_identity.as_ref().unwrap_or(&card.identity);
+            if target.kind != kind || target.id != id {
+                return Err(CoreError::InvalidInput);
+            }
+            Some(origins::metadata_issuer(&store, &selected.scope, card)?)
+        } else {
+            if !origins::shared_lookup(&kind, &id) {
+                return Err(CoreError::InvalidInput);
+            }
+            None
+        };
+        let public_delegation = expected
+            .as_ref()
+            .is_some_and(origins::public_metadata_identity);
+
+        let connections = store.connections("local").map_err(|_| CoreError::Bridge)?;
+        let mut eligible = connections
+            .iter()
+            .filter(|c| {
+                c.enabled
+                    && c.plugin_id == selected.browsing_plugin
+                    && selected.assignments.iter().any(|a| {
+                        a.connection_id == c.id && a.enabled.contains(&Capability::Metadata)
+                    })
+            })
+            .collect::<Vec<_>>();
+        if preferred.starts_with("addon:") && !public_delegation {
+            // A provider-owned opaque ID must never fall through to a sibling.
+            eligible.retain(|c| c.id == preferred);
+        } else if !public_delegation
+            && !preferred.is_empty()
+            && preferred != selected.browsing_plugin
+        {
+            return Err(CoreError::InvalidInput);
+        }
+        eligible.sort_by_key(|c| if c.id == preferred { 0 } else { 1 });
+        for connection in eligible {
+            let origin = origins::current_origin(
+                &store,
+                &selected.scope,
+                &connection.id,
+                Capability::Metadata,
+            )?;
+            let Ok(stored) = self.addon(&connection.id) else {
+                continue;
+            };
+            if let Some(url) = stremio::meta_url(&stored.manifest_url, &stored.manifest, &kind, &id)
+            {
+                let operation = uuid::Uuid::new_v4().to_string();
+                let mut pending = self.details.lock().map_err(|_| CoreError::Bridge)?;
+                pending.retain(|_, p| p.scope.profile_id != profile);
+                if pending.len() >= 64 {
+                    return Err(CoreError::Bridge);
+                }
+                let key = (
+                    profile.clone(),
+                    connection.id.clone(),
+                    kind.clone(),
+                    id.clone(),
+                );
+                let mut latest = self
+                    .metadata_requests
+                    .lock()
+                    .map_err(|_| CoreError::Bridge)?;
+                if !latest.contains_key(&key)
+                    && latest
+                        .keys()
+                        .filter(|(owner, _, _, _)| owner == &profile)
+                        .count()
+                        >= 128
+                {
+                    latest.retain(|(owner, _, _, _), _| owner != &profile);
+                }
+                latest.insert(key, operation.clone());
+                pending.insert(
+                    operation.clone(),
+                    PendingDetail {
+                        scope: selected.scope.clone(),
+                        created: std::time::Instant::now(),
+                        kind: kind.clone(),
+                        id: id.clone(),
+                        provider: connection.id.clone(),
+                        origin,
+                        producer_revision: connection.revision,
+                        issuer: issuer.clone(),
+                        expected,
+                    },
+                );
+                return Ok(json!({"operation":operation,"url":url}).to_string());
+            }
+        }
+        Err(CoreError::InvalidInput)
+    }
+}
+
+impl LocalEngine {
+    fn validate_metadata_producers(
+        &self,
+        store: &Store,
+        pending: &PendingDetail,
+    ) -> Result<(), CoreError> {
+        if !store
+            .profile(&pending.scope)
+            .map_err(|_| CoreError::Bridge)?
+            .is_some_and(|p| p.scope == pending.scope)
+        {
+            return Err(CoreError::InvalidInput);
+        }
+        let producer =
+            origins::require_origin(store, &pending.scope, &pending.origin, Capability::Metadata)?;
+        if producer.revision != pending.producer_revision {
+            return Err(CoreError::InvalidInput);
+        }
+        if let Some(issuer) = pending.issuer.as_ref() {
+            issuer.validate(store, &pending.scope)?;
+        }
+        Ok(())
+    }
+
+    fn metadata_request_current(
+        &self,
+        pending: &PendingDetail,
+        operation: &str,
+    ) -> Result<bool, CoreError> {
+        Ok(pending.created.elapsed().as_secs() < 120
+            && self
+                .metadata_requests
+                .lock()
+                .map_err(|_| CoreError::Bridge)?
+                .get(&(
+                    pending.scope.profile_id.clone(),
+                    pending.provider.clone(),
+                    pending.kind.clone(),
+                    pending.id.clone(),
+                ))
+                .is_some_and(|current| current == operation))
     }
 }

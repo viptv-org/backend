@@ -121,7 +121,7 @@ fn canonical_v2_request_preserves_4k_facts_and_rejects_legacy_options() {
     let playback = json!({"requestId":"request_1","streamId":"opaque-source","client":{"platform":"android_tv","canPlayDirect":true,"maxWidth":3840,"maxHeight":2160,"videoCodecs":["h264","hevc"],"audioCodecs":["aac"]},"position":120,"forceGateway":true,"audioTrack":2,"subtitleTrack":null});
     let mut input = json!({"operation":"playbackV2","playback":playback});
     let out = run("request", &input).unwrap();
-    assert_eq!(out["path"], "/api/playback");
+    assert_eq!(out["path"], "/api/v2/playback");
     assert_eq!(out["body"]["client"]["max_height"], 2160);
     assert_eq!(out["body"]["client"]["platform"], "android_tv");
     assert_eq!(out["body"]["request_id"], "request_1");
@@ -142,7 +142,7 @@ fn canonical_v2_request_preserves_4k_facts_and_rejects_legacy_options() {
         )
         .unwrap();
         assert_eq!(out["method"], method);
-        assert_eq!(out["path"], format!("/api/playback/pb2_fixture{suffix}"));
+        assert_eq!(out["path"], format!("/api/v2/playback/pb2_fixture{suffix}"));
     }
 }
 

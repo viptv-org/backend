@@ -30,6 +30,13 @@ fn fixture() -> (LocalEngine, std::path::PathBuf, Vec<String>) {
     (engine, dir, providers)
 }
 fn plan(engine: &LocalEngine, target: &str) -> String {
+    let target = format!(
+        "tt{}",
+        target.bytes().fold(1u64, |value, byte| value
+            .wrapping_mul(31)
+            .wrapping_add(u64::from(byte)))
+            % 1_000_000_000_000_000
+    );
     let plan: Value = serde_json::from_str(
         &engine
             .plan_sources("default".into(), "movie".into(), target.into())

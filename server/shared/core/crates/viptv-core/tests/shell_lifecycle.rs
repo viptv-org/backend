@@ -140,7 +140,7 @@ fn expired_preview_is_replaced_even_with_partial_rows_or_a_running_job() {
 }
 
 #[test]
-fn preview_settles_once_adopts_running_and_partial_rows_and_retries_empty_results() {
+fn preview_settles_once_adopts_running_discovery_and_refreshes_completed_results() {
     let mut v = preview_input(PreviewAction::Start);
     assert_eq!(preview(&v), PreviewDecision::BeginSettled);
     v.active_key = Some(v.requested_key.clone());
@@ -148,12 +148,13 @@ fn preview_settles_once_adopts_running_and_partial_rows_and_retries_empty_result
     v.action = PreviewAction::Adopt;
     assert_eq!(preview(&v), PreviewDecision::BeginImmediate);
     v.running = true;
+    v.has_sources = true;
     assert_eq!(preview(&v), PreviewDecision::Retain);
     v.running = false;
-    v.has_sources = true;
     v.done = true;
+    assert_eq!(preview(&v), PreviewDecision::BeginImmediate);
     v.failed = true;
-    assert_eq!(preview(&v), PreviewDecision::Retain);
+    assert_eq!(preview(&v), PreviewDecision::BeginImmediate);
     v.action = PreviewAction::Result;
     assert_eq!(preview(&v), PreviewDecision::Ready);
     v.has_sources = false;

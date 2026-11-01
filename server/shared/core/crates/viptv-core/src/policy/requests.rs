@@ -8,21 +8,15 @@ pub(super) fn request(v: &Value) -> Result {
         let mut body = item_request(&v["item"]);
         let (method, path) = match op {
             "nextEpisode" => ("POST", format!("{base}/continue/next")),
-            "sources" => ("POST", "/api/streams".into()),
-            "sourcesV2" => ("POST", "/api/streams".into()),
-            "sourcesPoll" | "sourcesPollV2" => {
+            "sourcesV2" => ("POST", "/api/v2/streams".into()),
+            "sourcesPollV2" => {
                 body = Value::Null;
                 let id = text(v, "id");
                 if id.is_empty() {
                     return Err(CoreError::InvalidInput);
                 }
                 let after = v["after"].as_u64().unwrap_or(0);
-                let prefix = if op == "sourcesPollV2" {
-                    "/api/streams"
-                } else {
-                    "/api/streams"
-                };
-                ("GET", format!("{prefix}/{}?after={after}", enc(id)))
+                ("GET", format!("/api/v2/streams/{}?after={after}", enc(id)))
             }
             "livePageV2" | "liveCategoriesV2" => {
                 body = Value::Null;
@@ -35,9 +29,9 @@ pub(super) fn request(v: &Value) -> Result {
                     return Err(CoreError::InvalidInput);
                 }
                 if op == "liveSourceV2" {
-                    ("POST", format!("/api/iptv/live/{}/source", enc(id)))
+                    ("POST", format!("/api/v2/iptv/live/{}/source", enc(id)))
                 } else {
-                    ("GET", format!("/api/iptv/guide/{}", enc(id)))
+                    ("GET", format!("/api/v2/iptv/guide/{}", enc(id)))
                 }
             }
             "saveProgress" => {
@@ -56,17 +50,13 @@ pub(super) fn request(v: &Value) -> Result {
             }
             "toggleFavorite" => ("POST", format!("{base}/favorites/toggle")),
             "setFavorite" => ("PUT", format!("{base}/favorites")),
-            "playback" => {
-                body = snake(&v["playback"]);
-                ("POST", "/api/playback".into())
-            }
             "playbackProtocolV2" => {
                 body = Value::Null;
-                ("GET", "/api/playback-protocol".into())
+                ("GET", "/api/v2/playback-protocol".into())
             }
             "torrentRuntimeProtocol" => {
                 body = Value::Null;
-                ("GET", "/api/torrent-runtime-protocol".into())
+                ("GET", "/api/v2/torrent-runtime-protocol".into())
             }
             "playbackV2CancelRequest" => {
                 let id = text(v, "requestId");
@@ -74,16 +64,16 @@ pub(super) fn request(v: &Value) -> Result {
                     return Err(CoreError::InvalidInput);
                 }
                 body = Value::Null;
-                ("DELETE", format!("/api/playback-requests/{id}"))
+                ("DELETE", format!("/api/v2/playback-requests/{id}"))
             }
             "playbackV2" | "playbackV2DecodedStart" => {
                 body = playback_v2_request(&v["playback"])?;
                 (
                     "POST",
                     if op == "playbackV2DecodedStart" {
-                        "/api/playback-decoder-start".into()
+                        "/api/v2/playback-decoder-start".into()
                     } else {
-                        "/api/playback".into()
+                        "/api/v2/playback".into()
                     },
                 )
             }
@@ -101,7 +91,7 @@ pub(super) fn request(v: &Value) -> Result {
                     return Err(CoreError::InvalidInput);
                 }
                 body = Value::Null;
-                let path = format!("/api/playback/{}", enc(id));
+                let path = format!("/api/v2/playback/{}", enc(id));
                 match op {
                     "playbackV2Heartbeat" => {
                         body = json!({});
@@ -118,21 +108,79 @@ pub(super) fn request(v: &Value) -> Result {
             "metadata" => {
                 body = Value::Null;
                 let item = &v["item"];
-                let series_id = text(item, "seriesId");
-                let (media_type, media_id) = if series_id.is_empty() {
-                    (text(item, "type"), text(item, "id"))
-                } else {
-                    ("series", series_id)
+                // Items without a served target keep their raw coordinate so a
+                // caller that branches on live after building the request still
+                // receives a path; the backend declines it.
+                let (media_type, media_id) = match metadata_target(item) {
+                    Some(target) => target,
+                    None => match text(item, "seriesId") {
+                        "" => (text(item, "type"), text(item, "id")),
+                        series_id => ("series", series_id),
+                    },
                 };
                 (
                     "GET",
                     format!("/api/meta/{}/{}", enc(media_type), enc(media_id)),
                 )
             }
+            "metadataBatch" => {
+                let mut items: Vec<Value> = Vec::new();
+                for (kind, id) in v["items"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(metadata_target)
+                {
+                    let row = json!({"type": kind, "id": id});
+                    if !items.contains(&row) {
+                        items.push(row);
+                    }
+                    if items.len() == METADATA_BATCH_LIMIT {
+                        break;
+                    }
+                }
+                if items.is_empty() {
+                    return Err(CoreError::InvalidInput);
+                }
+                body = json!({ "items": items });
+                ("POST", "/api/meta/batch".into())
+            }
             _ => return Err(CoreError::InvalidInput),
         };
         json!({"method":method,"path":path,"body":body})
     })
+}
+
+/// The backend accepts at most this many distinct titles per metadata batch.
+const METADATA_BATCH_LIMIT: usize = 16;
+
+/// The backend title whose metadata describes `item`. Episodes, and series
+/// rows naming an episode, resolve to their series. Live channels and kinds
+/// the metadata route does not serve have no target.
+pub(super) fn metadata_target(item: &Value) -> Option<(&'static str, &str)> {
+    let id = text(item, "id");
+    let series_id = text(item, "seriesId");
+    let (kind, id) = match text(item, "type") {
+        "movie" => ("movie", id),
+        "series" | "episode" => ("series", if series_id.is_empty() { id } else { series_id }),
+        _ => return None,
+    };
+    (!id.trim().is_empty() && id.len() <= 512 && !id.chars().any(char::is_control))
+        .then_some((kind, id))
+}
+
+/// One nullable target per input item, in input order, for one batch call.
+pub(super) fn metadata_targets(v: &Value) -> Value {
+    let items = v["items"].as_array().map(Vec::as_slice).unwrap_or_default();
+    Value::Array(
+        items
+            .iter()
+            .map(|item| {
+                metadata_target(item)
+                    .map_or(Value::Null, |(kind, id)| json!({"type": kind, "id": id}))
+            })
+            .collect(),
+    )
 }
 
 pub(crate) fn valid_live_cursor(value: &str) -> bool {
@@ -208,7 +256,7 @@ fn live_catalog_request(v: &Value, categories: bool) -> std::result::Result<Stri
         query += &format!("&cursor={}", enc(cursor));
     }
     Ok(format!(
-        "/api/iptv/live/{}?{query}",
+        "/api/v2/iptv/live/{}?{query}",
         if categories { "categories" } else { "channels" }
     ))
 }

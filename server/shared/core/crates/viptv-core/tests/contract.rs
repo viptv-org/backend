@@ -224,55 +224,7 @@ fn rejected_logout_retains_grant() {
     assert!(effects.iter().all(|r| r["effect"].get("Storage").is_none()));
 }
 #[test]
-fn playback_urls_are_capability_paths_or_original_sources() {
-    // A root-relative playback URL must stay a same-origin /media/ capability,
-    // and no playback URL ever carries embedded credentials.
-    assert!(
-        normalize(
-            "playback".into(),
-            json!({"id":"s","url":"/api/private"}).to_string(),
-            "https://example.test".into()
-        )
-        .is_err()
-    );
-    assert!(
-        normalize(
-            "playback".into(),
-            json!({"id":"s","url":"https://user:pass@evil.test/media/x"}).to_string(),
-            "https://example.test".into()
-        )
-        .is_err()
-    );
-    let proxy: Value = serde_json::from_str(
-        &normalize(
-            "playback".into(),
-            json!({"id":"s","url":"/media/s/cap/index.m3u8"}).to_string(),
-            "https://example.test".into(),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(proxy["url"], "https://example.test/media/s/cap/index.m3u8");
-    assert!(proxy.as_object().unwrap().get("authorization").is_none());
-    // A direct-URL session hands the ORIGINAL absolute source URL to the
-    // client; it passes through unchanged with its source authorization.
-    let direct: Value = serde_json::from_str(
-        &normalize(
-            "playback".into(),
-            json!({"id":"s","url":"https://provider.test/stream.mkv","authorization":{"cookie":"session=1","user_agent":"VIPTV Desktop","headers":{"Referer":"https://provider.test/watch","X-Stream":"opaque","Host":"wrong.test","Bad":"value\\r\\nInjected: yes"}}}).to_string(),
-            "https://example.test".into()
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(direct["url"], "https://provider.test/stream.mkv");
-    assert_eq!(direct["authorization"]["cookie"], "session=1");
-    assert_eq!(direct["authorization"]["userAgent"], "VIPTV Desktop");
-    assert_eq!(
-        direct["authorization"]["headers"]["Referer"],
-        "https://provider.test/watch"
-    );
-    assert!(direct["authorization"]["headers"].get("Host").is_none());
+fn container_follows_the_url_path_not_its_query() {
     assert_eq!(
         normalize(
             "container".into(),
@@ -284,7 +236,7 @@ fn playback_urls_are_capability_paths_or_original_sources() {
     );
 }
 #[test]
-fn shared_native_wasm_vectors() {
+fn shared_native_vectors() {
     let vectors: Value =
         serde_json::from_str(include_str!("../../../tests/bridge-vectors.json")).unwrap();
     for scenario in vectors.as_array().unwrap() {
@@ -423,31 +375,31 @@ fn stream_discovery_requests_and_polling_steps_share_one_policy() {
     let request: Value = serde_json::from_str(
         &normalize(
             "request".into(),
-            json!({"operation":"sources","item":item}).to_string(),
+            json!({"operation":"sourcesV2","item":item}).to_string(),
             "".into(),
         )
         .unwrap(),
     )
     .unwrap();
     assert_eq!(request["method"], "POST");
-    assert_eq!(request["path"], "/api/streams");
+    assert_eq!(request["path"], "/api/v2/streams");
     assert_eq!(request["body"]["id"], "tt123");
     let poll: Value = serde_json::from_str(
         &normalize(
             "request".into(),
-            json!({"operation":"sourcesPoll","id":"job-1","after":7}).to_string(),
+            json!({"operation":"sourcesPollV2","id":"job-1","after":7}).to_string(),
             "".into(),
         )
         .unwrap(),
     )
     .unwrap();
     assert_eq!(poll["method"], "GET");
-    assert_eq!(poll["path"], "/api/streams/job-1?after=7");
+    assert_eq!(poll["path"], "/api/v2/streams/job-1?after=7");
     assert!(poll["body"].is_null());
     assert!(
         normalize(
             "request".into(),
-            json!({"operation":"sourcesPoll","id":"","after":0}).to_string(),
+            json!({"operation":"sourcesPollV2","id":"","after":0}).to_string(),
             "".into()
         )
         .is_err(),
@@ -563,4 +515,102 @@ fn raw_json_deserialization_preserves_all_value_kinds() {
     assert_eq!(serde_json::from_str::<JsonValue>(wire).unwrap(), expected);
     assert_eq!(JsonValue::deserialize(&value).unwrap(), expected);
     assert_eq!(JsonValue::deserialize(value).unwrap(), expected);
+}
+/// Local engine profiles (native shells only) carry the design avatar catalog.
+#[cfg(feature = "native")]
+mod local_engine_avatars {
+    use super::*;
+    #[derive(Default)]
+    struct MemorySecrets(std::sync::Mutex<std::collections::HashMap<String, String>>);
+    impl viptv_core::SecretStore for MemorySecrets {
+        fn get(&self, key: String) -> Result<Option<String>, viptv_core::CoreError> {
+            Ok(self.0.lock().unwrap().get(&key).cloned())
+        }
+        fn put(&self, key: String, value: String) -> Result<(), viptv_core::CoreError> {
+            self.0.lock().unwrap().insert(key, value);
+            Ok(())
+        }
+        fn remove(&self, key: String) -> Result<(), viptv_core::CoreError> {
+            self.0.lock().unwrap().remove(&key);
+            Ok(())
+        }
+    }
+    #[test]
+    fn local_engine_profiles_carry_catalog_avatars_and_legacy_ids() {
+        let dir =
+            std::env::temp_dir().join(format!("viptv-avatar-contract-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let engine = viptv_core::LocalEngine::new(
+            dir.join("local.sqlite").to_string_lossy().into(),
+            std::sync::Arc::new(MemorySecrets::default()),
+        )
+        .unwrap();
+        let card = |id: &str| -> Value {
+            let cards: Value = serde_json::from_str(&engine.profile_cards().unwrap()).unwrap();
+            cards
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|card| card["id"] == id)
+                .unwrap()
+                .clone()
+        };
+        let created: Value =
+            serde_json::from_str(&engine.create_profile("kid".into(), "Kid".into()).unwrap())
+                .unwrap();
+        assert_eq!(created["avatar_style"], "critters");
+        assert_eq!(created["avatar_choice"], Value::Null);
+        assert_eq!(card("kid")["avatar_style"], "critters");
+        assert_eq!(card("kid")["avatar_choice"], Value::Null);
+        assert_eq!(card("kid")["avatar_id"], Value::Null);
+
+        engine
+            .set_profile_avatar_choice("kid".into(), "villains".into(), 12, "".into())
+            .unwrap();
+        assert!(
+            engine
+                .set_profile_avatar_choice("kid".into(), "villains".into(), 13, "".into())
+                .is_err()
+        );
+        assert!(
+            engine
+                .set_profile_avatar_choice("kid".into(), "dicebear".into(), 1, "".into())
+                .is_err()
+        );
+        let profile: Value = serde_json::from_str(&engine.profile("kid".into()).unwrap()).unwrap();
+        assert_eq!(
+            (&profile["avatar_style"], &profile["avatar_choice"]),
+            (&json!("villains"), &json!(12))
+        );
+
+        engine
+            .set_profile_avatar("default".into(), "zayne".into(), "".into())
+            .unwrap();
+        assert!(
+            engine
+                .set_profile_avatar("default".into(), "critters-1".into(), "".into())
+                .is_err()
+        );
+        let legacy = card("default");
+        assert_eq!(legacy["avatar_id"], "zayne");
+        assert_eq!(legacy["avatar_style"], "critters");
+        assert_eq!(legacy["avatar_choice"], Value::Null);
+
+        // A catalog choice wins over a legacy id written after it, as on the
+        // backend engine profile route.
+        engine
+            .set_profile_avatar_choice("kid".into(), "moods".into(), 3, "".into())
+            .unwrap();
+        engine
+            .set_profile_avatar("kid".into(), "vynxc".into(), "".into())
+            .unwrap();
+        let kid = card("kid");
+        assert_eq!(kid["avatar_id"], Value::Null);
+        assert_eq!(
+            (&kid["avatar_style"], &kid["avatar_choice"]),
+            (&json!("moods"), &json!(3))
+        );
+        drop(engine);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

@@ -11,6 +11,7 @@ mod browse;
 mod history;
 mod library;
 mod profiles;
+mod origins;
 mod preferences;
 mod live;
 mod search;
@@ -22,6 +23,7 @@ mod subtitle_content;
 pub use secrets::SecretStore;
 use viptv_engine::{
     profile::{ProfileConfiguration, Scope},
+    origin::MetadataOrigin,
     store::Store,
 };
 
@@ -32,6 +34,7 @@ pub struct LocalEngine {
     namespace: String,
     pending: Mutex<std::collections::HashMap<String, addons::PendingHome>>,
     details: Mutex<std::collections::HashMap<String, detail::PendingDetail>>,
+    metadata_requests:Mutex<std::collections::HashMap<(String,String,String,String),String>>,
     source_jobs: Mutex<std::collections::HashMap<String, sources::PendingSources>>,
     playable: Arc<Mutex<std::collections::HashMap<String, sources::Playable>>>,
     live_cache: Mutex<std::collections::HashMap<String,live::Cache>>,
@@ -40,7 +43,7 @@ pub struct LocalEngine {
     live_fixture: Mutex<Option<live::Fixture>>,
     enrichments: Mutex<std::collections::HashMap<String, detail::PendingEnrichment>>,
     detail_documents: Mutex<std::collections::HashMap<(String,String,String,String), detail_cache::Document>>,
-    detail_snapshots: Mutex<std::collections::HashMap<(String,String,String,String,u32,u32),(Scope,std::time::Instant,viptv_engine::presentation::DetailSnapshot)>>,
+    detail_snapshots: Mutex<std::collections::HashMap<(String,String,String,String,u32,u32),(Scope,std::time::Instant,viptv_engine::presentation::DetailSnapshot,u64)>>,
     verified_cards: Mutex<std::collections::HashMap<(String,String,String,String), (Scope,viptv_engine::presentation::Card)>>,
     integration_jobs: Mutex<std::collections::HashMap<String, Arc<source_integrations::Job>>>,
     subtitle_jobs: Mutex<std::collections::HashMap<String, subtitles::PendingSubtitles>>,
@@ -96,6 +99,7 @@ impl LocalEngine {
             ),
             pending: Mutex::new(std::collections::HashMap::new()),
             details: Mutex::new(std::collections::HashMap::new()),
+            metadata_requests:Mutex::new(Default::default()),
             source_jobs: Mutex::new(std::collections::HashMap::new()),
             playable: Arc::new(Mutex::new(std::collections::HashMap::new())),
             live_cache: Mutex::new(std::collections::HashMap::new()),
@@ -148,7 +152,7 @@ impl LocalEngine {
         {
             return Err(CoreError::InvalidInput);
         }
-        let profile = ProfileConfiguration::local("local".into(), id, name.trim().into());
+        let mut profile = ProfileConfiguration::local("local".into(), id, name.trim().into());
         let mut store = self.store.lock().map_err(|_| CoreError::Bridge)?;
         if store
             .profiles("local", "local")
@@ -158,6 +162,7 @@ impl LocalEngine {
         {
             return Err(CoreError::InvalidInput);
         }
+        profile.scope.revision = store.new_profile_revision(&profile.scope).map_err(|_|CoreError::Bridge)?;
         store
             .save_profile(&profile, None)
             .map_err(|_| CoreError::Bridge)?;

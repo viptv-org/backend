@@ -11,6 +11,7 @@ use viptv_engine::{
 };
 pub(super) struct Job {
     scope: Scope,
+    metadata_origin: Option<MetadataOrigin>,
     created: Instant,
     cancel: AtomicBool,
     state: Mutex<JobState>,
@@ -232,18 +233,26 @@ impl LocalEngine {
     ) -> Result<String, CoreError> {
         // Never retain the jobs-map lock while waiting for profile storage:
         // admission holds storage before replacing jobs.
-        let job = self.integration_jobs.lock().map_err(|_| CoreError::Bridge)?
-            .get(&job_id).cloned().ok_or(CoreError::InvalidInput)?;
+        let job = self
+            .integration_jobs
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .get(&job_id)
+            .cloned()
+            .ok_or(CoreError::InvalidInput)?;
         if job.scope.profile_id != profile
             || job.created.elapsed().as_secs() > 120
             || job.cancel.load(Ordering::Relaxed)
         {
             return Err(CoreError::InvalidInput);
         }
-        let current = self
-            .store
-            .lock()
-            .map_err(|_| CoreError::Bridge)?
+        let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
+        if let Some(origin) = job.metadata_origin.as_ref() {
+            store
+                .validate_metadata_origin(&job.scope, origin)
+                .map_err(|_| CoreError::InvalidInput)?;
+        }
+        let current = store
             .profile(&job.scope)
             .map_err(|_| CoreError::Bridge)?
             .ok_or(CoreError::InvalidInput)?;
@@ -275,36 +284,55 @@ impl LocalEngine {
     }
 }
 impl LocalEngine {
-    fn verified_source_card(&self, profile: &str, hint: &viptv_engine::presentation::Card)
-        -> Result<(Scope, viptv_engine::presentation::Card), CoreError> {
-        let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
-        let selected = store.profile(&local_scope(profile)).map_err(|_| CoreError::Bridge)?.ok_or(CoreError::InvalidInput)?;
-        let connections = store.connections("local").map_err(|_| CoreError::Bridge)?;
-        let eligible = viptv_engine::registry::Registry::builtin().connections_for(&selected,&connections,Capability::Metadata)
-            .map_err(|_| CoreError::InvalidInput)?;
-        if !eligible.iter().any(|connection| connection.id == hint.provider_id) { return Err(CoreError::InvalidInput); }
-        let verified = self.verified_cards.lock().map_err(|_| CoreError::Bridge)?;
-        let (scope, card) = verified.get(&(profile.to_owned(),hint.provider_id.clone(),hint.identity.kind.clone(),hint.identity.id.clone()))
-            .filter(|(scope, card)| scope == &selected.scope && card.identity.episode == hint.identity.episode)
-            .ok_or(CoreError::InvalidInput)?;
-        Ok((scope.clone(),card.clone()))
+    pub(super) fn verified_source_card(
+        &self,
+        profile: &str,
+        hint: &viptv_engine::presentation::Card,
+    ) -> Result<(Scope, viptv_engine::presentation::Card), CoreError> {
+        self.expected_source_card(profile, hint, true)
     }
     fn admit_integration_job(&self, scope: Scope) -> Result<(String, Arc<Job>), CoreError> {
+        self.admit_integration_job_with_origin(scope, None)
+    }
+    fn admit_integration_job_with_origin(
+        &self,
+        scope: Scope,
+        metadata_origin: Option<MetadataOrigin>,
+    ) -> Result<(String, Arc<Job>), CoreError> {
         let id = uuid::Uuid::new_v4().to_string();
-        let job = Arc::new(Job { scope: scope.clone(), created: Instant::now(), cancel: AtomicBool::new(false),
-            state: Mutex::new(JobState { events:vec![], done:false, error:None }) });
-        let mut jobs = self.integration_jobs.lock().map_err(|_| CoreError::Bridge)?;
+        let job = Arc::new(Job {
+            scope: scope.clone(),
+            metadata_origin,
+            created: Instant::now(),
+            cancel: AtomicBool::new(false),
+            state: Mutex::new(JobState {
+                events: vec![],
+                done: false,
+                error: None,
+            }),
+        });
+        let mut jobs = self
+            .integration_jobs
+            .lock()
+            .map_err(|_| CoreError::Bridge)?;
         jobs.retain(|_, old| {
-            let keep = old.scope.profile_id != scope.profile_id && old.created.elapsed().as_secs() < 120;
-            if !keep { old.cancel.store(true, Ordering::Relaxed); }
+            let keep =
+                old.scope.profile_id != scope.profile_id && old.created.elapsed().as_secs() < 120;
+            if !keep {
+                old.cancel.store(true, Ordering::Relaxed);
+            }
             keep
         });
-        if jobs.len() >= 12 { return Err(CoreError::InvalidInput); }
+        if jobs.len() >= 12 {
+            return Err(CoreError::InvalidInput);
+        }
         let mut grants = self.playable.lock().map_err(|_| CoreError::Bridge)?;
         // Replacing discovery cannot revoke a choice already given to a player.
         // Expiry and profile/configuration revisions still revoke it at open.
-        grants.retain(|_, grant| !grant.expires.is_some_and(|expiry| Instant::now() >= expiry)
-            && (grant.scope.profile_id != scope.profile_id || grant.scope == scope));
+        grants.retain(|_, grant| {
+            !grant.expires.is_some_and(|expiry| Instant::now() >= expiry)
+                && (grant.scope.profile_id != scope.profile_id || grant.scope == scope)
+        });
         jobs.insert(id.clone(), job.clone());
         Ok((id, job))
     }
@@ -353,18 +381,31 @@ impl LocalEngine {
             .ok_or(CoreError::Bridge)?;
         let config: VsourcesConfiguration =
             serde_json::from_str(&raw).map_err(|_| CoreError::Bridge)?;
-        let (id, job) = self.admit_integration_job(selected.scope.clone())?;
+        if let Some(origin) = card.metadata_origin.as_ref() {
+            store
+                .validate_metadata_origin(&selected.scope, origin)
+                .map_err(|_| CoreError::InvalidInput)?;
+        }
+        let (id, job) = self.admit_integration_job_with_origin(
+            selected.scope.clone(),
+            card.metadata_origin.clone(),
+        )?;
         drop(store);
         let store = self.store.clone();
         let scope = job.scope.clone();
         let guard_job = job.clone();
         let authorize: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
             !guard_job.cancel.load(Ordering::Relaxed)
-                && store
-                    .lock()
-                    .ok()
-                    .and_then(|s| s.profile(&scope).ok().flatten())
-                    .is_some_and(|p| p.scope.revision == scope.revision)
+                && store.lock().ok().is_some_and(|store| {
+                    store
+                        .profile(&scope)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|profile| profile.scope == scope)
+                        && guard_job.metadata_origin.as_ref().is_none_or(|origin| {
+                            store.validate_metadata_origin(&scope, origin).is_ok()
+                        })
+                })
         });
         let playable = self.playable.clone();
         let worker_id = id.clone();
@@ -378,18 +419,26 @@ impl LocalEngine {
                     config,
                     media,
                     authorize.clone(),
+                    None,
                     |streams| {
                         if !authorize() {
                             return;
                         }
                         let mut grants = playable.lock().unwrap();
+                        if job.cancel.load(Ordering::Relaxed) {
+                            return;
+                        }
                         let capacity = 4096usize.saturating_sub(grants.len());
                         let sources = streams
                             .into_iter()
                             .take(capacity)
                             .map(|stream| {
                                 let (id, grant) = sources::sdk_playable(
-                                    job.scope.clone(), &card, &connection.id, &worker_id, stream,
+                                    job.scope.clone(),
+                                    &card,
+                                    &connection.id,
+                                    &worker_id,
+                                    stream,
                                 );
                                 let candidate = grant.candidate.clone();
                                 grants.insert(id, grant);
@@ -522,19 +571,98 @@ mod real_native_qualification {
             Ok(())
         }
     }
-    fn read_real_media(opened:&serde_json::Value)->bool{
-        use viptv_engine::egress::{ScopedHttp,HttpRequest};
-        let Some(value)=opened["url"].as_str()else{return false;};let Ok(mut url)=url::Url::parse(value)else{return false;};let origin=url.origin();let mut headers=std::collections::BTreeMap::new();for pair in opened["headers"].as_array().into_iter().flatten(){if let(Some(name),Some(value))=(pair[0].as_str(),pair[1].as_str()){headers.insert(name.to_owned(),value.to_owned());}}
-        let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();runtime.block_on(async{
-          let http=ScopedHttp::new(Arc::new(||true));let mut encrypted=false;for _ in 0..3 {let mut request=HttpRequest::get(url.clone());request.timeout=Some(std::time::Duration::from_secs(8));if url.origin()==origin{request.headers=headers.clone();}let Ok(response)=http.probe(request,16384).await else{return false;};if !(200..300).contains(&response.status){return false;}let body=&response.body;
-            if body.starts_with(b"#EXTM3U"){let Ok(text)=std::str::from_utf8(body)else{return false;};if let Some(key)=text.lines().find(|line|line.starts_with("#EXT-X-KEY:")&&line.contains("METHOD=AES-128")){
-              let Some(uri)=key.split("URI=\"").nth(1).and_then(|tail|tail.split('"').next())else{return false;};
-              let Ok(key_url)=response.url.join(uri)else{return false;};let mut key_request=HttpRequest::get(key_url.clone());key_request.timeout=Some(std::time::Duration::from_secs(8));if key_url.origin()==origin{key_request.headers=headers.clone();}
-              let Ok(key)=http.probe(key_request,32).await else{return false;};if !(200..300).contains(&key.status)||key.body.len()!=16||key.truncated{return false;}encrypted=true;
+    fn read_real_media(opened: &serde_json::Value) -> bool {
+        use viptv_engine::egress::{HttpRequest, ScopedHttp};
+        let Some(value) = opened["url"].as_str() else {
+            return false;
+        };
+        let Ok(mut url) = url::Url::parse(value) else {
+            return false;
+        };
+        let origin = url.origin();
+        let mut headers = std::collections::BTreeMap::new();
+        for pair in opened["headers"].as_array().into_iter().flatten() {
+            if let (Some(name), Some(value)) = (pair[0].as_str(), pair[1].as_str()) {
+                headers.insert(name.to_owned(), value.to_owned());
             }
-            let Some(next)=text.lines().map(str::trim).find(|line|!line.is_empty()&&!line.starts_with('#'))else{return false;};let Ok(next)=response.url.join(next)else{return false;};url=next;continue;}
-            return (encrypted&&body.len()>=188&&body.len()%16==0&&std::str::from_utf8(body).is_err())||body.first()==Some(&0x47)||body.get(4..8).is_some_and(|bytes|matches!(bytes,b"ftyp"|b"styp"|b"moof"|b"moov"))||body.starts_with(&[0x1a,0x45,0xdf,0xa3]);
-          }false
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let http = ScopedHttp::new(Arc::new(|| true));
+            let mut encrypted = false;
+            for _ in 0..3 {
+                let mut request = HttpRequest::get(url.clone());
+                request.timeout = Some(std::time::Duration::from_secs(8));
+                if url.origin() == origin {
+                    request.headers = headers.clone();
+                }
+                let Ok(response) = http.probe(request, 16384).await else {
+                    return false;
+                };
+                if !(200..300).contains(&response.status) {
+                    return false;
+                }
+                let body = &response.body;
+                if body.starts_with(b"#EXTM3U") {
+                    let Ok(text) = std::str::from_utf8(body) else {
+                        return false;
+                    };
+                    if let Some(key) = text.lines().find(|line| {
+                        line.starts_with("#EXT-X-KEY:") && line.contains("METHOD=AES-128")
+                    }) {
+                        let Some(uri) = key
+                            .split("URI=\"")
+                            .nth(1)
+                            .and_then(|tail| tail.split('"').next())
+                        else {
+                            return false;
+                        };
+                        let Ok(key_url) = response.url.join(uri) else {
+                            return false;
+                        };
+                        let mut key_request = HttpRequest::get(key_url.clone());
+                        key_request.timeout = Some(std::time::Duration::from_secs(8));
+                        if key_url.origin() == origin {
+                            key_request.headers = headers.clone();
+                        }
+                        let Ok(key) = http.probe(key_request, 32).await else {
+                            return false;
+                        };
+                        if !(200..300).contains(&key.status)
+                            || key.body.len() != 16
+                            || key.truncated
+                        {
+                            return false;
+                        }
+                        encrypted = true;
+                    }
+                    let Some(next) = text
+                        .lines()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty() && !line.starts_with('#'))
+                    else {
+                        return false;
+                    };
+                    let Ok(next) = response.url.join(next) else {
+                        return false;
+                    };
+                    url = next;
+                    continue;
+                }
+                return (encrypted
+                    && body.len() >= 188
+                    && body.len() % 16 == 0
+                    && std::str::from_utf8(body).is_err())
+                    || body.first() == Some(&0x47)
+                    || body.get(4..8).is_some_and(|bytes| {
+                        matches!(bytes, b"ftyp" | b"styp" | b"moof" | b"moov")
+                    })
+                    || body.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]);
+            }
+            false
         })
     }
     #[test]
@@ -620,8 +748,12 @@ mod real_native_qualification {
         engine
             .cancel_integration_sources("default".into(), job_id.into())
             .unwrap();
-        let opened:serde_json::Value=serde_json::from_str(&engine.open_source(selected).unwrap()).unwrap();
-        assert!(read_real_media(&opened),"SDK candidate did not yield a bounded real media read");
+        let opened: serde_json::Value =
+            serde_json::from_str(&engine.open_source(selected).unwrap()).unwrap();
+        assert!(
+            read_real_media(&opened),
+            "SDK candidate did not yield a bounded real media read"
+        );
         println!(
             "Native SDK opaque grant and media bytes qualified; metadata-only Stremio manifest; early cancel preserves selected source; elapsed_seconds={}",
             start.elapsed().as_secs()
@@ -633,3 +765,19 @@ mod real_native_qualification {
 #[cfg(test)]
 #[path = "source_integrations/lifecycle_tests.rs"]
 mod lifecycle_tests;
+
+impl LocalEngine {
+    pub(super) fn forget_integration_profile(&self, profile: &str) -> Result<(), CoreError> {
+        self.integration_jobs
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .retain(|_, job| {
+                let keep = job.scope.profile_id != profile;
+                if !keep {
+                    job.cancel.store(true, Ordering::Relaxed);
+                }
+                keep
+            });
+        Ok(())
+    }
+}

@@ -66,3 +66,36 @@ fn legacy_models_do_not_project_private_grants() {
     );
     assert!(invoke("playbackV2", json!({"id":"playback_fixture","status":"ready","expires_at":1800000060_u64,"renew_after_seconds":20,"delivery":{"kind":"native_torrent","grant":{}}})).is_err());
 }
+
+#[test]
+fn gateway_clock_offset_round_trips_and_invalid_or_double_seek_clocks_fail_closed() {
+    let mut lease = json!({"id":"clock_fixture","status":"ready","expires_at":1800000060_u64,"renew_after_seconds":20,"delivery":{"kind":"gateway","url":"https://gateway.example/media/viewer/token/index.m3u8","format":"hls","mode":"remux","video_mode":"copy","audio_mode":"copy","position":0.0,"timeline_offset_seconds":48.6,"duration":600.0,"live":false,"audio_tracks":[],"subtitle_tracks":[],"selected_audio":null,"selected_subtitle":null,"subtitles_supported":false}});
+    let decode = |value: &Value| {
+        normalize(
+            "playbackV2".into(),
+            value.to_string(),
+            "https://fixture.invalid".into(),
+        )
+    };
+    let value: Value = serde_json::from_str(&decode(&lease).unwrap()).unwrap();
+    assert_eq!(value["session"]["timelineOffsetSeconds"], 48.6);
+    assert_eq!(value["session"]["position"], 0.0);
+    assert_eq!(value["session"]["duration"], 600.0);
+    lease["delivery"]["position"] = json!(48.6);
+    assert!(decode(&lease).is_err());
+    lease["delivery"]["position"] = json!(0.0);
+    lease["delivery"]["timeline_offset_seconds"] = json!(-1.0);
+    assert!(decode(&lease).is_err());
+    lease["delivery"]["timeline_offset_seconds"] = json!(1e10);
+    assert!(decode(&lease).is_err());
+}
+
+#[test]
+fn gateway_native_mp4_preserves_one_client_seek_without_a_source_cut_offset() {
+    let mut lease=json!({"id":"mp4_fixture","status":"ready","expires_at":1800000060_u64,"renew_after_seconds":20,"delivery":{"kind":"gateway","url":"https://gateway.example/media/viewer/token/source.mp4","format":"mp4","mode":"direct","video_mode":"copy","audio_mode":"copy","position":48.6,"timeline_offset_seconds":0.0,"duration":600.0,"live":false,"audio_tracks":[],"subtitle_tracks":[],"selected_audio":null,"selected_subtitle":null,"subtitles_supported":false}});
+    let decode=|value:&Value|normalize("playbackV2".into(),value.to_string(),"https://fixture.invalid".into());
+    let value:Value=serde_json::from_str(&decode(&lease).unwrap()).unwrap();
+    assert_eq!(value["session"]["format"],"mp4");assert_eq!(value["session"]["position"],48.6);assert_eq!(value["session"]["timelineOffsetSeconds"],0.0);
+    lease["delivery"]["timeline_offset_seconds"]=json!(48.6);assert!(decode(&lease).is_err());
+    lease["delivery"]["timeline_offset_seconds"]=json!(0.0);lease["delivery"]["mode"]=json!("transcode");assert!(decode(&lease).is_err());
+}

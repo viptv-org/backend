@@ -63,7 +63,25 @@ pub(super) fn playback_v2(v: &Value, origin: &str) -> Result<Value> {
         return Err(invalid());
     }
     let live = boolean(value, "live")?;
+    let offset = if value["timeline_offset_seconds"].is_null() {
+        None
+    } else {
+        let offset = number(value, "timeline_offset_seconds")?;
+        if !offset.is_finite()
+            || !(0.0..=1e9).contains(&offset)
+            || (kind == "direct" && offset != 0.0)
+            || (live && offset != 0.0)
+            || (kind == "gateway" && value["format"]=="hls" && position != 0.0)
+            || (kind=="gateway" && value["format"]=="mp4" && offset!=0.0)
+        {
+            return Err(invalid());
+        }
+        Some(offset)
+    };
     let mut safe = json!({"id":id,"url":url.as_str(),"position":if live { 0.0 } else { position },"live":live});
+    if let Some(offset) = offset {
+        safe["timeline_offset_seconds"] = json!(offset);
+    }
     if kind == "direct" {
         if value["format"] != "original" {
             return Err(invalid());
@@ -115,8 +133,9 @@ pub(super) fn playback_v2(v: &Value, origin: &str) -> Result<Value> {
         {
             return Err(invalid());
         }
+        if value["format"]=="mp4" && (value["mode"]!="direct" || value["video_mode"]!="copy" || !matches!(value["audio_mode"].as_str(),Some("copy"|"none")) || live || offset!=Some(0.0)){return Err(invalid());}
         for (field, allowed) in [
-            ("format", &["hls"][..]),
+            ("format", &["hls","mp4"][..]),
             ("mode", &["direct", "remux", "transcode"][..]),
             ("video_mode", &["copy", "encode"][..]),
             ("audio_mode", &["copy", "encode", "none"][..]),
@@ -231,6 +250,12 @@ pub fn playback(v: &Value, origin: &str) -> Result<Value> {
         parsed
     };
     let mut out = json!({"headers":v["headers"].as_object().map(|h|h.iter().filter(|(_,v)|v.is_string()).map(|(k,v)|(k.clone(),v.clone())).collect::<Map<String,Value>>()).unwrap_or_default(),"id":string(v,"id")?,"url":url.as_str(),"format":fallback(v,&["format"],"hls"),"mode":fallback(v,&["mode"],"direct"),"videoMode":fallback(v,&["video_mode"],"copy"),"audioMode":fallback(v,&["audio_mode"],"copy"),"position":v["position"].as_f64().unwrap_or(0.0),"live":v["live"].as_bool().unwrap_or(false),"duration":v["duration"].as_f64().unwrap_or(0.0),"audioTracks":v["audio_tracks"].as_array().into_iter().flatten().filter(|v|v.is_object()).map(track).collect::<Result<Vec<_>>>()?,"subtitleTracks":v["subtitle_tracks"].as_array().into_iter().flatten().filter(|v|v.is_object()).map(track).collect::<Result<Vec<_>>>()?,"subtitlesSupported":v["subtitles_supported"].as_bool().unwrap_or(false)});
+    if let Some(offset) = v["timeline_offset_seconds"].as_f64() {
+        if !offset.is_finite() || !(0.0..=1e9).contains(&offset) {
+            return Err(invalid());
+        }
+        out["timelineOffsetSeconds"] = json!(offset);
+    }
     // Source authorization is present only when the session carries one;
     // absent fields are omitted, matching the generated wire types.
     if let Some(authorization) = authorization(v) {
@@ -288,4 +313,42 @@ fn authorization(v: &Value) -> Option<Value> {
         }
     }
     Some(Value::Object(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_urls_are_capability_paths_or_original_sources() {
+        // playbackV2 delivery reuses this: a root-relative URL must stay a
+        // same-origin /media/ capability, and no URL carries embedded credentials.
+        let origin = "https://example.test";
+        assert!(playback(&json!({"id":"s","url":"/api/private"}), origin).is_err());
+        assert!(
+            playback(
+                &json!({"id":"s","url":"https://user:pass@evil.test/media/x"}),
+                origin
+            )
+            .is_err()
+        );
+        let proxy = playback(&json!({"id":"s","url":"/media/s/cap/index.m3u8"}), origin).unwrap();
+        assert_eq!(proxy["url"], "https://example.test/media/s/cap/index.m3u8");
+        assert!(proxy.as_object().unwrap().get("authorization").is_none());
+        // A direct session hands the original absolute source URL to the client
+        // with its sanitized source authorization.
+        let direct = playback(
+            &json!({"id":"s","url":"https://provider.test/stream.mkv","authorization":{"cookie":"session=1","user_agent":"VIPTV Desktop","headers":{"Referer":"https://provider.test/watch","X-Stream":"opaque","Host":"wrong.test","Bad":"value\r\nInjected: yes"}}}),
+            origin,
+        )
+        .unwrap();
+        assert_eq!(direct["url"], "https://provider.test/stream.mkv");
+        assert_eq!(direct["authorization"]["cookie"], "session=1");
+        assert_eq!(direct["authorization"]["userAgent"], "VIPTV Desktop");
+        assert_eq!(
+            direct["authorization"]["headers"]["Referer"],
+            "https://provider.test/watch"
+        );
+        assert!(direct["authorization"]["headers"].get("Host").is_none());
+    }
 }

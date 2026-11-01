@@ -1,4 +1,4 @@
-//! Execute the canonical transient-transport corpus natively for real WASM parity.
+//! Execute the canonical transient-transport corpus natively.
 #[path = "../tests/common/native_torrent_vectors.rs"]
 mod vectors;
 fn main() {

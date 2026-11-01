@@ -12,12 +12,15 @@ use viptv_engine::{
 };
 
 pub(super) struct Request {
+    origin: MetadataOrigin,
     provider: String,
     provider_name: String,
     url: String,
 }
 pub(super) struct PendingSources {
     scope: Scope,
+    metadata_origin: Option<MetadataOrigin>,
+    metadata_card: Option<Arc<viptv_engine::presentation::Card>>,
     kind: String,
     media_id: String,
     requests: Vec<Request>,
@@ -27,6 +30,9 @@ pub(super) struct PendingSources {
 }
 pub(super) struct Playable {
     pub(super) scope: Scope,
+    pub(super) metadata_origin: Option<MetadataOrigin>,
+    pub(super) provider_origin: Option<MetadataOrigin>,
+    pub(super) metadata_card: Option<Arc<viptv_engine::presentation::Card>>,
     pub(super) candidate: SourceCandidate,
     pub(super) kind: String,
     pub(super) media_id: String,
@@ -46,74 +52,24 @@ impl LocalEngine {
         kind: String,
         id: String,
     ) -> Result<String, CoreError> {
-        if id.len() > 512 || !["movie", "series"].contains(&kind.as_str()) {
+        if !origins::shared_lookup(&kind, &id) {
             return Err(CoreError::InvalidInput);
         }
-        let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
-        let selected = store
-            .profile(&local_scope(&profile))
-            .map_err(|_| CoreError::Bridge)?
-            .ok_or(CoreError::InvalidInput)?;
-        let connections = store.connections("local").map_err(|_| CoreError::Bridge)?;
-        let mut requests = Vec::new();
-        for connection in connections
-            .iter()
-            .filter(|c| {
-                c.enabled
-                    && selected.assignments.iter().any(|a| {
-                        a.connection_id == c.id && a.enabled.contains(&Capability::Sources)
-                    })
-            })
-            .take(12)
-        {
-            let Ok(secret) = self.addon(&connection.id) else {
-                continue;
-            };
-            if let Some(url) =
-                stremio::stream_url(&secret.manifest_url, &secret.manifest, &kind, &id)
-            {
-                requests.push(Request {
-                    provider: connection.id.clone(),
-                    provider_name: connection.name.clone(),
-                    url,
-                });
-            }
-        }
-        let operation = uuid::Uuid::new_v4().to_string();
-        let wires = requests
-            .iter()
-            .map(|r| json!({"provider":r.provider,"url":r.url}))
-            .collect::<Vec<_>>();
-        let mut jobs = self.source_jobs.lock().map_err(|_| CoreError::Bridge)?;
-        jobs.retain(|_, pending| {
-            pending.scope.profile_id != profile && pending.created.elapsed().as_secs() < 120
-        });
-        if jobs.len() >= 12 {
+        self.plan_sources_owned(profile, kind, id, None)
+    }
+    pub fn plan_sources_for_origin(
+        &self,
+        profile: String,
+        kind: String,
+        id: String,
+        card_json: String,
+    ) -> Result<String, CoreError> {
+        let expected = origins::expected_card(&card_json)?;
+        if expected.identity.kind != kind || expected.identity.id != id {
             return Err(CoreError::InvalidInput);
         }
-        // A new discovery replaces pending work, not an already selected grant.
-        let mut grants = self.playable.lock().map_err(|_| CoreError::Bridge)?;
-        grants.retain(|_, grant| {
-            !grant
-                .expires
-                .is_some_and(|expiry| std::time::Instant::now() >= expiry)
-                && (grant.scope.profile_id != profile
-                    || grant.scope.revision == selected.scope.revision)
-        });
-        drop(grants);
-        jobs.insert(
-            operation.clone(),
-            PendingSources {
-                scope: selected.scope,
-                kind,
-                media_id: id,
-                requests,
-                created: std::time::Instant::now(),
-                completed: Default::default(),
-                candidates: Vec::new(),
-            },
-        );
-        Ok(json!({"operation":operation,"requests":wires}).to_string())
+        let (_, card) = self.expected_source_card(&profile, &expected, false)?;
+        self.plan_sources_owned(profile, kind, id, Some(Arc::new(card)))
     }
 
     pub fn project_sources(
@@ -166,6 +122,21 @@ impl LocalEngine {
                 return Err(CoreError::InvalidInput);
             }
         }
+        for item in items {
+            let request = pending
+                .requests
+                .iter()
+                .find(|request| Some(request.provider.as_str()) == item["provider"].as_str())
+                .ok_or(CoreError::InvalidInput)?;
+            store
+                .validate_metadata_origin(&pending.scope, &request.origin)
+                .map_err(|_| CoreError::InvalidInput)?;
+        }
+        if let Some(origin) = pending.metadata_origin.as_ref() {
+            store
+                .validate_metadata_origin(&pending.scope, origin)
+                .map_err(|_| CoreError::InvalidInput)?;
+        }
         let mut playable = self.playable.lock().map_err(|_| CoreError::Bridge)?;
         for item in items {
             let provider = item["provider"].as_str().ok_or(CoreError::InvalidInput)?;
@@ -203,11 +174,17 @@ impl LocalEngine {
                     quality_height: source.quality_height,
                     audio_languages: source.audio_languages,
                     presentation: source.presentation,
-                };
+                    delivery: Some(source.delivery.into()),
+                    ..Default::default()
+                }
+                .with_release_facts(source.release_facts);
                 playable.insert(
                     id,
                     Playable {
                         scope: pending.scope.clone(),
+                        metadata_origin: pending.metadata_origin.clone(),
+                        provider_origin: Some(request.origin.clone()),
+                        metadata_card: pending.metadata_card.clone(),
                         candidate: candidate.clone(),
                         kind: pending.kind.clone(),
                         media_id: pending.media_id.clone(),
@@ -258,6 +235,16 @@ impl LocalEngine {
         {
             return Err(CoreError::InvalidInput);
         }
+        if let Some(origin) = source.provider_origin.as_ref() {
+            store
+                .validate_metadata_origin(&source.scope, origin)
+                .map_err(|_| CoreError::InvalidInput)?;
+        }
+        if let Some(origin) = source.metadata_origin.as_ref() {
+            store
+                .validate_metadata_origin(&source.scope, origin)
+                .map_err(|_| CoreError::InvalidInput)?;
+        }
         let current = store
             .profile(&source.scope)
             .map_err(|_| CoreError::Bridge)?
@@ -265,13 +252,38 @@ impl LocalEngine {
         if current.scope.revision != source.scope.revision {
             return Err(CoreError::Bridge);
         }
-        let resume = store
-            .playback(&source.scope, &source.kind, &source.media_id)
-            .map_err(|_| CoreError::Bridge)?
-            .filter(|record| record.can_resume())
-            .map(|record| record.position_millis)
-            .unwrap_or(0);
-        serde_json::to_string(&json!({"url":source.url,"headers":source.headers,"required_audio_index":source.required_audio_index,"profile_id":source.scope.profile_id,"revision":source.scope.revision,"position_millis":if source.kind=="live"{0}else{resume},"live":source.kind=="live"}))
+        let resume = if let Some(card) = source.metadata_card.as_ref() {
+            let exact = store
+                .playback_for_origin(&source.scope, card)
+                .map_err(|_| CoreError::Bridge)?;
+            if exact.is_some() {
+                exact
+            } else {
+                // This card came from current host metadata; source planning
+                // never accepts a posted external alias as this proof.
+                let canonical = viptv_engine::origin::verified_storage_identity(card);
+                if origins::shared_lookup(&canonical.kind, &canonical.id) {
+                    store
+                        .playback(&source.scope, &canonical.kind, &canonical.id)
+                        .map_err(|_| CoreError::Bridge)?
+                } else {
+                    None
+                }
+            }
+        } else {
+            store
+                .playback(&source.scope, &source.kind, &source.media_id)
+                .map_err(|_| CoreError::Bridge)?
+        }
+        .filter(|record| record.can_resume())
+        .map(|record| record.position_millis)
+        .unwrap_or(0);
+        let media_context = origins::playback_media_context(
+            &source.kind,
+            &source.media_id,
+            source.metadata_card.as_deref(),
+        );
+        serde_json::to_string(&json!({"url":source.url,"headers":source.headers,"required_audio_index":source.required_audio_index,"media_context":media_context,"metadata_origin":source.metadata_origin,"profile_id":source.scope.profile_id,"revision":source.scope.revision,"position_millis":if source.kind=="live"{0}else{resume},"live":source.kind=="live"}))
             .map_err(|_| CoreError::Bridge)
     }
 }
@@ -279,3 +291,114 @@ impl LocalEngine {
 #[cfg(test)]
 #[path = "sources/tests.rs"]
 mod tests;
+
+impl LocalEngine {
+    pub(super) fn forget_source_profile(&self, profile: &str) -> Result<(), CoreError> {
+        self.source_jobs
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .retain(|_, pending| pending.scope.profile_id != profile);
+        self.playable
+            .lock()
+            .map_err(|_| CoreError::Bridge)?
+            .retain(|_, grant| grant.scope.profile_id != profile);
+        Ok(())
+    }
+}
+
+impl LocalEngine {
+    fn plan_sources_owned(
+        &self,
+        profile: String,
+        kind: String,
+        id: String,
+        metadata_card: Option<Arc<viptv_engine::presentation::Card>>,
+    ) -> Result<String, CoreError> {
+        let metadata_origin = metadata_card
+            .as_ref()
+            .and_then(|card| card.metadata_origin.clone());
+        if id.len() > 512 || !["movie", "series"].contains(&kind.as_str()) {
+            return Err(CoreError::InvalidInput);
+        }
+        let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
+        let selected = store
+            .profile(&local_scope(&profile))
+            .map_err(|_| CoreError::Bridge)?
+            .ok_or(CoreError::InvalidInput)?;
+        if let Some(origin) = metadata_origin.as_ref() {
+            store
+                .validate_metadata_origin(&selected.scope, origin)
+                .map_err(|_| CoreError::InvalidInput)?;
+        }
+        let connections = store.connections("local").map_err(|_| CoreError::Bridge)?;
+        let mut requests = Vec::new();
+        for connection in connections
+            .iter()
+            .filter(|c| {
+                c.enabled
+                    && (origins::shared_lookup(&kind, &id)
+                        || metadata_origin
+                            .as_ref()
+                            .and_then(|origin| origin.connection_id.as_deref())
+                            == Some(c.id.as_str()))
+                    && selected.assignments.iter().any(|a| {
+                        a.connection_id == c.id && a.enabled.contains(&Capability::Sources)
+                    })
+            })
+            .take(12)
+        {
+            let Ok(secret) = self.addon(&connection.id) else {
+                continue;
+            };
+            if let Some(url) =
+                stremio::stream_url(&secret.manifest_url, &secret.manifest, &kind, &id)
+            {
+                requests.push(Request {
+                    origin: store
+                        .metadata_origin(&selected.scope, &connection.id)
+                        .map_err(|_| CoreError::InvalidInput)?,
+                    provider: connection.id.clone(),
+                    provider_name: connection.name.clone(),
+                    url,
+                });
+            }
+        }
+        let operation = uuid::Uuid::new_v4().to_string();
+        let wires = requests
+            .iter()
+            .map(|r| json!({"provider":r.provider,"url":r.url}))
+            .collect::<Vec<_>>();
+        let mut jobs = self.source_jobs.lock().map_err(|_| CoreError::Bridge)?;
+        jobs.retain(|_, pending| {
+            pending.scope.profile_id != profile && pending.created.elapsed().as_secs() < 120
+        });
+        if jobs.len() >= 12 {
+            return Err(CoreError::InvalidInput);
+        }
+        // A new discovery replaces pending work, not an already selected grant.
+        let mut grants = self.playable.lock().map_err(|_| CoreError::Bridge)?;
+        grants.retain(|_, grant| {
+            !grant
+                .expires
+                .is_some_and(|expiry| std::time::Instant::now() >= expiry)
+                && (grant.scope.profile_id != profile
+                    || grant.scope.revision == selected.scope.revision)
+        });
+        drop(grants);
+        jobs.insert(
+            operation.clone(),
+            PendingSources {
+                scope: selected.scope,
+                metadata_origin,
+                metadata_card,
+                kind,
+                media_id: id,
+                requests,
+                created: std::time::Instant::now(),
+                completed: Default::default(),
+                candidates: Vec::new(),
+            },
+        );
+        Ok(json!({"operation":operation,"requests":wires}).to_string())
+    }
+}

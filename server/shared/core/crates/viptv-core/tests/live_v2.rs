@@ -134,7 +134,7 @@ fn canonical_live_requests_are_cursor_bound_and_have_no_retired_filter_or_offset
             json!({"operation":"livePageV2","collection":"favorites"})
         )
         .unwrap()["path"],
-        "/api/iptv/live/channels?limit=50&collection=favorites"
+        "/api/v2/iptv/live/channels?limit=50&collection=favorites"
     );
     assert!(
         run(
@@ -147,12 +147,12 @@ fn canonical_live_requests_are_cursor_bound_and_have_no_retired_filter_or_offset
     assert_eq!(out["method"], "GET");
     assert_eq!(
         out["path"],
-        "/api/iptv/live/channels?limit=40&catalog_id=2&category_id=news%20%26%20sport&search=News&cursor=opaque_next"
+        "/api/v2/iptv/live/channels?limit=40&catalog_id=2&category_id=news%20%26%20sport&search=News&cursor=opaque_next"
     );
     assert!(out["body"].is_null());
     assert_eq!(
         run("request", json!({"operation":"livePageV2"})).unwrap()["path"],
-        "/api/iptv/live/channels?limit=50"
+        "/api/v2/iptv/live/channels?limit=50"
     );
     assert_eq!(
         run(
@@ -160,7 +160,7 @@ fn canonical_live_requests_are_cursor_bound_and_have_no_retired_filter_or_offset
             json!({"operation":"liveCategoriesV2","cursor":"next"})
         )
         .unwrap()["path"],
-        "/api/iptv/live/categories?limit=50&cursor=next"
+        "/api/v2/iptv/live/categories?limit=50&cursor=next"
     );
     for (field, value) in [
         ("offset", json!(40)),
@@ -188,7 +188,7 @@ fn canonical_live_requests_are_cursor_bound_and_have_no_retired_filter_or_offset
             json!({"operation":"liveSourceV2","id":"iptv:2:7"})
         )
         .unwrap()["path"],
-        "/api/iptv/live/iptv%3A2%3A7/source"
+        "/api/v2/iptv/live/iptv%3A2%3A7/source"
     );
     assert_eq!(
         run(
@@ -196,7 +196,7 @@ fn canonical_live_requests_are_cursor_bound_and_have_no_retired_filter_or_offset
             json!({"operation":"liveGuideV2","id":"iptv:2:7"})
         )
         .unwrap()["path"],
-        "/api/iptv/guide/iptv%3A2%3A7"
+        "/api/v2/iptv/guide/iptv%3A2%3A7"
     );
 }
 

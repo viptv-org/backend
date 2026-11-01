@@ -31,7 +31,7 @@ pub(super) fn presentation(v: &Value) -> Result {
         } else {
             "sources"
         };
-        json!({"heroImage":image(m,"background"),"posterImage":image(m,"poster"),"episodeImage":image(m,"thumbnail"),"titleLogo":image(m,"titleLogo"),"title":m["name"],"episodeLabel":label,"progress":if num(m,"duration")>0.0{(num(m,"position")/num(m,"duration")).clamp(0.0,1.0)}else{0.0},"primaryAction":action,"primaryActionLabel":match action{"next"=>"Play next episode","resume"=>"Resume","play"=>"Watch live","episodes"=>"Episodes",_=>"Play"},"resumeEligible":resume,"canAutoNext":!live&&episode>0.0&&num(m,"duration")>0.0&&num(m,"duration")-num(m,"position")<=10.0&&num(m,"position")>0.0})
+        json!({"heroImage":image(m,"background"),"posterImage":poster_image(m),"episodeImage":image(m,"thumbnail"),"titleLogo":image(m,"titleLogo"),"title":m["name"],"episodeLabel":label,"progress":if num(m,"duration")>0.0{(num(m,"position")/num(m,"duration")).clamp(0.0,1.0)}else{0.0},"primaryAction":action,"primaryActionLabel":match action{"next"=>"Play next episode","resume"=>"Resume","play"=>"Watch live","episodes"=>"Episodes",_=>"Play"},"resumeEligible":resume,"canAutoNext":!live&&episode>0.0&&num(m,"duration")>0.0&&num(m,"duration")-num(m,"position")<=10.0&&num(m,"position")>0.0})
     })
 }
 
@@ -53,12 +53,17 @@ pub(super) fn card_presentation(v: &Value) -> Result {
                 ("background", "landscape"),
                 ("thumbnail", "landscape"),
                 ("poster", "poster"),
+                (IMDB_POSTER, "poster"),
             ]
         };
         let (art, role) = candidates
             .iter()
             .find_map(|(key, role)| {
-                let art = image(m, key);
+                let art = if *key == IMDB_POSTER {
+                    poster_image(m)
+                } else {
+                    image(m, key)
+                };
                 let failed = v["failedImages"]
                     .as_array()
                     .is_some_and(|urls| urls.contains(&art));
