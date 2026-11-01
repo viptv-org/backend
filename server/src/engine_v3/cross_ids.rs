@@ -19,9 +19,34 @@ pub(crate) struct CrossIds {
     pub(crate) tvdb: Option<u64>,
     pub(crate) tmdb: Option<u64>,
     pub(crate) imdb: Option<String>,
+    pub(crate) season: Option<u32>,
+    pub(crate) episode_offset: Option<u32>,
 }
 
 impl CrossIds {
+    pub(crate) fn external_ids(&self) -> Vec<ExternalId> {
+        let mut ids = Vec::new();
+        for (namespace, value) in [
+            ("anidb", self.anidb.map(|v| v.to_string())),
+            ("tvdb", self.tvdb.map(|v| v.to_string())),
+            ("tmdb", self.tmdb.map(|v| v.to_string())),
+            ("imdb", self.imdb.clone()),
+            ("mal", self.mal.map(|v| v.to_string())),
+        ] {
+            let Some(value) = value else {
+                continue;
+            };
+            let id = ExternalId {
+                namespace: namespace.into(),
+                value,
+            };
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    }
+
     fn add(&mut self, id: &ExternalId) {
         let parsed = match id.namespace.as_str() {
             "anidb" => id.value.parse().ok().map(|value| (1, value, None)),
@@ -58,6 +83,8 @@ impl CrossIds {
         }
         self.mal = self.mal.or(entry.mal);
         self.anilist = self.anilist.or(entry.anilist);
+        self.season = self.season.or(entry.season);
+        self.episode_offset = self.episode_offset.or(entry.episode_offset);
     }
 }
 
@@ -70,6 +97,8 @@ struct Entry {
     tvdb: Option<u64>,
     tmdb: Option<u64>,
     imdb: Option<String>,
+    season: Option<u32>,
+    episode_offset: Option<u32>,
 }
 
 impl Entry {
@@ -103,6 +132,11 @@ impl Entry {
             tvdb: raw.tvdb_id,
             tmdb,
             imdb,
+            season: raw.season.and_then(|season| season.tvdb).filter(|season| *season > 0),
+            episode_offset: raw
+                .episode_offset
+                .and_then(|offset| offset.tvdb)
+                .filter(|offset| *offset > 0),
         })
     }
 }
@@ -117,6 +151,20 @@ struct RawEntry {
     tvdb_id: Option<u64>,
     themoviedb_id: Option<RawTmdb>,
     imdb_id: Vec<String>,
+    season: Option<RawSeason>,
+    episode_offset: Option<RawOffset>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawSeason {
+    tvdb: Option<u32>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawOffset {
+    tvdb: Option<u32>,
 }
 
 #[derive(Deserialize, Default)]

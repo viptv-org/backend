@@ -278,13 +278,73 @@ async fn resolve(
     if page.provider_id.is_none() && page.addon_id.is_some() {
         return Err("Metadata provider is required".into());
     }
-    let explicit = page
-        .provider_id
-        .as_deref()
-        .map(|provider| {
-            super::search::metadata_scope(app.clone(), &lease, profile, provider, page.addon_id)
-        })
-        .transpose()?;
+    let lookup = if kind == "series" {
+        episode_parent(&id).unwrap_or(&id)
+    } else {
+        id.as_str()
+    };
+    let selected_addon_serves_meta = page
+        .addon_id
+        .is_some_and(|addon| super::anime_show::addon_serves_meta(&app, addon, &kind));
+    let mut canonical = None;
+    let mut base_title = String::new();
+    let mut parsed_season = None;
+    let mut focus_season = None;
+    let mut focus_episode = None;
+    if kind == "series"
+        && page.addon_id.is_some()
+        && !selected_addon_serves_meta
+        && super::anime_show::anime_release(lookup)
+    {
+        let card_title = expected
+            .as_ref()
+            .map(|card| card.title.trim().to_owned())
+            .filter(|title| !title.is_empty());
+        let card_year = expected
+            .as_ref()
+            .and_then(|card| card.metadata.as_ref().and_then(|metadata| metadata.year));
+        let (title_base, season) = match card_title.as_deref() {
+            Some(title) => super::anime_show::split_title_season(title),
+            None => (String::new(), None),
+        };
+        base_title = title_base;
+        parsed_season = season;
+        canonical = super::anime_show::release_document(&app, lookup).await;
+        if canonical.is_none() && !base_title.is_empty() {
+            canonical = super::anime_show::title_document(
+                &app,
+                &lease,
+                profile,
+                lookup,
+                &base_title,
+                card_year,
+                parsed_season,
+            )
+            .await;
+        }
+        focus_season = canonical.as_ref().and_then(|canonical| canonical.focus_season);
+        focus_episode = canonical.as_ref().and_then(|canonical| canonical.focus_episode);
+    }
+    let is_canonical = canonical.is_some();
+    if kind == "series"
+        && page.addon_id.is_some()
+        && !selected_addon_serves_meta
+        && !is_canonical
+        && super::anime_show::anime_release(lookup)
+    {
+        return Err(ApiError::title_needs_search(&base_title, &kind, parsed_season));
+    }
+    let explicit = if is_canonical {
+        None
+    } else {
+        page
+            .provider_id
+            .as_deref()
+            .map(|provider| {
+                super::search::metadata_scope(app.clone(), &lease, profile, provider, page.addon_id)
+            })
+            .transpose()?
+    };
     let simkl = page
         .provider_id
         .as_deref()
@@ -364,7 +424,15 @@ async fn resolve(
         super::episode_progress::mark(&app, profile, &mut result.0);
         return Ok(result);
     }
-    let (app, origin, revision) = if let Some(explicit) = explicit {
+    let (app, origin, revision) = if is_canonical {
+        let (app, _, revision) =
+            super::search::metadata_scope(app, &lease, profile, "stremio", None)?;
+        (
+            app,
+            format!("addon:{}", page.addon_id.expect("canonical add-on id")),
+            revision,
+        )
+    } else if let Some(explicit) = explicit {
         explicit
     } else if stremio_fallback {
         super::search::metadata_scope(app, &lease, profile, "stremio", None)?
@@ -377,11 +445,6 @@ async fn resolve(
         )?;
         (app, "stremio".to_owned(), revision)
     };
-    let lookup = if kind == "series" {
-        episode_parent(&id).unwrap_or(&id)
-    } else {
-        id.as_str()
-    };
     {
         let db = app
             .db
@@ -392,53 +455,62 @@ async fn resolve(
             kids::require_item(&db, &app.identity(), &kind, &id)?;
         }
     }
-    let (value, issuer) = timed("addons_meta", async {
-        if page.addon_id.is_some() {
-            app.addons.meta_from_selected_addon(&kind, lookup).await
-        } else {
-            app.addons.meta_with_origin(&kind, lookup).await
-        }
-    })
-    .await
-    .map_err(|error| {
-        if page.addon_id.is_some() && error == "Metadata not found" {
-            ApiError(
-                StatusCode::BAD_GATEWAY,
-                "The selected metadata add-on did not return this title".into(),
-            )
-        } else {
-            ApiError::from(error)
-        }
-    })?;
     if app.addons.revision()? != addon_revision {
         return Err(ApiError(
             StatusCode::CONFLICT,
             "Metadata integrations changed. Try again.".into(),
         ));
     }
+    configuration::validate_revision(&app, profile, revision)?;
+    let (issuer, mut parent, meta) = if let Some(canonical) = canonical {
+        (
+            page.addon_id.expect("canonical add-on id"),
+            canonical.document.clone(),
+            canonical.document,
+        )
+    } else {
+        let (value, issuer) = timed("addons_meta", async {
+            if page.addon_id.is_some() {
+                app.addons.meta_from_selected_addon(&kind, lookup).await
+            } else {
+                app.addons.meta_with_origin(&kind, lookup).await
+            }
+        })
+        .await
+        .map_err(|error| {
+            if page.addon_id.is_some() && error == "Metadata not found" {
+                ApiError(
+                    StatusCode::BAD_GATEWAY,
+                    "The selected metadata add-on did not return this title".into(),
+                )
+            } else {
+                ApiError::from(error)
+            }
+        })?;
+        let meta = if value["meta"].is_object() {
+            value["meta"].clone()
+        } else {
+            value
+        };
+        if meta["type"].as_str().is_some_and(|actual| actual != kind)
+            || !provider_identity::same_title(&meta, lookup)
+        {
+            return Err(ApiError(
+                StatusCode::BAD_GATEWAY,
+                "Provider returned a different title".into(),
+            ));
+        }
+        let mut parent = meta.clone();
+        parent["type"] = json!(kind);
+        parent["id"] = json!(lookup);
+        (issuer, parent, meta)
+    };
     let origin = if origin == "stremio" {
         format!("addon:{issuer}")
     } else {
         origin
     };
-    configuration::validate_revision(&app, profile, revision)?;
-    let meta = if value["meta"].is_object() {
-        value["meta"].clone()
-    } else {
-        value
-    };
-    if meta["type"].as_str().is_some_and(|actual| actual != kind)
-        || !provider_identity::same_title(&meta, lookup)
-    {
-        return Err(ApiError(
-            StatusCode::BAD_GATEWAY,
-            "Provider returned a different title".into(),
-        ));
-    }
-    let mut parent = meta.clone();
-    parent["type"] = json!(kind);
-    parent["id"] = json!(lookup);
-    if kind == "series" {
+    if kind == "series" && !is_canonical {
         let document = timed(
             "tvdb_document",
             super::anime_show::tvdb_document(&app, &lease, profile, &parent),
@@ -578,7 +650,8 @@ async fn resolve(
     }
     configuration::validate_revision(&app, profile, revision)?;
     if let Some(provider) = page.provider_id.as_deref() {
-        super::search::metadata_scope(app.clone(), &lease, profile, provider, page.addon_id)?;
+        let addon = if is_canonical { None } else { page.addon_id };
+        super::search::metadata_scope(app.clone(), &lease, profile, provider, addon)?;
     }
     if app.addons.revision()? != addon_revision {
         return Err(ApiError(
@@ -597,6 +670,12 @@ async fn resolve(
     super::source_integrations::cache_detail(&app, &lease, revision, &addon_revision, &value);
     // Private watch state goes in after the shared verified-card cache.
     super::episode_progress::mark(&app, profile, &mut value);
+    if let Some(season) = focus_season {
+        value["focus_season"] = json!(season);
+    }
+    if let Some(episode) = focus_episode {
+        value["focus_episode"] = json!(episode);
+    }
     Ok(axum::Json(value))
 }
 

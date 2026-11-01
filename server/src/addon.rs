@@ -26,6 +26,7 @@ use discover::{enrich_episode_art, episode_art_url};
 #[cfg(test)]
 use extras::catalog_extra;
 pub use extras::supports;
+pub(crate) use discover::declares_meta;
 #[cfg(test)]
 pub(super) use extras::MAX_EXTRA_OPTION;
 use extras::{bounded_exact_text, bounded_text, catalog_extras, CatalogExtra};

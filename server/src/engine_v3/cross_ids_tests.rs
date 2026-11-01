@@ -52,6 +52,8 @@ async fn a_mal_id_resolves_to_anidb_tvdb_tmdb_and_imdb_through_the_fribb_file() 
             tvdb: Some(79099),
             tmdb: Some(8864),
             imdb: Some("tt1164545".into()),
+            season: None,
+            episode_offset: Some(11),
         }
     );
 }
@@ -69,6 +71,8 @@ async fn an_anilist_id_resolves_to_mal_through_the_fribb_file() {
             tvdb: Some(79099),
             tmdb: None,
             imdb: None,
+            season: None,
+            episode_offset: None,
         }
     );
 }
@@ -89,6 +93,8 @@ async fn an_anidb_id_resolves_back_to_mal_through_the_fribb_file() {
             tvdb: Some(79099),
             tmdb: None,
             imdb: None,
+            season: None,
+            episode_offset: None,
         }
     );
 }
@@ -108,6 +114,8 @@ async fn ids_that_are_missing_from_the_file_survive_alongside_the_direct_ids() {
             tvdb: Some(91021),
             tmdb: Some(44298),
             imdb: None,
+            season: None,
+            episode_offset: None,
         }
     );
 }
@@ -124,6 +132,8 @@ async fn an_unreachable_mapping_keeps_the_direct_ids() {
             tvdb: None,
             tmdb: None,
             imdb: None,
+            season: None,
+            episode_offset: None,
         }
     );
 }

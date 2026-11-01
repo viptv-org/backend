@@ -11,7 +11,7 @@ fn needs_episode_art(meta: &Value) -> bool {
     })
 }
 
-fn declares_meta(manifest: &Value, kind: &str) -> bool {
+pub(crate) fn declares_meta(manifest: &Value, kind: &str) -> bool {
     manifest["resources"].as_array().is_some_and(|resources| {
         resources.iter().any(|resource| {
             let name = resource.as_str().or_else(|| resource["name"].as_str());
