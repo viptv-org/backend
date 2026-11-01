@@ -14,8 +14,6 @@ tokio::task_local! {
     pub(crate) static STAGES: RefCell<Vec<(&'static str, Duration)>>;
 }
 
-/// Times one named stage of a request handler and records it for the
-/// slowest-stage diagnostic. Outside the observe scope this is a passthrough.
 pub(crate) async fn timed<T>(stage: &'static str, future: impl Future<Output = T>) -> T {
     let started = Instant::now();
     let output = future.await;
@@ -24,7 +22,6 @@ pub(crate) async fn timed<T>(stage: &'static str, future: impl Future<Output = T
     output
 }
 
-/// Sync counterpart of [`timed`] for stages that are plain function calls.
 pub(crate) fn timed_sync<T>(stage: &'static str, work: impl FnOnce() -> T) -> T {
     let started = Instant::now();
     let output = work();
