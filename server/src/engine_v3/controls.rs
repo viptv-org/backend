@@ -115,6 +115,7 @@ pub(crate) async fn get(
         } else {
             kind.as_str()
         };
+        let mut catalog_controls = Vec::new();
         match tokio::time::timeout(
             Duration::from_secs(4),
             crate::simkl::browse::controls(&app, profile, category),
@@ -132,6 +133,7 @@ pub(crate) async fn get(
                         }
                     }
                 }
+                catalog_controls = extra.clone();
                 controls.extend(extra);
                 filter_state = state(Availability::Available, None);
             }
@@ -142,27 +144,36 @@ pub(crate) async fn get(
                 )
             }
         }
-    } else if !is_simkl {
-        let (scoped, _) =
-            configuration::apply(app.clone(), &lease, profile, Capability::Discovery)?;
-        for catalog in scoped
-            .addons
-            .catalogs()?
-            .as_array()
-            .into_iter()
-            .flatten()
-            .take(100)
-        {
-            if catalog["type"] != kind {
-                continue;
-            }
-            let options = viptv_engine::stremio::catalog_controls(catalog)
-                .into_iter().filter(|c| c.id != "search").collect::<Vec<_>>();
-            catalogs.push(json!({"id":catalog["id"],"name":catalog["name"],"type":catalog["type"],"addon_id":catalog["addon_id"],"connection_name":catalog["addon_name"],"connection_id":catalog["addon_id"].as_i64().map(|id|format!("addon:{id}")),"supports_search":catalog["supports_search"],"supports_skip":catalog["supports_skip"],"controls":options}));
+        catalogs.push(json!({
+            "id":"simkl-trending",
+            "name":"Simkl Trending",
+            "type":kind,
+            "connection_id":format!("simkl:{profile}"),
+            "connection_name":"Simkl",
+            "supports_search":true,
+            "supports_skip":false,
+            "controls":catalog_controls,
+        }));
+    }
+    let (scoped, _) =
+        configuration::apply(app.clone(), &lease, profile, Capability::Discovery)?;
+    for catalog in scoped
+        .addons
+        .catalogs()?
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(100)
+    {
+        if catalog["type"] != kind {
+            continue;
         }
-        if !catalogs.is_empty() {
-            filter_state = state(Availability::Available, None);
-        }
+        let options = viptv_engine::stremio::catalog_controls(catalog)
+            .into_iter().filter(|c| c.id != "search").collect::<Vec<_>>();
+        catalogs.push(json!({"id":catalog["id"],"name":catalog["name"],"type":catalog["type"],"addon_id":catalog["addon_id"],"connection_name":catalog["addon_name"],"connection_id":catalog["addon_id"].as_i64().map(|id|format!("addon:{id}")),"supports_search":catalog["supports_search"],"supports_skip":catalog["supports_skip"],"controls":options}));
+    }
+    if !is_simkl && !catalogs.is_empty() {
+        filter_state = state(Availability::Available, None);
     }
     configuration::validate_revision(&app, profile, configuration.scope.revision)?;
     let search_state = if is_simkl && !search.is_empty() {

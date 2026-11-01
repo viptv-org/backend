@@ -59,11 +59,7 @@ pub(super) async fn load(
     };
     let (configuration, _) = configuration::read(&app, &lease, profile)?;
     let simkl = configuration.browsing_plugin == "simkl";
-    let catalogs = if simkl {
-        json!([])
-    } else {
-        app.addons.catalogs()?
-    };
+    let catalogs = app.addons.catalogs()?;
     let mut browse_actions = HashMap::from([
         (
             "continue".to_owned(),
