@@ -1,4 +1,4 @@
-//! Private v2 authority holder shared by native clients and actual WASM.
+//! Private v2 authority holder shared by native clients.
 use crate::{
     CoreError,
     native_torrent::{
@@ -343,7 +343,6 @@ impl Holder {
 
 #[cfg_attr(feature = "native", derive(uniffi::Object))]
 #[cfg_attr(feature = "native", uniffi::export(Debug, Display))]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 pub struct TorrentRuntimeBridge {
     inner: Mutex<Holder>,
 }
@@ -554,133 +553,5 @@ impl TorrentRuntimeBridge {
         let mut holder = self.inner.lock().map_err(|_| CoreError::Bridge)?;
         holder.authorize(&clock)?;
         holder.grant.as_ref().map(read).ok_or_else(invalid)
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-impl TorrentRuntimeBridge {
-    #[wasm_bindgen::prelude::wasm_bindgen(constructor)]
-    pub fn wasm_new(
-        context: String,
-    ) -> std::result::Result<TorrentRuntimeBridge, wasm_bindgen::JsValue> {
-        Self::new(context).map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=state)]
-    pub fn wasm_state(&self) -> std::result::Result<String, wasm_bindgen::JsValue> {
-        self.state().map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=invalidate)]
-    pub fn wasm_invalidate(&self) -> std::result::Result<(), wasm_bindgen::JsValue> {
-        self.invalidate().map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=playbackId)]
-    pub fn wasm_playback_id(&self) -> std::result::Result<Option<String>, wasm_bindgen::JsValue> {
-        self.playback_id().map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=trustedWallUpperUnixMillis)]
-    pub fn wasm_trusted_wall_upper_unix_millis(
-        &self,
-    ) -> std::result::Result<Option<u64>, wasm_bindgen::JsValue> {
-        self.trusted_wall_upper_unix_millis()
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=authorize)]
-    pub fn wasm_authorize(
-        &self,
-        clock: String,
-    ) -> std::result::Result<String, wasm_bindgen::JsValue> {
-        self.authorize(clock).map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=privateInfoHash)]
-    pub fn wasm_private_info_hash(
-        &self,
-        clock: String,
-    ) -> std::result::Result<String, wasm_bindgen::JsValue> {
-        self.private_info_hash(clock)
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=privateInputKind)]
-    pub fn wasm_private_input_kind(
-        &self,
-        clock: String,
-    ) -> std::result::Result<String, wasm_bindgen::JsValue> {
-        self.private_input_kind(clock)
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=privateInputValue)]
-    pub fn wasm_private_input_value(
-        &self,
-        clock: String,
-    ) -> std::result::Result<String, wasm_bindgen::JsValue> {
-        self.private_input_value(clock)
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=privateFileIndex)]
-    pub fn wasm_private_file_index(
-        &self,
-        clock: String,
-    ) -> std::result::Result<Option<u32>, wasm_bindgen::JsValue> {
-        self.private_file_index(clock)
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=privateArchiveIndex)]
-    pub fn wasm_private_archive_index(
-        &self,
-        clock: String,
-    ) -> std::result::Result<Option<u32>, wasm_bindgen::JsValue> {
-        self.private_archive_index(clock)
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=privateTrackers)]
-    pub fn wasm_private_trackers(
-        &self,
-        clock: String,
-    ) -> std::result::Result<Vec<String>, wasm_bindgen::JsValue> {
-        self.private_trackers(clock)
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=privateExpectedFileSize)]
-    pub fn wasm_private_expected_file_size(
-        &self,
-        clock: String,
-    ) -> std::result::Result<Option<u64>, wasm_bindgen::JsValue> {
-        self.private_expected_file_size(clock)
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=acceptBytes)]
-    pub fn wasm_accept_bytes(
-        &self,
-        status: u16,
-        body: Vec<u8>,
-        observation: String,
-    ) -> std::result::Result<String, wasm_bindgen::JsValue> {
-        self.accept_bytes(status, body, observation)
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=acceptMeasuredBytes)]
-    pub fn wasm_accept_measured_bytes(
-        &self,
-        status: u16,
-        body: Vec<u8>,
-        observation: String,
-    ) -> std::result::Result<String, wasm_bindgen::JsValue> {
-        self.accept_measured_bytes(status, body, observation)
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=bindResolution)]
-    pub fn wasm_bind_resolution(
-        &self,
-        file_index: u32,
-        archive_index: Option<u32>,
-        length: u64,
-        clock: String,
-    ) -> std::result::Result<bool, wasm_bindgen::JsValue> {
-        self.bind_resolution(file_index, archive_index, length, clock)
-            .map_err(|e| e.to_string().into())
-    }
-    #[wasm_bindgen::prelude::wasm_bindgen(js_name=toString)]
-    pub fn wasm_redacted(&self) -> String {
-        self.to_string()
     }
 }

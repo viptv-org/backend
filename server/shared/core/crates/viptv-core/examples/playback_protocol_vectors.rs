@@ -1,4 +1,4 @@
-//! Native raw-text corpus runner used by actual-WASM parity checks.
+//! Native raw-text corpus runner.
 use serde_json::{Value, json};
 
 fn main() {

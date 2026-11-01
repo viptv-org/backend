@@ -205,8 +205,10 @@ pub fn preview(v: &PreviewInput) -> PreviewDecision {
                 BeginSettled
             }
         }
+        // Torrent availability changes quickly, so opening the picker joins an
+        // in-flight discovery but never reuses a completed result set.
         PreviewAction::Adopt => {
-            if same_key && fresh && (v.running || v.has_sources) {
+            if same_key && fresh && v.running {
                 Retain
             } else {
                 BeginImmediate

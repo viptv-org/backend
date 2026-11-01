@@ -13,6 +13,7 @@ macro_rules! policy_regex {
 }
 
 mod catalog;
+mod layout;
 pub mod playback_control;
 mod presentation;
 mod progress;
@@ -32,6 +33,30 @@ pub(super) fn image(v: &Value, k: &str) -> Value {
     v[k].as_str()
         .filter(|s| !s.trim().is_empty())
         .map_or(Value::Null, |s| json!(s))
+}
+/// Candidate key for the derived Cinemeta poster.
+pub(super) const IMDB_POSTER: &str = "\0imdbPoster";
+/// The item's poster, or Cinemeta's poster for its IMDb title when it has
+/// none. Only a validated IMDb id (`tt` + 5-12 digits) derives a URL.
+pub(super) fn poster_image(v: &Value) -> Value {
+    let own = image(v, "poster");
+    if !own.is_null() {
+        return own;
+    }
+    ["imdbId", "seriesId", "id"]
+        .iter()
+        .filter_map(|k| v[*k].as_str())
+        .map(|id| id.split(':').next().unwrap_or(""))
+        .find(|id| {
+            id.strip_prefix("tt").is_some_and(|d| {
+                (5..=12).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_digit())
+            })
+        })
+        .map_or(Value::Null, |id| {
+            json!(format!(
+                "https://images.metahub.space/poster/medium/{id}/img"
+            ))
+        })
 }
 pub(super) fn watched(v: &Value) -> bool {
     v["watched"]
@@ -96,6 +121,9 @@ pub fn normalize(kind: &str, v: &Value) -> Result {
         "itemRequest" => item_request(v),
         "playbackRequest" | "preferencesRequest" => snake(v),
         "request" => requests::request(v)?,
+        "metadataTargets" => requests::metadata_targets(v),
+        "homeLayout" => layout::home_layout(v)?,
+        "searchPlan" => layout::search_plan(v)?,
         "playbackV2Intent" => requests::playback_v2_intent(v)?,
         "enrichDetail" => progress::enrich_detail(v),
         "mergeEpisodeProgress" => progress::merge_episode_progress(v)?,
@@ -104,6 +132,7 @@ pub fn normalize(kind: &str, v: &Value) -> Result {
         "enrichHome" => progress::enrich_home(v),
         "resume" => progress::resume(v)?,
         "autoNext" => sources::auto_next(v),
+        "subtitleSelection" => sources::subtitle_selection(v),
         "sourceMatch" => sources::source_match(v),
         "sourceRanks" => sources::source_ranks(v),
         "sourceProducerLabels" => sources::source_producer_labels(v),

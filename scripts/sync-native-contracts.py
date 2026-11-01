@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -24,12 +25,19 @@ for name, (revision, paths) in SOURCES.items():
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
         archive.extractall(destination, filter='data')
     if name == 'core':
-        # The exported workspace intentionally contains only the library used here.
-        cargo = destination / 'Cargo.toml'
-        cargo.write_text(cargo.read_text().replace(
-            'members = ["crates/viptv-core", "crates/viptv-provider", "crates/typegen"]',
-            'members = ["crates/viptv-core"]'))
+        workspace = destination / 'Cargo.toml'
+        text, count = re.subn(r'^members = \[.*\]$', 'members = ["crates/viptv-core"]', workspace.read_text(), flags=re.M)
+        if count != 1:
+            raise SystemExit('Unexpected core workspace members; review the manifest transform')
+        workspace.write_text(text)
+        library = destination / 'crates' / 'viptv-core' / 'Cargo.toml'
+        before = 'viptv-engine = { path = "../viptv-engine" }'
+        text = library.read_text()
+        if text.count(before) != 1:
+            raise SystemExit('Unexpected engine dependency; review the manifest transform')
+        library.write_text(text.replace(before, 'viptv-engine = { path = "../../../engine" }'))
     manifest[name] = {'revision': revision, 'license': ['GPL-2.0-only'] if name == 'core' else ['GPL-2.0-only', 'Apache-2.0'],
                       'archive_sha256': hashlib.sha256(data).hexdigest()}
-manifest['design_revision'] = (ROOT / 'DESIGN_REF').read_text().strip()
-(ROOT / 'server' / 'shared' / 'NATIVE_CONTRACTS.json').write_text(json.dumps(manifest, indent=2) + '\n')
+MANIFEST = ROOT / 'server' / 'shared' / 'NATIVE_CONTRACTS.json'
+manifest['design_revision'] = json.loads(MANIFEST.read_text())['design_revision']
+MANIFEST.write_text(json.dumps(manifest, indent=2) + '\n')

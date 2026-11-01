@@ -36,13 +36,28 @@ fn metadata(
     provider: &str,
     name: &str,
 ) -> viptv_engine::presentation::DetailSnapshot {
+    let scope = engine
+        .store
+        .lock()
+        .unwrap()
+        .profile(&local_scope("default"))
+        .unwrap()
+        .unwrap()
+        .scope;
+    let origin = engine
+        .store
+        .lock()
+        .unwrap()
+        .metadata_origin(&scope, provider)
+        .unwrap();
+    let expected: viptv_engine::presentation::Card=serde_json::from_value(json!({"identity":{"id":"shared-id","kind":"series","ids":[]},"metadata_origin":origin,"provider_id":provider,"title":name,"badges":[]})).unwrap();
     let plan: serde_json::Value = serde_json::from_str(
         &engine
-            .plan_detail(
+            .plan_detail_for_origin(
                 "default".into(),
                 "series".into(),
                 "shared-id".into(),
-                provider.into(),
+                serde_json::to_string(&expected).unwrap(),
             )
             .unwrap(),
     )
@@ -54,7 +69,7 @@ fn metadata(
 fn provider_scoped_metadata_cache_and_sdk_proof_do_not_mix_identical_opaque_ids() {
     let (engine, dir, providers) = fixture();
     let first = metadata(&engine, &providers[0], "First");
-    let _second = metadata(&engine, &providers[1], "Second");
+    let second = metadata(&engine, &providers[1], "Second");
     assert!(
         engine
             .detail_page("default".into(), "series".into(), "shared-id".into(), 0, 24)
@@ -65,11 +80,16 @@ fn provider_scoped_metadata_cache_and_sdk_proof_do_not_mix_identical_opaque_ids(
     for (provider, name) in providers.iter().zip(["First", "Second"]) {
         let page: serde_json::Value = serde_json::from_str(
             &engine
-                .detail_page_for_provider(
+                .detail_page_for_origin(
                     "default".into(),
                     "series".into(),
                     "shared-id".into(),
-                    provider.clone(),
+                    serde_json::to_string(if name == "First" {
+                        &first.item
+                    } else {
+                        &second.item
+                    })
+                    .unwrap(),
                     0,
                     24,
                 )
@@ -81,7 +101,10 @@ fn provider_scoped_metadata_cache_and_sdk_proof_do_not_mix_identical_opaque_ids(
         assert_eq!(page["episodes"][0]["provider_id"], provider.as_str());
     }
     let mut hint = first.item.clone();
-    hint.identity.ids = vec![viptv_engine::identity::ExternalId { namespace:"tmdb".into(), value:"forged-sibling-id".into() }];
+    hint.identity.ids = vec![viptv_engine::identity::ExternalId {
+        namespace: "tmdb".into(),
+        value: "forged-sibling-id".into(),
+    }];
     let (_, trusted) = engine.verified_source_card("default", &hint).unwrap();
     assert_eq!(trusted.title, "First");
     assert_eq!(trusted.identity.ids, first.item.identity.ids);
@@ -111,11 +134,11 @@ fn provider_scoped_metadata_cache_and_sdk_proof_do_not_mix_identical_opaque_ids(
     );
     assert!(
         engine
-            .plan_detail(
+            .plan_detail_for_origin(
                 "default".into(),
                 "series".into(),
                 "shared-id".into(),
-                providers[0].clone()
+                serde_json::to_string(&first.item).unwrap()
             )
             .is_err(),
         "Disabled explicit origin must not fall through to sibling metadata"
@@ -141,10 +164,14 @@ fn sdk_job_replacement_preserves_issued_choice_and_cancels_only_pending_work() {
         quality_height: None,
         audio_languages: vec![],
         presentation: None,
+        ..Default::default()
     };
     engine.playable.lock().unwrap().insert(
         "issued".into(),
         sources::Playable {
+            metadata_origin: None,
+            provider_origin: None,
+            metadata_card: None,
             scope: scope.clone(),
             candidate,
             kind: "series".into(),
@@ -194,12 +221,38 @@ fn sdk_poll_releases_jobs_map_before_waiting_for_profile_storage() {
     let cloned = Arc::strong_count(&job) >= 3;
     let mut acquired = false;
     while began.elapsed() < std::time::Duration::from_secs(1) {
-        if engine.integration_jobs.try_lock().is_ok() { acquired = true; break; }
+        if engine.integration_jobs.try_lock().is_ok() {
+            acquired = true;
+            break;
+        }
         std::thread::yield_now();
     }
     drop(store);
     assert!(cloned && acquired);
     assert!(poll.join().unwrap().is_ok());
+    drop(engine);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn deleted_profile_cancels_sdk_job_and_never_republishes_its_issued_grant() {
+    let (engine, dir, _) = fixture();
+    engine
+        .create_profile("other".into(), "Other".into())
+        .unwrap();
+    let scope =
+        serde_json::from_str::<ProfileConfiguration>(&engine.profile("default".into()).unwrap())
+            .unwrap()
+            .scope;
+    let (id, job) = engine.admit_integration_job(scope).unwrap();
+    engine.delete_profile("default".into(), "".into()).unwrap();
+    assert!(job.cancel.load(Ordering::Relaxed));
+    assert!(
+        engine
+            .poll_integration_sources("default".into(), id, 0)
+            .is_err()
+    );
+    assert!(engine.integration_jobs.lock().unwrap().is_empty());
     drop(engine);
     std::fs::remove_dir_all(dir).unwrap();
 }

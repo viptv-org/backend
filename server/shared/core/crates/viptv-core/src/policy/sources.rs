@@ -54,6 +54,58 @@ fn language_patterns(language: &str) -> &'static LanguagePatterns {
     &LANGUAGE_PATTERNS[index]
 }
 
+/// Whether a reported track language (`eng`, `en-US`, `English`) is the
+/// preferred language code; an empty preference means English.
+fn reported_language_matches(preferred: &str, reported: &str) -> bool {
+    !reported.trim().is_empty()
+        && language_patterns(preferred)
+            .reported
+            .is_match(reported.trim())
+}
+
+/// Automatic subtitle choice once a player knows its tracks. `always` shows the
+/// preferred subtitle language; `never` shows none; `foreign` shows it only when
+/// the selected audio is reported in another language than the preferred audio
+/// (unknown or undetermined audio counts as not foreign). The preferred subtitle
+/// track is the first non-forced track in that language, else the only
+/// non-forced track when the preference is empty. Manual choices are the
+/// shell's to keep: callers apply this once, before the viewer picks a track.
+pub(super) fn subtitle_selection(v: &Value) -> Value {
+    let mode = v["mode"].as_str().unwrap_or("never");
+    let audio = v["audioLanguage"].as_str().unwrap_or("").trim();
+    let preferred_audio = v["preferredAudioLanguage"].as_str().unwrap_or("");
+    let foreign_audio = !audio.is_empty()
+        && !["und", "unknown", "mul", "zxx"].contains(&audio.to_ascii_lowercase().as_str())
+        && !reported_language_matches(preferred_audio, audio);
+    let show = match mode {
+        "always" => true,
+        "foreign" => foreign_audio,
+        _ => false,
+    };
+    let language = v["subtitleLanguage"].as_str().unwrap_or("");
+    let tracks: Vec<&Value> = v["subtitleTracks"]
+        .as_array()
+        .map(|tracks| {
+            tracks
+                .iter()
+                .filter(|t| t["forced"] != true && t["id"].is_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let track = show
+        .then(|| {
+            if language.is_empty() {
+                (tracks.len() == 1).then(|| tracks[0])
+            } else {
+                tracks.iter().copied().find(|t| {
+                    reported_language_matches(language, t["language"].as_str().unwrap_or(""))
+                })
+            }
+        })
+        .flatten();
+    json!({"show":show,"foreignAudio":foreign_audio,"trackId":track.map_or(Value::Null, |t| t["id"].clone())})
+}
+
 pub(super) fn auto_next(v: &Value) -> Value {
     json!(
         v["playing"] == true
