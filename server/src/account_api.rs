@@ -276,6 +276,10 @@ fn details(code: &str) -> (StatusCode, &'static str) {
                 StatusCode::NOT_FOUND,
                 "This stream is unavailable in your IPTV accounts.",
             ),
+            "invalid_crash_report" => (StatusCode::BAD_REQUEST, "Send the crash report as a JSON object."),
+            "crash_report_too_large" => (StatusCode::PAYLOAD_TOO_LARGE, "This crash report is larger than 64 KB."),
+            "crash_report_not_found" => (StatusCode::NOT_FOUND, "This crash report is unavailable in your account."),
+            "crash_report_storage_unavailable" => (StatusCode::SERVICE_UNAVAILABLE, "Crash reports are temporarily unavailable. Try again."),
             "account_session_required" => (
                 StatusCode::FORBIDDEN,
                 crate::app_state::MSG_ACCOUNT_SESSION_REQUIRED,

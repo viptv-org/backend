@@ -350,6 +350,7 @@ impl App {
         continuation::init(&db).map_err(|_| "Viewing queue migration failed")?;
         provider::init(&db).map_err(|_| "Provider database initialization failed")?;
         auth::init(&db).map_err(|_| "Authentication database initialization failed")?;
+        crash_reports::init(&db).map_err(|_| "Crash report schema initialization failed")?;
         engine_v3::source_integrations::init(&db)
             .map_err(|_| "Source integration initialization failed")?;
         engine_v3::live::init(&db).map_err(|_| "Live connections initialization failed")?;

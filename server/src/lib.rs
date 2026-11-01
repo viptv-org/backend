@@ -3,6 +3,7 @@ mod android_links;
 pub mod addon;
 pub mod auth;
 mod continuation;
+mod crash_reports;
 mod engine_v3;
 #[cfg(test)]
 mod discovery_error_tests;
