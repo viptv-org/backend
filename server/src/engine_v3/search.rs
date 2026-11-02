@@ -2,6 +2,7 @@ use super::*;
 use viptv_engine::{capabilities::Capability, presentation::Card, registry::Registry};
 
 const ROW_BUDGET: Duration = Duration::from_secs(4);
+const SEARCH_DEADLINE: Duration = Duration::from_secs(10);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,6 +88,7 @@ pub(crate) async fn parent(
     run(app, lease, q, true).await
 }
 async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> ApiResult {
+    let deadline = tokio::time::Instant::now() + SEARCH_DEADLINE;
     let query = q.query.trim();
     if query.is_empty() || query.chars().count() > 256 || query.chars().any(char::is_control) {
         return Err("Enter a search query of at most 256 characters".into());
@@ -226,33 +228,21 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
         let query = query.to_owned();
         let parent_scope = parent_scope.clone();
         async move {
-            let result = match &plan {
-                Plan::Simkl(_, _) => tokio::time::timeout(
-                    ROW_BUDGET,
-                    load(&app, &lease, profile, &plan, &query, parent_scope.as_ref()),
-                )
-                .await
-                .ok(),
-                Plan::Addon { .. } => {
-                    Some(load(&app, &lease, profile, &plan, &query, parent_scope.as_ref()).await)
-                }
-            };
-            match result {
-                Some(Ok((mut cards, failed))) => {
-                    let provider = match &plan {
-                        Plan::Simkl(_, _) => "simkl".to_owned(),
-                        Plan::Addon { addon, .. } => format!("addon:{addon}"),
-                    };
-                    match super::origins::stamp(&app, &mut cards, &provider) {
-                        Ok(()) => {
-                            dedupe_display_names(&mut cards);
-                            plan.row(cards, failed)
-                        }
-                        Err(_) => plan.row(vec![], true),
-                    }
-                }
-                _ => plan.row(vec![], true),
-            }
+            let row_deadline = (tokio::time::Instant::now() + ROW_BUDGET).min(deadline);
+            tokio::time::timeout_at(
+                row_deadline,
+                complete_row(
+                    &app,
+                    &lease,
+                    profile,
+                    &plan,
+                    &query,
+                    parent_scope.as_ref(),
+                    row_deadline,
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| plan.row(vec![], true))
         }
     }))
     .await;
@@ -308,6 +298,32 @@ fn disambiguate_catalog_titles(titles: &mut [String], resources: &[AddonCatalog]
     }
 }
 
+async fn complete_row(
+    app: &App,
+    lease: &ResourceLease,
+    profile: i64,
+    plan: &Plan,
+    query: &str,
+    parent: Option<&crate::kids::parent_scope::ParentScope>,
+    deadline: tokio::time::Instant,
+) -> Value {
+    let (mut cards, failed) = match load(app, lease, profile, plan, query, parent, deadline).await {
+        Ok(loaded) => loaded,
+        Err(_) => return plan.row(vec![], true),
+    };
+    let provider = match plan {
+        Plan::Simkl(_, _) => "simkl".to_owned(),
+        Plan::Addon { addon, .. } => format!("addon:{addon}"),
+    };
+    match super::origins::stamp(app, &mut cards, &provider) {
+        Ok(()) => {
+            dedupe_display_names(&mut cards);
+            plan.row(cards, failed)
+        }
+        Err(_) => plan.row(vec![], true),
+    }
+}
+
 async fn load(
     app: &App,
     lease: &ResourceLease,
@@ -315,6 +331,7 @@ async fn load(
     plan: &Plan,
     query: &str,
     parent: Option<&crate::kids::parent_scope::ParentScope>,
+    deadline: tokio::time::Instant,
 ) -> Result<(Vec<Card>, bool), ApiError> {
     match plan {
         Plan::Simkl(category, _) => {
@@ -345,18 +362,26 @@ async fn load(
             catalog,
             ..
         } => {
-            let (items, failed) = app
+            let budget = deadline
+                .saturating_duration_since(tokio::time::Instant::now())
+                .min(ROW_BUDGET);
+            let (items, mut failed) = app
                 .addons
                 .search_results(
                     *addon,
                     vec![kind.clone()],
                     Some(catalog.clone()),
                     query.to_owned(),
-                    ROW_BUDGET,
+                    budget,
                 )
                 .await?;
             let mut cards = Vec::new();
             for batch in items.chunks(24) {
+                if tokio::time::Instant::now() >= deadline {
+                    cards.clear();
+                    failed = true;
+                    break;
+                }
                 if parent.is_some() {
                     cards.extend(
                         batch
