@@ -90,7 +90,7 @@ impl Addons {
         catalog: Option<String>,
         query: String,
         budget: Duration,
-    ) -> Result<(Vec<Value>, bool), String> {
+    ) -> Result<(Vec<Value>, bool, bool), String> {
         let entries = self.async_entries().await?;
         let mut endpoints = Vec::new();
         for kind in kinds {
@@ -111,7 +111,7 @@ impl Addons {
         }
         endpoints.truncate(32);
         if endpoints.is_empty() {
-            return Ok((vec![], true));
+            return Ok((vec![], true, false));
         }
         let mut requests = stream::iter(endpoints.into_iter().enumerate().map(
             |(index, (kind, url))| {
@@ -123,10 +123,13 @@ impl Addons {
         let deadline = tokio::time::Instant::now() + budget;
         let mut batches = Vec::new();
         let mut failed = false;
+        let mut answered = false;
+        let mut access_denied = false;
         loop {
             match tokio::time::timeout_at(deadline, requests.next()).await {
                 Ok(Some((index, kind, Ok(value)))) => {
                     if let Some(metas) = value["metas"].as_array() {
+                        answered = true;
                         let metas = metas
                             .iter()
                             .take(200)
@@ -147,13 +150,23 @@ impl Addons {
                         failed = true;
                     }
                 }
-                Ok(Some((_, _, Err(_)))) => failed = true,
+                Ok(Some((_, _, Err(error)))) => {
+                    failed = true;
+                    if crate::service_errors::addon(&error) == Some("addon_access_denied") {
+                        access_denied = true;
+                    }
+                }
                 Ok(None) => break,
                 Err(_) => {
                     failed = true;
                     break;
                 }
             }
+        }
+        if answered {
+            self.record_search_success(addon);
+        } else if access_denied {
+            self.record_search_auth_failure(addon);
         }
         batches.sort_by_key(|(index, _)| *index);
         let mut seen = std::collections::HashSet::new();
@@ -168,7 +181,7 @@ impl Addons {
             })
             .take(200)
             .collect();
-        Ok((items, failed))
+        Ok((items, failed, access_denied))
     }
 
     pub(crate) async fn forget_meta(&self, kind: &str, id: &str) -> Result<(), String> {

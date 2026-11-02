@@ -53,7 +53,7 @@ impl Plan {
             ),
         }
     }
-    fn row(&self, cards: Vec<Card>, failed: bool) -> Value {
+    fn row(&self, cards: Vec<Card>, failed: bool, denied: bool) -> Value {
         let (id, title, provider, addon) = self.identity();
         let state = if cards.is_empty() {
             if failed {
@@ -64,8 +64,13 @@ impl Plan {
         } else {
             "Ready"
         };
+        let message = if denied {
+            Some("This add-on needs valid credentials to search.")
+        } else {
+            failed.then_some("Some search results are unavailable. Try again.")
+        };
         json!({"id":id,"title":title,"provider_id":provider,"addon_id":addon,"state":state,"cards":cards,
-            "message":failed.then_some("Some search results are unavailable. Try again.")})
+            "message":message})
     }
     fn loading(&self) -> Value {
         let (id, title, provider, addon) = self.identity();
@@ -255,6 +260,9 @@ fn prepare(
     let mut resources = Vec::new();
     let mut planned = HashSet::new();
     for id in ids {
+        if addons.addons.search_in_cooldown(id) {
+            continue;
+        }
         let addon_name = selected
             .iter()
             .find(|connection| connection.id == format!("addon:{id}"))
@@ -377,7 +385,7 @@ impl Search {
             ),
         )
         .await
-        .unwrap_or_else(|_| plan.row(vec![], true));
+        .unwrap_or_else(|_| plan.row(vec![], true, false));
         if let Some(scope) = &self.parent {
             self.parent_items(&mut row, scope);
         }
@@ -435,9 +443,9 @@ async fn complete_row(
     parent: Option<&crate::kids::parent_scope::ParentScope>,
     deadline: tokio::time::Instant,
 ) -> Value {
-    let (mut cards, failed) = match load(app, lease, profile, plan, query, parent, deadline).await {
+    let (mut cards, failed, denied) = match load(app, lease, profile, plan, query, parent, deadline).await {
         Ok(loaded) => loaded,
-        Err(_) => return plan.row(vec![], true),
+        Err(_) => return plan.row(vec![], true, false),
     };
     let provider = match plan {
         Plan::Simkl(_, _) => "simkl".to_owned(),
@@ -446,9 +454,9 @@ async fn complete_row(
     match super::origins::stamp(app, &mut cards, &provider) {
         Ok(()) => {
             dedupe_display_names(&mut cards);
-            plan.row(cards, failed)
+            plan.row(cards, failed, denied)
         }
-        Err(_) => plan.row(vec![], true),
+        Err(_) => plan.row(vec![], true, false),
     }
 }
 
@@ -460,12 +468,13 @@ async fn load(
     query: &str,
     parent: Option<&crate::kids::parent_scope::ParentScope>,
     deadline: tokio::time::Instant,
-) -> Result<(Vec<Card>, bool), ApiError> {
+) -> Result<(Vec<Card>, bool, bool), ApiError> {
     match plan {
         Plan::Simkl(category, _) => {
             if let Some(scope) = parent {
                 return Ok((
                     crate::simkl::parent_search(app, scope, category, query).await?,
+                    false,
                     false,
                 ));
             }
@@ -482,7 +491,7 @@ async fn load(
             .await?;
             let page: viptv_engine::presentation::CatalogPage = serde_json::from_value(value)
                 .map_err(|_| ApiError::from("Invalid search response"))?;
-            Ok((page.cards, false))
+            Ok((page.cards, false, false))
         }
         Plan::Addon {
             addon,
@@ -493,7 +502,7 @@ async fn load(
             let budget = deadline
                 .saturating_duration_since(tokio::time::Instant::now())
                 .min(ROW_BUDGET);
-            let (items, mut failed) = app
+            let (items, mut failed, denied) = app
                 .addons
                 .search_results(
                     *addon,
@@ -526,7 +535,7 @@ async fn load(
                 }
             }
             viptv_engine::search::rank(&mut cards, query);
-            Ok((cards, failed))
+            Ok((cards, failed, denied))
         }
     }
 }
@@ -552,7 +561,7 @@ pub(crate) async fn canonical_search(
     scoped.addons = scoped.addons.with_engine_ids(ids.clone());
     let mut cards = Vec::new();
     for id in ids {
-        let (items, _) = scoped
+        let (items, _, _) = scoped
             .addons
             .search_results(id, vec![kind.to_owned()], None, query.to_owned(), ROW_BUDGET)
             .await?;
