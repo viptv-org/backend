@@ -8,6 +8,69 @@ fn session(app: &App, id: &str, account: i64, kind: &str) {
 fn session_with_origin(app: &App, id: &str, account: i64, kind: &str, origin: Option<&str>) {
     app.db.lock().unwrap().execute("INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,kind,origin,device_name,access_expires,refresh_expires,created_at) VALUES(?1,?2,?3,?4,'unused',?5,?6,'Fixture device',?7,?7,1)",params![id,account,auth::hash(id),format!("refresh-{id}"),kind,origin,auth::now()+3600]).unwrap();
 }
+fn session_at(app: &App, id: &str, account: i64, kind: &str, created_at: i64) {
+    app.db.lock().unwrap().execute("INSERT INTO auth_sessions(id,account_id,access_hash,refresh_hash,csrf_hash,kind,device_name,access_expires,refresh_expires,created_at) VALUES(?1,?2,?3,?4,'unused',?5,'Fixture device',?6,?6,?7)",params![id,account,auth::hash(id),format!("refresh-{id}"),kind,auth::now()+3600,created_at]).unwrap();
+}
+
+#[tokio::test]
+async fn account_devices_list_the_calling_session_first_then_most_recent() {
+    let app = fixture();
+    session_at(&app, "oldest-browser", 1, "browser", 100);
+    session_at(&app, "newest-browser", 1, "browser", 300);
+    session_at(&app, "middle-device", 1, "device", 200);
+    let (status, data) = request(
+        &app,
+        "oldest-browser",
+        "GET",
+        "/api/account/devices",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{data}");
+    let devices = data["devices"].as_array().unwrap();
+    let ids = devices
+        .iter()
+        .map(|device| device["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        [
+            "oldest-browser",
+            "newest-browser",
+            "middle-device",
+            "s1"
+        ]
+    );
+    assert_eq!(devices[0]["current"], true);
+    assert_eq!(devices[0]["can_sign_out"], false);
+    assert!(devices[1..]
+        .iter()
+        .all(|device| device["current"] == false && device["can_sign_out"] == true));
+    let (status, data) = request(
+        &app,
+        "newest-browser",
+        "GET",
+        "/api/account/devices",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{data}");
+    let devices = data["devices"].as_array().unwrap();
+    let ids = devices
+        .iter()
+        .map(|device| device["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        [
+            "newest-browser",
+            "middle-device",
+            "oldest-browser",
+            "s1"
+        ]
+    );
+    assert_eq!(devices[0]["current"], true);
+}
 
 #[tokio::test]
 async fn native_account_sessions_list_devices_while_paired_tvs_stay_limited() {
