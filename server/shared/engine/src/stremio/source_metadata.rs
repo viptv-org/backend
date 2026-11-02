@@ -332,14 +332,13 @@ pub fn source_audio_languages(source: &Value) -> Vec<String> {
     let mut output = Vec::new();
     for value in values.into_iter().take(32) {
         let text = clean(&value.chars().take(4096).collect::<String>(), 4096).to_lowercase();
-        // Torrentio's `Multi Subs` label is subtitle evidence inside an audio
-        // language line (`Multi Subs / 🇬🇧`); drop the label, keep the line.
-        let text = pattern!(r"\bmulti(?:ple)?[ ._-]*(?:subs?|subtitles?)\b")
-            .replace_all(&text, " ")
-            .into_owned();
+        // `JAP+Sub` names a subbed version, not subtitle tracks.
+        let text = pattern!(r"\+ *subs?\b").replace_all(&text, " ").into_owned();
+        // A line that names only subtitles is subtitle evidence, never audio.
         if !declared
-            && pattern!(r"\b(?:subtitles?|subs?|subbed|captions?)\b").is_match(&text)
-            && !pattern!(r"\b(?:audio|dub|dubbed)\b").is_match(&text)
+            && pattern!(r"\b(?:subtitles?|subs?|subbed|captions?|hardsubs?|softsubs?|vostfr|subfrench)\b")
+                .is_match(&text)
+            && !pattern!(r"\b(?:audio|dub|dubs|dubbed)\b").is_match(&text)
         {
             continue;
         }

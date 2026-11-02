@@ -303,20 +303,15 @@ pub fn language_tier(
     if listed.iter().any(|tag| same_language(tag, language)) {
         return 1;
     }
-    // Without the original language, marked dual/multi never outranks unmarked.
-    let unknown_original_tier = 3;
+    // Dual/multi audio carries a dub beside the original track, known or not.
     if dual_multi {
-        return if requested_original.is_none() {
-            unknown_original_tier
-        } else {
-            2
-        };
+        return 2;
     }
     if listed.is_empty() && dubbed {
         return match requested_original {
             Some(false) => 2,
             Some(true) => 4,
-            None => unknown_original_tier,
+            None => 3,
         };
     }
     if listed.is_empty() {
