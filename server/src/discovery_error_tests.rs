@@ -479,6 +479,50 @@ async fn iptv_discovery_and_guide_explain_failures_without_losing_healthy_source
 }
 
 #[tokio::test]
+async fn movie_iptv_vod_sources_are_discovered_by_id_and_scoped() {
+    let app = fixture();
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("INSERT INTO providers(id,name,url,username,password) VALUES(1,'First','https://fixture.invalid/player_api.php','user','private-password')", []).unwrap();
+        db.execute("INSERT INTO providers(id,name,url,username,password) VALUES(2,'Other account','https://fixture.invalid/player_api.php','user','private-password')", []).unwrap();
+        db.execute("INSERT INTO providers(id,name,url,username,password,enable_movies) VALUES(3,'Movies off','https://fixture.invalid/player_api.php','user','private-password',0)", []).unwrap();
+        db.execute("INSERT INTO provider_ownership VALUES(1,1)", [])
+            .unwrap();
+        db.execute("INSERT INTO provider_ownership VALUES(2,2)", [])
+            .unwrap();
+        db.execute("INSERT INTO provider_ownership VALUES(3,1)", [])
+            .unwrap();
+        db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,imdb_id,extension) VALUES('iptv:1:movie:10',1,'10','movie','Inception','inception',2010,'tt1375666','mp4')", []).unwrap();
+        db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,extension) VALUES('iptv:1:movie:11',1,'11','movie','Other Movie','other movie',2010,'mp4')", []).unwrap();
+        db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,imdb_id,extension) VALUES('iptv:2:movie:12',2,'12','movie','Inception','inception',2010,'tt1375666','mp4')", []).unwrap();
+        db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,imdb_id,extension) VALUES('iptv:3:movie:13',3,'13','movie','Inception','inception',2010,'tt1375666','mp4')", []).unwrap();
+        db.execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,year,extension) VALUES('iptv:1:movie:14',1,'14','movie','Verne film','verne film',1999,'mp4')", []).unwrap();
+        db.execute("INSERT INTO provider_matches(vod_id,metadata_id,kind) VALUES('iptv:1:movie:14','tt1375666','movie')", []).unwrap();
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    let result = discover(
+        &app,
+        json!({"type":"movie","id":"tt1375666","imdb_id":"tt1375666"}),
+    )
+    .await;
+    let events = result["events"].as_array().unwrap();
+    let names = events
+        .iter()
+        .filter(|e| e["source"] == "iptv:1")
+        .flat_map(|e| e["streams"].as_array().into_iter().flatten())
+        .map(|s| s["name"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert!(names.iter().any(|n| n.contains("Inception")), "{result}");
+    assert!(names.iter().any(|n| n.contains("Verne film")), "{result}");
+    assert!(
+        !result.to_string().contains("iptv:2:movie:12")
+            && !result.to_string().contains("iptv:3:movie:13")
+            && !result.to_string().contains("Other Movie"),
+        "{result}"
+    );
+}
+
+#[tokio::test]
 async fn addon_errors_and_invalid_success_bodies_are_not_silent_empty_results() {
     let mut app = fixture();
     app.addons.allow_test_loopback = true;
