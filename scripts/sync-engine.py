@@ -3,8 +3,8 @@
 
 Usage: sync-engine.py sync ../core FULL_COMMIT [--repair-committed-manifest]
        sync-engine.py check [../core]
-Only the managed production source tree is replaced. Existing fixture files,
-test copies and Cargo.lock outside that tree are not runtime provenance inputs.
+Only the managed production source tree is replaced. Existing fixture files
+and Cargo.lock outside that tree are not runtime provenance inputs.
 """
 import hashlib
 import io
