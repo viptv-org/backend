@@ -137,6 +137,21 @@ fn test_addons() -> Addons {
     remove(&addons, 1);
     addons
 }
+#[test]
+fn consecutive_search_denials_cool_down_and_one_success_clears() {
+    let addons = test_addons();
+    addons.record_search_auth_failure(9);
+    addons.record_search_auth_failure(9);
+    assert!(!addons.search_in_cooldown(9));
+    addons.record_search_success(9);
+    addons.record_search_auth_failure(9);
+    addons.record_search_auth_failure(9);
+    assert!(!addons.search_in_cooldown(9));
+    addons.record_search_auth_failure(9);
+    assert!(addons.search_in_cooldown(9));
+    addons.record_search_success(9);
+    assert!(!addons.search_in_cooldown(9));
+}
 pub(super) async fn install(addons: &Addons, url: &str) -> Result<i64, String> {
     let vault = addons.vault.clone().ok_or("secret_store_not_configured")?;
     let (url, manifest) = addons.prepare_manifest(url).await?;

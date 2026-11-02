@@ -47,6 +47,16 @@ type FetchFlight = tokio::sync::OnceCell<Result<Value, String>>;
 pub use viptv_provider::discover::{DiscoveryPlan, DiscoveryRequest as DiscoverOptions};
 
 const NEGATIVE_TTL: i64 = 60;
+const SEARCH_AUTH_LIMIT: u32 = 3;
+const SEARCH_AUTH_WINDOW: i64 = 10 * 60;
+const SEARCH_COOLDOWN: i64 = 15 * 60;
+
+#[derive(Default)]
+struct SearchHealth {
+    failures: u32,
+    last_failure: i64,
+    cooldown_until: i64,
+}
 #[derive(Clone)]
 pub struct Addons {
     db: Arc<Mutex<Connection>>,
@@ -62,6 +72,7 @@ pub struct Addons {
     protected_fetch: bool,
     meta_results: CachedMetaResults,
     fetch_failures: CachedFailures,
+    search_health: Arc<Mutex<HashMap<i64, SearchHealth>>>,
     #[cfg(test)]
     pub(crate) allow_test_loopback: bool,
 }
@@ -119,6 +130,7 @@ impl Addons {
             protected_fetch: false,
             meta_results: Default::default(),
             fetch_failures: Default::default(),
+            search_health: Default::default(),
             #[cfg(test)]
             allow_test_loopback: false,
         })
@@ -133,6 +145,38 @@ impl Addons {
     }
     fn protected(&self) -> bool {
         self.protected_fetch || self.vault.is_some()
+    }
+    pub(crate) fn search_in_cooldown(&self, addon: i64) -> bool {
+        match self.search_health.lock() {
+            Ok(health) => health
+                .get(&addon)
+                .is_some_and(|health| health.cooldown_until > now()),
+            Err(_) => false,
+        }
+    }
+    fn record_search_auth_failure(&self, addon: i64) {
+        let now = now();
+        let Some(mut health) = self.search_health.lock().ok() else {
+            return;
+        };
+        let entry = health.entry(addon).or_default();
+        if entry.cooldown_until > now {
+            return;
+        }
+        if now.saturating_sub(entry.last_failure) > SEARCH_AUTH_WINDOW {
+            entry.failures = 0;
+        }
+        entry.last_failure = now;
+        entry.failures = entry.failures.saturating_add(1);
+        if entry.failures >= SEARCH_AUTH_LIMIT {
+            entry.cooldown_until = now + SEARCH_COOLDOWN;
+            entry.failures = 0;
+        }
+    }
+    fn record_search_success(&self, addon: i64) {
+        if let Ok(mut health) = self.search_health.lock() {
+            health.remove(&addon);
+        }
     }
     pub(crate) fn fixture_transport(&self) -> bool {
         #[cfg(test)]
