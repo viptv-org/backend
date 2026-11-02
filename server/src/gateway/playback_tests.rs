@@ -21,8 +21,14 @@ struct Peer {
     task: tokio::task::JoinHandle<()>,
     starts: Arc<Mutex<Vec<String>>>,
     stops: Arc<AtomicUsize>,
+    events: Arc<Mutex<Vec<String>>>,
     mode: Arc<AtomicUsize>,
     hold: Arc<tokio::sync::Notify>,
+}
+impl Peer {
+    fn events(&self) -> Vec<String> {
+        self.events.lock().unwrap().clone()
+    }
 }
 impl Drop for Peer {
     fn drop(&mut self) {
@@ -335,10 +341,13 @@ async fn setup() -> (App, Peer) {
     let received_inputs = inputs.clone();
     let received_outputs = outputs.clone();
     let stops = Arc::new(AtomicUsize::new(0));
+    let events = Arc::new(Mutex::new(Vec::new()));
     let mode = Arc::new(AtomicUsize::new(0));
     let hold = Arc::new(tokio::sync::Notify::new());
     let created = starts.clone();
+    let created_events = events.clone();
     let deleted = stops.clone();
+    let deleted_events = events.clone();
     let state = mode.clone();
     let waiting = hold.clone();
     let capacity_mode = mode.clone();
@@ -351,6 +360,7 @@ async fn setup() -> (App, Peer) {
     let protocol = axum::routing::get(move || { let mode=protocol_mode.clone(); async move { Json(if mode.load(Ordering::SeqCst)==8 { json!({"version":2,"first_frame_ack":false}) } else { json!({"version":2,"first_frame_ack":true}) }) } });
     let create = axum::routing::post(move |Json(value): Json<Value>| {
         let created = created.clone();
+        let events = created_events.clone();
         let state = state.clone();
         let waiting = waiting.clone();
         let outputs = received_outputs.clone();
@@ -363,6 +373,7 @@ async fn setup() -> (App, Peer) {
                 created.push(value["namespace"].as_str().unwrap().into());
                 format!("viewer_{}", created.len())
             };
+            events.lock().unwrap().push(format!("create:{id}"));
             if state.load(Ordering::SeqCst) == 2 {
                 return (
                     StatusCode::TOO_MANY_REQUESTS,
@@ -408,7 +419,7 @@ async fn setup() -> (App, Peer) {
         .route("/v2/torrent-runtime-protocol", protocol)
         .route("/torrent-sessions/:id/first-frame", axum::routing::post(move |Path(id):Path<String>, Json(body):Json<Value>| { let frames=received_frames; async move { assert_eq!(body,json!({}));frames.lock().unwrap().push(id);StatusCode::NO_CONTENT }}))
         .route("/v2/torrent-sessions/:id/first-frame", axum::routing::post(move |Path(id):Path<String>, Json(body):Json<Value>| { let frames=received_frames_v2; async move { assert_eq!(body,json!({}));frames.lock().unwrap().push(id);StatusCode::NO_CONTENT }}))
-        .route("/v1/sessions/:id",axum::routing::get(|Path(id):Path<String>|async move{Json(remote(&id))}).delete(move||{let deleted=deleted.clone();async move{deleted.fetch_add(1,Ordering::SeqCst);StatusCode::NO_CONTENT}}))
+        .route("/v1/sessions/:id",axum::routing::get(|Path(id):Path<String>|async move{Json(remote(&id))}).delete(move|Path(id):Path<String>|{let deleted=deleted.clone();let events=deleted_events.clone();async move{deleted.fetch_add(1,Ordering::SeqCst);events.lock().unwrap().push(format!("delete:{id}"));StatusCode::NO_CONTENT}}))
         .route("/v1/sessions/:id/captions",axum::routing::post(move |Path(id):Path<String>,headers:axum::http::HeaderMap,Json(body):Json<Value>|{let received=received_captions.clone();async move {
             assert!(headers["authorization"].to_str().unwrap().starts_with("Bearer pgk_"));
             assert!(!headers.contains_key("cookie"));assert_eq!(body.as_object().unwrap().len(),1);
@@ -429,6 +440,7 @@ async fn setup() -> (App, Peer) {
             task,
             starts,
             stops,
+            events,
             mode,
             hold,
         },
@@ -1826,4 +1838,338 @@ async fn next_episode_action_follows_the_profile_preference() {
     let ready = settled(&app, admission["id"].as_str().unwrap()).await;
     assert_eq!(ready["actions"]["next_episode"], false, "{ready}");
     assert_eq!(ready["actions"]["episodes"], true, "{ready}");
+}
+
+fn prepared_body(source: &str, id: &str, platform: &str) -> Value {
+    let mut value = body(source, id, platform);
+    value["prepare"] = json!(true);
+    value
+}
+
+async fn heartbeat(app: &App, id: &str) -> (StatusCode, Value) {
+    request(
+        app,
+        "member-token-1",
+        "POST",
+        &format!("/api/playback/{id}/heartbeat"),
+        Value::Null,
+    )
+    .await
+}
+
+async fn promote(app: &App, id: &str, body: Value) -> (StatusCode, Value) {
+    request(
+        app,
+        "member-token-1",
+        "POST",
+        &format!("/api/playback/{id}/promote"),
+        body,
+    )
+    .await
+}
+
+async fn prepared(app: &App, stream: &str, id: &str, platform: &str) -> String {
+    let (status, prepared) = request(
+        app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        prepared_body(stream, id, platform),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{prepared}");
+    prepared["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn prepared_delivery_admits_a_second_stream_without_a_viewer_until_it_replaces_the_playing_one() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 1);
+    let stream = source(&app);
+    let (status, admission) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&stream, "playing", "roku"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{admission}");
+    let playing = admission["id"].as_str().unwrap().to_owned();
+    assert_eq!(settled(&app, &playing).await["status"], "ready");
+    assert_eq!(peer.events(), vec!["create:viewer_1"]);
+
+    let (status, prepared) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        prepared_body(&stream, "prepared", "roku"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{prepared}");
+    let id = prepared["id"].as_str().unwrap().to_owned();
+    assert_ne!(id, playing);
+    assert_eq!(prepared["status"], "prepared");
+    assert_eq!(prepared["delivery"], Value::Null);
+    assert_eq!(prepared["live"], false);
+    assert_eq!(
+        prepared["plan"],
+        json!({"kind":"gateway","position":0.0,"live":false})
+    );
+    assert_eq!(prepared["renew_after_seconds"], 20);
+    assert!(prepared["expires_at"].as_u64().unwrap() > crate::util::now() as u64);
+    assert_eq!(peer.events(), vec!["create:viewer_1"]);
+    assert_eq!(settled(&app, &playing).await["status"], "ready");
+
+    let (status, renewed) = heartbeat(&app, &id).await;
+    assert_eq!(status, StatusCode::OK, "{renewed}");
+    assert_eq!(renewed["status"], "prepared");
+    assert_eq!(peer.events(), vec!["create:viewer_1"]);
+
+    let (status, promoted) = promote(&app, &id, json!({"replaces": playing})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{promoted}");
+    let ready = settled(&app, &id).await;
+    assert_eq!(ready["status"], "ready", "{ready}");
+    assert_eq!(ready["delivery"]["kind"], "gateway");
+    assert!(ready.get("plan").is_none(), "{ready}");
+    assert_eq!(
+        peer.events(),
+        vec![
+            "create:viewer_1".to_owned(),
+            "delete:viewer_1".to_owned(),
+            "create:viewer_2".to_owned()
+        ]
+    );
+    assert_eq!(settled(&app, &playing).await["status"], "released");
+}
+
+#[tokio::test]
+async fn prepared_delivery_holds_no_provider_slot_so_promotion_replaces_the_playing_stream_without_a_second_connection(
+) {
+    let (app, _peer) = setup().await;
+    gateway(&app, "first", 1);
+    let stream = live_source_fixture(&app).await;
+    let (status, admission) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&stream, "live-playing", "android"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{admission}");
+    let playing = admission["id"].as_str().unwrap().to_owned();
+    let ready = settled(&app, &playing).await;
+    assert_eq!(ready["status"], "ready", "{ready}");
+    assert_eq!(ready["delivery"]["kind"], "direct");
+
+    let (status, second) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&stream, "live-second", "android"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{second}");
+    let second = settled(&app, second["id"].as_str().unwrap()).await;
+    assert_eq!(second["status"], "failed", "{second}");
+    assert_eq!(second["error_code"], "provider_connection_limit");
+
+    let (status, prepared) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        prepared_body(&stream, "live-prepared", "android"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{prepared}");
+    let id = prepared["id"].as_str().unwrap().to_owned();
+    assert_eq!(prepared["plan"]["kind"], "direct");
+
+    let (status, promoted) = promote(&app, &id, json!({"replaces": playing})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{promoted}");
+    let ready = settled(&app, &id).await;
+    assert_eq!(ready["status"], "ready", "{ready}");
+    assert_eq!(ready["delivery"]["kind"], "direct");
+    assert_eq!(settled(&app, &playing).await["status"], "released");
+}
+
+#[tokio::test]
+async fn promotion_without_releasing_the_playing_stream_fails_closed_on_the_provider_limit() {
+    let (app, _peer) = setup().await;
+    gateway(&app, "first", 1);
+    let stream = live_source_fixture(&app).await;
+    let (status, admission) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&stream, "live-playing", "android"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{admission}");
+    let playing = admission["id"].as_str().unwrap().to_owned();
+    assert_eq!(settled(&app, &playing).await["status"], "ready");
+
+    let (status, prepared) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        prepared_body(&stream, "live-prepared", "android"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{prepared}");
+    let id = prepared["id"].as_str().unwrap().to_owned();
+
+    let (status, promoted) = promote(&app, &id, Value::Null).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{promoted}");
+    let failed = settled(&app, &id).await;
+    assert_eq!(failed["status"], "failed", "{failed}");
+    assert_eq!(failed["error_code"], "provider_connection_limit");
+    assert_eq!(settled(&app, &playing).await["status"], "ready");
+}
+
+#[tokio::test]
+async fn released_or_expired_preparation_never_touches_the_playing_playback() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 1);
+    let stream = source(&app);
+    let (status, admission) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&stream, "playing", "roku"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{admission}");
+    let playing = admission["id"].as_str().unwrap().to_owned();
+    assert_eq!(settled(&app, &playing).await["status"], "ready");
+
+    let released = prepared(&app, &stream, "released", "roku").await;
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "DELETE",
+            &format!("/api/playback/{released}"),
+            Value::Null,
+        )
+        .await
+        .1,
+        json!({"ok":true})
+    );
+    let (status, gone) = promote(&app, &released, json!({"replaces": playing})).await;
+    assert_ne!(status, StatusCode::ACCEPTED, "{gone}");
+    assert_eq!(gone["error_code"], "playback_expired");
+    assert_eq!(peer.events(), vec!["create:viewer_1"]);
+
+    let expired = prepared(&app, &stream, "expired", "roku").await;
+    app.gateway_playbacks.lapse_lease(&expired);
+    let (status, gone) = promote(&app, &expired, json!({"replaces": playing})).await;
+    assert_ne!(status, StatusCode::ACCEPTED, "{gone}");
+    assert_eq!(gone["error_code"], "playback_expired");
+    assert_eq!(peer.events(), vec!["create:viewer_1"]);
+    assert_eq!(settled(&app, &playing).await["status"], "ready");
+
+    let repeated = prepared(&app, &stream, "repeated", "roku").await;
+    let (status, promoted) = promote(&app, &repeated, json!({"replaces": playing})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{promoted}");
+    assert_eq!(settled(&app, &repeated).await["status"], "ready");
+    let (status, repeated) = promote(&app, &repeated, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{repeated}");
+    assert_eq!(repeated["status"], "ready");
+}
+
+#[tokio::test]
+async fn preparation_rejects_requests_it_cannot_hand_over() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 1);
+    let stream = source(&app);
+    for (name, body, code) in [
+        (
+            "replacement",
+            json!({"request_id":"prepare-replacement","stream_id":stream,"client":{"platform":"roku","can_play_direct":true,"max_width":3840,"max_height":2160,"video_codecs":["h264"],"audio_codecs":["aac"]},"prepare":true,"replace_source":{"playback_id":"other","observed_position":12.0}}),
+            "invalid_playback_request",
+        ),
+        (
+            "decoder",
+            json!({"request_id":"prepare-decoder","stream_id":stream,"client":{"platform":"roku","can_play_direct":true,"max_width":3840,"max_height":2160,"video_codecs":["h264"],"audio_codecs":["aac"]},"prepare":true}),
+            "invalid_playback_request",
+        ),
+    ] {
+        let path = if name == "decoder" {
+            "/api/playback-decoder-start"
+        } else {
+            "/api/playback"
+        };
+        let (status, response) = request(&app, "member-token-1", "POST", path, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {response}");
+        assert_eq!(response["error_code"], code, "{name}: {response}");
+    }
+    let mut prepared = Vec::new();
+    for index in 0..5 {
+        let (status, response) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/playback",
+            prepared_body(&stream, &format!("prepared-{index}"), "roku"),
+        )
+        .await;
+        if index < 4 {
+            assert_eq!(status, StatusCode::CREATED, "{response}");
+            prepared.push(response["id"].as_str().unwrap().to_owned());
+        } else {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{response}");
+            assert_eq!(response["error_code"], "playback_capacity");
+        }
+    }
+    request(
+        &app,
+        "member-token-1",
+        "DELETE",
+        &format!("/api/playback/{}", prepared[0]),
+        Value::Null,
+    )
+    .await;
+    let (status, response) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        prepared_body(&stream, "prepared-5", "roku"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{response}");
+    assert!(peer.events().is_empty());
+}
+
+#[tokio::test]
+async fn an_abandoned_preparation_is_expired_by_the_lease_sweep() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 1);
+    let stream = source(&app);
+    let id = prepared(&app, &stream, "abandoned", "roku").await;
+    app.gateway_playbacks.lapse_lease(&id);
+    let state = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let state = app
+                .gateway_playbacks
+                .prepared_state(&id)
+                .unwrap_or_else(|| panic!("playback fixture missing"));
+            if state.0 != "prepared" {
+                return state;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(state, ("expired", false));
+    assert!(peer.events().is_empty());
 }
