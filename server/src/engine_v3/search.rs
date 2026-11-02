@@ -11,9 +11,23 @@ pub(crate) struct SearchQuery {
 }
 
 #[derive(Clone)]
+struct AddonCatalog {
+    addon: i64,
+    addon_name: String,
+    kind: String,
+    catalog: String,
+    name: String,
+}
+
+#[derive(Clone)]
 enum Plan {
     Simkl(&'static str, &'static str),
-    Addon(i64, String, Option<String>, Vec<String>),
+    Addon {
+        addon: i64,
+        kind: String,
+        catalog: String,
+        title: String,
+    },
 }
 impl Plan {
     fn row(&self, cards: Vec<Card>, failed: bool) -> Value {
@@ -24,14 +38,16 @@ impl Plan {
                 "simkl",
                 None,
             ),
-            Self::Addon(id, label, catalog, _) => (
-                match catalog {
-                    Some(catalog) => format!("addon:{id}:{catalog}"),
-                    None => format!("addon:{id}"),
-                },
-                label.clone(),
+            Self::Addon {
+                addon,
+                kind,
+                catalog,
+                title,
+            } => (
+                format!("addon:{addon}:{kind}:{catalog}"),
+                title.clone(),
                 "stremio",
-                Some(*id),
+                Some(*addon),
             ),
         };
         let state = if cards.is_empty() {
@@ -128,29 +144,10 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
     addons.addons = addons.addons.with_engine_ids(ids.clone());
     let addon_revision = addons.addons.revision()?;
     let catalogs = addons.addons.catalogs()?;
+    let mut resources = Vec::new();
+    let mut planned = HashSet::new();
     for id in ids {
-        let mut by_catalog: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
-            std::collections::BTreeMap::new();
-        for catalog in catalogs.as_array().into_iter().flatten() {
-            if catalog["addon_id"] == id && catalog["supports_search"] == true {
-                let Some(kind) = catalog["type"]
-                    .as_str()
-                    .filter(|kind| matches!(*kind, "movie" | "series"))
-                else {
-                    continue;
-                };
-                let catalog_id = catalog["id"].as_str().unwrap_or("").to_owned();
-                let entry = by_catalog.entry(catalog_id).or_default();
-                entry.insert(kind.to_owned());
-                if let Some(name) = catalog["name"].as_str() {
-                    entry.insert(format!("name:{name}"));
-                }
-            }
-        }
-        if by_catalog.is_empty() {
-            continue;
-        }
-        let name = selected
+        let addon_name = selected
             .iter()
             .find(|connection| connection.id == format!("addon:{id}"))
             .map(|connection| {
@@ -162,31 +159,66 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
                     .collect::<String>()
             })
             .unwrap_or_else(|| "Stremio addon".into());
-        let split = by_catalog.len() > 1;
-        for (catalog_id, kinds) in by_catalog {
-            let label = if split {
-                kinds
-                    .iter()
-                    .find_map(|k| k.strip_prefix("name:"))
-                    .map(|label| format!("{name} · {label}"))
-                    .unwrap_or_else(|| name.clone())
-            } else {
-                name.clone()
-            };
-            let kinds: Vec<String> = kinds
-                .into_iter()
-                .filter(|k| !k.starts_with("name:"))
-                .collect();
-            if kinds.is_empty() {
+        for catalog in catalogs.as_array().into_iter().flatten() {
+            if catalog["addon_id"] != id || catalog["supports_search"] != true {
                 continue;
             }
-            plans.push(Plan::Addon(
-                id,
-                label,
-                split.then_some(catalog_id),
-                kinds,
-            ));
+            let Some(kind) = catalog["type"]
+                .as_str()
+                .filter(|kind| matches!(*kind, "movie" | "series"))
+            else {
+                continue;
+            };
+            let Some(catalog_id) = catalog["id"].as_str().filter(|id| !id.is_empty()) else {
+                continue;
+            };
+            let (kind, catalog_id) = (kind.to_owned(), catalog_id.to_owned());
+            if !planned.insert((id, kind.clone(), catalog_id.clone())) {
+                continue;
+            }
+            let extras = viptv_provider::extras::catalog_extras(catalog);
+            if viptv_provider::discovery_values::resolve(
+                &extras,
+                &[],
+                &HashMap::new(),
+                None,
+                Some(query),
+            )
+            .is_err()
+            {
+                continue;
+            }
+            let name = catalog["name"]
+                .as_str()
+                .unwrap_or(&catalog_id)
+                .to_owned();
+            resources.push(AddonCatalog {
+                addon: id,
+                addon_name: addon_name.clone(),
+                kind,
+                catalog: catalog_id,
+                name,
+            });
         }
+    }
+    let mut titles = super::home_titles::catalog_row_titles(
+        &resources
+            .iter()
+            .map(|resource| super::home_titles::CatalogRow {
+                name: &resource.name,
+                kind: &resource.kind,
+                addon: &resource.addon_name,
+            })
+            .collect::<Vec<_>>(),
+    );
+    disambiguate_catalog_titles(&mut titles, &resources);
+    for (resource, title) in resources.into_iter().zip(titles) {
+        plans.push(Plan::Addon {
+            addon: resource.addon,
+            kind: resource.kind,
+            catalog: resource.catalog,
+            title,
+        });
     }
     let rows = futures::future::join_all(plans.into_iter().map(|plan| {
         let app = addons.clone();
@@ -201,7 +233,7 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
                 )
                 .await
                 .ok(),
-                Plan::Addon(_, _, _, _) => {
+                Plan::Addon { .. } => {
                     Some(load(&app, &lease, profile, &plan, &query, parent_scope.as_ref()).await)
                 }
             };
@@ -209,7 +241,7 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
                 Some(Ok((mut cards, failed))) => {
                     let provider = match &plan {
                         Plan::Simkl(_, _) => "simkl".to_owned(),
-                        Plan::Addon(id, _, _, _) => format!("addon:{id}"),
+                        Plan::Addon { addon, .. } => format!("addon:{addon}"),
                     };
                     match super::origins::stamp(&app, &mut cards, &provider) {
                         Ok(()) => {
@@ -264,6 +296,18 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
     Ok(axum::Json(json!({"rows":rows,"complete":complete})))
 }
 
+fn disambiguate_catalog_titles(titles: &mut [String], resources: &[AddonCatalog]) {
+    let mut counts = HashMap::<String, usize>::new();
+    for title in titles.iter() {
+        *counts.entry(title.to_lowercase()).or_default() += 1;
+    }
+    for (title, resource) in titles.iter_mut().zip(resources) {
+        if counts[&title.to_lowercase()] > 1 {
+            title.push_str(&format!(" · {}", resource.catalog));
+        }
+    }
+}
+
 async fn load(
     app: &App,
     lease: &ResourceLease,
@@ -295,10 +339,21 @@ async fn load(
                 .map_err(|_| ApiError::from("Invalid search response"))?;
             Ok((page.cards, false))
         }
-        Plan::Addon(id, _, catalog, kinds) => {
+        Plan::Addon {
+            addon,
+            kind,
+            catalog,
+            ..
+        } => {
             let (items, failed) = app
                 .addons
-                .search_results(*id, kinds.clone(), catalog.clone(), query.to_owned(), ROW_BUDGET)
+                .search_results(
+                    *addon,
+                    vec![kind.clone()],
+                    Some(catalog.clone()),
+                    query.to_owned(),
+                    ROW_BUDGET,
+                )
                 .await?;
             let mut cards = Vec::new();
             for batch in items.chunks(24) {
@@ -307,13 +362,13 @@ async fn load(
                         batch
                             .iter()
                             .filter(|meta| !crate::kids::adult(meta))
-                            .filter_map(|meta| projection::card(meta, &format!("addon:{id}"))),
+                            .filter_map(|meta| projection::card(meta, &format!("addon:{addon}"))),
                     );
                 } else {
                     cards.extend(projection::cards(
                         app,
                         batch.to_vec(),
-                        &format!("addon:{id}"),
+                        &format!("addon:{addon}"),
                     )?);
                 }
             }

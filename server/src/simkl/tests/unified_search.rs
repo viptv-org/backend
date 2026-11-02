@@ -103,15 +103,13 @@ async fn simkl_connection(app: &App) -> Value {
         .clone()
 }
 
-#[tokio::test]
-async fn multi_catalog_addons_split_rows_per_catalog_with_catalog_names() {
-    let (mut app, task, _, _) = stack(0).await;
-    let (manifest_url, mut manifest): (String, Value) = {
+fn reseal_manifest(app: &App, addon: i64, manifest: Value) {
+    let url = {
         let db = app.db.lock().unwrap();
         let sealed: String = db
             .query_row(
-                "SELECT secret FROM addon_credentials_v2 WHERE addon_id=101",
-                [],
+                "SELECT secret FROM addon_credentials_v2 WHERE addon_id=?1",
+                [addon],
                 |r| r.get(0),
             )
             .unwrap();
@@ -119,38 +117,92 @@ async fn multi_catalog_addons_split_rows_per_catalog_with_catalog_names() {
             .secret_vault
             .as_ref()
             .unwrap()
-            .open_addon(1, "101", &sealed)
+            .open_addon(1, &addon.to_string(), &sealed)
             .unwrap();
         let value: Value = serde_json::from_slice(payload.expose()).unwrap();
-        (
-            value["url"].as_str().unwrap().to_owned(),
-            value["manifest"].clone(),
-        )
+        value["url"].as_str().unwrap().to_owned()
     };
-    manifest["catalogs"]
-        .as_array_mut()
+    let secret = app
+        .secret_vault
+        .as_ref()
         .unwrap()
-        .push(json!({"id":"extra","name":"Extra Catalog","type":"movie","extra":[{"name":"search","isRequired":true}]}));
-    {
-        let db = app.db.lock().unwrap();
-        let secret = app
-            .secret_vault
-            .as_ref()
-            .unwrap()
-            .seal_addon(
-                1,
-                "101",
-                serde_json::json!({"url": manifest_url, "manifest": manifest})
-                    .to_string()
-                    .as_bytes(),
-            )
-            .unwrap();
-        db.execute(
-            "UPDATE addon_credentials_v2 SET secret=?1 WHERE addon_id=101",
-            [secret],
+        .seal_addon(
+            1,
+            &addon.to_string(),
+            serde_json::json!({"url": url, "manifest": manifest})
+                .to_string()
+                .as_bytes(),
         )
         .unwrap();
-    }
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE addon_credentials_v2 SET secret=?1 WHERE addon_id=?2",
+            params![secret, addon],
+        )
+        .unwrap();
+}
+
+fn search_manifest(id: &str, name: &str, catalogs: Value) -> Value {
+    json!({"id":id,"name":name,"resources":["catalog"],"types":["movie","series"],"catalogs":catalogs})
+}
+
+fn search_catalog(id: &str, name: &str, kind: &str) -> Value {
+    json!({"id":id,"name":name,"type":kind,"extra":[{"name":"search","isRequired":true}]})
+}
+
+fn search_row<'a>(page: &'a Value, id: &str) -> &'a Value {
+    page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap_or_else(|| panic!("{id} missing from {page}"))
+}
+
+fn search_rows_with_prefix<'a>(page: &'a Value, prefix: &str) -> Vec<&'a Value> {
+    page["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| {
+            row["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with(prefix))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn search_keeps_each_catalog_resource_and_media_type_in_its_own_row() {
+    let (app, task, _, _) = stack(0).await;
+    reseal_manifest(
+        &app,
+        101,
+        search_manifest(
+            "fixture101",
+            "Fixture 101",
+            json!([
+                search_catalog("top", "Popular", "movie"),
+                search_catalog("top", "Popular", "series"),
+                search_catalog("year", "New", "movie"),
+                {"id":"no-query","name":"Needs a genre","type":"movie","extra":[{"name":"search"},{"name":"genre","isRequired":true,"options":["2020"]}]}
+            ]),
+        ),
+    );
+    reseal_manifest(
+        &app,
+        102,
+        search_manifest(
+            "fixture102",
+            "Fixture 102",
+            json!([
+                search_catalog("top", "Popular", "movie"),
+                search_catalog("top", "Popular", "series")
+            ]),
+        ),
+    );
     let (status, page) = request(
         &app,
         "member-token-1",
@@ -160,26 +212,82 @@ async fn multi_catalog_addons_split_rows_per_catalog_with_catalog_names() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    let rows = page["rows"].as_array().unwrap();
-    let first = rows
-        .iter()
-        .find(|row| row["id"] == "addon:101:good")
-        .expect("split catalog row");
+    let movie = search_row(&page, "addon:101:movie:top");
+    assert_eq!(movie["title"], "Popular Movies · Fixture 101");
+    assert_eq!(movie["state"], "Ready");
+    assert_eq!(movie["cards"][0]["identity"]["kind"], "movie");
+    let series = search_row(&page, "addon:101:series:top");
+    assert_eq!(series["title"], "Popular Series · Fixture 101");
+    assert_eq!(series["state"], "Ready");
+    assert_eq!(series["cards"][0]["identity"]["kind"], "series");
     assert_eq!(
-        first["title"],
-        "Fixture 101 · good",
-        "label uses the catalog name when the add-on name differs"
+        search_row(&page, "addon:101:movie:year")["title"],
+        "New Movies"
     );
-    assert_eq!(first["state"], "Ready");
-    assert!(!first["cards"].as_array().unwrap().is_empty());
-    let second = rows
-        .iter()
-        .find(|row| row["id"] == "addon:101:extra")
-        .expect("second split catalog row");
-    assert_eq!(second["title"], "Fixture 101 · Extra Catalog");
-    assert_eq!(second["state"], "Ready");
-    assert!(!second["cards"].as_array().unwrap().is_empty());
-    assert!(rows.iter().any(|row| row["id"] == "addon:102"));
+    assert_eq!(
+        search_row(&page, "addon:102:movie:top")["title"],
+        "Popular Movies · Fixture 102"
+    );
+    assert_eq!(
+        search_row(&page, "addon:102:series:top")["title"],
+        "Popular Series · Fixture 102"
+    );
+    for id in [
+        "addon:101:movie:top",
+        "addon:101:movie:year",
+        "addon:102:movie:top",
+    ] {
+        assert!(
+            search_row(&page, id)["cards"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|card| card["identity"]["id"] == "tt123"),
+            "a title another row also holds stays in this row: {page}"
+        );
+    }
+    assert!(
+        search_rows_with_prefix(&page, "addon:101:")
+            .iter()
+            .all(|row| row["state"] != "Failed"
+                && row["id"] != "addon:101:movie:no-query"),
+        "a catalog that needs more than a query is not guessed and does not fail: {page}"
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn same_named_catalogs_in_one_add_on_are_told_apart_by_catalog_id() {
+    let (app, task, _, _) = stack(0).await;
+    reseal_manifest(
+        &app,
+        101,
+        search_manifest(
+            "fixture101",
+            "Fixture 101",
+            json!([
+                search_catalog("top", "Popular", "movie"),
+                search_catalog("trending", "Popular", "movie")
+            ]),
+        ),
+    );
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/search?query=Fixture",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(
+        search_row(&page, "addon:101:movie:top")["title"],
+        "Popular Movies · Fixture 101 · top"
+    );
+    assert_eq!(
+        search_row(&page, "addon:101:movie:trending")["title"],
+        "Popular Movies · Fixture 101 · trending"
+    );
     task.abort();
 }
 
@@ -234,8 +342,9 @@ async fn unlinked_profile_advertises_no_simkl_search_and_linking_restores_it_wit
         "{page}"
     );
     assert!(
-        rows.iter()
-            .any(|row| row["id"] == "addon:101" && row["state"] == "Ready"),
+        search_rows_with_prefix(&page, "addon:101:")
+            .iter()
+            .any(|row| row["state"] == "Ready"),
         "{page}"
     );
     link(&app).await;
@@ -295,6 +404,22 @@ async fn unlinked_profile_advertises_no_simkl_search_and_linking_restores_it_wit
 async fn browse_search_uses_the_addon_search_until_simkl_is_linked() {
     let (app, task, _, _) = stack(0).await;
     assert_eq!(simkl_connection(&app).await["revision"], 0);
+    let (status, bootstrap) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/bootstrap",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{bootstrap}");
+    let search = bootstrap["navigation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == "search")
+        .expect("search nav visible with add-on search");
+    assert_eq!(search["media_search"], true, "{bootstrap}");
     for query in [
         "/api/discover?type=movie&search=Fixture",
         "/api/discover?type=movie&catalog=simkl-trending&search=Fixture",
@@ -360,7 +485,7 @@ async fn browse_search_without_a_search_provider_is_a_typed_unavailable() {
 }
 
 #[tokio::test]
-async fn grouped_search_keeps_three_simkl_rows_and_per_addon_identity_with_partial_failures() {
+async fn grouped_search_keeps_three_simkl_rows_and_every_add_on_catalog_resource_with_partial_failures() {
     let (app, task, _, _) = stack(0).await;
     link(&app).await;
     let (status, page) = request(
@@ -373,26 +498,27 @@ async fn grouped_search_keeps_three_simkl_rows_and_per_addon_identity_with_parti
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     let rows = page["rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 6);
+    assert_eq!(rows.len(), 9);
     assert_eq!(page["complete"], false);
     for id in [
         "simkl:anime",
         "simkl:movie",
         "simkl:tv",
-        "addon:101",
-        "addon:102",
+        "addon:101:movie:good",
+        "addon:101:series:good",
+        "addon:102:movie:search-only",
+        "addon:102:series:search-only",
     ] {
-        let row = rows.iter().find(|row| row["id"] == id).unwrap();
+        let row = search_row(&page, id);
         assert_eq!(row["state"], "Ready", "{row}");
         assert!(!row["cards"].as_array().unwrap().is_empty());
     }
-    let addon = rows.iter().find(|row| row["id"] == "addon:101").unwrap();
-    assert_eq!(addon["cards"].as_array().unwrap().len(), 2);
+    let addon = search_row(&page, "addon:101:movie:good");
+    assert_eq!(addon["cards"].as_array().unwrap().len(), 1);
     assert_eq!(addon["cards"][0]["provider_id"], "addon:101");
-    assert_eq!(
-        rows.iter().find(|row| row["id"] == "addon:103").unwrap()["state"],
-        "Failed"
-    );
+    for id in ["addon:103:movie:broken", "addon:103:series:broken"] {
+        assert_eq!(search_row(&page, id)["state"], "Failed");
+    }
     assert!(!page.to_string().contains("private provider reflection"));
     configuration(&app, "stremio", Some("addon:102")).await;
     let (status, page) = request(
@@ -404,7 +530,7 @@ async fn grouped_search_keeps_three_simkl_rows_and_per_addon_identity_with_parti
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(page["rows"].as_array().unwrap().len(), 5);
+    assert_eq!(page["rows"].as_array().unwrap().len(), 7);
     assert!(page["rows"]
         .as_array()
         .unwrap()
@@ -499,15 +625,12 @@ async fn a_search_row_timeout_retains_completed_rows() {
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert!(start.elapsed() < Duration::from_secs(6));
-    let rows = page["rows"].as_array().unwrap();
-    assert_eq!(
-        rows.iter().find(|row| row["id"] == "addon:103").unwrap()["state"],
-        "Failed"
-    );
-    assert_eq!(
-        rows.iter().find(|row| row["id"] == "addon:101").unwrap()["state"],
-        "Ready"
-    );
+    for id in ["addon:103:movie:slow", "addon:103:series:slow"] {
+        assert_eq!(search_row(&page, id)["state"], "Failed", "{page}");
+    }
+    for id in ["addon:101:movie:good", "addon:101:series:good"] {
+        assert_eq!(search_row(&page, id)["state"], "Ready", "{page}");
+    }
     task.abort();
 }
 
@@ -521,7 +644,7 @@ async fn profile_and_policy_changes_suppress_all_inflight_search_rows() {
 }
 
 #[tokio::test]
-async fn fast_sibling_catalog_cards_survive_the_same_addon_timeout() {
+async fn a_blocked_catalog_resource_fails_alone_without_taking_its_siblings() {
     let (app, task, _, _) = stack(2).await;
     let (status, page) = request(
         &app,
@@ -532,16 +655,15 @@ async fn fast_sibling_catalog_cards_survive_the_same_addon_timeout() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    let row = page["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["id"] == "addon:103")
-        .unwrap();
-    assert_eq!(row["state"], "Ready");
-    assert_eq!(row["cards"].as_array().unwrap().len(), 1);
-    assert_eq!(row["cards"][0]["identity"]["kind"], "movie");
-    assert!(row["message"].is_string());
+    let movie = search_row(&page, "addon:103:movie:slow");
+    assert_eq!(movie["state"], "Ready");
+    assert_eq!(movie["cards"].as_array().unwrap().len(), 1);
+    assert_eq!(movie["cards"][0]["identity"]["kind"], "movie");
+    assert!(movie["message"].is_null());
+    assert_eq!(
+        search_row(&page, "addon:103:series:slow")["state"],
+        "Failed"
+    );
     assert_eq!(page["complete"], false);
     task.abort();
 }
@@ -559,21 +681,20 @@ async fn empty_rows_are_distinct_from_failure_and_large_rows_keep_the_bounded_20
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{page}");
-        let id = if mode == 3 { "addon:103" } else { "addon:101" };
-        let row = page["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["id"] == id)
-            .unwrap();
         if mode == 3 {
-            assert_eq!(row["state"], "Empty");
-            assert!(row["message"].is_null());
-        } else if mode == 4 {
-            assert_eq!(row["cards"].as_array().unwrap().len(), 200);
+            for id in ["addon:103:movie:empty", "addon:103:series:empty"] {
+                let row = search_row(&page, id);
+                assert_eq!(row["state"], "Empty");
+                assert!(row["message"].is_null());
+            }
         } else {
-            assert_eq!(row["state"], "Failed");
-            assert!(row["message"].is_string());
+            let row = search_row(&page, "addon:101:movie:good");
+            if mode == 4 {
+                assert_eq!(row["cards"].as_array().unwrap().len(), 200);
+            } else {
+                assert_eq!(row["state"], "Failed");
+                assert!(row["message"].is_string());
+            }
         }
         task.abort();
     }
@@ -591,26 +712,33 @@ async fn duplicate_display_names_without_a_year_are_dropped_from_search() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    let row = page["rows"]
+    let addon_rows = page["rows"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["id"] == "addon:101")
-        .unwrap();
-    assert_eq!(row["state"], "Ready", "{page}");
-    let cards = row["cards"].as_array().unwrap();
-    assert!(
-        cards
-            .iter()
-            .any(|card| card["identity"]["id"] == "tt1375666"),
-        "{page}"
-    );
-    assert!(
-        cards
-            .iter()
-            .all(|card| card["identity"]["id"] != "tt5581256"),
-        "{page}"
-    );
+        .filter(|row| {
+            row["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("addon:101:"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(addon_rows.len(), 2, "{page}");
+    for row in addon_rows {
+        assert_eq!(row["state"], "Ready", "{page}");
+        let cards = row["cards"].as_array().unwrap();
+        assert!(
+            cards
+                .iter()
+                .any(|card| card["identity"]["id"] == "tt1375666"),
+            "{page}"
+        );
+        assert!(
+            cards
+                .iter()
+                .all(|card| card["identity"]["id"] != "tt5581256"),
+            "{page}"
+        );
+    }
     task.abort();
 }
 
@@ -1018,18 +1146,16 @@ async fn typed_parent_approval_rejects_opaque_namespace_confusion_and_keeps_revo
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    let row = page["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["id"] == "addon:102")
-        .unwrap();
-    assert!(row["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|item| item["approval_supported"] == false
-            && item["message"] == "Metadata is not configured for this result."));
+    let rows = search_rows_with_prefix(&page, "addon:102:");
+    assert_eq!(rows.len(), 2, "{page}");
+    for row in rows {
+        assert!(row["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["approval_supported"] == false
+                && item["message"] == "Metadata is not configured for this result."));
+    }
     task.abort();
 }
 
@@ -1045,13 +1171,12 @@ async fn typed_parent_search_marks_scoped_private_ids_supported_and_adult_refetc
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
-    let row = page["rows"]
-        .as_array()
-        .unwrap()
+    let rows = search_rows_with_prefix(&page, "addon:101:");
+    assert_eq!(rows.len(), 2, "{page}");
+    let items = rows
         .iter()
-        .find(|row| row["id"] == "addon:101")
-        .unwrap();
-    let items = row["items"].as_array().unwrap();
+        .flat_map(|row| row["items"].as_array().unwrap().iter())
+        .collect::<Vec<_>>();
     assert!(items
         .iter()
         .any(|item| item["card"]["identity"]["id"] == "opaque-parent"
@@ -1619,9 +1744,15 @@ async fn parent_target_search_and_approval_use_owned_target_without_switching_me
     .await;
     assert_eq!(status, StatusCode::OK, "{page}");
     let rows = page["rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["id"], "addon:101");
-    assert_eq!(rows[0]["items"][0]["approval_supported"], true);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        search_row(&page, "addon:101:movie:good")["items"][0]["approval_supported"],
+        true
+    );
+    assert_eq!(
+        search_row(&page, "addon:101:series:good")["items"][0]["approval_supported"],
+        true
+    );
     let body = json!({"type":"movie","id":"tt123","approved":true,"metadata_provider_id":"stremio","metadata_addon_id":101});
     let (status, result) = request(
         &app,
