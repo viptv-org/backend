@@ -11,6 +11,7 @@ use vsources::error::FetchError;
 use vsources::traits::{FetchRequest, FetchResponse, Fetcher, ProbeResponse};
 use vsources::{MediaId, MediaRef, MediaType};
 pub use vsources::Stream as SdkStream;
+pub use vsources::types::{AudioSelection, CountryCode, Format};
 
 /// Canonical metadata IDs are authoritative. Opaque title IDs and title text are never parsed.
 pub fn media_ref(
@@ -333,6 +334,59 @@ pub fn presentation(stream: &vsources::Stream) -> crate::stremio::SourcePresenta
         delivery_format: match stream.format { vsources::types::Format::Hls => Some("hls".into()), vsources::types::Format::Mp4 => Some("progressive".into()), _ => None },
         container: None, quality: meta.quality.clone(), video_codec: meta.codec.clone(),
         audio_codecs: meta.audio.clone(), size_bytes: meta.size, size_label: meta.size_label.clone(),
+    }
+}
+
+/// Ranking candidate from provider declarations; a `Multi` tag names no language.
+pub fn candidate(
+    id: String,
+    provider_id: &str,
+    stream: &vsources::Stream,
+) -> crate::stremio::SourceCandidate {
+    let meta = &stream.meta;
+    let mut languages = Vec::<String>::new();
+    for language in &meta.languages {
+        if *language == vsources::types::CountryCode::Multi {
+            continue;
+        }
+        if !languages.iter().any(|known| known == language.as_str()) {
+            languages.push(language.as_str().to_owned());
+        }
+    }
+    if languages.is_empty() {
+        if let Some(audio) = meta.audio_selection.as_ref() {
+            languages.push(audio.language.as_str().to_owned());
+        }
+    }
+    let audio_flags = meta
+        .dubbed
+        .filter(|dubbed| *dubbed)
+        .map(|_| vec!["dubbed".to_owned()])
+        .unwrap_or_default();
+    crate::stremio::SourceCandidate {
+        presentation: Some(presentation(stream)),
+        id,
+        provider_id: provider_id.into(),
+        label: meta
+            .source_label
+            .clone()
+            .unwrap_or_else(|| "VIPTV Sources".into()),
+        detail: meta.resolution.map(|resolution| format!("{resolution}p")),
+        quality_height: meta.resolution.map(u32::from),
+        audio_languages: languages,
+        audio_flags,
+        subbed: meta.subbed.unwrap_or(false) || !meta.subtitles.is_empty(),
+        subtitle_languages: meta
+            .subtitles
+            .iter()
+            .filter_map(|subtitle| subtitle.language.clone())
+            .fold(Vec::new(), |mut languages, language| {
+                if !languages.contains(&language) {
+                    languages.push(language);
+                }
+                languages
+            }),
+        ..Default::default()
     }
 }
 fn publish_new(

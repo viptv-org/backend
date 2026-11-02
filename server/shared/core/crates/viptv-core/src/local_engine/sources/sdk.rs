@@ -10,52 +10,7 @@ pub(in crate::local_engine) fn sdk_playable(
     stream: viptv_engine::vsources_runtime::SdkStream,
 ) -> (String, Playable) {
     let id = uuid::Uuid::new_v4().to_string();
-    let candidate = SourceCandidate {
-        presentation: Some(viptv_engine::vsources_runtime::presentation(&stream)),
-        id: id.clone(),
-        provider_id: provider_id.into(),
-        label: stream
-            .meta
-            .source_label
-            .clone()
-            .unwrap_or_else(|| "VIPTV Sources".into()),
-        detail: stream.meta.resolution.map(|r| format!("{r}p")),
-        quality_height: stream.meta.resolution.map(u32::from),
-        audio_languages: if stream.meta.languages.is_empty() {
-            stream
-                .meta
-                .audio_selection
-                .as_ref()
-                .map(|audio| vec![audio.language.as_str().into()])
-                .unwrap_or_default()
-        } else {
-            stream
-                .meta
-                .languages
-                .iter()
-                .map(|language| language.as_str().into())
-                .collect()
-        },
-        audio_flags: stream
-            .meta
-            .dubbed
-            .filter(|dubbed| *dubbed)
-            .map(|_| vec!["dubbed".into()])
-            .unwrap_or_default(),
-        subbed: stream.meta.subbed.unwrap_or(false) || !stream.meta.subtitles.is_empty(),
-        subtitle_languages: stream
-            .meta
-            .subtitles
-            .iter()
-            .filter_map(|subtitle| subtitle.language.clone())
-            .fold(Vec::new(), |mut languages, language| {
-                if !languages.contains(&language) {
-                    languages.push(language);
-                }
-                languages
-            }),
-        ..Default::default()
-    };
+    let candidate = viptv_engine::vsources_runtime::candidate(id.clone(), provider_id, &stream);
     let playable = Playable {
         scope,
         metadata_origin: card.metadata_origin.clone(),
@@ -119,7 +74,7 @@ mod tests {
         );
         stream.meta.audio_selection =
             Some(serde_json::from_str(r#"{"language":"En","audio_index":1}"#).unwrap());
-        stream.meta.languages = serde_json::from_str(r#"["En","Fr"]"#).unwrap();
+        stream.meta.languages = serde_json::from_str(r#"["Multi","En","Fr"]"#).unwrap();
         stream.meta.dubbed = Some(true);
         stream.meta.subbed = Some(false);
         stream.meta.subtitles = serde_json::from_str(
