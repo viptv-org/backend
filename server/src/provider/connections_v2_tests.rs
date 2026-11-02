@@ -111,7 +111,7 @@ async fn connection_crud_encrypts_immediately_and_preserves_account_defaults() {
         .0,
         StatusCode::CONFLICT
     );
-    let (status, member) = request(
+    let (status, error) = request(
         &app,
         "member-token-2",
         "POST",
@@ -119,19 +119,10 @@ async fn connection_crud_encrypts_immediately_and_preserves_account_defaults() {
         input(&base, "user-one", "private-password"),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{member}");
-    let member_id = member["id"].as_i64().unwrap();
-    assert_eq!(
-        provider::v2::live_catalog(&app.db.lock().unwrap(), 2, None).unwrap(),
-        Some(member_id)
-    );
-    assert_eq!(
-        provider::v2::live_catalog(&app.db.lock().unwrap(), 1, None).unwrap(),
-        Some(id)
-    );
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
     let (_, member_page) = request(&app, "member-token-2", "GET", ROOT, Value::Null).await;
-    assert_eq!(member_page["items"].as_array().unwrap().len(), 1);
-    assert_eq!(member_page["items"][0]["id"], member_id);
+    assert!(member_page["items"].as_array().unwrap().is_empty());
     let (_, second) = request(
         &app,
         "member-token-1",
@@ -181,11 +172,11 @@ async fn connection_crud_encrypts_immediately_and_preserves_account_defaults() {
         json!({"enabled":false}),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(error["error_code"], "provider_not_found");
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
     let (status, error) = request(&app, "member-token-2", "DELETE", &path, Value::Null).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(error["error_code"], "provider_not_found");
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
     assert_eq!(
         provider::v2::live_catalog(&app.db.lock().unwrap(), 1, None).unwrap(),
         Some(id)

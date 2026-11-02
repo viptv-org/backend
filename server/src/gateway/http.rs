@@ -53,12 +53,12 @@ pub(crate) async fn check(
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, Error> {
-    account_api::owner(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
+    account_api::run(app.clone(), lease.clone(), |_, account| Ok(account)).await?;
     let vault = app
         .secret_vault
         .clone()
         .ok_or(Error::Code("secret_store_not_configured"))?;
-    let target = account_api::owner(app.clone(), lease.clone(), move |db, account| {
+    let target = account_api::run(app.clone(), lease.clone(), move |db, account| {
         Ok(registry::authorized(db, &vault, account, &id)?)
     })
     .await?;
@@ -70,7 +70,7 @@ pub(crate) async fn check(
             &target.gateway.namespace,
         )
         .await?;
-    account_api::owner_work(app, lease, move |db, account| {
+    account_api::work(app, lease, move |db, account| {
         if !registry::list(db, account)?.iter().any(|current| {
             current.id == target.gateway.id
                 && current.enabled

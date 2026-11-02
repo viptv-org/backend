@@ -82,7 +82,15 @@ impl Principal {
         }
     }
     pub fn require_account_owner(&self) -> Result<(), ApiError> {
-        self.require_account_session()
+        self.require_account_session()?;
+        if self.is_owner() {
+            Ok(())
+        } else {
+            Err(ApiError(
+                StatusCode::FORBIDDEN,
+                MSG_ACCOUNT_OWNER_REQUIRED.into(),
+            ))
+        }
     }
     pub fn require_profile(&self, db: &Connection, profile: i64) -> Result<(), ApiError> {
         let ok = self.can_profile(db, profile)?;

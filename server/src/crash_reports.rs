@@ -101,7 +101,7 @@ pub(crate) async fn list(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
 ) -> Result<Json<Value>, account_api::Error> {
-    account_api::owner_work(app, lease, |db, account| {
+    account_api::work(app, lease, |db, account| {
         let mut statement = db
             .prepare("SELECT id,received_at,device_model,app_version,build_commit FROM crash_reports WHERE account_id=?1 ORDER BY seq DESC LIMIT ?2")
             .map_err(db_error)?;
@@ -130,7 +130,7 @@ pub(crate) async fn get_one(
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, account_api::Error> {
-    account_api::owner_work(app, lease, move |db, account| {
+    account_api::work(app, lease, move |db, account| {
         let row = db
             .query_row(
                 "SELECT received_at,body FROM crash_reports WHERE id=?1 AND account_id=?2",
@@ -151,7 +151,7 @@ pub(crate) async fn remove(
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, account_api::Error> {
-    account_api::owner_work(app, lease, move |db, account| {
+    account_api::work(app, lease, move |db, account| {
         let removed = db
             .execute(
                 "DELETE FROM crash_reports WHERE id=?1 AND account_id=?2",
