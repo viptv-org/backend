@@ -22,6 +22,21 @@ Simkl has three independent category rows, with up to 24 results each. Up to 32 
 
 Each row has a four-second provider deadline. Stremio retains completed sibling catalog results when another catalog fails or times out. A partial row can be `Ready` with cards and a message. A valid empty result is `Empty`; a failed result with no cards is `Failed`. Provider errors and reflected response bodies are not exposed. `complete` means all planned rows completed without provider failures; it does not promise an exhaustive provider catalog or a total search-result count. This endpoint has no pagination cursor.
 
+### Progressive delivery
+
+`GET /api/search/stream` answers the same query with `text/event-stream`; rows reach the client as each provider finishes instead of after the slowest one. `GET /api/parent/search/stream` is the parent-scoped equivalent. Both accept the same query parameters and apply the same identity, scope, capability, profile, kids-policy and revision checks as their snapshot endpoints. A request that cannot be answered at all (empty or over-long query, wrong profile, refused parent scope) still fails before the stream starts, with the snapshot endpoint's status and body.
+
+Each event is `event: <name>` plus one `data:` JSON line:
+
+| Event | Data | Meaning |
+| --- | --- | --- |
+| `plan` | `{"rows": [...]}` | Every planned row in display order, before any provider answers. Rows carry `state: "Loading"`, empty `cards` and a null `message`; parent rows carry empty `items` and no `cards`. |
+| `row` | A complete row object | Sent once per row, in completion order. The object has the snapshot row shape for the same `id`, so a client replaces the planned row with it; ids are unique per stream. |
+| `done` | `{"complete": true\|false}` | Every planned row was sent and authority still matched. `complete` has the snapshot endpoint's meaning. |
+| `error` | `{"status": <code>, "error": <message>}` | The lease, profile policy, configuration revision or add-on revision changed mid-stream. No `done` follows, and any row sent before it came from the authority captured at `plan`. |
+
+The plan order never changes, so a client renders pending rows where they will stay and does not reorder or duplicate them when a later row arrives. Cancelling the request stops delivery: the remaining provider work is dropped unsent. The snapshot endpoints remain unchanged for clients that do not consume events.
+
 Credential refresh is a separate bounded transaction: once begun, a canceled search cannot discard a rotated Simkl token before sealing it. Refresh admission waits at most 15 seconds; its exchange/persistence phase has a 20-second bound. Existing lease, profile, capability, configuration and link-revision checks still apply.
 
 ## Metadata provenance

@@ -1,4 +1,5 @@
 use super::*;
+use futures::StreamExt;
 use viptv_engine::{capabilities::Capability, presentation::Card, registry::Registry};
 
 const ROW_BUDGET: Duration = Duration::from_secs(4);
@@ -16,8 +17,8 @@ enum Plan {
     Addon(i64, String, Option<String>, Vec<String>),
 }
 impl Plan {
-    fn row(&self, cards: Vec<Card>, failed: bool) -> Value {
-        let (id, title, provider, addon) = match self {
+    fn identity(&self) -> (String, String, &'static str, Option<i64>) {
+        match self {
             Self::Simkl(category, title) => (
                 format!("simkl:{category}"),
                 title.to_string(),
@@ -33,7 +34,10 @@ impl Plan {
                 "stremio",
                 Some(*id),
             ),
-        };
+        }
+    }
+    fn row(&self, cards: Vec<Card>, failed: bool) -> Value {
+        let (id, title, provider, addon) = self.identity();
         let state = if cards.is_empty() {
             if failed {
                 "Failed"
@@ -45,6 +49,11 @@ impl Plan {
         };
         json!({"id":id,"title":title,"provider_id":provider,"addon_id":addon,"state":state,"cards":cards,
             "message":failed.then_some("Some search results are unavailable. Try again.")})
+    }
+    fn loading(&self) -> Value {
+        let (id, title, provider, addon) = self.identity();
+        json!({"id":id,"title":title,"provider_id":provider,"addon_id":addon,"state":"Loading","cards":[],
+            "message":null})
     }
 }
 
@@ -70,7 +79,104 @@ pub(crate) async fn parent(
 ) -> ApiResult {
     run(app, lease, q, true).await
 }
+pub(crate) async fn get_stream(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Query(q): Query<SearchQuery>,
+) -> Result<Response, ApiError> {
+    stream(app, lease, q, false)
+}
+pub(crate) async fn parent_stream(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Query(q): Query<SearchQuery>,
+) -> Result<Response, ApiError> {
+    stream(app, lease, q, true)
+}
 async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> ApiResult {
+    let search = prepare(app, lease, q, parent)?;
+    let rows = futures::future::join_all(search.plans.iter().cloned().map(|plan| search.row(plan)))
+        .await;
+    search.recheck()?;
+    let complete = rows.iter().all(|row| row["message"].is_null());
+    Ok(axum::Json(json!({"rows":rows,"complete":complete})))
+}
+fn stream(
+    app: App,
+    lease: ResourceLease,
+    q: SearchQuery,
+    parent: bool,
+) -> Result<Response, ApiError> {
+    let search = prepare(app, lease, q, parent)?;
+    let (sender, receiver) = tokio::sync::mpsc::channel(8);
+    tokio::spawn(async move { pump(search, sender).await });
+    let body = axum::body::Body::from_stream(futures::stream::unfold(
+        receiver,
+        |mut receiver| async move {
+            receiver
+                .recv()
+                .await
+                .map(|frame| (Ok::<_, std::convert::Infallible>(frame), receiver))
+        },
+    ));
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/event-stream; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+            (header::HeaderName::from_static("x-accel-buffering"), "no"),
+        ],
+        body,
+    )
+        .into_response())
+}
+fn frame(event: &str, data: Value) -> String {
+    format!("event: {event}\ndata: {data}\n\n")
+}
+async fn pump(search: Search, sender: tokio::sync::mpsc::Sender<String>) {
+    let pending = search
+        .plans
+        .iter()
+        .map(|plan| search.pending(plan))
+        .collect::<Vec<_>>();
+    if sender
+        .send(frame("plan", json!({"rows":pending})))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let watched = search
+        .parent
+        .is_none()
+        .then(|| super::watched::Watched::for_profile(&search.app, search.profile));
+    let mut complete = true;
+    let mut rows = search
+        .plans
+        .iter()
+        .cloned()
+        .map(|plan| Box::pin(search.row(plan)))
+        .collect::<futures::stream::FuturesUnordered<_>>();
+    while let Some(mut row) = rows.next().await {
+        if let Some(watched) = &watched {
+            watched.mark_values(&mut row["cards"]);
+        }
+        complete &= row["message"].is_null();
+        if sender.send(frame("row", row)).await.is_err() {
+            return;
+        }
+    }
+    let reply = match search.recheck() {
+        Ok(()) => frame("done", json!({"complete":complete})),
+        Err(error) => frame("error", json!({"status":error.0.as_u16(),"error":error.1})),
+    };
+    let _ = sender.send(reply).await;
+}
+fn prepare(
+    app: App,
+    lease: ResourceLease,
+    q: SearchQuery,
+    parent: bool,
+) -> Result<Search, ApiError> {
     let query = q.query.trim();
     if query.is_empty() || query.chars().count() > 256 || query.chars().any(char::is_control) {
         return Err("Enter a search query of at most 256 characters".into());
@@ -188,80 +294,115 @@ async fn run(app: App, lease: ResourceLease, q: SearchQuery, parent: bool) -> Ap
             ));
         }
     }
-    let rows = futures::future::join_all(plans.into_iter().map(|plan| {
-        let app = addons.clone();
-        let lease = lease.clone();
-        let query = query.to_owned();
-        let parent_scope = parent_scope.clone();
-        async move {
-            let result = match &plan {
-                Plan::Simkl(_, _) => tokio::time::timeout(
-                    ROW_BUDGET,
-                    load(&app, &lease, profile, &plan, &query, parent_scope.as_ref()),
-                )
-                .await
-                .ok(),
-                Plan::Addon(_, _, _, _) => {
-                    Some(load(&app, &lease, profile, &plan, &query, parent_scope.as_ref()).await)
-                }
-            };
-            match result {
-                Some(Ok((mut cards, failed))) => {
-                    let provider = match &plan {
-                        Plan::Simkl(_, _) => "simkl".to_owned(),
-                        Plan::Addon(id, _, _, _) => format!("addon:{id}"),
-                    };
-                    match super::origins::stamp(&app, &mut cards, &provider) {
-                        Ok(()) => {
-                            dedupe_display_names(&mut cards);
-                            plan.row(cards, failed)
-                        }
-                        Err(_) => plan.row(vec![], true),
-                    }
-                }
-                _ => plan.row(vec![], true),
-            }
+    Ok(Search {
+        app: addons,
+        lease,
+        profile,
+        query: query.to_owned(),
+        plans,
+        parent: parent_scope,
+        revision: configuration.scope.revision,
+        addon_revision,
+    })
+}
+struct Search {
+    app: App,
+    lease: ResourceLease,
+    profile: i64,
+    query: String,
+    plans: Vec<Plan>,
+    parent: Option<crate::kids::parent_scope::ParentScope>,
+    revision: u64,
+    addon_revision: String,
+}
+impl Search {
+    fn pending(&self, plan: &Plan) -> Value {
+        let mut row = plan.loading();
+        if self.parent.is_some() {
+            row.as_object_mut()
+                .expect("search row object")
+                .remove("cards");
+            row["items"] = json!([]);
         }
-    }))
-    .await;
-    if let Some(scope) = &parent_scope {
-        scope.recheck(&app)?;
-    } else {
-        configuration::validate_revision(&app, profile, configuration.scope.revision)?;
+        row
     }
-    if addons.addons.revision()? != addon_revision {
-        return Err(ApiError(
-            StatusCode::CONFLICT,
-            "Search integrations changed. Try again.".into(),
-        ));
+    async fn row(&self, plan: Plan) -> Value {
+        let result = match &plan {
+            Plan::Simkl(_, _) => tokio::time::timeout(
+                ROW_BUDGET,
+                load(
+                    &self.app,
+                    &self.lease,
+                    self.profile,
+                    &plan,
+                    &self.query,
+                    self.parent.as_ref(),
+                ),
+            )
+            .await
+            .ok(),
+            Plan::Addon(_, _, _, _) => Some(
+                load(
+                    &self.app,
+                    &self.lease,
+                    self.profile,
+                    &plan,
+                    &self.query,
+                    self.parent.as_ref(),
+                )
+                .await,
+            ),
+        };
+        let mut row = match result {
+            Some(Ok((mut cards, failed))) => {
+                let provider = match &plan {
+                    Plan::Simkl(_, _) => "simkl".to_owned(),
+                    Plan::Addon(id, _, _, _) => format!("addon:{id}"),
+                };
+                match super::origins::stamp(&self.app, &mut cards, &provider) {
+                    Ok(()) => {
+                        dedupe_display_names(&mut cards);
+                        plan.row(cards, failed)
+                    }
+                    Err(_) => plan.row(vec![], true),
+                }
+            }
+            _ => plan.row(vec![], true),
+        };
+        if let Some(scope) = &self.parent {
+            self.parent_items(&mut row, scope);
+        }
+        row
     }
-    let rows = if parent {
-        rows.into_iter().map(|mut row| {
-            let provider=row["provider_id"].as_str().unwrap_or("");
-            let metadata_ready=metadata_scope_parent(app.clone(),parent_scope.as_ref().expect("parent scope"),provider,row["addon_id"].as_i64()).is_ok_and(|(_,_,revision)|revision==configuration.scope.revision);
-            let cards=row.as_object_mut().and_then(|row|row.remove("cards")).unwrap_or(json!([]));
-            row["items"]=json!(cards.as_array().into_iter().flatten().map(|card| {
-                let provider=row["provider_id"].as_str().unwrap_or("");
-                let supported=metadata_ready && (crate::kids::titles::canonical(provider,card["identity"]["kind"].as_str().unwrap_or(""),card["identity"]["id"].as_str().unwrap_or("")) || provider=="stremio" && card["metadata_origin"].is_object() && !card["identity"]["id"].as_str().is_some_and(|id|id.starts_with("simkl:")));
-                let message=if !metadata_ready {Some("Metadata is not configured for this result.")}else if !supported {Some("This result does not have a supported metadata origin.")}else{None};
-                json!({"card":card,"approval_supported":supported,"message":message})
-            }).collect::<Vec<_>>());
-            row
-        }).collect()
-    } else {
-        rows
-    };
-    if parent {
-        parent_scope.as_ref().expect("parent scope").recheck(&app)?;
-        if addons.addons.revision()? != addon_revision {
+    fn parent_items(&self, row: &mut Value, scope: &crate::kids::parent_scope::ParentScope) {
+        let provider = row["provider_id"].as_str().unwrap_or("").to_owned();
+        let metadata_ready =
+            metadata_scope_parent(self.app.clone(), scope, &provider, row["addon_id"].as_i64())
+                .is_ok_and(|(_, _, revision)| revision == self.revision);
+        let cards = row
+            .as_object_mut()
+            .and_then(|row| row.remove("cards"))
+            .unwrap_or(json!([]));
+        row["items"] = json!(cards.as_array().into_iter().flatten().map(|card| {
+            let supported = metadata_ready && (crate::kids::titles::canonical(&provider, card["identity"]["kind"].as_str().unwrap_or(""), card["identity"]["id"].as_str().unwrap_or("")) || provider == "stremio" && card["metadata_origin"].is_object() && !card["identity"]["id"].as_str().is_some_and(|id| id.starts_with("simkl:")));
+            let message = if !metadata_ready { Some("Metadata is not configured for this result.") } else if !supported { Some("This result does not have a supported metadata origin.") } else { None };
+            json!({"card":card,"approval_supported":supported,"message":message})
+        }).collect::<Vec<_>>());
+    }
+    fn recheck(&self) -> Result<(), ApiError> {
+        if let Some(scope) = &self.parent {
+            scope.recheck(&self.app)?;
+        } else {
+            configuration::validate_revision(&self.app, self.profile, self.revision)?;
+        }
+        if self.app.addons.revision()? != self.addon_revision {
             return Err(ApiError(
                 StatusCode::CONFLICT,
                 "Search integrations changed. Try again.".into(),
             ));
         }
+        Ok(())
     }
-    let complete = rows.iter().all(|row| row["message"].is_null());
-    Ok(axum::Json(json!({"rows":rows,"complete":complete})))
 }
 
 async fn load(

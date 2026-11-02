@@ -84,6 +84,7 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
             get(kids::profile_pin::status).put(kids::profile_pin::set),
         )
         .route("/parent/search", get(engine_v3::search::parent))
+        .route("/parent/search/stream", get(engine_v3::search::parent_stream))
         .route(
             "/profiles/:id/approvals",
             get(kids::titles::list).post(kids::titles::approve),
@@ -138,6 +139,7 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
         )
         .route("/discover", get(engine_v3::discover))
         .route("/search", get(engine_v3::search::get))
+        .route("/search/stream", get(engine_v3::search::get_stream))
         .route("/calendar", get(simkl::calendar::get))
         .route("/discovery-controls", get(engine_v3::discovery_controls))
         .route("/meta/:kind/:id", get(engine_v3::detail))
