@@ -1,10 +1,10 @@
 {
   "core": {
-    "revision": "f5aecaf0f0a4cd2f15be5f9a04ab516d4e6ba1fc",
+    "revision": "43fa1d5dde68b18b579128c42cfa4a55e4f99a53",
     "license": [
       "GPL-2.0-only"
     ],
-    "archive_sha256": "b45c646864ad27c92194e59e955c534614e10d07530dbbc4979c8c2aa957480d"
+    "archive_sha256": "08ccc4fd3021f53fa856f410c1c9c93489ce6d0195aa4d201d88720f58438df6"
   },
   "playback-gateway": {
     "revision": "f318d6df9bb3d4d03a4c81c3ea2e524e6f5405d1",
