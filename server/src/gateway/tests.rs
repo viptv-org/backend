@@ -172,8 +172,8 @@ async fn grant_recipient_pages_require_operator_and_own_registration() {
     let id = added["id"].as_str().unwrap();
     let root = format!("/api/gateways/{id}/grants");
     let (status, error) = request(&app, "member-token-2", "GET", &root, Value::Null).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(error["error_code"], "gateway_not_found");
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
     {
         let db = app.db.lock().unwrap();
         for account in 3..=253 {
@@ -261,7 +261,7 @@ async fn grant_recipient_pages_require_operator_and_own_registration() {
         request(&app, "member-token-2", "GET", &root, Value::Null)
             .await
             .0,
-        StatusCode::NOT_FOUND
+        StatusCode::FORBIDDEN
     );
     app.db.lock().unwrap().execute_batch("UPDATE auth_accounts SET role='member' WHERE id=1; UPDATE auth_accounts SET role='owner' WHERE id=2;").unwrap();
     let (status, error) = request(&app, "member-token-2", "GET", &root, Value::Null).await;
@@ -439,8 +439,8 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         json!({"account_id":2,"enabled":true}),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(error["error_code"], "gateway_not_found");
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
     assert_eq!(
         request(
             &app,
@@ -481,8 +481,8 @@ async fn gateway_keys_are_encrypted_and_family_gateway_has_no_implicit_public_gr
         json!({"enabled":false}),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(error["error_code"], "gateway_not_found");
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["error_code"], "owner_required");
     app.db
         .lock()
         .unwrap()
