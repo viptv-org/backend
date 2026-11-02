@@ -113,6 +113,8 @@ pub struct ProfilePreferences {
     pub skip_intros: bool,
     /// Switch the display to the video frame rate where the platform allows it.
     pub match_frame_rate: bool,
+    /// Reuse the source the viewer last picked for a title; off shows the picker.
+    pub remembered_source_reuse: bool,
 }
 /// Wire/stored form: rows saved before `subtitle_mode` derive it from
 /// `subtitles_enabled`; a sent `subtitle_mode` decides `subtitles_enabled`.
@@ -140,6 +142,8 @@ struct StoredPreferences {
     skip_intros: bool,
     #[serde(default = "default_match_frame_rate")]
     match_frame_rate: bool,
+    #[serde(default = "default_remembered_source_reuse")]
+    remembered_source_reuse: bool,
 }
 impl From<StoredPreferences> for ProfilePreferences {
     fn from(value: StoredPreferences) -> Self {
@@ -162,6 +166,7 @@ impl From<StoredPreferences> for ProfilePreferences {
             next_episode_button: value.next_episode_button,
             skip_intros: value.skip_intros,
             match_frame_rate: value.match_frame_rate,
+            remembered_source_reuse: value.remembered_source_reuse,
         }
     }
 }
@@ -181,6 +186,7 @@ impl Default for ProfilePreferences {
             next_episode_button: true,
             skip_intros: false,
             match_frame_rate: true,
+            remembered_source_reuse: true,
         }
     }
 }
@@ -214,6 +220,9 @@ fn default_next_episode_button() -> bool {
     true
 }
 fn default_match_frame_rate() -> bool {
+    true
+}
+fn default_remembered_source_reuse() -> bool {
     true
 }
 fn default_text() -> String {
