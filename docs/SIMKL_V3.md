@@ -30,7 +30,7 @@ Anime episodes require the provider's explicit aired TVDB season/episode mapping
 
 Anime progress and tracking are implemented with verified provider identities. Synthetic fixtures cover scrobble/history dispatch, missing mappings with zero writes, and exact film/episode responses. A read-only real Naruto document independently confirms S2 E1 maps to sequential episode 36; no real user history or scrobble writes were used for that mapping qualification.
 
-The generic `/api/bootstrap` and profile Home endpoints assemble Simkl Trending Movies, TV Shows, and Anime when Simkl is selected. One combined public `today_100.json` document serves the three rows, coalesced and cached for one hour without user credentials. Home retains its two-second assembly deadline and presents failed rows for slow or failed upstreams. `/api/discover` routes movie/series/anime discovery and text search to the selected provider; unsupported controls are rejected. Generic `/api/meta/:kind/:id` accepts projected identities such as `simkl:movie:123` and uses the selected provider. A profile with no Simkl link reads its assigned Stremio metadata add-on instead, so a library or imported card that carries no metadata origin still opens its details; a `simkl:` identity always stays with Simkl. Explicit provider switches never merge Stremio and Simkl metadata in one browsing configuration.
+The generic `/api/bootstrap` and profile Home endpoints assemble Simkl Trending Movies, TV Shows, and Anime when Simkl is selected. One combined public `today_100.json` document serves the three rows, coalesced and cached for one hour without user credentials. Home retains its two-second assembly deadline and presents failed rows for slow or failed upstreams. `/api/discover` routes movie/series/anime discovery to the selected provider and text search to the providers that advertise Search for the profile; unsupported controls are rejected. Generic `/api/meta/:kind/:id` accepts projected identities such as `simkl:movie:123` and uses the selected provider. A profile with no Simkl link reads its assigned Stremio metadata add-on instead, so a library or imported card that carries no metadata origin still opens its details; a `simkl:` identity always stays with Simkl. Explicit provider switches never merge Stremio and Simkl metadata in one browsing configuration.
 
 The engine tests cover stable title/episode identities, missing and conflicting IDs, duplicate episode coordinates, type mismatches, and exact source mappings. In-process server fixtures cover routed OAuth, encrypted storage, account/profile isolation, expired/revoked/single-use state, disabled configuration, exact episode tracking, metadata mismatch, unlinking, default provider routing, public cache coalescing, OAuth-required metadata fallback without shared caching, explicit provider selection, bounded slow Home assembly, canonical playback identity, and mapped movie/TV addon source and subtitle requests. No production server or real account was modified.
 
@@ -181,9 +181,13 @@ this field as optional `timelineOffsetSeconds` for legacy response compatibility
 
 `GET /api/discover?type=all&search=...` combines at most three advertised
 media types from the selected metadata integration into one canonical
-`CatalogPage`; it never selects or mixes another browsing plugin. Broad text
-search starts at offset zero and rejects ambiguous catalog/filter/paging input.
-The total result projection is bounded to 200 cards and the complete operation
+`CatalogPage`; it never selects or mixes another browsing plugin. Text search
+runs only on providers that advertise Search for the profile. When the browsing
+provider cannot search, Simkl's catalog selection and browse filters are dropped
+and the assigned add-ons search instead. A search no provider can serve returns
+422 `search_unavailable`, with copy naming the missing Simkl link or capability.
+Broad text search starts at offset zero and rejects ambiguous catalog/filter/paging
+input. The total result projection is bounded to 200 cards and the complete operation
 has a 12-second deadline. Specific-type discovery keeps existing pagination.
 
 Source job reads accept optional `wait_ms` up to 10,000 milliseconds alongside

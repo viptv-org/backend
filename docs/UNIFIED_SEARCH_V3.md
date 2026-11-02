@@ -10,21 +10,23 @@ The response is `{ "rows": [...], "complete": true|false }`. Each row contains:
 
 | Field | Meaning |
 | --- | --- |
-| `id` | Stable `simkl:anime`, `simkl:movie`, `simkl:tv`, or `addon:<id>` |
-| `title` | Anime, Movies, TV Shows, or the account's add-on name |
+| `id` | Stable `simkl:anime`, `simkl:movie`, `simkl:tv`, or `addon:<addon>:<kind>:<catalog>` |
+| `title` | Anime, Movies, TV Shows, or the catalog's name and type, for example `Popular Movies` |
 | `provider_id` | `simkl` or `stremio` |
 | `addon_id` | Numeric add-on ID, or null for Simkl |
 | `state` | `Ready`, `Empty`, or `Failed` |
 | `cards` | Existing engine Card objects; no generated DTO changes |
 | `message` | Null, or a safe retry message when some results failed |
 
-Simkl has three independent category rows, with up to 24 results each. Up to 32 assigned Stremio add-ons have individual rows. An add-on searches its eligible movie/series catalogs, at most 32 endpoints with eight concurrent fetches, and retains up to 200 distinct `(kind,id)` results. Equal titles in different add-on rows remain distinct. Catalogs requiring unavailable extra selections are not guessed.
+Simkl has three independent category rows, with up to 24 results each. Up to 32 assigned Stremio add-ons contribute one row per search catalog resource: a movie and a series catalog that share an ID are separate rows, so are additional catalogs of one add-on, and identical catalog IDs in different add-ons never share an identity. A row retains up to 200 distinct `(kind,id)` results from its own catalog, so a title another row also holds stays in both. Equal titles in different rows remain distinct. Catalogs requiring unavailable extra selections are not guessed.
 
-Each row has a four-second provider deadline. Stremio retains completed sibling catalog results when another catalog fails or times out. A partial row can be `Ready` with cards and a message. A valid empty result is `Empty`; a failed result with no cards is `Failed`. Provider errors and reflected response bodies are not exposed. `complete` means all planned rows completed without provider failures; it does not promise an exhaustive provider catalog or a total search-result count. This endpoint has no pagination cursor.
+A row title names the catalog and its type (`Popular Movies`), and adds the add-on name, or failing that the catalog ID, when another row would otherwise share the title. Titles are decided across every planned row before any of them load.
+
+Each row has a four-second provider deadline and only its own catalog can fail it. A partly malformed provider page can be `Ready` with its cards and a message; a valid empty result is `Empty`; a failed result with no cards is `Failed`. Provider errors and reflected response bodies are not exposed. `complete` means all planned rows completed without provider failures; it does not promise an exhaustive provider catalog or a total search-result count. This endpoint has no pagination cursor.
 
 ### Progressive delivery
 
-`GET /api/search/stream` answers the same query with `text/event-stream`; rows reach the client as each provider finishes instead of after the slowest one. `GET /api/parent/search/stream` is the parent-scoped equivalent. Both accept the same query parameters and apply the same identity, scope, capability, profile, kids-policy and revision checks as their snapshot endpoints. A request that cannot be answered at all (empty or over-long query, wrong profile, refused parent scope) still fails before the stream starts, with the snapshot endpoint's status and body.
+`GET /api/search/stream` answers the same query with `text/event-stream`; rows reach the client as each provider finishes instead of after the slowest one. A row still fails at its own four-second budget, and every planned row answers within the ten-second search deadline, so the stream completes without waiting on a provider that hangs. `GET /api/parent/search/stream` is the parent-scoped equivalent. Both accept the same query parameters and apply the same identity, scope, capability, profile, kids-policy and revision checks as their snapshot endpoints. A request that cannot be answered at all (empty or over-long query, wrong profile, refused parent scope) still fails before the stream starts, with the snapshot endpoint's status and body.
 
 Each event is `event: <name>` plus one `data:` JSON line:
 

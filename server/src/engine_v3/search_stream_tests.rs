@@ -152,7 +152,7 @@ async fn each_row_arrives_as_its_provider_completes() {
     assert_eq!(event, "plan");
     assert_eq!(
         row_ids(&plan),
-        vec!["addon:201", "addon:202", "addon:203"],
+        vec!["addon:201:movie:fast", "addon:202:movie:slow", "addon:203:movie:broken"],
         "the plan fixes the row order before any provider answers"
     );
     for row in plan["rows"].as_array().unwrap() {
@@ -173,18 +173,18 @@ async fn each_row_arrives_as_its_provider_completes() {
             .iter()
             .filter_map(|row| row["id"].as_str())
             .collect::<HashSet<_>>(),
-        HashSet::from(["addon:201", "addon:203"]),
+        HashSet::from(["addon:201:movie:fast", "addon:203:movie:broken"]),
         "the fast and the failed row arrive while the slow provider is still gated"
     );
     let fast = answered
         .iter()
-        .find(|row| row["id"] == "addon:201")
+        .find(|row| row["id"] == "addon:201:movie:fast")
         .expect("fast row");
     assert_eq!(fast["state"], "Ready");
     assert_eq!(fast["cards"][0]["title"], "Fast fixture");
     let failed = answered
         .iter()
-        .find(|row| row["id"] == "addon:203")
+        .find(|row| row["id"] == "addon:203:movie:broken")
         .expect("failed row");
     assert_eq!(failed["state"], "Failed");
     assert_eq!(
@@ -194,7 +194,7 @@ async fn each_row_arrives_as_its_provider_completes() {
     gate.add_permits(1);
     let (event, slow) = frames.next().await;
     assert_eq!(event, "row");
-    assert_eq!(slow["id"], "addon:202");
+    assert_eq!(slow["id"], "addon:202:movie:slow");
     assert_eq!(slow["state"], "Ready");
     let (event, done) = frames.next().await;
     assert_eq!(event, "done");
@@ -225,7 +225,7 @@ async fn a_profile_configuration_change_ends_the_stream_without_a_completion() {
     gate.add_permits(1);
     let (event, slow) = frames.next().await;
     assert_eq!(event, "row");
-    assert_eq!(slow["id"], "addon:202");
+    assert_eq!(slow["id"], "addon:202:movie:slow");
     let (event, failure) = frames.next().await;
     assert_eq!(event, "error");
     assert_eq!(failure["status"], 409);
@@ -251,7 +251,7 @@ async fn parent_search_streams_pending_rows_and_approval_items() {
     let mut frames = open(&app, "/api/parent/search/stream?query=Fixture").await;
     let (event, plan) = frames.next().await;
     assert_eq!(event, "plan");
-    assert_eq!(row_ids(&plan), vec!["addon:201", "addon:202", "addon:203"]);
+    assert_eq!(row_ids(&plan), vec!["addon:201:movie:fast", "addon:202:movie:slow", "addon:203:movie:broken"]);
     for row in plan["rows"].as_array().unwrap() {
         assert_eq!(row["state"], "Loading");
         assert!(row.get("cards").is_none(), "{row}");
