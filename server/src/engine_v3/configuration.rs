@@ -155,6 +155,7 @@ fn read_inner(
                 .collect(),
         }
     };
+    clamp_assignments(&mut configuration, &connections);
     configuration.name = db
         .query_row("SELECT name FROM profiles WHERE id=?1", [profile], |r| {
             r.get(0)
@@ -163,6 +164,22 @@ fn read_inner(
     let avatar = super::profiles::avatar_record(&db, profile)?.ok_or_else(auth::forbidden)?;
     avatar.project_into(&mut configuration);
     Ok((configuration, connections))
+}
+
+fn clamp_assignments(
+    configuration: &mut ProfileConfiguration,
+    connections: &[IntegrationConnection],
+) {
+    for assignment in &mut configuration.assignments {
+        if let Some(connection) = connections
+            .iter()
+            .find(|connection| connection.id == assignment.connection_id)
+        {
+            assignment
+                .enabled
+                .retain(|capability| connection.capabilities.contains(capability));
+        }
+    }
 }
 
 pub(crate) async fn get(
@@ -212,6 +229,7 @@ pub(crate) async fn update(
     }
     configuration.browsing_plugin = update.browsing_plugin;
     configuration.assignments = update.assignments;
+    clamp_assignments(&mut configuration, &connections);
     Registry::builtin()
         .validate(&configuration, &connections)
         .map_err(|_| ApiError::from("Invalid integration assignments"))?;
@@ -237,10 +255,14 @@ pub(crate) async fn update(
             "Profile configuration changed".into(),
         ));
     }
+    crate::simkl::retain_unlinked_capabilities(&tx, profile, &mut configuration)?;
     configuration.scope.revision = revision
         .checked_add(1)
         .ok_or_else(|| ApiError::from("Configuration revision unavailable"))?;
-    tx.execute("INSERT INTO engine_profile_configuration VALUES(?1,?2,?3,?4) ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision,value=excluded.value",params![profile,lease.principal.account_id(),configuration.scope.revision,serde_json::to_string(&configuration).map_err(|_|ApiError::from("Invalid profile configuration"))?]).map_err(db_error)?;
+    let stored = serde_json::to_string(&configuration)
+        .map_err(|_| ApiError::from("Invalid profile configuration"))?;
+    tx.execute("INSERT INTO engine_profile_configuration VALUES(?1,?2,?3,?4) ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision,value=excluded.value",params![profile,lease.principal.account_id(),configuration.scope.revision,stored]).map_err(db_error)?;
     tx.commit().map_err(db_error)?;
+    clamp_assignments(&mut configuration, &connections);
     Ok(axum::Json(json!({"configuration":configuration})))
 }

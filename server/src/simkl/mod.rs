@@ -36,17 +36,21 @@ mod tracking;
 pub(crate) use client::Service;
 pub(crate) use metadata::{detail, search, Page, Search};
 pub(crate) use oauth::{authorize, callback, disconnect, status};
-pub(crate) use store::{connections, init, linked, linked_db};
+pub(crate) use store::{connections, init, linked, linked_db, retain_unlinked_capabilities};
 pub(crate) use tracking::watched;
 
 pub(crate) fn capabilities() -> Vec<Capability> {
-    vec![
-        Capability::Discovery,
+    let mut capabilities = public_capabilities();
+    capabilities.extend([
         Capability::Authorization,
         Capability::Search,
-        Capability::Metadata,
         Capability::Tracking,
-    ]
+    ]);
+    capabilities
+}
+
+pub(crate) fn public_capabilities() -> Vec<Capability> {
+    vec![Capability::Discovery, Capability::Metadata]
 }
 
 fn unavailable() -> ApiError {

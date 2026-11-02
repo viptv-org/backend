@@ -11,7 +11,8 @@ async fn stack(
     let started = Arc::new(tokio::sync::Notify::new());
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let routes=Router::new()
-        .route("/search/:category",get(|Path(category):Path<String>|async move{axum::Json(json!([{"title":format!("Fixture {category}"),"ids":{"simkl_id":10,"imdb":"tt123"}}]))}))
+        .route("/oauth2/token",post(||async{axum::Json(json!({"access_token":"fixture-private-token","refresh_token":"fixture-refresh-token","token_type":"Bearer","expires_in":604800,"scope":"media:read media:write"}))}))
+        .route("/search/:category",get(|Path(category):Path<String>,headers:axum::http::HeaderMap|async move{if headers.get(header::AUTHORIZATION).and_then(|value|value.to_str().ok())!=Some("Bearer fixture-private-token"){return (StatusCode::UNAUTHORIZED,axum::Json(json!({"error":"unauthorized"})));}(StatusCode::OK,axum::Json(json!([{"title":format!("Fixture {category}"),"ids":{"simkl_id":10,"imdb":"tt123"}}])))}))
         .route("/movies/19",get({let started=started.clone();let gate=gate.clone();move||{let started=started.clone();let gate=gate.clone();async move{started.notify_one();let _permit=gate.acquire().await.unwrap();axum::Json(json!({"title":"Blocked parent fixture","ids":{"simkl":19}}))}}}))
         .route("/movies/18",get(||async{axum::Json(json!({"title":"Adult fixture","ids":{"simkl":18},"certification":"TV-MA"}))}))
         .route("/movies/10",get(||async{axum::Json(json!({"title":"Fixture Simkl movie","ids":{"simkl":10,"imdb":"tt123"}}))}))
@@ -81,6 +82,25 @@ async fn configuration(app: &App, browser: &str, remove: Option<&str>) {
             .retain(|assignment| assignment["connection_id"] != remove);
     }
     app.db.lock().unwrap().execute("INSERT INTO engine_profile_configuration(profile_id,account_id,revision,value) VALUES(1,1,1,?1) ON CONFLICT(profile_id) DO UPDATE SET revision=1,value=excluded.value",[value.to_string()]).unwrap();
+}
+
+async fn simkl_connection(app: &App) -> Value {
+    let (status, body) = request(
+        app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/integrations",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|connection| connection["plugin_id"] == "simkl")
+        .expect("Simkl connection")
+        .clone()
 }
 
 #[tokio::test]
@@ -164,8 +184,102 @@ async fn multi_catalog_addons_split_rows_per_catalog_with_catalog_names() {
 }
 
 #[tokio::test]
+async fn unlinked_profile_advertises_no_simkl_search_and_linking_restores_it_without_a_restart() {
+    let (app, task, _, _) = stack(0).await;
+    let unlinked = simkl_connection(&app).await;
+    assert_eq!(unlinked["revision"], 0);
+    assert_eq!(unlinked["capabilities"], json!(["Discovery", "Metadata"]));
+    let (status, integrations) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/integrations",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{integrations}");
+    let saved = json!({
+        "revision": integrations["configuration"]["scope"]["revision"],
+        "browsing_plugin": "simkl",
+        "assignments": integrations["configuration"]["assignments"],
+    });
+    let (status, reply) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/integrations",
+        saved,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let assignment = reply["configuration"]["assignments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|assignment| assignment["connection_id"] == "simkl:1")
+        .unwrap();
+    assert_eq!(assignment["enabled"], json!(["Discovery", "Metadata"]));
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/search?query=Fixture",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let rows = page["rows"].as_array().unwrap();
+    assert!(
+        !rows.iter().any(|row| row["provider_id"] == "simkl"),
+        "{page}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row["id"] == "addon:101" && row["state"] == "Ready"),
+        "{page}"
+    );
+    link(&app).await;
+    let linked = simkl_connection(&app).await;
+    assert!(
+        linked["revision"].as_u64().unwrap() > unlinked["revision"].as_u64().unwrap(),
+        "{linked}"
+    );
+    assert_eq!(
+        linked["capabilities"],
+        json!([
+            "Discovery",
+            "Metadata",
+            "Authorization",
+            "Search",
+            "Tracking"
+        ])
+    );
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/search?query=Fixture",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    for id in ["simkl:anime", "simkl:movie", "simkl:tv"] {
+        let row = page["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap_or_else(|| panic!("{id} {page}"));
+        assert_eq!(row["state"], "Ready", "{row}");
+        assert!(!row["cards"].as_array().unwrap().is_empty(), "{row}");
+    }
+    task.abort();
+}
+
+#[tokio::test]
 async fn grouped_search_keeps_three_simkl_rows_and_per_addon_identity_with_partial_failures() {
     let (app, task, _, _) = stack(0).await;
+    link(&app).await;
     let (status, page) = request(
         &app,
         "member-token-1",
@@ -611,6 +725,7 @@ async fn subtitle_origin_keeps_stremio_opaque_simkl_prefix_ids_out_of_simkl_mapp
 async fn typed_parent_search_and_approval_are_selected_profile_scoped_and_observe_real_simkl_episodes(
 ) {
     let (app, task, _, _) = stack(0).await;
+    link(&app).await;
     configuration(&app, "stremio", None).await;
     assert_eq!(
         request(
@@ -1320,6 +1435,7 @@ async fn restricted_imdb_parent_and_exact_stremio_episode_work_with_a_different_
 async fn restricted_search_and_discovery_project_only_approved_titles_and_hide_reserved_namespace_spoofs(
 ) {
     let (app, task, _, _) = stack(9).await;
+    link(&app).await;
     configuration(&app, "stremio", None).await;
     assert_eq!(request(&app,"member-token-1","POST","/api/profiles/1/approvals",json!({"type":"movie","id":"simkl:movie:10","approved":true,"metadata_provider_id":"simkl"})).await.0,StatusCode::OK);
     app.db

@@ -24,15 +24,15 @@ pub(crate) async fn list(
                 Availability::NeedsConfiguration,
                 Some("Simkl is not configured on this server".to_owned()),
             )
-        } else if !assigned {
-            (
-                Availability::Unsupported,
-                Some("Simkl authorization is disabled for this profile".to_owned()),
-            )
         } else if !linked {
             (
                 Availability::NeedsAuthorization,
                 Some("Link Simkl for this profile".to_owned()),
+            )
+        } else if !assigned {
+            (
+                Availability::Unsupported,
+                Some("Simkl authorization is disabled for this profile".to_owned()),
             )
         } else {
             (Availability::Available, None)

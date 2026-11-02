@@ -21,7 +21,11 @@ pub(crate) fn connections(
     profile: i64,
 ) -> Result<Vec<IntegrationConnection>, ApiError> {
     let revision: Option<u64> = db.query_row("SELECT revision FROM simkl_links WHERE account_id=?1 AND profile_id=?2 AND credential IS NOT NULL", params![account,profile], |r| r.get(0)).optional().map_err(db_error)?;
-    let supported = capabilities();
+    let supported = if revision.is_some() {
+        capabilities()
+    } else {
+        public_capabilities()
+    };
     Ok(vec![IntegrationConnection {
         id: format!("simkl:{profile}"),
         plugin_id: "simkl".into(),
@@ -51,6 +55,38 @@ pub(crate) fn linked_db(db: &Connection, account: i64, profile: i64) -> Result<b
         |row| row.get(0),
     )
     .map_err(db_error)
+}
+
+pub(crate) fn retain_unlinked_capabilities(
+    db: &Connection,
+    profile: i64,
+    configuration: &mut viptv_engine::profile::ProfileConfiguration,
+) -> Result<(), ApiError> {
+    let revision: Option<u64> = db
+        .query_row(
+            "SELECT revision FROM simkl_links WHERE profile_id=?1 AND credential IS NOT NULL",
+            [profile],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if revision.is_some() {
+        return Ok(());
+    }
+    let connection = format!("simkl:{profile}");
+    let Some(assignment) = configuration
+        .assignments
+        .iter_mut()
+        .find(|assignment| assignment.connection_id == connection)
+    else {
+        return Ok(());
+    };
+    for capability in capabilities() {
+        if !assignment.enabled.contains(&capability) {
+            assignment.enabled.push(capability);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn save_token(
