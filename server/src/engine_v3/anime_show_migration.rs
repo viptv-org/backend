@@ -266,6 +266,9 @@ fn merge_stored(ids: &mut Vec<ExternalId>, stored: &Value) {
         let Ok(id) = serde_json::from_value::<ExternalId>(id.clone()) else {
             continue;
         };
+        if ids.iter().any(|existing| existing.namespace == id.namespace) {
+            continue;
+        }
         if !ids.contains(&id) {
             ids.push(id);
         }

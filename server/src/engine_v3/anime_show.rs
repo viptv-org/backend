@@ -229,6 +229,15 @@ pub(crate) async fn detail(
         if page.item.identity.ids.len() == 32 {
             break;
         }
+        if page
+            .item
+            .identity
+            .ids
+            .iter()
+            .any(|existing| existing.namespace == id.namespace)
+        {
+            continue;
+        }
         if !page.item.identity.ids.contains(id) {
             page.item.identity.ids.push(id.clone());
         }
