@@ -34,6 +34,8 @@ pub(crate) const MSG_ACCOUNT_SESSION_REQUIRED: &str =
     "Manage account settings from an account session, not a paired TV.";
 pub(crate) const MSG_OWNER_REQUIRED: &str =
     "Only the server owner can manage accounts and devices.";
+pub(crate) const MSG_ACCOUNT_OWNER_REQUIRED: &str =
+    "Only the account owner can change household settings.";
 pub(crate) const CODE_ACCOUNT_DELETE_REJECTED: &str = "account_delete_rejected";
 pub(crate) const CODE_PARENT_PIN_INCORRECT: &str = "parent_pin_incorrect";
 pub(crate) const CODE_LAST_OWNER: &str = "last_owner";
@@ -63,6 +65,7 @@ impl ApiError {
             MSG_LAST_OWNER => Some(CODE_LAST_OWNER),
             MSG_ACCOUNT_SESSION_REQUIRED => Some(CODE_ACCOUNT_SESSION_REQUIRED),
             MSG_OWNER_REQUIRED => Some(CODE_OWNER_REQUIRED),
+            MSG_ACCOUNT_OWNER_REQUIRED => Some(CODE_OWNER_REQUIRED),
             MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
             MSG_AUTHORIZATION_PENDING => Some(MSG_AUTHORIZATION_PENDING),
             MSG_ACCESS_DENIED => Some(MSG_ACCESS_DENIED),

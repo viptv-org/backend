@@ -6,7 +6,7 @@ These are the existing local account/password and recovery-code contracts. They 
 
 Use the browser's Secure/HttpOnly/SameSite session cookies. Public register/login/recover calls require the pinned HTTPS Origin. `GET /api/auth/status` returns `registration_enabled`, `authenticated` and `csrf_token`; authenticated cookie mutations use that CSRF token. Status can report authenticated when the refresh cookie remains valid after access expiry. In that case refresh before relying on `/api/auth/me`.
 
-`GET /api/auth/me` returns the account `{id,username,name,role}`, selected `profile_id`, owned profiles, profile-management flags, `capabilities.manage_account` and CSRF token. `manage_account` is true for a browser or native sign-in session and false for a paired TV, so a client no longer infers that from the platform. Account-only entry and TV approval do not require Home/catalog/profile metadata requests.
+`GET /api/auth/me` returns the account `{id,username,name,role}`, selected `profile_id`, owned profiles, profile-management flags, `capabilities.manage_account` and CSRF token. `manage_account` is true only for the owner's browser or native sign-in session, and false for a member and for a paired TV, so a client no longer infers that from the platform. Account-only entry and TV approval do not require Home/catalog/profile metadata requests.
 
 ## Registration and recovery
 
@@ -43,7 +43,7 @@ Recovery retains profiles, saved titles and watch progress. The old password, us
 
 A new member has no profile. `GET /api/profiles` and `POST /api/profiles {name,avatar_style?,avatar_choice?}` (legacy `avatar_id?` still accepted) work with an account-only session. Create/select a real profile before media requests. Profile selection is `POST /api/auth/profile {profile_id}`. Existing onboarding state is available through `/api/auth/setup`; its accepted fields are household_name, timezone, language, completed, step and profile_id.
 
-Household configuration is account-scoped: the household PIN (`PUT /api/parent/pin`), add-ons, IPTV connections and matches, gateways, source integrations and signing other devices out need an account session and answer `403 account_session_required` to a paired TV. A native sign-in session counts as an account session and manages its own account: a native owner and a native member each change their own household PIN, add-ons and connections. Profile and parental-policy routes stay with any account session. Parent operations are:
+Household configuration is owner-only: the household PIN (`PUT /api/parent/pin`), add-ons, IPTV connections and matches, gateways, source integrations and signing other devices out answer `403 owner_required` to a member session and `403 account_session_required` to a paired TV. A native sign-in session counts as an account session and follows the same owner/member rules, so a native owner may change the household PIN while a native member gets `403 owner_required`. Profile and parental-policy routes stay with any account session. Parent operations are:
 
 - `GET /api/parent/status` → `{pin_configured,unlocked,restricted,leave_pin_configured}`.
 - `POST /api/parent/unlock {pin}` → a session-bound, one-shot grant lasting 120 seconds. Wrong PIN is 403; five failures trigger a five-minute lockout (429).

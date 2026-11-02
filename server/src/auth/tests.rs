@@ -825,6 +825,30 @@ fn origins_cookie_flags_and_public_allowlist() {
     assert!(!public("/auth/login/extra", &Method::POST));
 }
 #[test]
+fn household_writes_need_the_owner_account_session() {
+    let member = Principal::Account {
+        account_id: 2,
+        role: "member".into(),
+        profile_id: None,
+        session_id: Some("member".into()),
+    };
+    let device = Principal::Account {
+        account_id: 1,
+        role: "device".into(),
+        profile_id: Some(1),
+        session_id: Some("tv".into()),
+    };
+    owner().require_account_owner().unwrap();
+    let error = member.require_account_owner().unwrap_err();
+    assert_eq!(error.0, StatusCode::FORBIDDEN);
+    assert_eq!(error.api_error_code(), Some("owner_required"));
+    assert_eq!(error.1, crate::app_state::MSG_ACCOUNT_OWNER_REQUIRED);
+    assert_eq!(
+        device.require_account_owner().unwrap_err().api_error_code(),
+        Some("account_session_required")
+    );
+}
+#[test]
 fn owner_management_does_not_bypass_profile_grants() {
     let db = db();
     claim(&db);
