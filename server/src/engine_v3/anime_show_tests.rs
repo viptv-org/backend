@@ -107,6 +107,8 @@ fn meta_of(addon: i64, id: &str) -> Value {
             "videos":tvdb_videos("tt5550001", &[(1,2),(2,3)])}}),
         (4, "tt9876543") => json!({"meta":{"id":"tt9876543","type":"series","name":"Mob Psycho 100","tvdb_id":"79999","moviedb_id":"7999",
             "videos":tvdb_videos("tt9876543", &[(1,1),(2,1),(3,1)])}}),
+        (4, "tt7441658") => json!({"meta":{"id":"tt7441658","type":"series","name":"Black Clover","tvdb_id":"364223","moviedb_id":"73223",
+            "videos":tvdb_videos("tt7441658", &[(1,30)])}}),
         (15, "mal:20") => json!({"meta":{"id":"mal:20","type":"series","name":"Naruto","imdb_id":"tt0409591","_tmdbId":"46260","_tvdbId":"78857","_malId":"20","_kitsuId":"11",
             "videos":videos("kitsu:11", &[1,2,3])}}),
         (15, "mal:16498") => json!({"meta":{"id":"mal:16498","type":"series","name":"Attack on Titan","imdb_id":"tt2560140","_tvdbId":"267440","_tmdbId":"1429","_malId":"16498",
@@ -190,6 +192,7 @@ async fn simkl_title(Path(id): Path<String>) -> axum::Json<Value> {
         "403" => json!({"title":"Coordinates missing","ids":{"simkl":403,"mal":31,"tvdb":999}}),
         "5000" => json!({"title":"Attack on Titan Season 3 Part 2","type":"anime","anime_type":"tv","ids":{"simkl":5000,"mal":38524,"imdb":"tt2560140","tmdb":1429,"tvdb":267440}}),
         "5001" => json!({"title":"Attack on Titan","type":"anime","anime_type":"tv","ids":{"simkl":5001,"mal":16498,"imdb":"tt2560140","tmdb":1429,"tvdb":267440}}),
+        "6000" => json!({"title":"Black Clover Second Season","type":"anime","anime_type":"tv","ids":{"simkl":6000,"imdb":"tt7441658","tmdb":336735,"tvdb":364223}}),
         _ => Value::Null,
     })
 }
@@ -213,6 +216,9 @@ async fn simkl_episodes(Path(id): Path<String>) -> axum::Json<Value> {
             .collect::<Vec<_>>(),
         "5001" => (1..=3)
             .map(|n| json!({"type":"episode","episode":n,"aired":true,"tvdb":{"season":1,"episode":n},"ids":{"simkl_id":5100+n}}))
+            .collect::<Vec<_>>(),
+        "6000" => (1..=30)
+            .map(|n| json!({"type":"episode","episode":n,"aired":true,"tvdb":{"season":1,"episode":n},"ids":{"simkl_id":6000+n}}))
             .collect::<Vec<_>>(),
         _ => Vec::new(),
     };
@@ -573,6 +579,38 @@ async fn details_from_simkl_lists_the_show_seasons() {
     assert!(ids.contains(&json!({"namespace":"simkl","value":"5000"})), "{ids:?}");
     assert!(ids.contains(&json!({"namespace":"imdb","value":"tt2560140"})), "{ids:?}");
     task.abort();
+}
+
+#[tokio::test]
+async fn a_simkl_detail_with_a_conflicting_tmdb_id_pages_without_rejecting_its_own_item() {
+    let (app, task) = stack().await;
+    let first = detail(&app, "/api/meta/series/simkl:anime:6000").await;
+    let ids = first["item"]["identity"]["ids"].as_array().unwrap();
+    let tmdb = ids
+        .iter()
+        .filter(|id| id["namespace"] == "tmdb")
+        .map(|id| id["value"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(tmdb, vec!["73223"], "{ids:?}");
+    assert!(ids.contains(&json!({"namespace":"imdb","value":"tt7441658"})), "{ids:?}");
+
+    let origin = first["item"]["metadata_origin"].clone();
+    let card = first["item"].clone();
+    let mut q = url::form_urlencoded::Serializer::new(String::new());
+    q.append_pair("offset", "24");
+    q.append_pair("limit", "96");
+    q.append_pair("metadata_origin", &origin.to_string());
+    q.append_pair("card", &card.to_string());
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        &format!("/api/meta/series/simkl:anime:6000?{}", q.finish()),
+        Value::Null,
+    )
+    .await;
+    task.abort();
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test]
