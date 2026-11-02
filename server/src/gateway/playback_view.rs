@@ -14,6 +14,20 @@ impl ReplaceSource {
     }
 }
 
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Promote {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) replaces: Option<String>,
+}
+impl Promote {
+    pub(super) fn valid(&self) -> bool {
+        self.replaces
+            .as_ref()
+            .is_none_or(|outgoing| protocol::identifier(outgoing))
+    }
+}
+
 fn bound(proof: &Proof) -> bool {
     proof.metadata_proof.is_some()
         || proof.exact_vod.is_some()

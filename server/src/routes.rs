@@ -271,6 +271,10 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
                     post(gateway::playback::first_frame),
                 )
                 .route(
+                    "/playback/:id/promote",
+                    post(gateway::playback::promote),
+                )
+                .route(
                     "/playback/:id",
                     get(gateway::playback::get).delete(gateway::playback::stop),
                 )

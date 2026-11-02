@@ -42,6 +42,7 @@ pub(crate) use playback_segments::segments as skip_segments;
 const LEASE: Duration = Duration::from_secs(60);
 const REQUEST_QUOTA: usize = 4096;
 const MAX_NATIVE_GRANTS_PER_SESSION: usize = 2;
+const MAX_PREPARED_PER_SESSION: usize = 4;
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS playback_request_authority(
@@ -124,6 +125,8 @@ pub(crate) struct Start {
     resume: bool,
     #[serde(default)]
     force_gateway: bool,
+    #[serde(default)]
+    prepare: bool,
     audio_track: Option<u32>,
     subtitle_track: Option<u32>,
     audio_language: Option<String>,
@@ -144,6 +147,7 @@ struct Proof {
     kind: String,
     exact_vod: Option<crate::app_state::ExactVod>,
 }
+#[derive(Clone)]
 struct Source {
     proof: Proof,
     url: String,
@@ -235,11 +239,30 @@ struct GatewayPreparation {
     target: Arc<AuthorizedGateway>,
     client: Client,
 }
+struct Prepared {
+    source: Source,
+    request: Start,
+    direct: bool,
+    native_candidate: bool,
+}
+impl Prepared {
+    fn plan(&self) -> Value {
+        let kind = if self.direct {
+            "direct"
+        } else if self.native_candidate {
+            "native_torrent"
+        } else {
+            "gateway"
+        };
+        json!({"kind":kind,"position":self.request.position,"live":self.source.live})
+    }
+}
 struct StateData {
     retained_subtitles: Vec<String>,
     native: Option<NativeState>,
     status: &'static str,
     delivery: Option<Value>,
+    prepared: Option<Prepared>,
     error: Option<&'static str>,
     touched: Instant,
     local_expires_at: u64,
@@ -290,6 +313,13 @@ impl Registry {
         entries[id].state.lock().unwrap().touched =
             Instant::now().checked_sub(LEASE + Duration::from_secs(1)).unwrap();
     }
+    #[cfg(test)]
+    pub(super) fn prepared_state(&self, id: &str) -> Option<(&'static str, bool)> {
+        let entries = self.entries.lock().unwrap();
+        let entry = entries.get(id)?;
+        let state = entry.state.lock().unwrap();
+        Some((state.status, state.prepared.is_some()))
+    }
     pub(crate) fn new(db: Arc<Mutex<Connection>>) -> Arc<Self> {
         let registry = Arc::new(Self {
             entries: Mutex::new(HashMap::new()),
@@ -329,7 +359,7 @@ impl Registry {
                 let database = db.clone();
                 let failed_checks = facts
                     .iter()
-                    .filter(|(_, _, _, _, status, _)| matches!(*status, "starting" | "ready"))
+                    .filter(|(_, _, _, _, status, _)| holds_lease(status))
                     .map(|(id, ..)| (id.clone(), "authorization_expired"))
                     .collect::<Vec<_>>();
                 let stale = tokio::task::spawn_blocking(move || {
@@ -337,7 +367,7 @@ impl Registry {
                     facts
                         .into_iter()
                         .filter_map(|(id, lease, proof, expired, status, remote)| {
-                            if !matches!(status, "starting" | "ready") {
+                            if !holds_lease(status) {
                                 return None;
                             }
                             if expired {
@@ -381,8 +411,7 @@ impl Registry {
                 }
                 registry.entries.lock().unwrap().retain(|_, entry| {
                     let state = entry.state.lock().unwrap();
-                    matches!(state.status, "starting" | "ready")
-                        || state.touched.elapsed() < Duration::from_secs(300)
+                    holds_lease(state.status) || state.touched.elapsed() < Duration::from_secs(300)
                 });
                 drop(registry);
                 stream::iter(releases)
@@ -608,7 +637,7 @@ fn response(entry: &Entry) -> Value {
     }
     let error = state.error.map(crate::account_api::description);
     let local_expiry = state.local_expires_at;
-    let expires_at = if matches!(state.status, "starting" | "ready") {
+    let expires_at = if holds_lease(state.status) {
         state.native.as_ref().map_or_else(
             || {
                 state
@@ -623,8 +652,12 @@ fn response(entry: &Entry) -> Value {
     };
     tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), status = state.status, expires_at, error_code = state.error.unwrap_or("none"), gateway_session_tag = %state.remote.as_ref().map(|remote| super::diagnostics::tag(&remote.viewer)).unwrap_or_default(), "Playback lease state");
     let mut value = json!({"id":entry.id,"status":state.status,"delivery":state.delivery,"live":entry.live,"error_code":state.error,"error":error,"expires_at":expires_at,"renew_after_seconds":20});
+    if let Some(prepared) = state.prepared.as_ref() { value["plan"] = prepared.plan(); }
     if state.native.is_none() { value["actions"] = viewing::actions(entry,&state); }
     value
+}
+fn holds_lease(status: &str) -> bool {
+    matches!(status, "prepared" | "starting" | "ready")
 }
 fn expired(state: &StateData) -> bool {
     state.touched.elapsed() >= LEASE
@@ -642,13 +675,14 @@ fn terminate(entry: &Entry, status: &'static str, error: Option<&'static str>) -
     entry.cancel_signal.notify_one();
     entry.permit.lock().unwrap().take();
     let mut state = entry.state.lock().unwrap();
-    if !matches!(state.status, "starting" | "ready") {
+    if !holds_lease(state.status) {
         return None;
     }
     tracing::warn!(session_tag = %super::diagnostics::tag(&entry.id), previous_status = state.status, terminal_status = status, error_code = error.unwrap_or("none"), "Playback session terminated");
     state.status = status;
     state.error = error;
     state.delivery = None;
+    state.prepared = None;
     state.retained_subtitles.clear();
     if let Some(native) = state.native.as_mut() {
         native.grant = None;
@@ -761,7 +795,7 @@ fn core_request(request: &Start) -> Result<viptv_core::dto::PlaybackV2Request, E
     }
     serde_json::to_value(request)
         .and_then(|mut v| {
-            if let Some(fields) = v.as_object_mut() { fields.remove("resume"); fields.remove("replace_source"); }
+            if let Some(fields) = v.as_object_mut() { fields.remove("resume"); fields.remove("replace_source"); fields.remove("prepare"); }
             if let Some(fields) = v["client"].as_object_mut() { fields.remove("supports_required_audio_index"); }
             serde_json::from_value(camel(v))
         })
@@ -1255,6 +1289,9 @@ async fn choose(
     .map_err(|_| Error::Code("gateway_unavailable"))?
 }
 fn validate(request: &Start) -> Result<(), Error> {
+    if request.prepare && (request.replace_source.is_some() || request.decoder_start) {
+        return Err(Error::Code("invalid_playback_request"));
+    }
     if request
         .client
         .native_torrent
@@ -1479,6 +1516,21 @@ async fn start_mode(
                 return Err(Error::Code("playback_capacity"));
             }
         }
+        if request.prepare {
+            let prepared = entries
+                .values()
+                .filter(|entry| {
+                    entry.lease.session_id == lease.session_id
+                        && {
+                            let state = entry.state.lock().unwrap();
+                            state.prepared.is_some() && !expired(&state)
+                        }
+                })
+                .count();
+            if prepared >= MAX_PREPARED_PER_SESSION {
+                return Err(Error::Code("playback_capacity"));
+            }
+        }
         let id = uuid::Uuid::new_v4().to_string();
         let issued_at = u64::try_from(util::now()).map_err(|_| Error::Code("playback_expired"))?;
         let native_expiry = issued_at
@@ -1539,8 +1591,14 @@ async fn start_mode(
                         subtitles_enabled: request.preferred_subtitle_language.is_some(),
                     },
                 }),
-                status: "starting",
+                status: if request.prepare { "prepared" } else { "starting" },
                 delivery: None,
+                prepared: request.prepare.then(|| Prepared {
+                    source: input.clone(),
+                    request: request.clone(),
+                    direct,
+                    native_candidate,
+                }),
                 error: None,
                 touched: Instant::now(),
                 local_expires_at: util::now() as u64 + LEASE.as_secs(),
@@ -1552,12 +1610,26 @@ async fn start_mode(
         entries.insert(id, entry.clone());
         entry
     };
-    let worker = entry.clone();
+    if request.prepare {
+        tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), direct, position_seconds = request.position, "Playback delivery prepared");
+        return Ok((StatusCode::CREATED, Json(response(&entry))));
+    }
     tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), direct, position_seconds = request.position, "Playback admission accepted");
+    schedule_preparation(app, entry.clone(), input, request, direct, native_candidate);
+    Ok((StatusCode::ACCEPTED, Json(response(&entry))))
+}
+fn schedule_preparation(
+    app: App,
+    worker: Arc<Entry>,
+    source: Source,
+    request: Start,
+    direct: bool,
+    native_candidate: bool,
+) {
     let trace_context = service_telemetry::current_context();
     tokio::spawn(service_telemetry::in_context(trace_context, async move {
         let observation = service_telemetry::observe(service_telemetry::Operation::PlaybackStart);
-        let startup_budget = if input.requires_torrent_gateway
+        let startup_budget = if source.requires_torrent_gateway
             || request
                 .client
                 .native_torrent
@@ -1573,7 +1645,7 @@ async fn start_mode(
             prepare(
                 app.clone(),
                 worker.clone(),
-                input,
+                source,
                 request,
                 direct,
                 native_candidate,
@@ -1602,7 +1674,6 @@ async fn start_mode(
             }
         }
     }));
-    Ok((StatusCode::ACCEPTED, Json(response(&entry))))
 }
 async fn validate_entry(app: &App, entry: &Entry) -> Result<(), Error> {
     let terminated =
@@ -1632,7 +1703,7 @@ async fn validate_entry(app: &App, entry: &Entry) -> Result<(), Error> {
     .map_err(|_| Error::Code("gateway_storage_unavailable"))?
 }
 async fn inspect_entry(app: &App, entry: &Entry) -> Result<(), Error> {
-    let terminal = !matches!(entry.state.lock().unwrap().status, "starting" | "ready");
+    let terminal = !holds_lease(entry.state.lock().unwrap().status);
     if !terminal {
         return validate_entry(app, entry).await;
     }
@@ -2086,18 +2157,81 @@ pub(crate) async fn stop(
             return Ok(Json(json!({"ok":true})));
         }
     };
+    release_playback(&app, &lease, &entry).await?;
+    Ok(Json(json!({"ok":true})))
+}
+async fn release_playback(
+    app: &App,
+    lease: &ResourceLease,
+    entry: &Arc<Entry>,
+) -> Result<(), Error> {
     let remote = {
         let _gate = app.gateway_playbacks.request_gate.lock().unwrap();
         let db = app.db.lock().unwrap();
         lease.validate(&db)?;
         db.execute("UPDATE playback_request_authority SET cancelled=1 WHERE session_id=?1 AND request_id=?2",params![lease.session_id,entry.request_id]).map_err(|_| Error::Code("provider_storage_unavailable"))?;
-        terminate(&entry, "released", None)
+        terminate(entry, "released", None)
     };
     if let Some(remote) = remote {
         release_remote(&remote.client, &remote.target, &remote.viewer).await;
     }
-    cancel_gateway_preparation(&entry).await;
-    Ok(Json(json!({"ok":true})))
+    cancel_gateway_preparation(entry).await;
+    Ok(())
+}
+pub(crate) async fn promote(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(id): Path<String>,
+    request: axum::extract::Request,
+) -> Result<(StatusCode, Json<Value>), Error> {
+    let body = control_body(request, 256).await?;
+    let intent = if body.is_empty() {
+        viewing::Promote::default()
+    } else {
+        serde_json::from_slice::<Option<viewing::Promote>>(&body)
+            .map_err(|_| Error::Code("invalid_playback_request"))?
+            .unwrap_or_default()
+    };
+    if !intent.valid() {
+        return Err(Error::Code("invalid_playback_request"));
+    }
+    let entry = app.gateway_playbacks.snapshot(&id, &lease)?;
+    validate_entry(&app, &entry).await?;
+    if entry.state.lock().unwrap().prepared.is_none() {
+        return Ok((StatusCode::OK, Json(response(&entry))));
+    }
+    if let Some(outgoing) = intent.replaces.filter(|outgoing| *outgoing != entry.id) {
+        if let Ok(outgoing) = app.gateway_playbacks.snapshot(&outgoing, &lease) {
+            release_playback(&app, &lease, &outgoing).await?;
+        }
+    }
+    let prepared = {
+        let mut state = entry.state.lock().unwrap();
+        if state.status != "prepared" || entry.cancelled.load(Ordering::Acquire) {
+            None
+        } else {
+            let prepared = state.prepared.take();
+            if prepared.is_some() {
+                state.status = "starting";
+                state.touch();
+            }
+            prepared
+        }
+    };
+    let Some(prepared) = prepared else {
+        return Ok((StatusCode::OK, Json(response(&entry))));
+    };
+    validate(&prepared.request)?;
+    tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), direct = prepared.direct, position_seconds = prepared.request.position, "Playback admission accepted");
+    schedule_preparation(
+        app,
+        entry.clone(),
+        prepared.source,
+        prepared.request,
+        prepared.direct,
+        prepared.native_candidate,
+    );
+    Ok((StatusCode::ACCEPTED, Json(response(&entry))))
 }
 
 pub(crate) async fn support(

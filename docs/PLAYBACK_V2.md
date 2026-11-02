@@ -78,6 +78,42 @@ restart implicitly; an intentional retry needs a new request ID. Startup is
 bounded to 45 seconds including gateway selection, and gateway create calls are
 separated from lifecycle-control concurrency so starts do not monopolize renewal.
 
+## Prepared delivery
+
+POST /api/v2/playback with `"prepare": true` resolves a stream without starting
+it, so a client can line up the next episode while the current one still plays.
+The body is a normal start body and the answer is `201` with status `prepared`,
+`delivery: null`, `expires_at`, `renew_after_seconds` and a plan:
+
+```json
+{"id": "backend-playback-id", "status": "prepared", "delivery": null,
+ "live": false, "plan": {"kind": "gateway", "position": 0.0, "live": false},
+ "expires_at": 1762000000, "renew_after_seconds": 20}
+```
+
+`plan.kind` is `direct`, `gateway` or `native_torrent`; `plan.position` is the
+position the start would use, so a resume is already applied. A preparation does
+no upstream work: it opens no gateway session, takes no provider connection,
+probes no direct URL and registers no viewer. The plan is therefore advisory and
+`delivery` after promotion is the authoritative answer.
+
+A prepared playback lives on the ordinary 60-second lease, renewed by the same
+heartbeat, and is released by the same DELETE. Keep it alive with a 20-second
+heartbeat while the current episode plays. A session may hold four preparations
+at once; more answers `playback_capacity`.
+
+POST /api/v2/playback/:id/promote adopts it. The optional body
+`{"replaces": "<playing playback id>"}` releases that playback first, including
+its gateway viewer and its provider connection, and only then runs the start, so
+the two deliveries never hold one upstream input at once. Without `replaces` the
+promotion behaves like an ordinary start and can fail with
+`provider_connection_limit` while the outgoing stream is still playing. The
+answer is the usual `202` starting; poll the same id until ready. Promotion
+reuses the source resolved at preparation, so no discovery, ranking or
+stream_id rotation happens at handoff. Promoting a released, expired or failed
+preparation answers its terminal response and touches nothing else; promoting a
+started one is idempotent and returns its current state.
+
 ## Authorization and routing
 
 Sources must have been issued by backend discovery for the exact caller scope.
