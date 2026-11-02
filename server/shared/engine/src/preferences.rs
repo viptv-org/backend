@@ -311,7 +311,7 @@ pub fn language_tier(
         return match requested_original {
             Some(false) => 2,
             Some(true) => 4,
-            None => 3,
+            None => 2,
         };
     }
     if listed.is_empty() {

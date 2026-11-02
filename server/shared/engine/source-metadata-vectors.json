@@ -13869,15 +13869,12 @@
       }
     },
     {
-      "id": "flags",
+      "id": "markerless-flags-unknown",
       "source": {
         "name": "Provider 🇮🇹 🇬🇧"
       },
       "expected": {
-        "languages": [
-          "en",
-          "it"
-        ]
+        "languages": []
       }
     },
     {

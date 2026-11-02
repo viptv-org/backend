@@ -334,12 +334,12 @@ pub fn source_audio_languages(source: &Value) -> Vec<String> {
         let text = clean(&value.chars().take(4096).collect::<String>(), 4096).to_lowercase();
         // `JAP+Sub` names a subbed version, not subtitle tracks.
         let text = pattern!(r"\+ *subs?\b").replace_all(&text, " ").into_owned();
+        let has_subtitle =
+            pattern!(r"\b(?:subtitles?|subs?|subbed|captions?|hardsubs?|softsubs?|vostfr|subfrench)\b")
+                .is_match(&text);
+        let has_audio = pattern!(r"\b(?:audio|dub|dubs|dubbed)\b").is_match(&text);
         // A line that names only subtitles is subtitle evidence, never audio.
-        if !declared
-            && pattern!(r"\b(?:subtitles?|subs?|subbed|captions?|hardsubs?|softsubs?|vostfr|subfrench)\b")
-                .is_match(&text)
-            && !pattern!(r"\b(?:audio|dub|dubs|dubbed)\b").is_match(&text)
-        {
+        if !declared && has_subtitle && !has_audio {
             continue;
         }
         let text =
@@ -375,7 +375,9 @@ pub fn source_audio_languages(source: &Value) -> Vec<String> {
                 output.push(language.to_owned());
             }
         }
-        if !declared {
+        // Flags are audio evidence only on a line that names audio and no
+        // subtitles; a markerless or mixed list is ambiguous, not a language.
+        if !declared && has_audio && !has_subtitle {
             for (flag, language) in [
                 ("🇬🇧", "en"),
                 ("🇺🇸", "en"),
