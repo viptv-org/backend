@@ -1353,6 +1353,60 @@ async fn playback_preferences_are_scoped_validated_and_share_autoplay_setting() 
 }
 
 #[tokio::test]
+async fn remembered_source_reuse_defaults_true_round_trips_and_survives_older_clients() {
+    let a = fixture();
+    let (status, defaults) = request(
+        &a,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/preferences",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(defaults["preferences"]["remembered_source_reuse"], true);
+    let mut disabled = defaults["preferences"].clone();
+    disabled["remembered_source_reuse"] = json!(false);
+    let (status, saved) = request(
+        &a,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/preferences",
+        json!({"revision":0,"preferences":disabled}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["preferences"]["remembered_source_reuse"], false);
+    let (_, read_back) = request(
+        &a,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/preferences",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(
+        read_back["preferences"]["remembered_source_reuse"],
+        false
+    );
+    let mut older = read_back["preferences"].clone();
+    older
+        .as_object_mut()
+        .unwrap()
+        .remove("remembered_source_reuse");
+    let (status, kept) = request(
+        &a,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/preferences",
+        json!({"revision":1,"preferences":older}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["preferences"]["remembered_source_reuse"], true);
+}
+
+#[tokio::test]
 async fn kids_policy_requires_parent_pin_and_blocks_unknown_content_and_exit() {
     let a = fixture();
     let (_, child) = request(
