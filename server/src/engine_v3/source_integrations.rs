@@ -230,6 +230,12 @@ pub(crate) fn save_revision(
     config: &mut viptv_engine::profile::ProfileConfiguration,
     account: i64,
 ) -> Result<(), ApiError> {
+    let profile = config
+        .scope
+        .profile_id
+        .parse()
+        .map_err(|_| ApiError::from("Invalid profile configuration"))?;
+    crate::simkl::retain_unlinked_capabilities(tx, profile, config)?;
     config.scope.revision = config
         .scope
         .revision
