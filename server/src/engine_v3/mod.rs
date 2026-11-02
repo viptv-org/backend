@@ -14,6 +14,8 @@ mod controls;
 mod correction_tests;
 pub(crate) mod live;
 pub(crate) mod search;
+#[cfg(test)]
+mod search_stream_tests;
 pub(crate) mod source_integrations;
 pub(crate) use controls::get as discovery_controls;
 pub(crate) mod configuration;
