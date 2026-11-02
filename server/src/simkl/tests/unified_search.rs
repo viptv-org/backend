@@ -24,6 +24,7 @@ async fn stack(
         .route("/subs/subtitles/:kind/:id",get(||async{axum::Json(json!({"subtitles":[]}))}))
         .route("/addon/:owner/catalog/:kind/:catalog/:extras",get({let started=started.clone();let gate=gate.clone();move|Path((_,kind,catalog,_)):Path<(String,String,String,String)>|{let started=started.clone();let gate=gate.clone();async move{
             if catalog=="broken"{return (StatusCode::BAD_GATEWAY,axum::Json(json!({"error":"private provider reflection"})));}
+            if catalog=="hang"{started.notify_one();tokio::time::sleep(Duration::from_secs(30)).await;}
             if slow > 0 && catalog=="slow" && (slow!=2 || kind=="series"){started.notify_one();let _permit=gate.acquire().await.unwrap();}
             let metas=if slow==9 && catalog=="good" {vec![json!({"id":"simkl:movie:10","type":"movie","name":"Spoofed private title"})]}else if slow==10 && catalog=="good" {vec![json!({"id":"tt1375666","type":kind,"name":"Inception","releaseInfo":"2010"}),json!({"id":"tt5581256","type":kind,"name":"Inception"})]}else if slow==7 && catalog=="good" {vec![json!({"id":"opaque-parent","type":kind,"name":"Opaque fixture"}),json!({"id":"tt18","type":kind,"name":"Adult fixture","certification":"TV-MA"}),json!({"id":"tt123","type":kind,"name":"Canonical fixture"})]}else if catalog=="empty" {vec![]}else if slow==6 && catalog=="good" {vec![json!(null),json!(17),json!("bad")]}else if slow==4&&catalog=="good" {(0..250).map(|index|json!({"id":format!("tt{index}"),"type":kind,"name":"Fixture title"})).collect()}else{vec![json!({"id":"tt123","type":kind,"name":"Fixture title"})]};
             (StatusCode::OK,axum::Json(json!({"metas":metas})))
@@ -44,6 +45,8 @@ async fn stack(
             1,
             if slow == 3 {
                 "empty"
+            } else if slow == 11 {
+                "hang"
             } else if matches!(slow, 1 | 2) {
                 "slow"
             } else {
@@ -509,6 +512,39 @@ async fn explicit_metadata_origin_overrides_default_and_search_only_addons_deleg
         .0,
         StatusCode::BAD_REQUEST
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_hanging_add_on_row_fails_within_the_row_budget() {
+    let (app, task, _, _) = stack(11).await;
+    let start = Instant::now();
+    let (status, page) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/search?query=Fixture",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(
+        start.elapsed() < Duration::from_secs(6),
+        "search waited {:?}",
+        start.elapsed()
+    );
+    for id in ["addon:103:movie:hang", "addon:103:series:hang"] {
+        let row = search_row(&page, id);
+        assert_eq!(row["state"], "Failed", "{row}");
+        assert!(row["message"].is_string(), "{row}");
+        assert!(row["cards"].as_array().unwrap().is_empty(), "{row}");
+    }
+    for id in ["addon:101:movie:good", "addon:101:series:good"] {
+        let row = search_row(&page, id);
+        assert_eq!(row["state"], "Ready", "{row}");
+        assert!(!row["cards"].as_array().unwrap().is_empty(), "{row}");
+    }
+    assert_eq!(page["complete"], false);
     task.abort();
 }
 
