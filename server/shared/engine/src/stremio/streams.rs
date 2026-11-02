@@ -103,6 +103,15 @@ pub struct SourceCandidate {
     /// `direct` or `torrent`, from the stream transport only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<String>,
+    /// `avc`, `hevc`, `av1` or `vp9`; decode class reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_codec: Option<String>,
+    /// HDR10/SDR base layer of a Dolby Vision row; `none` is DV only, absent unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dv_base_layer: Option<String>,
+    /// The add-on's `behaviorHints.bingeGroup`; series memory scopes it by provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binge_group: Option<String>,
 }
 impl SourceCandidate {
     /// Copy normalized release facts onto this candidate.
@@ -110,8 +119,11 @@ impl SourceCandidate {
         self.release_type = facts.release_type;
         self.three_d = facts.three_d;
         self.dynamic_range = facts.dynamic_range;
+        self.dv_base_layer = facts.dv_base_layer;
+        self.video_codec = facts.video_codec;
         self.audio_flags = facts.audio_flags;
         self.seeders = facts.seeders;
+        self.binge_group = facts.binge_group;
         self
     }
 }

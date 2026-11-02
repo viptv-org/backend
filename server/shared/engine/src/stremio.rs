@@ -7,8 +7,8 @@ mod streams;
 mod source_metadata;
 mod release_facts;
 pub use release_facts::{
-    AUDIO_FLAGS, DELIVERIES, DYNAMIC_RANGES, RELEASE_TYPES, ReleaseFacts, source_release_facts,
-    stream_delivery,
+    AUDIO_FLAGS, BINGE_GROUP_MAX, DELIVERIES, DV_BASE_LAYERS, DYNAMIC_RANGES, RELEASE_TYPES,
+    VIDEO_CODECS, ReleaseFacts, source_release_facts, stream_delivery,
 };
 pub use source_metadata::{source_audio_languages, source_detail, source_quality_height};
 mod subtitle_text;
