@@ -36,23 +36,13 @@ impl LocalEngine {
         serde_json::to_string(&value).map_err(|_| CoreError::Bridge)
     }
 }
-#[uniffi::export]
 impl LocalEngine {
-    /// Supplied metadata is ignored; only IDs address current profile-owned private grants.
-    pub fn rank_sources(&self, profile: String, sources_json: String) -> Result<String, CoreError> {
-        self.rank_sources_for_device(profile, sources_json, None)
-    }
-    /// `device_max_height` (144..=4320) caps quality at what the device shows,
-    /// together with the profile cap (the lower one wins); None = unknown.
-    pub fn rank_sources_for_device(
+    fn rank_sources_in_context(
         &self,
         profile: String,
         sources_json: String,
-        device_max_height: Option<u32>,
+        context: &viptv_engine::preferences::RankingContext,
     ) -> Result<String, CoreError> {
-        if device_max_height.is_some_and(|height| !(144..=4320).contains(&height)) {
-            return Err(CoreError::InvalidInput);
-        }
         if sources_json.len() > 128 * 1024 {
             return Err(CoreError::InvalidInput);
         }
@@ -93,12 +83,10 @@ impl LocalEngine {
             }
             candidates.push(grant.candidate.clone());
         }
-        // Title original-language metadata is not plumbed to ranking yet.
         let ranking = viptv_engine::preferences::rank_sources(
             &mut candidates,
             &preferences,
-            None,
-            device_max_height,
+            context,
         );
         serde_json::to_string(&serde_json::json!({
             "streams": candidates,
@@ -107,6 +95,46 @@ impl LocalEngine {
             "best_match_fully_matches": ranking.best_match_fully_matches,
         }))
         .map_err(|_| CoreError::Bridge)
+    }
+}
+
+#[uniffi::export]
+impl LocalEngine {
+    /// Supplied metadata is ignored; only IDs address current profile-owned private grants.
+    pub fn rank_sources(&self, profile: String, sources_json: String) -> Result<String, CoreError> {
+        self.rank_sources_for_device(profile, sources_json, None)
+    }
+    /// `device_max_height` (144..=4320) caps quality at what the device shows,
+    /// together with the profile cap (the lower one wins); None = unknown.
+    pub fn rank_sources_for_device(
+        &self,
+        profile: String,
+        sources_json: String,
+        device_max_height: Option<u32>,
+    ) -> Result<String, CoreError> {
+        if device_max_height.is_some_and(|height| !(144..=4320).contains(&height)) {
+            return Err(CoreError::InvalidInput);
+        }
+        self.rank_sources_in_context(
+            profile,
+            sources_json,
+            &viptv_engine::preferences::RankingContext::for_device_height(device_max_height),
+        )
+    }
+    /// `context_json` is a `RankingContext`: device capability and series memory.
+    pub fn rank_sources_with_context(
+        &self,
+        profile: String,
+        sources_json: String,
+        context_json: String,
+    ) -> Result<String, CoreError> {
+        if context_json.len() > 4096 {
+            return Err(CoreError::InvalidInput);
+        }
+        let context: viptv_engine::preferences::RankingContext =
+            serde_json::from_str(&context_json).map_err(|_| CoreError::InvalidInput)?;
+        context.validate().map_err(|_| CoreError::InvalidInput)?;
+        self.rank_sources_in_context(profile, sources_json, &context)
     }
 }
 #[cfg(test)]
@@ -204,6 +232,45 @@ mod tests {
         assert_eq!(streams[1]["label"], "Compatible");
         assert_eq!(streams[2]["quality_height"], 2160);
         assert_eq!(device["best_match_fully_matches"], json!(false));
+        // A capability context crosses the bridge; an unknown codec match and
+        // no remembered group leave the ranking unchanged.
+        let capability = json!({
+            "device": {
+                "max_height": 2160,
+                "video_codecs": [{"codec": "hevc", "support": "supported", "max_height": 2160}],
+                "dolby_vision": "unsupported",
+                "display_hdr": [{"hdr": "hdr10", "support": "supported"}],
+                "audio_codecs": [{"codec": "eac3", "support": "supported"}]
+            },
+            "series_memory": {"provider_id": "addon:1", "binge_group": "g1"}
+        });
+        let contextual: Value = serde_json::from_str(
+            &engine
+                .rank_sources_with_context(
+                    "default".into(),
+                    sources.to_string(),
+                    capability.to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(contextual["best_match_id"], ranked["best_match_id"]);
+        for invalid_context in [
+            json!({"device": {"max_height": 100}}),
+            json!({"device": {"video_codecs": [{"codec": "hevc", "support": "maybe"}]}}),
+            json!({"series_memory": {"provider_id": "", "binge_group": "g1"}}),
+            json!({"unexpected": true}),
+        ] {
+            assert!(
+                engine
+                    .rank_sources_with_context(
+                        "default".into(),
+                        sources.to_string(),
+                        invalid_context.to_string(),
+                    )
+                    .is_err()
+            );
+        }
         for invalid in [100, 4321] {
             assert!(
                 engine

@@ -140,3 +140,86 @@ async fn best_match_fully_matches_reports_whether_every_preference_is_met() {
     assert_eq!(body["best_match_id"],ids[0]);
     assert_eq!(body["best_match_fully_matches"],json!(false));
 }
+
+#[tokio::test]
+async fn a_device_unsupported_codec_drops_the_row_out_of_best_matches_and_sorts_it_last() {
+    let (app,cards)=rank_fixture(vec![
+        json!({"url":"https://media.example/hevc.mkv","name":"hevc","codec":"hevc","quality_height":2160}),
+        json!({"url":"https://media.example/avc.mkv","name":"avc","codec":"avc","quality_height":2160}),
+    ]);
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    let device=json!({"video_codecs":[{"codec":"hevc","support":"unsupported"}]});
+    let(status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"device":device})).await;
+    assert_eq!(status,StatusCode::OK,"{body}");
+    let names=body["streams"].as_array().unwrap().iter().map(|card|card["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(names,["avc","hevc"]);
+    assert_eq!(body["best_match_ids"],json!([ids[1].clone()]));
+    assert_eq!(body["best_match_id"],ids[1]);
+}
+
+#[tokio::test]
+async fn a_dv_only_row_ranks_after_supported_rows_on_a_device_without_a_dv_decoder() {
+    let (app,cards)=rank_fixture(vec![
+        json!({"url":"https://media.example/sdr.mkv","name":"sdr","title":"Movie.2024.2160p.WEB-DL.x264-GRP"}),
+        json!({"url":"https://media.example/dv.mkv","name":"dv","title":"Movie.2024.2160p.WEB-DL.DV-GRP"}),
+    ]);
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    let device=json!({"dolby_vision":"unsupported"});
+    let(status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"device":device})).await;
+    assert_eq!(status,StatusCode::OK,"{body}");
+    let names=body["streams"].as_array().unwrap().iter().map(|card|card["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(names,["sdr","dv"]);
+}
+
+#[tokio::test]
+async fn a_device_max_height_wins_over_the_legacy_device_max_height() {
+    let (app,cards)=rank_fixture(vec![
+        json!({"url":"https://media.example/2160.mkv","name":"2160","quality_height":2160}),
+        json!({"url":"https://media.example/1080.mkv","name":"1080","quality_height":1080}),
+    ]);
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    let (status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"device_max_height":1080,"device":{"max_height":2160}})).await;
+    assert_eq!(status,StatusCode::OK,"{body}");
+    let names=body["streams"].as_array().unwrap().iter().map(|card|card["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(names,["2160","1080"]);
+}
+
+#[tokio::test]
+async fn a_remembered_provider_and_binge_group_ranks_first_within_its_language_tier() {
+    let (app,cards)=rank_fixture(vec![
+        json!({"url":"https://media.example/a.mkv","name":"remembered","quality_height":1080,"behaviorHints":{"bingeGroup":"group-a"}}),
+        json!({"url":"https://media.example/b.mkv","name":"other","quality_height":1080}),
+    ]);
+    let provider_id=app.addons.clone().for_account(1).engine_connections(1).unwrap().into_iter().find(|c|c.capabilities.contains(&viptv_engine::capabilities::Capability::Sources)).unwrap().id;
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    let body=json!({"ids":ids,"series_memory":{"provider_id":provider_id,"binge_group":"group-a"}});
+    let(status,ranked)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",body).await;
+    assert_eq!(status,StatusCode::OK,"{ranked}");
+    let names=ranked["streams"].as_array().unwrap().iter().map(|card|card["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(names,["remembered","other"]);
+    assert_eq!(ranked["best_match_id"],ids[0]);
+}
+
+#[tokio::test]
+async fn invalid_capabilities_are_rejected() {
+    let (app,cards)=rank_fixture(vec![json!({"url":"https://media.example/a.mkv","name":"a","quality_height":1080})]);
+    let ids=cards.iter().map(|card|card["id"].clone()).collect::<Vec<_>>();
+    for invalid in [
+        json!({"max_height":143}),
+        json!({"max_height":4321}),
+        json!({"video_codecs":[{"codec":"hevc","support":"supported","max_height":4321}]}),
+        json!({"video_codecs":[{"codec":"bad codec!","support":"supported"}]}),
+    ] {
+        let (status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"device":invalid})).await;
+        assert_eq!(status,StatusCode::BAD_REQUEST,"{body}");
+        assert!(body.to_string().contains("Invalid source selection"),"{body}");
+    }
+    for invalid in [
+        json!({"provider_id":"","binge_group":"g"}),
+        json!({"provider_id":"addon:1","binge_group":""}),
+    ] {
+        let (status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"series_memory":invalid})).await;
+        assert_eq!(status,StatusCode::BAD_REQUEST,"{body}");
+        assert!(body.to_string().contains("Invalid source selection"),"{body}");
+    }
+}

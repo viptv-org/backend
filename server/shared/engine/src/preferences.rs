@@ -331,6 +331,210 @@ const RELEASE_RANK: [(&str, u8); 7] = [
     ("other_rip", 4),
 ];
 
+/// One client-reported decode answer. `unknown` leaves ranking unchanged.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DecodeSupport {
+    #[default]
+    Unknown,
+    Supported,
+    Unsupported,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct VideoCodecSupport {
+    /// `avc`, `hevc`, `av1` or `vp9`; names compare case-insensitively.
+    pub codec: String,
+    pub support: DecodeSupport,
+    /// Highest height the device decodes in hardware; absent is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AudioCodecSupport {
+    /// `ac3`, `eac3`, `truehd` or `dts`.
+    pub codec: String,
+    pub support: DecodeSupport,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct HdrSupport {
+    /// `hdr10`, `hdr10_plus`, `hlg` or `dv`.
+    pub hdr: String,
+    pub support: DecodeSupport,
+}
+
+/// What the client can decode and show, reported with every ranking request.
+/// Every part defaults to unknown, which ranks exactly as before.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeviceCapability {
+    /// Display height the client snapped to 2160/1440/1080/720/480.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub video_codecs: Vec<VideoCodecSupport>,
+    #[serde(skip_serializing_if = "is_unknown")]
+    pub dolby_vision: DecodeSupport,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub display_hdr: Vec<HdrSupport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub audio_codecs: Vec<AudioCodecSupport>,
+}
+
+/// The last source this profile started for this series, remembered by the
+/// add-on's binge group so later episodes can prefer the same release family.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct SeriesMemory {
+    pub provider_id: String,
+    pub binge_group: String,
+}
+
+/// Everything one ranking request carries besides the rows and the profile.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RankingContext {
+    /// The title's original language; absent means unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_language: Option<String>,
+    pub device: DeviceCapability,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series_memory: Option<SeriesMemory>,
+}
+
+fn is_unknown(support: &DecodeSupport) -> bool {
+    *support == DecodeSupport::Unknown
+}
+
+const MAX_CAPABILITY_ENTRIES: usize = 8;
+const MAX_SERIES_MEMORY_TEXT: usize = 128;
+
+fn capability_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 16
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn memory_text(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= MAX_SERIES_MEMORY_TEXT
+        && !value.chars().any(char::is_control)
+}
+
+impl DeviceCapability {
+    pub fn validate(&self) -> Result<(), Error> {
+        let height =
+            |value: &Option<u32>| value.is_some_and(|height| !(144..=4320).contains(&height));
+        if height(&self.max_height)
+            || self.video_codecs.len() > MAX_CAPABILITY_ENTRIES
+            || self.display_hdr.len() > MAX_CAPABILITY_ENTRIES
+            || self.audio_codecs.len() > MAX_CAPABILITY_ENTRIES
+            || self
+                .video_codecs
+                .iter()
+                .any(|entry| !capability_name(&entry.codec) || height(&entry.max_height))
+            || self
+                .display_hdr
+                .iter()
+                .any(|entry| !capability_name(&entry.hdr))
+            || self
+                .audio_codecs
+                .iter()
+                .any(|entry| !capability_name(&entry.codec))
+        {
+            return Err(Error::InvalidQuery);
+        }
+        Ok(())
+    }
+}
+
+impl RankingContext {
+    pub fn for_device_height(device_max_height: Option<u32>) -> Self {
+        Self {
+            device: DeviceCapability {
+                max_height: device_max_height,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), Error> {
+        self.device.validate()?;
+        if self
+            .original_language
+            .as_deref()
+            .is_some_and(|tag| !language_tag(tag))
+            || self
+                .series_memory
+                .as_ref()
+                .is_some_and(|memory| {
+                    !memory_text(&memory.provider_id) || !memory_text(&memory.binge_group)
+                })
+        {
+            return Err(Error::InvalidQuery);
+        }
+        Ok(())
+    }
+}
+
+/// Supported, unknown, risky or unsupported on this device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodeClass {
+    Supported,
+    Unknown,
+    Risky,
+    Unsupported,
+}
+
+/// Risky is a Dolby Vision row with no known HDR10/SDR base layer on a device
+/// without a Dolby Vision decoder, or a codec the device only decodes in
+/// software at this resolution.
+pub fn decode_class(
+    candidate: &crate::stremio::SourceCandidate,
+    capability: &DeviceCapability,
+) -> DecodeClass {
+    let declared = candidate.video_codec.as_deref().and_then(|codec| {
+        capability
+            .video_codecs
+            .iter()
+            .find(|entry| entry.codec.eq_ignore_ascii_case(codec))
+    });
+    if declared.is_some_and(|entry| entry.support == DecodeSupport::Unsupported) {
+        return DecodeClass::Unsupported;
+    }
+    let dv_without_base_layer = candidate.dynamic_range.iter().any(|range| range == "dv")
+        && !matches!(candidate.dv_base_layer.as_deref(), Some("hdr10" | "sdr"));
+    if dv_without_base_layer && capability.dolby_vision == DecodeSupport::Unsupported {
+        return DecodeClass::Risky;
+    }
+    match declared {
+        Some(entry) if entry.support == DecodeSupport::Supported => {
+            match (candidate.quality_height, entry.max_height) {
+                (Some(height), Some(max)) if height > max => DecodeClass::Risky,
+                _ => DecodeClass::Supported,
+            }
+        }
+        _ => DecodeClass::Unknown,
+    }
+}
+
+fn preferred_dynamic_range(
+    candidate: &crate::stremio::SourceCandidate,
+    capability: &DeviceCapability,
+) -> bool {
+    candidate.dynamic_range.iter().any(|range| {
+        range != "dv" || capability.dolby_vision != DecodeSupport::Unsupported
+    })
+}
+
 /// The Best matches group is the top-ranked rows that pass every hard filter,
 /// at most this many; rows failing a filter sort after every other row.
 pub const BEST_MATCHES_LIMIT: usize = 5;
@@ -343,48 +547,64 @@ pub struct SourceRanking {
     pub best_match_fully_matches: bool,
 }
 
-/// Cam, 3D and torrents reporting fewer than five seeders never join the Best
-/// matches group; an unknown seeder count is not filtered.
-pub fn fails_hard_filter(candidate: &crate::stremio::SourceCandidate) -> bool {
+/// Cam, 3D, torrents reporting fewer than five seeders and rows the device
+/// cannot decode never join the Best matches group; an unknown seeder count is
+/// not filtered.
+pub fn fails_hard_filter(
+    candidate: &crate::stremio::SourceCandidate,
+    capability: &DeviceCapability,
+) -> bool {
     candidate.release_type.as_deref() == Some("cam")
         || candidate.three_d
         || (candidate.delivery.as_deref() == Some("torrent")
             && candidate.seeders.is_some_and(|seeders| seeders < 5))
+        || decode_class(candidate, capability) == DecodeClass::Unsupported
 }
 
 /// Quality and spoken-audio metadata come from plugins and the shared release
 /// facts normalizer, never presentation-label parsing at ranking time.
-/// `device_max_height` lowers the profile cap to what the device shows.
+/// `device.max_height` lowers the profile cap to what the device shows.
 pub fn rank_sources(
     candidates: &mut [crate::stremio::SourceCandidate],
     preferences: &ProfilePreferences,
-    original_language: Option<&str>,
-    device_max_height: Option<u32>,
+    context: &RankingContext,
 ) -> SourceRanking {
-    let cap = match (preferences.max_quality_height, device_max_height) {
+    let capability = &context.device;
+    let original_language = context.original_language.as_deref();
+    let memory = context.series_memory.as_ref();
+    let cap = match (preferences.max_quality_height, capability.max_height) {
         (Some(profile), Some(device)) => Some(profile.min(device)),
         (profile, device) => profile.or(device),
     };
     let requested = preferences.preferred_audio_language.as_deref();
     candidates.sort_by_key(|candidate| {
         let torrent = candidate.delivery.as_deref() == Some("torrent");
-        let excluded = fails_hard_filter(candidate);
+        let excluded = fails_hard_filter(candidate, capability);
+        let decode = match decode_class(candidate, capability) {
+            DecodeClass::Supported => 0,
+            DecodeClass::Unknown => 1,
+            DecodeClass::Risky => 2,
+            DecodeClass::Unsupported => 3,
+        };
         let quality_class = match (cap, candidate.quality_height) {
             (Some(cap), Some(height)) if height > cap => 2,
             (_, None) => 1,
             _ => 0,
         };
+        let remembered = memory.is_some_and(|memory| {
+            candidate.provider_id == memory.provider_id
+                && candidate.binge_group.as_deref() == Some(memory.binge_group.as_str())
+        });
         let release = candidate.release_type.as_deref().map_or(2, |kind| {
             RELEASE_RANK
                 .iter()
                 .find(|(known, _)| *known == kind)
                 .map_or(2, |(_, rank)| *rank)
         });
-        let has_hdr = !candidate.dynamic_range.is_empty();
         let hdr = match preferences.hdr_preference {
             HdrPreference::Any => 0,
-            HdrPreference::Prefer => u8::from(!has_hdr),
-            HdrPreference::Avoid => u8::from(has_hdr),
+            HdrPreference::Prefer => u8::from(!preferred_dynamic_range(candidate, capability)),
+            HdrPreference::Avoid => u8::from(!candidate.dynamic_range.is_empty()),
         };
         let seeders = if torrent {
             (
@@ -396,8 +616,10 @@ pub fn rank_sources(
         };
         (
             excluded,
+            decode,
             language_tier(candidate, requested, original_language),
             quality_class,
+            !remembered,
             // Highest first within the cap; over the cap, closest to it first.
             if quality_class == 2 {
                 i64::from(candidate.quality_height.unwrap_or(0))
@@ -412,14 +634,14 @@ pub fn rank_sources(
     });
     let best_match_ids = candidates
         .iter()
-        .filter(|candidate| !fails_hard_filter(candidate))
+        .filter(|candidate| !fails_hard_filter(candidate, capability))
         .take(BEST_MATCHES_LIMIT)
         .map(|candidate| candidate.id.clone())
         .collect::<Vec<_>>();
     let best_match_id = best_match_ids.first().cloned();
     let best_match_fully_matches = candidates
         .iter()
-        .find(|candidate| !fails_hard_filter(candidate))
+        .find(|candidate| !fails_hard_filter(candidate, capability))
         .is_some_and(|candidate| {
             best_match_fully_matches(candidate, preferences, original_language, cap)
         });

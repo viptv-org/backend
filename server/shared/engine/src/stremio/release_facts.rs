@@ -24,8 +24,11 @@ pub const RELEASE_TYPES: [&str; 8] = [
     "cam",
 ];
 pub const DYNAMIC_RANGES: [&str; 5] = ["dv", "hdr10_plus", "hdr10", "hdr", "hlg"];
+pub const DV_BASE_LAYERS: [&str; 3] = ["hdr10", "sdr", "none"];
+pub const VIDEO_CODECS: [&str; 4] = ["avc", "hevc", "av1", "vp9"];
 pub const AUDIO_FLAGS: [&str; 3] = ["dual", "multi", "dubbed"];
 pub const DELIVERIES: [&str; 2] = ["direct", "torrent"];
+pub const BINGE_GROUP_MAX: usize = 128;
 
 /// Release facts derived from one stream. Delivery is deliberately absent: it
 /// comes from the stream transport (`stream_delivery`), never from text.
@@ -37,10 +40,19 @@ pub struct ReleaseFacts {
     pub three_d: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dynamic_range: Vec<String>,
+    /// HDR10/SDR base layer of a Dolby Vision row; absent is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dv_base_layer: Option<String>,
+    /// `avc`, `hevc`, `av1` or `vp9`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_codec: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub audio_flags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seeders: Option<u32>,
+    /// The add-on's `behaviorHints.bingeGroup`, add-on scoped at ranking time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binge_group: Option<String>,
 }
 
 /// `torrent` for infoHash, magnet or `.torrent` transports, otherwise `direct`.
@@ -240,6 +252,66 @@ fn dynamic_range(line: &str, out: &mut Vec<&'static str>) {
     }
 }
 
+fn video_codec(value: &str) -> Option<&'static str> {
+    let token: String = value
+        .to_ascii_lowercase()
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    match token.as_str() {
+        "h264" | "x264" | "avc" | "avc1" => Some("avc"),
+        "h265" | "x265" | "hevc" | "hvc1" | "hev1" => Some("hevc"),
+        "av1" | "av01" => Some("av1"),
+        "vp9" | "vp09" => Some("vp9"),
+        _ => None,
+    }
+}
+
+fn declared_codec(value: &Value) -> Option<String> {
+    ["video_codec", "codec"]
+        .iter()
+        .filter_map(|key| value[*key].as_str())
+        .find_map(video_codec)
+        .map(str::to_owned)
+}
+
+fn codec(line: &str) -> Option<&'static str> {
+    pattern!(r"(?i)(?:^|[^a-z0-9])(h[ ._-]?26[45]|x[ ._-]?26[45]|avc|hevc|av1|vp9)\b")
+        .find_iter(line)
+        .find_map(|m| video_codec(m.as_str()))
+}
+
+fn hdr10_base(line: &str) -> bool {
+    pattern!(r"(?i)\bHDR10\b|\bHDR\b").is_match(line)
+}
+
+fn derived_base_layer(lines: &[String], dynamic_range: &[String]) -> Option<String> {
+    if !dynamic_range.iter().any(|range| range == "dv") {
+        return None;
+    }
+    lines
+        .iter()
+        .find(|line| pattern!(r"(?i)\bDV\b|\bDoVi\b|\bdolby[ .-]?vision\b").is_match(line))
+        .map(|line| {
+            if hdr10_base(line) {
+                "hdr10"
+            } else if pattern!(r"(?i)\bSDR\b").is_match(line) {
+                "sdr"
+            } else {
+                "none"
+            }
+            .to_owned()
+        })
+}
+
+fn binge_group(source: &Value) -> Option<String> {
+    let value = source.pointer("/behaviorHints/bingeGroup")?.as_str()?.trim();
+    (!value.is_empty()
+        && value.chars().count() <= BINGE_GROUP_MAX
+        && !value.chars().any(char::is_control))
+    .then(|| value.to_owned())
+}
+
 fn three_d(line: &str) -> bool {
     pattern!(r"(?i)\b(?:BD)?3D\b").find_iter(line).any(|m| {
         // `3D audio` is spatial audio, not a stereoscopic video release.
@@ -308,6 +380,13 @@ pub fn source_release_facts(source: &Value) -> ReleaseFacts {
             }
             canonical(out, &DYNAMIC_RANGES)
         });
+    let declared_base_layer = source["dv_base_layer"]
+        .as_str()
+        .and_then(|value| DV_BASE_LAYERS.iter().find(|known| **known == value))
+        .map(|value| (*value).to_owned());
+    let dv_base_layer = declared_base_layer.or_else(|| derived_base_layer(&lines, &dynamic_range));
+    let video_codec = declared_codec(&source)
+        .or_else(|| lines.iter().find_map(|line| codec(line).map(str::to_owned)));
     let audio_flags = declared_list(&source["audio_flags"], &AUDIO_FLAGS).unwrap_or_else(|| {
         let mut out = Vec::new();
         for line in &lines {
@@ -319,7 +398,10 @@ pub fn source_release_facts(source: &Value) -> ReleaseFacts {
         release_type,
         three_d,
         dynamic_range,
+        dv_base_layer,
+        video_codec,
         audio_flags,
         seeders: seeders(source),
+        binge_group: binge_group(&source),
     }
 }
