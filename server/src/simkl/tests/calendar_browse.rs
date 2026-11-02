@@ -199,7 +199,7 @@ async fn calendar_configuration_date_window_and_session_revocation_are_not_empty
 async fn all_types_search_aggregates_only_selected_metadata_provider_and_rejects_ambiguous_paging()
 {
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let router=Router::new().route("/search/:category",get({let calls=calls.clone();move|Path(category):Path<String>|{let calls=calls.clone();async move{
+    let router=Router::new().route("/oauth2/token",post(||async{axum::Json(json!({"access_token":"fixture-private-token","refresh_token":"fixture-refresh-token","token_type":"Bearer","expires_in":604800,"scope":"media:read media:write"}))})).route("/search/:category",get({let calls=calls.clone();move|Path(category):Path<String>|{let calls=calls.clone();async move{
         calls.lock().unwrap().push(category.clone());
         axum::Json(json!([{"title":format!("Actual {category} title"),"ids":{"simkl_id":match category.as_str(){"movie"=>10,"tv"=>20,_=>30}}}]))
     }}}));
@@ -208,6 +208,7 @@ async fn all_types_search_aggregates_only_selected_metadata_provider_and_rejects
     let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let mut app = fixture();
     app.simkl = Arc::new(Service::fixture(&format!("http://{address}")));
+    link(&app).await;
     let (status, page) = request(
         &app,
         "member-token-1",

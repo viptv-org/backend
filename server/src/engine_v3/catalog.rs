@@ -43,8 +43,9 @@ async fn discover_cards(
         return Err(auth::forbidden());
     };
     let scoped = app.clone().with_lease(lease.clone());
-    let (configuration, _) = configuration::read(&scoped, &lease, profile)?;
-    let kinds = if configuration.browsing_plugin == "simkl" {
+    let (configuration, connections) = configuration::read(&scoped, &lease, profile)?;
+    let simkl = configuration.browsing_plugin == "simkl";
+    let kinds = if simkl && simkl_searches(&configuration, &connections)? {
         vec!["movie".to_owned(), "series".to_owned(), "anime".to_owned()]
     } else {
         let (selected, _) = configuration::apply(
@@ -68,10 +69,7 @@ async fn discover_cards(
         kinds.into_iter().collect()
     };
     if kinds.is_empty() {
-        return Err(ApiError(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Search is not configured for this profile".into(),
-        ));
+        return Err(search_unavailable(simkl, simkl_linked(&connections)));
     }
     let tasks = kinds.into_iter().take(3).map(|kind| {
         let mut query = q.clone();
@@ -134,18 +132,35 @@ async fn discover_one(
     let auth::Principal::Account { profile_id, .. } = &lease.principal;
     let profile = profile_id.ok_or_else(auth::forbidden)?;
     let scoped = app.with_lease(lease.clone());
-    let (configuration, _) = configuration::read(&scoped, &lease, profile)?;
+    let (configuration, connections) = configuration::read(&scoped, &lease, profile)?;
     let simkl = configuration.browsing_plugin == "simkl";
-    let simkl_browse = q.addon_id.is_none()
+    let simkl_selected = q.addon_id.is_none()
         && q.catalog
             .as_deref()
             .is_none_or(|catalog| catalog == "simkl-trending" || catalog == "trending");
-    if simkl && (q.is_search() || simkl_browse) {
+    let simkl_search = simkl_selected
+        && simkl
+        && q.is_search()
+        && simkl_searches(&configuration, &connections)?;
+    if simkl && simkl_selected && (simkl_search || !q.is_search()) {
         let result = super::simkl_catalog::discover(scoped.clone(), lease, profile, q).await?;
         configuration::validate_revision(&scoped, profile, configuration.scope.revision)?;
         return Ok(result);
     }
+    let mut q = q;
+    if simkl && simkl_selected {
+        q.catalog = None;
+        q.genre = None;
+        q.extras = None;
+        q.values = None;
+    }
     let (scoped, revision) = configuration::apply(scoped, &lease, profile, capability)?;
+    if q.is_search() && !searchable(&scoped, &q)? {
+        return Err(search_unavailable(
+            simkl && simkl_selected,
+            simkl_linked(&connections),
+        ));
+    }
     let addon_revision = scoped.addons.revision()?;
     let (value, issuer) =
         crate::handlers_catalog::discover_origin(scoped.clone(), lease, q).await?;
@@ -173,6 +188,60 @@ async fn discover_one(
     Ok(axum::Json(
         serde_json::to_value(page).map_err(|_| ApiError::from("Catalog unavailable"))?,
     ))
+}
+
+fn simkl_searches(
+    configuration: &viptv_engine::profile::ProfileConfiguration,
+    connections: &[viptv_engine::profile::IntegrationConnection],
+) -> Result<bool, ApiError> {
+    Ok(viptv_engine::registry::Registry::builtin()
+        .connections_for(
+            configuration,
+            connections,
+            viptv_engine::capabilities::Capability::Search,
+        )
+        .map_err(|_| ApiError::from("Integration unavailable"))?
+        .iter()
+        .any(|connection| connection.plugin_id == "simkl"))
+}
+
+fn simkl_linked(connections: &[viptv_engine::profile::IntegrationConnection]) -> bool {
+    connections
+        .iter()
+        .find(|connection| connection.plugin_id == "simkl")
+        .is_some_and(|connection| connection.revision > 0)
+}
+
+fn searchable(scoped: &App, q: &crate::handlers_catalog::Discover) -> Result<bool, ApiError> {
+    Ok(scoped
+        .addons
+        .catalogs()?
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|catalog| {
+            catalog["type"].as_str() == Some(q.kind.as_str())
+                && catalog["supports_search"].as_bool() == Some(true)
+                && q.addon_id
+                    .is_none_or(|addon| catalog["addon_id"].as_i64() == Some(addon))
+                && q.catalog
+                    .as_deref()
+                    .is_none_or(|id| catalog["id"].as_str() == Some(id))
+        }))
+}
+
+fn search_unavailable(simkl: bool, linked: bool) -> ApiError {
+    ApiError(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        if simkl && !linked {
+            "Link Simkl for authenticated search"
+        } else if simkl {
+            "Enable search for this profile"
+        } else {
+            "Search is not configured for this profile"
+        }
+        .into(),
+    )
 }
 
 #[derive(Default, Deserialize)]
