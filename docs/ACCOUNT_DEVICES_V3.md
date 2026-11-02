@@ -4,7 +4,9 @@
 its unexpired browser and paired-app session families in one response. Each entry
 contains a stable family ID, supplied display name, session kind, creation time,
 current-browser flag and per-device sign-out availability. No credential, hash,
-IP address or hardware identifier is returned. The current browser is listed last.
+IP address or hardware identifier is returned. The calling session is listed first,
+so a client finds its own "This device" row without scrolling; the rest follow
+most recent first.
 Account session creation limits each account to 32 active families; no manual
 pagination is needed. A sign-in at that limit evicts the account's oldest family
 of the same kind first (a browser sign-in prunes a browser, a new pairing prunes

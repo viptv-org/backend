@@ -15,7 +15,7 @@ pub(crate) async fn get(
             [account],
             |row| Ok(json!({"id":account.to_string(),"username":row.get::<_,String>(0)?,"name":row.get::<_,String>(1)?,"role":row.get::<_,String>(2)?})),
         ).map_err(db_error)?;
-        let mut statement = db.prepare("SELECT id,device_name,kind,created_at FROM auth_sessions WHERE account_id=?1 AND refresh_expires>?2 AND kind IN ('browser','device') ORDER BY (id=?3) ASC,created_at DESC,id DESC")
+        let mut statement = db.prepare("SELECT id,device_name,kind,created_at FROM auth_sessions WHERE account_id=?1 AND refresh_expires>?2 AND kind IN ('browser','device') ORDER BY (id=?3) DESC,created_at DESC,id DESC")
             .map_err(db_error)?;
         let devices = statement.query_map(params![account,auth::now(),current], |row| {
             let id: String = row.get(0)?;
