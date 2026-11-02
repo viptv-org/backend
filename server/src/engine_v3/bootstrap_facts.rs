@@ -28,14 +28,12 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
     let enabled = |capability| registry.connections_for(&configuration, &connections, capability)
         .map(|connections| !connections.is_empty())
         .map_err(|_| ApiError::from("Viewing configuration unavailable"));
-    let (restricted, live_allowed, simkl_linked, library_series) = {
+    let (restricted, live_allowed, library_series) = {
         let db = scoped.db.lock().map_err(|_| ApiError::from("Database unavailable"))?;
         lease.validate(&db)?;
         let restricted = kids::restricted(&db, &lease.principal)?;
         let live_allowed = !restricted || kids::unlocked(&db, &lease.principal)?;
-        let linked =
-            crate::simkl::linked_db(&db, lease.principal.account_id().ok_or_else(auth::forbidden)?, profile)?;
-        (restricted, live_allowed, linked, continuation::calendar::has_series_db(&db, profile)?)
+        (restricted, live_allowed, continuation::calendar::has_series_db(&db, profile)?)
     };
     let (movies, series) = if restricted {
         (true, true)
@@ -48,8 +46,7 @@ pub(super) fn navigation(app: &App, lease: &ResourceLease, profile: Option<i64>)
         let has = |kind: &str| catalogs.as_array().into_iter().flatten().any(|catalog| catalog["type"] == kind);
         (has("movie"), has("series"))
     };
-    let media_search = restricted || (enabled(Capability::Search)?
-        && (configuration.browsing_plugin != "simkl" || simkl_linked));
+    let media_search = restricted || enabled(Capability::Search)?;
     let live = live_allowed && enabled(Capability::LiveTv)?;
     let search = media_search || live;
     let calendar = !restricted

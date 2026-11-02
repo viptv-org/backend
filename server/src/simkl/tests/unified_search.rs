@@ -385,7 +385,106 @@ async fn unlinked_profile_advertises_no_simkl_search_and_linking_restores_it_wit
         assert_eq!(row["state"], "Ready", "{row}");
         assert!(!row["cards"].as_array().unwrap().is_empty(), "{row}");
     }
+    for query in [
+        "/api/discover?type=movie&search=Fixture",
+        "/api/discover?type=movie&catalog=simkl-trending&search=Fixture",
+    ] {
+        let (status, page) = request(&app, "member-token-1", "GET", query, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{query}: {page}");
+        let cards = page["cards"].as_array().unwrap();
+        assert!(!cards.is_empty(), "{query}: {page}");
+        assert!(
+            cards
+                .iter()
+                .all(|card| card["metadata_origin"]["provider_id"] == "simkl"),
+            "{query}: {page}"
+        );
+    }
     task.abort();
+}
+
+#[tokio::test]
+async fn browse_search_uses_the_addon_search_until_simkl_is_linked() {
+    let (app, task, _, _) = stack(0).await;
+    assert_eq!(simkl_connection(&app).await["revision"], 0);
+    let (status, bootstrap) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/bootstrap",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{bootstrap}");
+    let search = bootstrap["navigation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == "search")
+        .expect("search nav visible with add-on search");
+    assert_eq!(search["media_search"], true, "{bootstrap}");
+    for query in [
+        "/api/discover?type=movie&search=Fixture",
+        "/api/discover?type=movie&catalog=simkl-trending&search=Fixture",
+        "/api/discover?type=movie&catalog=simkl-trending&genre=drama&search=Fixture",
+        "/api/discover?type=all&search=Fixture",
+    ] {
+        let (status, page) = request(&app, "member-token-1", "GET", query, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{query}: {page}");
+        let cards = page["cards"].as_array().unwrap();
+        assert!(!cards.is_empty(), "{query}: {page}");
+        assert!(
+            cards
+                .iter()
+                .all(|card| card["title"] == "Fixture title"),
+            "{query}: {page}"
+        );
+    }
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/discover?type=anime&search=Fixture",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error_code"], "search_unavailable", "{body}");
+    link(&app).await;
+    for query in [
+        "/api/discover?type=movie&search=Fixture",
+        "/api/discover?type=movie&catalog=simkl-trending&search=Fixture",
+    ] {
+        let (status, page) = request(&app, "member-token-1", "GET", query, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{query}: {page}");
+        let cards = page["cards"].as_array().unwrap();
+        assert_eq!(cards.len(), 1, "{query}: {page}");
+        assert_eq!(cards[0]["title"], "Fixture movie", "{query}: {page}");
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn browse_search_without_a_search_provider_is_a_typed_unavailable() {
+    let mut app = fixture();
+    app.simkl = Arc::new(Service::fixture("http://127.0.0.1:9"));
+    for query in [
+        "/api/discover?type=movie&search=Fixture",
+        "/api/discover?type=movie&catalog=simkl-trending&search=Fixture",
+        "/api/discover?type=all&search=Fixture",
+    ] {
+        let (status, body) = request(&app, "member-token-1", "GET", query, json!({})).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{query}: {body}"
+        );
+        assert_eq!(body["error_code"], "search_unavailable", "{query}: {body}");
+        assert_eq!(
+            body["error"], "Link Simkl for authenticated search",
+            "{query}: {body}"
+        );
+    }
 }
 
 #[tokio::test]

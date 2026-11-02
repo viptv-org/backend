@@ -86,6 +86,82 @@ async fn unspecified_episode_containers_use_transport_route_not_live_kind() {
     assert!(s.acquire_playback_for_kind(p, "series").await.is_err());
 }
 
+#[tokio::test]
+async fn movie_vod_sources_are_resolved_through_lazy_title_and_year_enrichment() {
+    let mut s = service();
+    let p = add_provider(&s);
+    s.lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,extension) VALUES(?1,?2,'2318','movie','Inception (2010)','inception','mp4')",
+            params![format!("iptv:{p}:movie:2318"), p],
+        )
+        .unwrap();
+    let info = json!({"info":{"name":"Inception (2010)","year":2010}});
+    s.lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO provider_cache(provider_id,cache_key,expires_at,payload) VALUES(?1,'get_vod_info:2318',?2,?3)",
+            params![p, crate::util::now() + 300, info.to_string()],
+        )
+        .unwrap();
+    let vault = crate::test_support::vault();
+    {
+        let db = s.lock().unwrap();
+        db.execute_batch(
+            "CREATE TABLE provider_ownership(provider_id INTEGER PRIMARY KEY,account_id INTEGER NOT NULL)",
+        )
+        .unwrap();
+        db.execute("INSERT INTO provider_ownership VALUES(?1,1)", [p])
+            .unwrap();
+        let secret = vault
+            .seal(
+                1,
+                "xtream",
+                &p.to_string(),
+                json!({"url":"https://example.com/base/","username":"user","password":"SUPER_SECRET"})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .unwrap();
+        db.execute(
+            "INSERT INTO provider_credentials_v2 VALUES(?1,1,?2)",
+            params![p, secret],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE providers SET url='',username='',password='',credentials_version=1 WHERE id=?1",
+            [p],
+        )
+        .unwrap();
+        use sha2::{Digest, Sha256};
+        let record = format!("{p}:{:x}", Sha256::digest(b"get_vod_info:2318"));
+        let payload = vault
+            .seal(1, "xtream-cache", &record, info.to_string().as_bytes())
+            .unwrap();
+        db.execute(
+            "UPDATE provider_cache SET payload=?2 WHERE provider_id=?1",
+            params![p, payload],
+        )
+        .unwrap();
+    }
+    s.vault = Some(vault);
+    let rows = s
+        .streams(json!({"type":"movie","id":"tt1375666","name":"Inception","year":2010,"imdb_id":"tt1375666"}))
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0]["url"]
+        .as_str()
+        .unwrap()
+        .ends_with("/movie/user/SUPER_SECRET/2318.mp4"));
+    assert!(s
+        .streams(json!({"type":"movie","id":"tt9999999","name":"Unrelated","year":2010}))
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 #[test]
 fn normalization_is_conservative_and_unicode_aware() {
     assert_eq!(normalize("  Amélie: THE   Film! "), "amelie the film");

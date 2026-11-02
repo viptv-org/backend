@@ -49,6 +49,9 @@ impl ApiError {
                 Some("metadata_mapping_unavailable")
             }
             "This title is no longer available." => Some("metadata_not_found"),
+            "Link Simkl for authenticated search"
+            | "Enable search for this profile"
+            | "Search is not configured for this profile" => Some("search_unavailable"),
             "client_update_required" => Some("client_update_required"),
             MSG_PROFILE_REQUIRED => Some("profile_required"),
             MSG_PARENT_REQUIRED => Some("parent_required"),

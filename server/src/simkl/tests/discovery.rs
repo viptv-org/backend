@@ -61,14 +61,30 @@ async fn configured_default_routes_home_discovery_search_and_detail_without_user
             .any(|v| v["id"] == "catalog" && v["values"][0] == "simkl-trending"));
     }
 
-    for (path, title) in [
-        ("/api/discover?type=movie", "Trending Movie"),
-        ("/api/discover?type=movie&search=Movie", "Search Movie"),
-    ] {
-        let (status, body) = request(&app, "member-token-1", "GET", path, json!({})).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["cards"][0]["title"], title);
-    }
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/discover?type=movie",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["cards"][0]["title"], "Trending Movie");
+    let (status, body) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/discover?type=movie&search=Movie",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["error_code"], "search_unavailable", "{body}");
+    assert_eq!(
+        body["error"], "Link Simkl for authenticated search",
+        "{body}"
+    );
     let (status, detail) = request(
         &app,
         "member-token-1",
