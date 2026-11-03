@@ -204,7 +204,9 @@ async fn bootstrap_returns_without_waiting_for_a_slow_metadata_upstream() {
     use axum::routing::get;
     use std::sync::atomic::{AtomicUsize, Ordering};
     let calls = Arc::new(AtomicUsize::new(0));
+    let answered = Arc::new(AtomicUsize::new(0));
     let counted = calls.clone();
+    let responded = answered.clone();
     let mock = axum::Router::new()
         .route(
             "/1/catalog/movie/top.json",
@@ -216,9 +218,11 @@ async fn bootstrap_returns_without_waiting_for_a_slow_metadata_upstream() {
             "/1/meta/movie/tt1.json",
             get(move || {
                 let calls = counted.clone();
+                let answered = responded.clone();
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
                     tokio::time::sleep(Duration::from_secs(5)).await;
+                    answered.fetch_add(1, Ordering::SeqCst);
                     axum::Json(json!({"meta":{"id":"tt1","type":"movie","name":"Popular one"}}))
                 }
             }),
@@ -249,15 +253,18 @@ async fn bootstrap_returns_without_waiting_for_a_slow_metadata_upstream() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{saved}");
-    let started = Instant::now();
     let mut body = Value::Null;
     for _ in 0..3 {
         let (status, response) =
             request(&app, "member-token-1", "GET", "/api/bootstrap", json!({})).await;
         assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(
+            answered.load(Ordering::SeqCst),
+            0,
+            "bootstrap waited for a 5 s metadata upstream that already answered"
+        );
         body = response;
     }
-    let elapsed = started.elapsed();
     let row = body["home"]["rows"]
         .as_array()
         .unwrap()
@@ -265,10 +272,6 @@ async fn bootstrap_returns_without_waiting_for_a_slow_metadata_upstream() {
         .find(|row| row["id"] == "addon:1:movie:top")
         .expect("the catalog row is present");
     assert_eq!(row["cards"][0]["title"], "Popular one", "{row}");
-    assert!(
-        elapsed < Duration::from_millis(3000),
-        "bootstrap waited {elapsed:?} for a 5 s metadata upstream"
-    );
     assert_eq!(
         app.home_enrichment.lock().unwrap().len(),
         1,
