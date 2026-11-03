@@ -777,6 +777,7 @@ mod tests {
             badges: vec![],
             parent_identity: None,
             added_at_millis: None,
+            released_at_millis: None,
             category: Some(kind.into()),
             metadata: Some(CardMetadata {
                 year,
