@@ -803,7 +803,7 @@ async fn resolve_with(
         if release_document.is_none() {
             release_document = app
                 .addons
-                .meta(&release.kind, &release.id)
+                .meta_identity(&release.kind, &release.id)
                 .await
                 .ok()
                 .map(meta_of);
@@ -956,7 +956,7 @@ async fn show_document(app: &App, identity: &mut MediaIdentity) -> Option<Value>
                 format!("{namespace}:{value}")
             })
         })?;
-    let meta = meta_of(app.addons.meta("series", &id).await.ok()?);
+    let meta = meta_of(app.addons.meta_identity("series", &id).await.ok()?);
     if !provider_identity::same_title(&meta, &id)
         || meta["videos"].as_array().is_none_or(Vec::is_empty)
     {
