@@ -14,7 +14,7 @@ Android, Android TV and desktop may request native transport version 2 with
 `network_policy: public_discovery_verified_v2`. Authoritative source, account,
 profile, session, exact-VOD and cancellation proofs remain required. Native v2
 torrent requests do not substitute gateway delivery when negotiation, selection
-or transport requirements fail. Web/Roku retain gateway delivery.
+or transport requirements fail. Web retains gateway delivery.
 
 The private version-2 grant preserves canonical hash identity, metainfo/magnet
 input, validated tracker hints and optional file/archive indices. Missing file

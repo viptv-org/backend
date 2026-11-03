@@ -1,8 +1,6 @@
-# Engine-free runtime and offline retirement — 2026-09-30
+# Engine-free runtime and offline retirement
 
-This is an isolated source candidate, not a production operation. The Android
-v2 handoff is merged in source (viptv-org/android#6); still do not deploy this
-server under old media/catalog clients.
+This is an isolated source candidate, not a production operation.
 
 The backend no longer links `viptv-playback-engine`, configures FFmpeg/GPU/media
 directories, serves `/media` bytes, or starts family catalog/health/XMLTV workers.
@@ -75,8 +73,7 @@ Synthetic offline fixtures verify backup/export contents and permissions,
 ID/history/match preservation, active-routing/ownership/encryption refusal, wrong-key/unknown-FK
 rollback, idempotence and no table resurrection at boot. Runtime retirement
 fixtures verify no job allocation/media relay, async responsiveness, exact
-raw/composite history IDs and quality-free writer preservation. The removed
-legacy API suite's shared cases are audited in RETIRED_TEST_AUDIT.md.
+raw/composite history IDs and quality-free writer preservation.
 
 The original runtime checkpoint passed 199 locked Rust tests (185 library + 14
 integration). The incoming-FK guard checkpoint passed 201 (187 library + 14

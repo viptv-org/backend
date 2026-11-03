@@ -178,28 +178,16 @@ Shared synthetic fixtures: [`fixtures/remote-viewing-v3.json`](fixtures/remote-v
 The ordered card projection is asserted against this file by producer tests;
 Clients can consume it alongside their transport/lifecycle fixtures.
 
-## Source validation — 2026-10-23
+## Viewing-bundle mount
 
-The additive action/replacement/default-query producer and canonical engine
-`e42a97fd9734b850b92579e2eb10d800300e39f1` passed the complete single-threaded
-server library suite: **564 passed, 0 failed, 10 ignored** after the effective
-preference resolver/revision cases were added. The ignored cases
-retain their external-runtime requirements. The five parental-policy regression
-cases pass, including all three formerly failing certification observations.
-The native torrent case now feeds an actual producer envelope to the existing
-`NativeTorrentBridge` parser, guarding its closed response shape. Engine checks
-pass both offline and against the canonical commit (51 managed source files).
-These are source/test results, not deployment or physical-device evidence.
-
-The opt-in ignored `engine_v3::remote_tv_acceptance::remote_tv_backend` harness
-also serves the actual router and TV-web static mount from an in-memory fixture
-account. It requires an explicit loopback bind, owned add-on and static output.
-The associated TV-web HTTPS test exercises real device code/approval/token,
-bootstrap/profile selection, durable reload, scoped catalog/detail provenance,
-library save/read and preference persistence. No `/api` responses are intercepted
-in that browser test. Its external add-on content is synthetic, and this harness
-does not qualify gateway transcoding or torrent delivery. It never opens or
-replaces the shared QA database, runtime binary or serving paths.
+`VIPTV_TV_DIST` points at the KMP viewing bundle; `router_with_viewers(app,
+Some(dist))` serves it at the root with SPA fallback for client routes and
+`validate_tv_dist` refuses an incomplete bundle (see server/README.md). The
+`tv_web_mount_tests` and `engine_v3::remote_tv_acceptance::remote_tv_backend`
+names are legacy "tv-web" labels for that KMP mount. The opt-in `remote_tv_backend`
+fixture serves the real router and bundle from an in-memory account and an owned
+synthetic add-on over a loopback bind; it never opens or replaces the shared QA
+database, runtime binary or serving paths.
 
 ## Live directory pagination snapshots
 

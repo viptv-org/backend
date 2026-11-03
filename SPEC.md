@@ -76,11 +76,10 @@ uses the core's dedicated bounded private serializer; no private grant enters
 ordinary launch/session/card/history models, logs or persistent request records.
 
 ## Acceptance
-- Original server source and web source match their migration manifests.
-- All required CI checks pass; container smoke checks execute against the candidate image.
-- dashboard is an exact reviewed commit; CI verifies a checksummed distributable web bundle tied to that source commit; web CI validates its own source. Deploy keys are disabled by repository policy.
-- Compose keeps viptv_viptv_data regardless of the new checkout folder name.
-- Rollback uses the prior immutable image and current data; never replace current history with historical counts.
+- Backend, gateway and clients speak the unversioned `/api` contract; retired namespaces answer as unknown routes.
+- The KMP viewing bundle from `VIPTV_TV_DIST` serves client routes with SPA fallback, and an incomplete bundle fails startup.
+- Account, profile, source and history identities survive migration; the named production data volume is preserved.
+- Rollback uses the prior immutable image with current data; never replace current history with historical counts.
 
 ## Shared logic
-The Rust backend remains the authoritative module for account/profile policy, catalog, source preparation, continuation, queue and history. Clients share versioned HTTP contracts and fixtures first. Add generated TypeScript/Kotlin clients after a reviewed schema exists. Rust FFI or a separate shared core is deferred until real duplicate policy justifies its packaging cost; BrightScript remains a thin presentation/transport client where feasible without changing it in this migration.
+The Rust backend remains the authoritative module for account/profile policy, catalog, source preparation, continuation, queue and history. Clients share versioned HTTP contracts and fixtures first. Add generated TypeScript/Kotlin clients after a reviewed schema exists. Rust FFI or a separate shared core is deferred until real duplicate policy justifies its packaging cost.

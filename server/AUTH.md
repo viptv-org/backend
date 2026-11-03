@@ -1,6 +1,6 @@
 # Account and device authentication
 
-All routes are relative to `/api`. VIPTV has no shared administrator bearer, bootstrap HTTP claim, or anonymous application API. Browser requests use revocable account cookies; Roku uses a revocable paired-device bearer. Public health, registration/login/recovery, pairing initiation/polling, dashboard assets, and capability-scoped media URLs are the only unauthenticated entry points.
+All routes are relative to `/api`. VIPTV has no shared administrator bearer, bootstrap HTTP claim, or anonymous application API. Browser requests use revocable account cookies; the TV client uses a revocable paired-device bearer. Public health, registration/login/recovery, pairing initiation/polling, dashboard assets, and capability-scoped media URLs are the only unauthenticated entry points.
 
 ## First owner and public registration
 
@@ -61,7 +61,7 @@ or approval from the viewing hostname is still forbidden.
 
 An account holds at most 32 sessions, browser and paired-device together, so a client that pairs repeatedly cannot fill the table. A sign-in at that limit evicts the account's oldest session of its own kind first — a browser login prunes browser history and never kicks a paired TV, and a new pairing prunes the oldest TV — falling back to the oldest session of any kind only when the account holds none of its own kind. Expired sessions are deleted before the count, so they never hold a slot: an account whose stored grants have all aged out can always sign in again, and an account at the cap always has room for the sign-in that lets its owner revoke a device. A server-wide bound separately prunes the oldest member sessions of any kind and never the owner's; its `429` names server capacity, not an account state. A viewer signed out everywhere therefore always recovers through `POST /auth/login`, `GET /devices`, and `DELETE /devices/:id`.
 
-Store Roku access/refresh values only in private device storage and send access tokens in the Authorization header, never a query parameter. Pairing codes are short-lived, one-time, and not credentials by themselves. Revocation clears access immediately; there is no fallback credential.
+Store device access/refresh values only in private device storage and send access tokens in the Authorization header, never a query parameter. Pairing codes are short-lived, one-time, and not credentials by themselves. Revocation clears access immediately; there is no fallback credential.
 
 ## Deleting an account
 

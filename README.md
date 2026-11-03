@@ -17,8 +17,8 @@ Copyright (C) 2026 viptv contributors.
 This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation; version 2 of the License. See [LICENSE](LICENSE). The playback adapters (`viptv-org/video`, `viptv-org/tauri-video-plugin`) and the Android repository remain under their existing MIT OR Apache-2.0 terms.
 ## Optional Monitoring
 
-Backend and gateway support opt-in OpenTelemetry export to New Relic; no Roku
-agent or application update is required. `OBSERVABILITY_ENABLED=false` is the
+Backend and gateway support opt-in OpenTelemetry export to New Relic; no
+client agent or application update is required. `OBSERVABILITY_ENABLED=false` is the
 default. Set an ingest-only `NEW_RELIC_LICENSE_KEY` privately, enable monitoring,
 and retain the persistent data volume containing the daily byte-budget ledger.
 See [the shared exporter documentation](server/shared/service-telemetry/README.md)

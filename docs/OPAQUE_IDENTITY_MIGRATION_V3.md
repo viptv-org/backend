@@ -34,10 +34,3 @@ Do not assign current connector incarnations to old ambiguous policy, library or
 
 No storage/API migration is deployed to production during this work. All migration and HTTP tests use disposable data.
 
-## Implementation status (2026-10-15)
-
-The initial-key table above records the pre-migration audit. Canonical shared-engine Store and native host implementations are now additive and qualified separately: optional Card/PlaybackRecord/LibraryStatistics origins, explicit scoped/legacy membership lists, stable connector incarnations, verified multi-origin lookup associations and assertion-specific removal. DTO fields were appended to preserve positional source compatibility, and existing native RPC signatures remain intact.
-
-Backend implementation now has separate stable addon incarnations; origin/expected-Card metadata lookup; scoped policy observations/grants and exact episode edges; Job→stream→gateway and subtitle metadata proofs; origin-aware next; and additive scoped favorites/history/membership/queue integration. Old tables stay legacy. Post-fetch alias writes recheck captured issuer configuration plus profile assignment revision. Source/credential revisions never become durable persistence keys. The final merged backend normal all-target gate passed 503 tests (8 existing ignored), and the SDK variant passed 505 (9 existing ignored), with no failures. Normal release and qualification-only HTTP binaries were copied immutably; only owned disposable browser fixtures are upgraded. Cross-profile/private-provider browser qualification is recorded separately in the parent contract proof.
-
-Wire details are in `PARENT_TITLE_APPROVAL_V3.md`. Expected Card query payloads may omit presentation artwork/descriptions and retain identity, parent identity, provider ID, metadata origin, title and empty badges, reducing URL size without dropping identity assertions. Stored scoped membership includes all authoritative lookup aliases, even when multiple providers share one canonical record, and keeps full IDs/episode/edition assertions. UI consumers must not infer aliases from preview external IDs.
