@@ -195,7 +195,7 @@ pub(super) async fn load(
         profile,
         viptv_engine::capabilities::Capability::Metadata,
     ) {
-        enrich(&metadata_app, profile, &mut snapshot).await;
+        enrich_bounded(&metadata_app, profile, &mut snapshot).await;
     }
     for row in &mut snapshot.rows {
         row.browse = browse_actions.remove(&row.id);
@@ -265,6 +265,21 @@ pub(super) async fn load(
         json!({"background":background,"caption":caption,"progress":progress,"action":action})
     }).collect()).collect();
     Ok(PresentedHome { snapshot, previews })
+}
+
+async fn enrich_bounded(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {
+    let budget = Duration::from_millis(350);
+    if tokio::time::timeout(budget, enrich(app, profile, snapshot))
+        .await
+        .is_ok()
+    {
+        return;
+    }
+    let mut background = snapshot.clone();
+    let app = app.clone();
+    tokio::spawn(async move {
+        enrich(&app, profile, &mut background).await;
+    });
 }
 
 async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {

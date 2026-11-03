@@ -200,6 +200,71 @@ async fn home_rejects_cross_profile_access() {
 }
 
 #[tokio::test]
+async fn bootstrap_returns_without_waiting_for_a_slow_metadata_upstream() {
+    use axum::routing::get;
+    let mock = axum::Router::new()
+        .route(
+            "/1/catalog/movie/top.json",
+            get(|| async {
+                axum::Json(json!({"metas":[{"id":"tt1","type":"movie","name":"Popular one"}]}))
+            }),
+        )
+        .route(
+            "/2/meta/movie/tt1.json",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                axum::Json(json!({"meta":{"id":"tt1","type":"movie","name":"Popular one"}}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let mut app = fixture();
+    app.addons.allow_test_loopback = true;
+    {
+        let db = app.db.lock().unwrap();
+        let catalog = json!({"id":"catalog","name":"Catalog","version":"1","resources":["catalog"],"types":["movie"],"catalogs":[{"id":"top","name":"Popular","type":"movie"}]});
+        let metadata = json!({"id":"metadata","name":"Metadata","version":"1","resources":["meta"],"types":["movie"]});
+        for (id, manifest) in [(1, &catalog), (2, &metadata)] {
+            db.execute(
+                "INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(?1,?2,?3,?4,1)",
+                params![id, manifest["name"].as_str().unwrap(), format!("http://{address}/{id}/manifest.json"), manifest.to_string()],
+            )
+            .unwrap();
+        }
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    let (status, saved) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/integrations",
+        json!({"revision":0,"browsing_plugin":"stremio","assignments":[
+            {"connection_id":"addon:1","enabled":["Discovery"]},
+            {"connection_id":"addon:2","enabled":["Metadata"]}
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let started = Instant::now();
+    let (status, body) = request(&app, "member-token-1", "GET", "/api/bootstrap", json!({})).await;
+    server.abort();
+    let elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let row = body["home"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "addon:1:movie:top")
+        .expect("the catalog row is present");
+    assert_eq!(row["cards"][0]["title"], "Popular one", "{row}");
+    assert!(
+        elapsed < Duration::from_millis(3000),
+        "bootstrap waited {elapsed:?} for a 5 s metadata upstream"
+    );
+}
+
+#[tokio::test]
 async fn profile_configuration_is_scoped_and_rejects_stale_updates() {
     let app = fixture();
     let (status, first) = request(
