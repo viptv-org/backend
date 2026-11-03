@@ -174,7 +174,7 @@ impl App {
                 &headers,
                 &input.private_values
             ));
-            if source.starts_with("addon:") {
+            if source.starts_with("addon:") || source.starts_with("iptv:") {
                 public["presentation"]["provider_name"] = public["source_name"].clone();
             }
             public["delivery"] = json!(if input.torrent { "torrent" } else { "direct" });
