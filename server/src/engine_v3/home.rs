@@ -195,7 +195,7 @@ pub(super) async fn load(
         profile,
         viptv_engine::capabilities::Capability::Metadata,
     ) {
-        enrich(&metadata_app, profile, &mut snapshot).await;
+        enrich_bounded(&metadata_app, profile, revision, &mut snapshot).await;
     }
     for row in &mut snapshot.rows {
         row.browse = browse_actions.remove(&row.id);
@@ -265,6 +265,48 @@ pub(super) async fn load(
         json!({"background":background,"caption":caption,"progress":progress,"action":action})
     }).collect()).collect();
     Ok(PresentedHome { snapshot, previews })
+}
+
+async fn enrich_bounded(app: &App, profile: i64, revision: u64, snapshot: &mut HomeSnapshot) {
+    let budget = Duration::from_millis(350);
+    if tokio::time::timeout(budget, enrich(app, profile, snapshot))
+        .await
+        .is_ok()
+    {
+        return;
+    }
+    let key = (profile, revision);
+    {
+        let mut running = app
+            .home_enrichment
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !running.insert(key) {
+            return;
+        }
+    }
+    let mut background = snapshot.clone();
+    let app = app.clone();
+    tokio::spawn(async move {
+        let _guard = EnrichmentGuard {
+            app: app.clone(),
+            key,
+        };
+        enrich(&app, profile, &mut background).await;
+    });
+}
+
+struct EnrichmentGuard {
+    app: App,
+    key: (i64, u64),
+}
+
+impl Drop for EnrichmentGuard {
+    fn drop(&mut self) {
+        if let Ok(mut running) = self.app.home_enrichment.lock() {
+            running.remove(&self.key);
+        }
+    }
 }
 
 async fn enrich(app: &App, profile: i64, snapshot: &mut HomeSnapshot) {

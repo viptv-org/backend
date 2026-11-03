@@ -200,6 +200,94 @@ async fn home_rejects_cross_profile_access() {
 }
 
 #[tokio::test]
+async fn bootstrap_returns_without_waiting_for_a_slow_metadata_upstream() {
+    use axum::routing::get;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let mock = axum::Router::new()
+        .route(
+            "/1/catalog/movie/top.json",
+            get(|| async {
+                axum::Json(json!({"metas":[{"id":"tt1","type":"movie","name":"Popular one","background":"https://images.example/tt1.png"}]}))
+            }),
+        )
+        .route(
+            "/1/meta/movie/tt1.json",
+            get(move || {
+                let calls = counted.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    axum::Json(json!({"meta":{"id":"tt1","type":"movie","name":"Popular one"}}))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let mut app = fixture();
+    app.addons.allow_test_loopback = true;
+    {
+        let db = app.db.lock().unwrap();
+        let manifest = json!({"id":"cinemeta","name":"Cinemeta","version":"1","resources":["catalog","meta"],"types":["movie"],"catalogs":[{"id":"top","name":"Popular","type":"movie"}]});
+        db.execute(
+            "INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Cinemeta',?1,?2,1)",
+            params![format!("http://{address}/1/manifest.json"), manifest.to_string()],
+        )
+        .unwrap();
+    }
+    crate::test_support::encrypt_fixture_sources(&app);
+    let (status, saved) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/integrations",
+        json!({"revision":0,"browsing_plugin":"stremio","assignments":[
+            {"connection_id":"addon:1","enabled":["Discovery","Metadata"]}
+        ]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let started = Instant::now();
+    let mut body = Value::Null;
+    for _ in 0..3 {
+        let (status, response) =
+            request(&app, "member-token-1", "GET", "/api/bootstrap", json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        body = response;
+    }
+    let elapsed = started.elapsed();
+    let row = body["home"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "addon:1:movie:top")
+        .expect("the catalog row is present");
+    assert_eq!(row["cards"][0]["title"], "Popular one", "{row}");
+    assert!(
+        elapsed < Duration::from_millis(3000),
+        "bootstrap waited {elapsed:?} for a 5 s metadata upstream"
+    );
+    assert_eq!(
+        app.home_enrichment.lock().unwrap().len(),
+        1,
+        "exactly one background enrichment is in flight across three bootstraps"
+    );
+    server.abort();
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert!(
+        app.home_enrichment.lock().unwrap().is_empty(),
+        "the in-flight guard is released once the background enrichment ends"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "one inline fetch plus one background fetch reach the upstream"
+    );
+}
+
+#[tokio::test]
 async fn profile_configuration_is_scoped_and_rejects_stale_updates() {
     let app = fixture();
     let (status, first) = request(

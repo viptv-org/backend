@@ -1,9 +1,36 @@
 use crate::*;
 use axum::extract::OriginalUri;
+use std::future::Future;
 use viptv_engine::{
     capabilities::{builtins, ExecutionMode},
     profile::Scope,
 };
+
+async fn timed<T>(
+    phase: &'static str,
+    work: impl Future<Output = Result<T, ApiError>> + Send,
+) -> Result<T, ApiError> {
+    let start = Instant::now();
+    let result = work.await;
+    tracing::debug!(phase, elapsed_ms = start.elapsed().as_millis() as u64, ok = result.is_ok());
+    result
+}
+
+async fn when_profile<T, F, Fut>(
+    phase: &'static str,
+    profile: Option<i64>,
+    work: F,
+) -> Result<Option<T>, ApiError>
+where
+    F: FnOnce(i64) -> Fut,
+    Fut: Future<Output = Result<T, ApiError>> + Send,
+{
+    match profile {
+        Some(profile) => timed(phase, work(profile)).await.map(Some),
+        None => Ok(None),
+    }
+}
+
 pub(crate) mod account_devices;
 mod bootstrap_facts;
 #[cfg(test)]
@@ -81,31 +108,46 @@ pub(crate) async fn bootstrap(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
 ) -> ApiResult {
-    let response = auth::info(
-        State(app.clone()),
-        OriginalUri("/api/auth/me".parse().unwrap()),
-        Extension(lease.principal.clone()),
-    )
-    .await?;
-    let bytes = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024)
-        .await
-        .map_err(|_| ApiError::from("Identity unavailable"))?;
-    let identity: Value =
-        serde_json::from_slice(&bytes).map_err(|_| ApiError::from("Identity unavailable"))?;
+    let started = Instant::now();
     let auth::Principal::Account { profile_id, .. } = lease.principal;
-    let revisions = profile_id
-        .map(|profile| revisions::snapshot(&app.clone().with_lease(lease.clone()), profile))
-        .transpose()?;
-    let initial = if let Some(profile) = profile_id {
-        Some(home::load(app.clone(), lease.clone(), profile).await?)
-    } else {
-        None
+    let scoped = app.clone().with_lease(lease.clone());
+    let identity = {
+        let app = app.clone();
+        let principal = lease.principal.clone();
+        timed("identity", async move {
+            let response = auth::info(
+                State(app),
+                OriginalUri("/api/auth/me".parse().unwrap()),
+                Extension(principal),
+            )
+            .await?;
+            let bytes = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024)
+                .await
+                .map_err(|_| ApiError::from("Identity unavailable"))?;
+            Ok(serde_json::from_slice::<Value>(&bytes)
+                .map_err(|_| ApiError::from("Identity unavailable"))?)
+        })
     };
-    let bootstrap_library = if let Some(profile) = profile_id {
-        Some(
+    let revisions = {
+        let app = scoped.clone();
+        when_profile("revisions", profile_id, |profile| {
+            blocking(move || revisions::snapshot(&app, profile))
+        })
+    };
+    let initial = {
+        let app = app.clone();
+        let lease = lease.clone();
+        when_profile("home", profile_id, |profile| async move {
+            home::load(app, lease, profile).await
+        })
+    };
+    let bootstrap_library = {
+        let app = app.clone();
+        let lease = lease.clone();
+        when_profile("library", profile_id, |profile| async move {
             library::list(
-                State(app.clone()),
-                Extension(lease.clone()),
+                State(app),
+                Extension(lease),
                 Path(profile),
                 axum::extract::Query(library::Page {
                     offset: 0,
@@ -113,47 +155,97 @@ pub(crate) async fn bootstrap(
                     ..Default::default()
                 }),
             )
-            .await?
-            .0,
-        )
-    } else {
-        None
-    };
-    let membership = profile_id
-        .map(|profile| {
-            library::membership::snapshot(&app.clone().with_lease(lease.clone()), &lease, profile)
+            .await
+            .map(|json| json.0)
         })
-        .transpose()?;
-    let continuation = profile_id
-        .map(|profile| {
-            continuation::snapshot(
-                &app.clone().with_lease(lease.clone()),
-                &lease,
-                profile,
-                0,
-                12,
-            )
-        })
-        .transpose()?;
-    let subtitle_availability = profile_id
-        .map(|profile| bootstrap_facts::subtitles(&app, &lease, profile))
-        .transpose()?;
-    let navigation = bootstrap_facts::navigation(&app, &lease, profile_id)?;
-    let bootstrap_preferences = if let Some(profile) = profile_id {
-        Some(
-            preferences::get(State(app.clone()), Extension(lease.clone()), Path(profile))
-                .await?
-                .0,
-        )
-    } else {
-        None
     };
+    let membership = {
+        let app = scoped.clone();
+        let lease = lease.clone();
+        when_profile("membership", profile_id, |profile| {
+            blocking(move || library::membership::snapshot(&app, &lease, profile))
+        })
+    };
+    let continuation = {
+        let app = scoped.clone();
+        let lease = lease.clone();
+        when_profile("continuation", profile_id, |profile| {
+            blocking(move || continuation::snapshot(&app, &lease, profile, 0, 12))
+        })
+    };
+    let subtitle_availability = {
+        let app = app.clone();
+        let lease = lease.clone();
+        when_profile("subtitles", profile_id, |profile| {
+            blocking(move || bootstrap_facts::subtitles(&app, &lease, profile))
+        })
+    };
+    let navigation = {
+        let app = app.clone();
+        let lease = lease.clone();
+        timed("navigation", async move {
+            blocking(move || bootstrap_facts::navigation(&app, &lease, profile_id)).await
+        })
+    };
+    let bootstrap_preferences = {
+        let app = app.clone();
+        let lease = lease.clone();
+        when_profile("preferences", profile_id, |profile| async move {
+            preferences::get(State(app), Extension(lease), Path(profile))
+                .await
+                .map(|json| json.0)
+        })
+    };
+    let management = {
+        let app = app.clone();
+        let lease = lease.clone();
+        timed("profiles", async move {
+            profiles::list(State(app), Extension(lease))
+                .await
+                .map(|json| json.0)
+        })
+    };
+    let (
+        identity,
+        revisions,
+        initial,
+        bootstrap_library,
+        membership,
+        continuation,
+        subtitle_availability,
+        navigation,
+        bootstrap_preferences,
+        management,
+    ) = tokio::join!(
+        identity,
+        revisions,
+        initial,
+        bootstrap_library,
+        membership,
+        continuation,
+        subtitle_availability,
+        navigation,
+        bootstrap_preferences,
+        management,
+    );
+    let identity = identity?;
+    let revisions = revisions?;
+    let initial = initial?;
+    let bootstrap_library = bootstrap_library?;
+    let membership = membership?;
+    let continuation = continuation?;
+    let subtitle_availability = subtitle_availability?;
+    let navigation = navigation?;
+    let bootstrap_preferences = bootstrap_preferences?;
+    let management = management?;
+    let authorize = Instant::now();
     lease.validate(
         &*app
             .db
             .lock()
             .map_err(|_| ApiError::from("Database unavailable"))?,
     )?;
+    tracing::debug!(phase = "authorize", elapsed_ms = authorize.elapsed().as_millis() as u64);
     let mut integrations: Vec<_> = builtins()
         .into_iter()
         .filter(|p| {
@@ -182,7 +274,6 @@ pub(crate) async fn bootstrap(
             crate::simkl::imports::schedule(&app.clone().with_lease(lease.clone()), &lease, profile)
         })
         .map(|s| s.json());
-    let axum::Json(management) = profiles::list(State(app), Extension(lease)).await?;
     let mut value=json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial.as_ref().map(|home| &home.snapshot),"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions});
     value["navigation"] = navigation;
     if let Some(membership)=membership.as_ref(){
@@ -193,6 +284,7 @@ pub(crate) async fn bootstrap(
         viewing_presentation::decorate(&mut value,membership,show_ratings)?;
     }
     if let Some(home)=&initial { home.attach(&mut value["home"]); }
+    tracing::debug!(phase = "bootstrap", elapsed_ms = started.elapsed().as_millis() as u64);
     Ok(axum::Json(value))
 }
 
