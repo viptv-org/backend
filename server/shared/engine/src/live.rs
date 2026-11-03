@@ -173,6 +173,7 @@ pub fn live_card(id: String, name: String, logo: Option<String>, provider_id: St
         badges: vec![],
         parent_identity: None,
         added_at_millis: None,
+        released_at_millis: None,
         category: Some("live".into()),
         metadata: None,
     }

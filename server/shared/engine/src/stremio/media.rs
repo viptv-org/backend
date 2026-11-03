@@ -121,6 +121,8 @@ pub fn episode_cards(meta: &Value, provider: &str, item: &Card) -> Result<Vec<Ca
                 });
             }
             card.parent_identity = Some(item.identity.clone());
+            card.released_at_millis = crate::simkl::release_millis(&video["date"])
+                .or_else(|| crate::simkl::release_millis(&video["released"]));
             episodes.push(card);
         }
     }
@@ -180,6 +182,7 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                 badges: vec![],
                 parent_identity: None,
                 added_at_millis: None,
+                released_at_millis: None,
                 category: Some(kind.clone()),
                 metadata: Some(crate::presentation::CardMetadata {
                     year: field(v, "releaseInfo", 256)
@@ -404,6 +407,37 @@ mod identity_proof_tests {
         );
         assert_eq!(detail.item.identity.ids.len(), 3);
         assert!(crate::identity::resolve(&detail.item.identity, "imdb", &[]).is_err());
+    }
+
+    #[test]
+    fn episode_cards_project_release_dates_with_simkl_date_winning() {
+        let detail = detail_page(
+            &serde_json::json!({"meta":{"id":"series-id","type":"series","name":"Series",
+                "videos":[
+                    {"id":"series-id:1:1","season":1,"episode":1,"name":"Released","released":"2026-03-04T00:00:00Z"},
+                    {"id":"series-id:1:2","season":1,"episode":2,"name":"SimklOnly","date":"2024-04-01"},
+                    {"id":"series-id:1:3","season":1,"episode":3,"name":"Both","released":"2026-03-04T00:00:00Z","date":"2026-03-11T00:00:00Z"},
+                    {"id":"series-id:1:4","season":1,"episode":4,"name":"None"}
+                ]}}).to_string(),
+            "addon:one",
+            "series",
+            "series-id",
+            0,
+            24,
+        )
+        .unwrap();
+        let at = |episode: u32| {
+            detail
+                .episodes
+                .iter()
+                .find(|card| card.identity.episode.as_ref().is_some_and(|e| e.episode == episode))
+                .unwrap()
+                .released_at_millis
+        };
+        assert_eq!(at(1), Some(1_772_582_400_000));
+        assert_eq!(at(2), Some(1_711_929_600_000));
+        assert_eq!(at(3), Some(1_773_187_200_000));
+        assert_eq!(at(4), None);
     }
 
     #[test]

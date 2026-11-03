@@ -213,6 +213,7 @@ fn bare(identity: MediaIdentity, parent_identity: Option<MediaIdentity>) -> Card
         badges: vec![],
         parent_identity,
         added_at_millis: None,
+        released_at_millis: None,
         metadata_origin: None,
     }
 }

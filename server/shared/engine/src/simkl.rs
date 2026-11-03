@@ -107,6 +107,7 @@ pub fn card(value: &Value, category: &str) -> Result<Card, Error> {
         badges: vec!["Simkl".into()],
         parent_identity: None,
         added_at_millis: None,
+        released_at_millis: None,
     })
 }
 
@@ -160,6 +161,7 @@ pub fn episodes(value: &Value, parent: &Card) -> Result<Vec<Card>, Error> {
         card.description =
             description::text(&value["description"]).or_else(|| description::text(&value["overview"]));
         card.landscape = image(&value["img"], "episodes", "w");
+        card.released_at_millis = release_millis(&value["date"]);
         cards.push(card);
     }
     cards.sort_by_key(|card| {
@@ -260,6 +262,19 @@ fn cast(value: &Value) -> Vec<String> {
         .take(3)
         .collect()
 }
+pub(crate) fn release_millis(value: &Value) -> Option<u64> {
+    let raw = value.as_str()?;
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .and_then(|date| u64::try_from(date.timestamp_millis()).ok())
+        .or_else(|| {
+            chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+                .ok()?
+                .and_hms_opt(0, 0, 0)
+                .and_then(|date| u64::try_from(date.and_utc().timestamp_millis()).ok())
+        })
+}
+
 fn year(value: &Value) -> Option<u32> {
     if let Some(year) = value["year"]
         .as_u64()

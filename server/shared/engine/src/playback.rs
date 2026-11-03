@@ -67,6 +67,7 @@ impl PlaybackRecord {
             badges: vec![],
             parent_identity: self.parent_identity.clone(),
             added_at_millis: None,
+            released_at_millis: None,
             category: None,
             metadata: None,
         });
