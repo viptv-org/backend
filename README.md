@@ -3,8 +3,7 @@
 Actions runs the backend checks on pull requests into `edge` and `main` and on
 pushes to `edge`; delivery is otherwise by main pushes and manual builds
 producing sideloading artifacts (Android universal APK; desktop Windows/Linux
-installers; Roku ZIP; TV WGT/IPK). No automatic deploys; previous
-CI/release-publication descriptions below are historical.
+installers; Roku ZIP; TV WGT/IPK). No automatic deploys.
 
 Extracted from `vynxc/viptv@7d6b413`. `MIGRATION.json` records every original file and SHA-256; the original repository retains history. This repository owns the Rust backend and deployment packaging.
 

@@ -5,7 +5,7 @@ The owner-authorized refactor follows design
 gateway's `docs/TORRENT_PERFORMANCE_FOLLOWUP.md`; production rollout remains
 separately coordinated.
 
-GET `/api/v2/torrent-runtime-protocol` is authenticated, admitted-profile scoped,
+GET `/api/torrent-runtime-protocol` is authenticated, admitted-profile scoped,
 bodyless and `no-store`. It returns the closed version-2 support object.
 The existing native-v1 route and response remain unchanged. Negotiation records
 are separate, so negotiating one protocol does not authorize the other.
@@ -48,7 +48,7 @@ passes. Strict Clippy passes with the same two pre-existing lint classes allowed
 
 ## Gateway decoder acknowledgement
 
-POST `/api/v2/playback-decoder-start` takes the existing closed playback start
+POST `/api/playback-decoder-start` takes the existing closed playback start
 envelope. Its route-selected mode is part of idempotency identity; it is not an
 extra JSON field. The original start route and native v1 negotiation stay
 compatible. Ordinary HTTP delivery retains its existing admission rules.
@@ -58,7 +58,7 @@ decoder-acknowledgement protocol, including when considering an existing input's
 affinity. Unsupported gateways are refused before source creation. The backend
 uses `/v2/torrent-sessions` and retains the original gateway viewer identity.
 
-POST `/api/v2/playback/:id/first-frame` accepts exactly `{}`. It checks the
+POST `/api/playback/:id/first-frame` accepts exactly `{}`. It checks the
 current account/profile/session, source ownership/configuration, ready lease
 and gateway configuration before brokering the scoped acknowledgement. It does
 not update backend touch time or gateway expiry. Ordinary direct/legacy gateway

@@ -6,8 +6,8 @@ over and this is not a deployment claim.
 
 ## Viewing routes
 
-- `GET /api/v2/iptv/live/channels`
-- `GET /api/v2/iptv/live/categories`
+- `GET /api/iptv/live/channels`
+- `GET /api/iptv/live/categories`
 
 Both require a valid account session and selected, authorized profile. Paired
 devices can browse. Raw catalogs cannot bypass a restricted profile's parent
@@ -78,15 +78,15 @@ cutover is in progress; this is not production or physical-device qualification.
 
 ## Source discovery and native Xtream guide
 
-- `POST /api/v2/streams` starts an incremental discovery job using the existing
+- `POST /api/streams` starts an incremental discovery job using the existing
   Stremio-style movie/series/live request and returns `{id}`.
-- `GET /api/v2/streams/:id?after=N` returns `{events,done}`. Events retain their
+- `GET /api/streams/:id?after=N` returns `{events,done}`. Events retain their
   monotonic `seq`, producer and sanitized stream cards with backend-issued IDs.
   Producer failures include readable `error` and stable `error_code`; successful
   HTTP polling does not imply every producer succeeded. See [v2 errors](ERRORS_V2.md).
   The same exact account/profile/session owns the job. V2 currently uses polling;
   no new SSE endpoint is claimed.
-- `GET /api/v2/iptv/guide/:channel_id` returns bounded Xtream-native programs for
+- `GET /api/iptv/guide/:channel_id` returns bounded Xtream-native programs for
   an owned raw channel. Foreign, absent, disabled and retired family-channel IDs
   receive the same `source_not_found` response.
 
@@ -129,7 +129,7 @@ there. Durable account-owned initial/periodic refresh is also implemented;
 are implemented; client adoption and remaining cutover gates are still open.
 ## Account VOD matching pages
 
-`GET /api/v2/iptv/matches` accepts `provider_id`, `kind` (movie/series),
+`GET /api/iptv/matches` accepts `provider_id`, `kind` (movie/series),
 `search`, `cursor` and `limit` (default 50, 1–200). It returns
 `{items, next_cursor, previous_cursor}`. Rows retain raw `vod_id` and
 `provider_id` values and are always ordered ascending by provider ID and VOD ID,

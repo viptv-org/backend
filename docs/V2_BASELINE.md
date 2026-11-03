@@ -34,11 +34,11 @@ No implicit provider ownership migration or public source-sharing grant occurs.
 
 ## HTTP and migration checkpoint
 
-- GET/PUT `/api/v2/iptv/matches` lists and edits only account-owned candidates.
+- GET/PUT `/api/iptv/matches` lists and edits only account-owned candidates.
   Pages default to 50 and reject sizes above 200, cross-account cursors and
   unknown query fields. Editing a foreign ID is indistinguishable from a missing
   ID. Operator role does not bypass ownership.
-- GET/PUT `/api/v2/iptv/live-default` persists the account default and validates
+- GET/PUT `/api/iptv/live-default` persists the account default and validates
   explicit changes. Paired-device sessions and locked kids profiles cannot use
   these account-management endpoints. No viewing-client swap button was added.
 - `provider-owners` inspects read-only and requires an explicit complete owner
@@ -71,7 +71,7 @@ not prove playback forwarding, public HTTPS deployment or provider-secret migrat
 
 ## Playback control checkpoint
 
-The /api/v2/playback lifecycle now supports native direct delivery and independent
+The /api/playback lifecycle now supports native direct delivery and independent
 gateway-managed delivery, with scoped source validation, active affinity,
 priority/capacity selection and no backend media-byte relay. A real isolated
 container fixture verifies HLS playback/renewal/release through the independent

@@ -8,7 +8,7 @@ separate review.
 
 ## Start and lifecycle
 
-POST /api/v2/playback takes a backend-issued stream_id and a stable request_id:
+POST /api/playback takes a backend-issued stream_id and a stable request_id:
 
 ```json
 {
@@ -58,13 +58,13 @@ metadata, gateway forwarding, overrides, subtitle-off and stable retries. This
 does not establish actual device track qualification.
 
 The initial 202 response includes the backend playback id, status, expires_at
-and renewal interval. Poll GET /api/v2/playback/:id until ready or terminal.
+and renewal interval. Poll GET /api/playback/:id until ready or terminal.
 When ready, delivery.kind is direct or gateway. Direct delivery includes the
 original URL/required headers; this deliberately discloses them to an authorized
 device. Gateway delivery contains an absolute URL under the registered gateway
 origin/path prefix, without an integration key or arbitrary upstream JSON.
 
-POST /api/v2/playback/:id/heartbeat renews the viewer. Existing direct/gateway
+POST /api/playback/:id/heartbeat renews the viewer. Existing direct/gateway
 clients may send the established empty JSON object `{}` or no body; arbitrary
 payloads are refused. Native torrent heartbeat requires no body. DELETE releases
 only that viewer. Status reads do not renew. Use a 20-second heartbeat and respect the
@@ -80,7 +80,7 @@ separated from lifecycle-control concurrency so starts do not monopolize renewal
 
 ## Prepared delivery
 
-POST /api/v2/playback with `"prepare": true` resolves a stream without starting
+POST /api/playback with `"prepare": true` resolves a stream without starting
 it, so a client can line up the next episode while the current one still plays.
 The body is a normal start body and the answer is `201` with status `prepared`,
 `delivery: null`, `expires_at`, `renew_after_seconds` and a plan:
@@ -102,7 +102,7 @@ heartbeat, and is released by the same DELETE. Keep it alive with a 20-second
 heartbeat while the current episode plays. A session may hold four preparations
 at once; more answers `playback_capacity`.
 
-POST /api/v2/playback/:id/promote adopts it. The optional body
+POST /api/playback/:id/promote adopts it. The optional body
 `{"replaces": "<playing playback id>"}` releases that playback first, including
 its gateway viewer and its provider connection, and only then runs the start, so
 the two deliveries never hold one upstream input at once. Without `replaces` the
@@ -147,7 +147,7 @@ must stop native playback when their control authorization is lost.
 
 ## Skip segments
 
-GET /api/v2/playback/:id/segments answers the playing episode's opening, recap
+GET /api/playback/:id/segments answers the playing episode's opening, recap
 and credits intervals in milliseconds on the original media timeline:
 
 ```json
@@ -231,10 +231,9 @@ not production operation. Public HTTPS ingress and browser/device rendering are
 not covered by this fixture.
 
 Account-owned discovery, bounded live catalogs and explicit ownership/provider/
-addon encryption tools are implemented and fixture-tested. Client candidates
-include TV-web `ecec486`, Roku `d46fe66`, Android `c3ebe7b` / quality transport
-evidence `df2e334`; desktop evidence is tracked by the design ledger. Client
-unit/browser fixtures do not establish provider or physical-decoder integration.
+addon encryption tools are implemented and fixture-tested. The KMP app is the
+only supported client; its unit/browser fixtures do not establish provider or
+physical-decoder integration.
 
 Remaining: coordinated merges/builds and downtime approval; production backup/
 ownership/encryption/retirement/recovery; operator private-network exceptions;

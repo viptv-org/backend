@@ -33,7 +33,7 @@ public-classified address remains inside that namespace, preserving actual
 backend private-address rejection. No host address or TLS trust changes occur.
 
 A minimal real addon supplies catalog, metadata and a header-protected stream.
-Registration uses the account's normal `/api/v2/addons` route and verifies the
+Registration uses the account's normal `/api/addons` route and verifies the
 stored configuration is encrypted. Media uses the supported `X-API-Key` source
 header; no source-header whitelist exception is added. The finite provider is
 materialized from actual authenticated gateway output with original segment

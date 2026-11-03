@@ -11,18 +11,18 @@ network exceptions and bulk key rotation remain separately unqualified.
 
 ## V2 management and protected requests
 
-- GET `/api/v2/addons?limit=50&cursor=…` returns `{items,next_cursor}`, with a
+- GET `/api/addons?limit=50&cursor=…` returns `{items,next_cursor}`, with a
   maximum of 200 and account-bound cursors. Records redact manifest URLs and
   include bounded logo metadata when available. A locked/unreadable configuration
   gets a safe per-record error rather than leaking its URL or blocking the list.
-- POST `/api/v2/addons` accepts only `manifest_url`. It validates and downloads
+- POST `/api/addons` accepts only `manifest_url`. It validates and downloads
   the manifest, rechecks the captured authorization, and encrypts it before save.
   A missing keyring refuses before download or write. Existing owned credentials
   are checked before this v2 install fetch; legacy plaintext is not converted
   online.
   A concurrent deletion/reconfiguration conflicts rather than resurrecting a
   deleted source or overwriting a newer manifest.
-- PATCH `/api/v2/addons/:id` accepts `enabled`; DELETE removes that owned addon.
+- PATCH `/api/addons/:id` accepts `enabled`; DELETE removes that owned addon.
   Writes require an account session, not a paired viewing-device session.
 
 Paired devices may read redacted metadata/icons with a selected, authorized
@@ -46,8 +46,7 @@ installs do not occupy the browsing pool. Downloads retain response-size and
 timeout bounds. Test loopback exceptions are explicit and compiled for fixtures,
 not end-user configuration.
 
-The unversioned `/api/addons` wrappers were removed on 2026-10-11; addon
-management is `/api/v2/addons` only. Its list always redacts `manifest_url`;
+Addon management is `/api/addons` only. Its list always redacts `manifest_url`;
 PATCH changes only `enabled`, and DELETE removes an owned entry. These can
 inspect, disable or remove archived legacy rows without decrypting them (the row
 reports its configuration error); enabling one does not make its credentials

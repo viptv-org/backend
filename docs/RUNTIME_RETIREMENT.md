@@ -12,7 +12,7 @@ auth, profiles, history, favorites, queue and v2 API contracts remain.
 After the 2026-10-09 production cutover the `client_update_required` stubs for
 retired namespaces and `/media` were removed; those paths are unknown routes and
 never parse input or create jobs. Addons are managed only through
-`/api/v2/addons`. Historical composite IDs are unavailable
+`/api/addons`. Historical composite IDs are unavailable
 for playback, retained exactly in storage, and never remapped to raw channels.
 
 Normal startup creates no retired configuration tables. Existing advanced

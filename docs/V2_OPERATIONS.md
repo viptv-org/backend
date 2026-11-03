@@ -14,8 +14,7 @@ playlist swap control is introduced by these endpoints.
 
 Current source at `8823114` requires encrypted runtime provider/addon credential
 reads and encrypted new credential writes. Preserved plaintext rows are offline
-migration inputs, not a runtime fallback. Addon management is `/api/v2/addons`
-only; the unversioned `/api/addons` wrappers were removed on 2026-10-11. Historical
+migration inputs, not a runtime fallback. Addon management is `/api/addons` only. Historical
 qualification counts and pre-cutover controls below are checkpoint evidence only.
 
 ## Responsive restoration recovery adoption — 2026-10-02
@@ -92,11 +91,11 @@ unchanged raw data; an encoder fixture checks the exact bounds. Full suite:
 213 passing tests, two opt-in fixtures ignored; Clippy/format/inventory pass.
 Actual source observations on physical devices remain separate acceptance.
 
-Viewing clients use POST `/api/v2/iptv/live/:id/source` for one selected raw
+Viewing clients use POST `/api/iptv/live/:id/source` for one selected raw
 channel. It returns `{source}` with an opaque playback handle, provider identity
 and safe presentation metadata, never a source URL or credentials. It does not
 query addons or allocate a discovery job. The handle then goes through ordinary
-`/api/v2/playback`; native HTTP delivery remains eligible, while Roku/Vizio still
+`/api/playback`; native HTTP delivery remains eligible, while Roku/Vizio still
 require authorized gateway delivery. No gateway means an actionable refusal.
 
 Ownership, enabled live scope, selected profile/parent policy and credential proof
@@ -166,7 +165,7 @@ Compatibility catalog arrays retain their existing shape and list only usable
 encrypted sources when mixed with legacy entries.
 
 Clients may still call `/api/catalogs` metadata routes; addon metadata moved to
-`/api/v2/addons`. Metadata never returns stored manifest URLs; list/PATCH/DELETE
+`/api/addons`. Metadata never returns stored manifest URLs; list/PATCH/DELETE
 remain account-scoped and do not decrypt legacy secrets.
 Enable/delete can operate on archived owned metadata without granting playback
 access to unmigrated credentials. Add-on POST requires a keyring before fetching
@@ -183,13 +182,13 @@ No production migration, deployment, real gateway media or hardware was exercise
 
 Authenticated account sessions use:
 
-- GET/POST `/api/v2/iptv/connections`
-- PATCH/DELETE `/api/v2/iptv/connections/:id`
-- PUT `/api/v2/iptv/connections/:id/credentials` with a replacement `password`.
-- GET `/api/v2/iptv/matches?provider_id=…&kind=movie&search=…&limit=50&cursor=…`
-- PUT `/api/v2/iptv/matches` with `vod_id`, `metadata_id`, `type` (movie/series).
-- GET `/api/v2/iptv/live-default`
-- PUT `/api/v2/iptv/live-default` with `catalog_id`.
+- GET/POST `/api/iptv/connections`
+- PATCH/DELETE `/api/iptv/connections/:id`
+- PUT `/api/iptv/connections/:id/credentials` with a replacement `password`.
+- GET `/api/iptv/matches?provider_id=…&kind=movie&search=…&limit=50&cursor=…`
+- PUT `/api/iptv/matches` with `vod_id`, `metadata_id`, `type` (movie/series).
+- GET `/api/iptv/live-default`
+- PUT `/api/iptv/live-default` with `catalog_id`.
 
 The matches response is `{items, next_cursor}`. No full-library count or candidate
 array is produced. Limit is 1–200; default 50. Cursors are tied to account and
@@ -238,7 +237,7 @@ run; name-only changes do not restart a refresh. Migrated encrypted connections
 without refresh state are queued on backend startup. The backend runtime starts
 the worker when the operator keyring is configured.
 
-- GET `/api/v2/iptv/connections/:id/refresh`: state, timestamps, safe error,
+- GET `/api/iptv/connections/:id/refresh`: state, timestamps, safe error,
   next refresh time and last successful item counts.
 - POST the same route: enqueue/retry (202); an already queued/running request is
   idempotent.

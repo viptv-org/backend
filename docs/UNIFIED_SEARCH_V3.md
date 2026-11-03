@@ -63,7 +63,7 @@ Details, episodes and direct metadata recommendations retain the requested `addo
 
 ## Source discovery
 
-`POST /api/v2/streams` accepts optional `metadata_provider_id=simkl|stremio` and `metadata_addon_id`. The add-on ID requires Stremio. Preserve `series_id` from an episode's parent so a cache miss can fetch the correct parent metadata.
+`POST /api/streams` accepts optional `metadata_provider_id=simkl|stremio` and `metadata_addon_id`. The add-on ID requires Stremio. Preserve `series_id` from an episode's parent so a cache miss can fetch the correct parent metadata.
 
 Provenance is validated before discovery and before SDK cache use. Untrusted client IDs remain lookup hints. An add-on's opaque identifier cannot invoke Simkl mapping merely because it starts with `simkl:`. Legacy requests without these fields retain their previous behavior.
 
