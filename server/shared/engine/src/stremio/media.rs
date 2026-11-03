@@ -209,6 +209,21 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                     // this field does not infer an age or permission.
                     certification: ["contentRating", "certification", "ageRating", "mpaaRating"]
                         .into_iter().find_map(|key| field(v,key,128)),
+                    cast: v["cast"]
+                        .as_array()
+                        .or_else(|| v["credits"]["cast"].as_array())
+                        .or_else(|| v["credits"].as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|entry| {
+                            entry.as_str().map(str::to_owned).or_else(|| {
+                                entry["name"].as_str().map(str::to_owned)
+                            })
+                        })
+                        .filter(|s| !s.trim().is_empty())
+                        .take(3)
+                        .map(|s| s.chars().take(256).collect())
+                        .collect(),
                     ..Default::default()
                 }),
             })

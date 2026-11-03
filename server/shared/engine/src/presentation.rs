@@ -15,6 +15,8 @@ pub struct CardMetadata {
     pub certification: Option<String>,
     #[serde(default)]
     pub alternate_titles: Vec<String>,
+    #[serde(default)]
+    pub cast: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
