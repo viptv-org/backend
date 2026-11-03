@@ -64,18 +64,23 @@ impl Plan {
         } else {
             "Ready"
         };
+        let error_code = if denied {
+            Some("credentials_required")
+        } else {
+            failed.then_some("search_failed")
+        };
         let message = if denied {
             Some("This add-on needs valid credentials to search.")
         } else {
             failed.then_some("Some search results are unavailable. Try again.")
         };
         json!({"id":id,"title":title,"provider_id":provider,"addon_id":addon,"state":state,"cards":cards,
-            "message":message})
+            "message":message,"error_code":error_code})
     }
     fn loading(&self) -> Value {
         let (id, title, provider, addon) = self.identity();
         json!({"id":id,"title":title,"provider_id":provider,"addon_id":addon,"state":"Loading","cards":[],
-            "message":null})
+            "message":null,"error_code":null})
     }
 }
 
