@@ -95,6 +95,7 @@ async fn an_addon_that_always_rejects_access_stops_being_planned() {
             row["message"],
             "This add-on needs valid credentials to search."
         );
+        assert_eq!(row["error_code"], "credentials_required");
         assert_eq!(page["complete"], false);
     }
     let (status, page) = request(
@@ -135,6 +136,7 @@ async fn a_single_rejected_search_does_not_hide_an_addon_that_recovers() {
         failed["message"],
         "This add-on needs valid credentials to search."
     );
+    assert_eq!(failed["error_code"], "credentials_required");
     app.addons.forget_responses();
     let (status, second) = request(
         &app,
@@ -147,6 +149,7 @@ async fn a_single_rejected_search_does_not_hide_an_addon_that_recovers() {
     assert_eq!(status, StatusCode::OK, "{second}");
     let recovered = find_row(&second, "addon:302:movie:flaky").unwrap_or_else(|| panic!("{second}"));
     assert_eq!(recovered["state"], "Ready");
+    assert_eq!(recovered["error_code"], Value::Null);
     assert_eq!(recovered["cards"][0]["title"], "Recovered fixture");
     let (_, third) = request(
         &app,

@@ -191,6 +191,7 @@ async fn each_row_arrives_as_its_provider_completes() {
         failed["message"],
         "Some search results are unavailable. Try again."
     );
+    assert_eq!(failed["error_code"], "search_failed");
     gate.add_permits(1);
     let (event, slow) = frames.next().await;
     assert_eq!(event, "row");
