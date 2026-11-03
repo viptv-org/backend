@@ -254,6 +254,9 @@ impl Addons {
         };
         if let Some((expiry, value, issuer)) = self.meta_results.lock().unwrap().get(&result_key) {
             if *expiry > now() {
+                if value.is_null() {
+                    return Err("Metadata not found".into());
+                }
                 return Ok((value.clone(), *issuer));
             }
         }
@@ -320,6 +323,18 @@ impl Addons {
                     return Ok((primary, issuer));
                 }
             }
+        }
+        {
+            let mut cache = self.meta_results.lock().unwrap();
+            cache.retain(|_, (expiry, _, _)| *expiry > now());
+            let expiry = now() + META_NOT_FOUND_TTL;
+            if cache.len() >= 256 {
+                let drop: Vec<_> = cache.keys().take(64).cloned().collect();
+                for key in drop {
+                    cache.remove(&key);
+                }
+            }
+            cache.insert(result_key, (expiry, Value::Null, 0));
         }
         Err("Metadata not found".into())
     }

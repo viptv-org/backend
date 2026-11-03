@@ -552,6 +552,11 @@ async fn resolve(
                     StatusCode::BAD_GATEWAY,
                     "The selected metadata add-on did not return this title".into(),
                 )
+            } else if error == "Metadata not found" {
+                ApiError(
+                    StatusCode::NOT_FOUND,
+                    "This title is no longer available.".into(),
+                )
             } else {
                 ApiError::from(error)
             }
