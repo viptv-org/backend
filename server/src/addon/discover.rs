@@ -214,20 +214,26 @@ impl Addons {
         kind: &str,
         id: &str,
     ) -> Result<(Value, i64), String> {
-        self.meta_lookup(kind, id, false).await
+        self.meta_lookup(kind, id, false, true).await
     }
     pub(crate) async fn meta_from_selected_addon(
         &self,
         kind: &str,
         id: &str,
     ) -> Result<(Value, i64), String> {
-        self.meta_lookup(kind, id, true).await
+        self.meta_lookup(kind, id, true, true).await
+    }
+    pub(crate) async fn meta_identity(&self, kind: &str, id: &str) -> Result<Value, String> {
+        self.meta_lookup(kind, id, false, false)
+            .await
+            .map(|(value, _)| value)
     }
     async fn meta_lookup(
         &self,
         kind: &str,
         id: &str,
         selected: bool,
+        enrich: bool,
     ) -> Result<(Value, i64), String> {
         let revision = self.revision()?;
         let scoped = match &self.engine_ids {
@@ -254,6 +260,9 @@ impl Addons {
         };
         if let Some((expiry, value, issuer)) = self.meta_results.lock().unwrap().get(&result_key) {
             if *expiry > now() {
+                if value.is_null() {
+                    return Err("Metadata not found".into());
+                }
                 return Ok((value.clone(), *issuer));
             }
         }
@@ -282,7 +291,7 @@ impl Addons {
             if let Ok(v) = result {
                 if v["meta"].is_object() {
                     let mut primary = v;
-                    if kind == "series" && primary["meta"]["videos"].is_array() {
+                    if enrich && kind == "series" && primary["meta"]["videos"].is_array() {
                         crate::gateway::diagnostics::timed("episode_enrich", async {
                             let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
                             while needs_episode_art(&primary["meta"]) {
@@ -305,7 +314,7 @@ impl Addons {
                         })
                         .await;
                     }
-                    {
+                    if enrich {
                         let mut cache = self.meta_results.lock().unwrap();
                         cache.retain(|_, (expiry, _, _)| *expiry > now());
                         let expiry = now() + 3600;
@@ -320,6 +329,18 @@ impl Addons {
                     return Ok((primary, issuer));
                 }
             }
+        }
+        if enrich {
+            let mut cache = self.meta_results.lock().unwrap();
+            cache.retain(|_, (expiry, _, _)| *expiry > now());
+            let expiry = now() + META_NOT_FOUND_TTL;
+            if cache.len() >= 256 {
+                let drop: Vec<_> = cache.keys().take(64).cloned().collect();
+                for key in drop {
+                    cache.remove(&key);
+                }
+            }
+            cache.insert(result_key, (expiry, Value::Null, 0));
         }
         Err("Metadata not found".into())
     }

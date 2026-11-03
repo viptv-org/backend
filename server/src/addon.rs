@@ -47,6 +47,7 @@ type FetchFlight = tokio::sync::OnceCell<Result<Value, String>>;
 pub use viptv_provider::discover::{DiscoveryPlan, DiscoveryRequest as DiscoverOptions};
 
 const NEGATIVE_TTL: i64 = 60;
+const META_NOT_FOUND_TTL: i64 = 60;
 const SEARCH_AUTH_LIMIT: u32 = 3;
 const SEARCH_AUTH_WINDOW: i64 = 10 * 60;
 const SEARCH_COOLDOWN: i64 = 15 * 60;

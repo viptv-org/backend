@@ -120,6 +120,7 @@ async fn link(app: &App) -> String {
 }
 
 mod metadata;
+mod meta_not_found;
 mod oauth;
 
 mod revocation;
