@@ -279,7 +279,7 @@ async fn oauth_required_metadata_uses_profile_link_without_populating_public_cac
 async fn related_titles_and_full_metadata_arrive_in_one_selected_provider_detail_response(){
  let (app,task,_)=server().await;
  let (status,body)=request(&app,"member-token-1","GET","/api/profiles/1/simkl/meta/movie/10",json!({})).await;
- assert_eq!(status,StatusCode::OK,"{body}");assert_eq!(body["item"]["metadata"]["runtime_minutes"],120);assert_eq!(body["item"]["description"],"Full movie detail");assert_eq!(body["recommendations"].as_array().unwrap().len(),1);assert_eq!(body["recommendations"][0]["identity"]["id"],"simkl:movie:12");
+ assert_eq!(status,StatusCode::OK,"{body}");assert_eq!(body["item"]["metadata"]["runtime_minutes"],120);assert_eq!(body["item"]["description"],"Full movie detail");assert_eq!(body["item"]["metadata"]["cast"],json!(["First Actor","Second Actor","Third Actor"]));assert_eq!(body["recommendations"].as_array().unwrap().len(),1);assert_eq!(body["recommendations"][0]["identity"]["id"],"simkl:movie:12");
  task.abort();
 }
 

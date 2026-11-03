@@ -211,6 +211,7 @@ fn metadata(value: &Value) -> crate::presentation::CardMetadata {
         rating_votes: ratings.and_then(|r| r.1),
         certification: text(&value["certification"], 128),
         alternate_titles,
+        cast: cast(value),
     }
 }
 
@@ -241,6 +242,24 @@ pub fn recommendations(value: &Value, parent_category: &str, parent_id: &str) ->
         .collect()
 }
 
+fn cast(value: &Value) -> Vec<String> {
+    value["people"]["cast"]
+        .as_array()
+        .or_else(|| value["cast"].as_array())
+        .or_else(|| value["credits"]["cast"].as_array())
+        .or_else(|| value["credits"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| text(&entry["name"], 256))
+                .or_else(|| text(&entry["person"]["name"], 256))
+        })
+        .take(3)
+        .collect()
+}
 fn year(value: &Value) -> Option<u32> {
     if let Some(year) = value["year"]
         .as_u64()
