@@ -324,12 +324,12 @@ fn year(value: &Value) -> Option<u32> {
     }
     None
 }
-fn runtime_minutes(value: &Value) -> Option<u32> {
+pub(crate) fn runtime_minutes(value: &Value) -> Option<u32> {
     if let Some(n) = value.as_u64().filter(|n| *n > 0 && *n <= 10000) {
         return Some(n as u32);
     }
     let s = value.as_str()?.trim();
-    if s.len() > 64 {
+    if s.is_empty() || s.len() > 64 {
         return None;
     }
     if let Ok(n) = s.parse::<u32>() {
@@ -338,16 +338,25 @@ fn runtime_minutes(value: &Value) -> Option<u32> {
     let mut hours = None;
     let mut minutes = None;
     for word in s.split_whitespace() {
-        if let Some(n) = word.strip_suffix('h') {
-            if hours.is_some() {
+        if word == "min" || word == "m" {
+            continue;
+        }
+        if let Some(n) = word.strip_suffix("min") {
+            if minutes.replace(n.parse::<u32>().ok()?).is_some() {
                 return None;
             }
-            hours = Some(n.parse::<u32>().ok()?);
+        } else if let Some(n) = word.strip_suffix('h') {
+            if hours.replace(n.parse::<u32>().ok()?).is_some() {
+                return None;
+            }
         } else if let Some(n) = word.strip_suffix('m') {
-            if minutes.is_some() {
+            if minutes.replace(n.parse::<u32>().ok()?).is_some() {
                 return None;
             }
-            minutes = Some(n.parse::<u32>().ok()?);
+        } else if let Ok(n) = word.parse::<u32>() {
+            if minutes.replace(n).is_some() {
+                return None;
+            }
         } else {
             return None;
         }
