@@ -17,9 +17,8 @@ always use account-authorized gateway HLS on web, desktop and Android. Native
 torrent delivery and progressive integration remain deferred. The visual/assets
 DESIGN_REF below remains unchanged; this is explicit non-visual contract adoption.
 The bundled viewing client adopts the corresponding reviewed source-picker copy
-and Core/design behavior pins at TV-web `b576a383ec261dd4799f52e52456be065a943a39`
-([PR8](https://github.com/viptv-org/tv-web/pull/8)); this does not establish layout
-or installed-device parity.
+and Core/design behavior pins; this does not establish layout or
+installed-device parity.
 
 DESIGN_REF intentionally remains the baseline visual/asset pin while this
 non-visual backend adoption is in progress. No visual parity or completed
@@ -33,7 +32,7 @@ The non-visual Android extension is specified by
 DESIGN_REF retains the visual/asset baseline. The implementation below consumes
 the non-visual contract; device qualification and deployment are separately scoped.
 
-Authenticated, bodyless GET `/api/v2/playback-protocol` revalidates the resource
+Authenticated, bodyless GET `/api/playback-protocol` revalidates the resource
 lease and admitted profile and returns `{"version":1,"native_torrent_versions":[1]}`
 with `Cache-Control: no-store`. Native admission is enabled by default for every
 authenticated supported Android and Android TV client, without an operator
@@ -76,19 +75,11 @@ Native ready serialization
 uses the core's dedicated bounded private serializer; no private grant enters
 ordinary launch/session/card/history models, logs or persistent request records.
 
-## Historical extraction contract
-
-Move server/, operational scripts, container acceptance and Compose deployment files verbatim from vynxc/viptv@7d6b413. Pin the independently maintained React web repository at dashboard using a git submodule. Keep the HTTP wire contract, SQLite schema/migrations, account/profile IDs, auth origin, provider/addon settings and playback behavior unchanged.
-
-## Historical delivery (superseded by AGENTS.md)
-Pull-request and main CI run fmt, strict Clippy, backend tests including real FFmpeg, pinned-web bundle integrity, Docker build and isolated container acceptance. Successful version tags publish an immutable GHCR image and release metadata. Production rollout uses the existing guarded deployment procedure with all three Compose overlays; image publication is not a claim of production rollout. The named production volume must be explicitly retained when moving checkout directories.
-
 ## Acceptance
-- Original server source and web source match their migration manifests.
-- All required CI checks pass; container smoke checks execute against the candidate image.
-- dashboard is an exact reviewed commit; CI verifies a checksummed distributable web bundle tied to that source commit; web CI validates its own source. Deploy keys are disabled by repository policy.
-- Compose keeps viptv_viptv_data regardless of the new checkout folder name.
-- Rollback uses the prior immutable image and current data; never replace current history with historical counts.
+- Backend, gateway and clients speak the unversioned `/api` contract; retired namespaces answer as unknown routes.
+- The KMP viewing bundle from `VIPTV_TV_DIST` serves client routes with SPA fallback, and an incomplete bundle fails startup.
+- Account, profile, source and history identities survive migration; the named production data volume is preserved.
+- Rollback uses the prior immutable image with current data; never replace current history with historical counts.
 
 ## Shared logic
-The Rust backend remains the authoritative module for account/profile policy, catalog, source preparation, continuation, queue and history. Clients share versioned HTTP contracts and fixtures first. Add generated TypeScript/Kotlin clients after a reviewed schema exists. Rust FFI or a separate shared core is deferred until real duplicate policy justifies its packaging cost; BrightScript remains a thin presentation/transport client where feasible without changing it in this migration.
+The Rust backend remains the authoritative module for account/profile policy, catalog, source preparation, continuation, queue and history. Clients share versioned HTTP contracts and fixtures first. Add generated TypeScript/Kotlin clients after a reviewed schema exists. Rust FFI or a separate shared core is deferred until real duplicate policy justifies its packaging cost.

@@ -1,102 +1,36 @@
 # V2 account IPTV operations
 
-The development engine-free runtime/guarded offline retirement is described
-in [RUNTIME_RETIREMENT.md](RUNTIME_RETIREMENT.md). Reviewed clients now have v2
-adoption candidates; historical checkpoint paragraphs below do not override that
-source evidence or authorize production migration. The Android v2 handoff is
-merged in source (viptv-org/android#6). Legacy runtime behavior cannot be retained in
-the cleanup candidate; retired API namespaces were removed after the 2026-10-09
-cutover and answer as unknown routes.
+The engine-free runtime and guarded offline retirement are described in
+[RUNTIME_RETIREMENT.md](RUNTIME_RETIREMENT.md). Retired API namespaces are no
+longer routed and answer as unknown routes.
 
 This is a development-branch contract, not authorization to migrate production.
 Production deployment and migration require separate approval. No viewing UI or
 playlist swap control is introduced by these endpoints.
 
-Current source at `8823114` requires encrypted runtime provider/addon credential
-reads and encrypted new credential writes. Preserved plaintext rows are offline
-migration inputs, not a runtime fallback. Addon management is `/api/v2/addons`
-only; the unversioned `/api/addons` wrappers were removed on 2026-10-11. Historical
-qualification counts and pre-cutover controls below are checkpoint evidence only.
-
-## Responsive restoration recovery adoption — 2026-10-02
-
-The viewing gitlink adopts reviewed TV-web source
-`c797ad081e41f3ee2c3e1d0eaf7f2ae5e91f83e6` (PR11/PR12/PR13). Failed Next/restoration
-offers one recovery dialog, the responsive Retry icon, exact outgoing
-source/position Retry and manual source/Back actions. Obsolete failure callbacks
-and busy cleanup are fenced to their originating navigation/request; an owned
-same-navigation deadline still offers recovery. TV layout, Core `f66c87e`, and the dashboard gitlink
-`2a6094067e44b6e2b8ab58b012a971c4ab7fad38` are unchanged. Populated responsive
-source lists also retain their existing100px desktop/108px phone row sizes,
-without flex shrink clipping Best match or description content. The twelve-row
-390/1440 geometry regressions are red before/green after; existing focused
-filename/reduced-motion acceptance passes. This restores existing CSS sizes.
-
-Video source `2038c0f` also preserves selected VOD Resume intent while native
-startup metadata is incomplete; an initial duration0/live=true snapshot no
-longer suppresses a requested seek. The two public adapter/IPC regressions are
-red before/green after, with128 Video tests/typecheck/build passing. Renderer
-policy is unchanged. Actual native replay and the reported controls/sidebar
-flicker remain separate; this adoption does not claim a rendering fix.
-
-The consumer's fresh viewing build passes design/Core/video integrity and all
-TypeScript groups. TV-web's recovery source `a2c53af` passed267 app tests, two public-stage
-ownership regressions (cancelled failure red/green), three full UI/HTTP/adapter
-recovery cases and private trusted-HTTPS DeskPlayerRestore inspection.
-Existing backend/runtime/native media evidence retains its recorded source
-pins; this frontend adoption does not requalify installed/physical consumers,
-move a database, change API/media policy or deploy anything.
-
-## Reviewed frontend source checkpoint — 2026-09-30
-
-The dashboard submodule pins web main
-`a6eca85f2bd0dcfaa9e31ab352300bbeccbaab98`, which merges ADM-002 management
-(`93c9316`) and bounded VOD browsing (`048651e`, see
-[BOUNDED_VOD_ACCEPTANCE.md](BOUNDED_VOD_ACCEPTANCE.md)); the viewing submodule pins
-tv-web main `e5789ab30361fba5816e0322bf3df98401604d75`, which labels both
-responsive player timeline ends as clocks (desktop parity, design#3) on top of
-`4ffc748`; that earlier pin adopts Core `1f8483e` and video `514a332`, offers
-only plugin-reported desktop engines and ranks continuation sources against
-measured device capabilities (242 unit tests, build and targeted single-worker
-browser specs passed at both pins). Account management uses the v2
-connection, matches and gateway contracts, while ordinary live viewing uses
-the raw cursor catalog and exact source selection. Retired organizer/setup
-controls are absent from the dashboard. This supersedes the historical notes
-below about the old dashboard matches route and pending client guide adoption.
-The follow-up dashboard pin also rejects repeated/overlapping management pages
-and retains failed-refresh source identity. Same-profile drafts survive parent
-challenges without exposing protected portals, persisting secrets or replaying
-saves; 88 unit tests and both desktop/phone HTTPS fixtures passed. The earlier viewing pin `db9c5ab`
-retires dormant local-only code and adopts Core `8ae9f81`; 234 retained tests and
-36 HTTPS cases passed. These remain client-side evidence, separate from backend
-runtime acceptance. The engine-free backend at `dd37044` passed 207 tests and
-the exact-source isolated real-gateway media lifecycle fixture.
-
-These are source pins, not deployment evidence. Dashboard acceptance used
-mocked APIs over local HTTPS; TV-web passed local unit/browser checks.
-No production database or public website was modified. See the pinned repos'
-validation records for incomplete real-gateway and physical-device gates.
+Encrypted runtime provider/addon credential reads and encrypted new credential
+writes are required. Preserved plaintext rows are offline migration inputs, not
+a runtime fallback. Addon management is `/api/addons` only.
 
 ## Exact live playback and personal guide subsets
 
 ### Cursor size boundary
 
 Live next/previous tokens are bounded at 4096 characters; unmatched-VOD tokens
-retain their existing 2048-character bound. Encoders now enforce the same limit
+retain their existing 2048-character bound. Encoders enforce the same limit
 as their respective decoders. If a provider's original identifier makes a token
 too large, the page fails with a safe 502 `catalog_cursor_too_large` reason instead
 of returning a token that will fail on the next request. This does not truncate,
 filter, delete or rewrite stored provider IDs, change import policy, or add a
 playlist-swap UI. Synthetic HTTP fixtures cover both live directions, VOD and
-unchanged raw data; an encoder fixture checks the exact bounds. Full suite:
-213 passing tests, two opt-in fixtures ignored; Clippy/format/inventory pass.
-Actual source observations on physical devices remain separate acceptance.
+unchanged raw data; an encoder fixture checks the exact bounds. Actual source
+observations on physical devices remain separate acceptance.
 
-Viewing clients use POST `/api/v2/iptv/live/:id/source` for one selected raw
+Viewing clients use POST `/api/iptv/live/:id/source` for one selected raw
 channel. It returns `{source}` with an opaque playback handle, provider identity
 and safe presentation metadata, never a source URL or credentials. It does not
 query addons or allocate a discovery job. The handle then goes through ordinary
-`/api/v2/playback`; native HTTP delivery remains eligible, while Roku/Vizio still
+`/api/playback`; native HTTP delivery remains eligible, while Roku/Vizio still
 require authorized gateway delivery. No gateway means an actionable refusal.
 
 Ownership, enabled live scope, selected profile/parent policy and credential proof
@@ -112,23 +46,13 @@ query override. Categories reject personal collection filters. Saved references
 outside the current playlist (including retired composites) remain in history/
 favorites; they are not silently remapped. No synchronous total is introduced.
 
-Historical pre-retirement checkpoint: full backend suite 281 passed/four opt-in
-fixtures ignored, strict
-all-target Clippy passed. The 13 catalog/ownership fixtures also passed after
-extending exact live selection through native direct v2 admission and release.
-Synthetic tests cover profile-bound saved subsets, default/override isolation,
-hidden foreign/unassigned/composite IDs, parent gates, private source cards and
-credential-proof changes. No real provider, hardware or production state was used.
-Guide/catalog adoption and retired runtime removal subsequently reached the
-reviewed source checkpoints above; that does not complete production cutover.
-
 ## Account management API
 
-### Historical private source headers checkpoint — 2026-09-30
+### Source request headers
 
 Source registration preserves the existing closed request-header allowlist and
-adds only `X-API-Key`, which the existing direct-client and gateway transport
-contracts can carry privately. Cookie, Authorization, X-CSRF-Token and X-API-Key
+adds only `X-API-Key`, which the direct-client and gateway transport contracts
+can carry privately. Cookie, Authorization, X-CSRF-Token and X-API-Key
 credential reflections are omitted from source-card display fields, including
 configured producer labels. Ordinary language/client-identification metadata is
 retained; short cookie values are matched at token boundaries.
@@ -140,19 +64,11 @@ raw input URL or diagnostic is included in this error. Authorized direct deliver
 and gateway preparation retain accepted header values; cards and gateway viewer
 delivery do not disclose them.
 
-Synthetic registration, discovery-event and v2 direct/gateway lease fixtures:
-205 tests passed, two opt-in tests ignored; strict all-target Clippy passed. These
-checks did not qualify real gateway media playback or hardware. At that earlier
-checkpoint, version-zero plaintext fallback still existed. The strict runtime
-encryption boundary below supersedes that behavior; offline migration/retirement
-evidence remains a separate operational gate.
+### Runtime encryption boundary
 
-### Runtime encryption boundary (current behavior; historical validation count)
-
-The subsequent coordinated runtime checkpoint supersedes the plaintext fallback
-caveat above: provider/addon credential readers and opaque-source registration
-refuse version-zero credentials with safe `source_credentials_migration_required`
-copy. Restoring the correct keyring remains necessary for encrypted sources.
+Provider/addon credential readers and opaque-source registration refuse
+version-zero credentials with safe `source_credentials_migration_required` copy.
+Restoring the correct keyring remains necessary for encrypted sources.
 There is no whole-server startup refusal or runtime encryption/owner assignment;
 authentication, history and owned raw catalog-index inspection remain available.
 Unmigrated sources retain their identities and bytes for reviewed offline work.
@@ -166,30 +82,22 @@ Compatibility catalog arrays retain their existing shape and list only usable
 encrypted sources when mixed with legacy entries.
 
 Clients may still call `/api/catalogs` metadata routes; addon metadata moved to
-`/api/v2/addons`. Metadata never returns stored manifest URLs; list/PATCH/DELETE
+`/api/addons`. Metadata never returns stored manifest URLs; list/PATCH/DELETE
 remain account-scoped and do not decrypt legacy secrets.
 Enable/delete can operate on archived owned metadata without granting playback
 access to unmigrated credentials. Add-on POST requires a keyring before fetching
 and writes only encrypted records. It cannot reinstall a legacy source to bypass
 the reviewed migration.
 
-Historical validation at the encryption-boundary checkpoint: 206 tests passed,
-two opt-in tests ignored; strict all-target Clippy
-passed. Synthetic fixtures cover plaintext refusal, unchanged legacy bytes,
-healthy encrypted sources, auth/history/raw-index availability and missing-keyring
-POST refusal before network/write. Genuine source/lease fixtures now use encrypted
-credentials and detail caches. Existing offline migration/export fixtures pass.
-No production migration, deployment, real gateway media or hardware was exercised.
-
 Authenticated account sessions use:
 
-- GET/POST `/api/v2/iptv/connections`
-- PATCH/DELETE `/api/v2/iptv/connections/:id`
-- PUT `/api/v2/iptv/connections/:id/credentials` with a replacement `password`.
-- GET `/api/v2/iptv/matches?provider_id=…&kind=movie&search=…&limit=50&cursor=…`
-- PUT `/api/v2/iptv/matches` with `vod_id`, `metadata_id`, `type` (movie/series).
-- GET `/api/v2/iptv/live-default`
-- PUT `/api/v2/iptv/live-default` with `catalog_id`.
+- GET/POST `/api/iptv/connections`
+- PATCH/DELETE `/api/iptv/connections/:id`
+- PUT `/api/iptv/connections/:id/credentials` with a replacement `password`.
+- GET `/api/iptv/matches?provider_id=…&kind=movie&search=…&limit=50&cursor=…`
+- PUT `/api/iptv/matches` with `vod_id`, `metadata_id`, `type` (movie/series).
+- GET `/api/iptv/live-default`
+- PUT `/api/iptv/live-default` with `catalog_id`.
 
 The matches response is `{items, next_cursor}`. No full-library count or candidate
 array is produced. Limit is 1–200; default 50. Cursors are tied to account and
@@ -238,7 +146,7 @@ run; name-only changes do not restart a refresh. Migrated encrypted connections
 without refresh state are queued on backend startup. The backend runtime starts
 the worker when the operator keyring is configured.
 
-- GET `/api/v2/iptv/connections/:id/refresh`: state, timestamps, safe error,
+- GET `/api/iptv/connections/:id/refresh`: state, timestamps, safe error,
   next refresh time and last successful item counts.
 - POST the same route: enqueue/retry (202); an already queued/running request is
   idempotent.
@@ -273,9 +181,9 @@ Each v2 response is bounded at 64 MiB. This is server-side indexing, not client
 playlist synchronization. Catalog replacement, generation and succeeded status
 commit atomically. Failure keeps the entire prior snapshot; an authenticated,
 valid empty array is a legitimate replacement, not a custom filtering rule.
-The old provider refresh/pool/lineup namespaces are retired in the current
-engine-free runtime and are no longer routed, not an alternate refresh engine. Reviewed admin/client source adoption is recorded above; production
-migration and client handoff/deployment remain separate gates.
+The old provider refresh/pool/lineup namespaces are retired and no longer
+routed, not an alternate refresh engine. Production migration and client
+handoff/deployment remain separate gates.
 
 Each handler revalidates the captured account session before querying or writing.
 Selected kids profiles require parent authorization; paired TV/device sessions
@@ -288,12 +196,9 @@ becomes unavailable, the next default read persists the oldest enabled owned
 provider. No enabled sources means catalog_id is null. An explicit foreign or
 disabled selection fails, without changing the existing default.
 
-Historical pre-admin/pre-retirement notes about the old matches UI and active
-legacy media controls are superseded by the reviewed frontend/runtime checkpoints
-above. Account/admin now uses the v2 management contracts. Deliberately retained
-addon metadata/Stremio wrappers, authentication, profiles and history are not
-retired media/setup controls. This is still not a blanket claim of production
-or all-device playback qualification.
+Deliberately retained addon metadata/Stremio wrappers, authentication, profiles
+and history are not retired media/setup controls. This is not a blanket claim
+of production or all-device playback qualification.
 
 ## Explicit legacy ownership migration
 
@@ -327,10 +232,9 @@ server/target/debug/provider-owners apply /absolute/path/source.sqlite \
   FULL_40_CHARACTER_BACKEND_SOURCE_COMMIT --confirm-ownership
 ```
 
-The final argument is the backend source revision used to build the reviewed
-tool. The original ownership checkpoint preceded its image build. The executable
-is now packaged in the reviewed full image; image/browser fixture evidence does
-not authorize deploying it or running it against production data.
+The final argument is the backend source revision used to build the tool. The
+executable is packaged in the reviewed full image; image/browser fixture evidence
+does not authorize deploying it or running it against production data.
 
 The operation holds BEGIN IMMEDIATE while it:
 
@@ -378,12 +282,10 @@ Full coordinated rollback remains acceptance work before production cutover.
 ## Offline provider credential encryption
 
 This command is implemented and fixture-tested, **not approved for production
-use yet**. Reviewed client/runtime source adoption supersedes the historical
-pending-cutover note, but production migration is not complete. Legacy provider
-renew/update/delete/pool, family matching and external provider XMLTV namespaces
-are retired for all sources and are no longer routed; they are not
-an operational fallback after this command. Raw v2 catalogs, native Xtream guide
-reads and source discovery use the encrypted reader.
+use yet**. Legacy provider renew/update/delete/pool, family matching and external
+provider XMLTV namespaces are retired for all sources and are no longer routed;
+they are not an operational fallback after this command. Raw v2 catalogs, native
+Xtream guide reads and source discovery use the encrypted reader.
 
 After explicit ownership assignment and separately approved downtime, stop all
 backend processes/readers/writers. Supply the same operator-managed
@@ -415,19 +317,6 @@ committed**. Stop remaining readers/writers and investigate; do not assume a
 rollback or overwrite the database from an old backup. A fresh-path retry with
 the same valid keyring repeats validation and cleanup.
 
-Synthetic recovery acceptance on 2026-09-30 holds an actual old WAL reader
-through the encryption transaction. The real checkpoint reports
-`encryption_committed_cleanup_required` after commit, while credential rows are
-already sealed and backup/export remain private. The fixture then records later
-progress and a new history row, closes the reader, and retries with new artifact
-paths. Retry validates existing ciphertext without rotating it, compacts the old
-plaintext and rebuilds FTS while retaining both later history writes and source/
-match identity. This is not permission to overwrite current data with the older
-backup, and does not qualify a coordinated old-image/client rollback. The full
-backend suite at this historical checkpoint passed 210 tests with two opt-in
-media fixtures
-ignored; strict Clippy, formatting and the extraction inventory passed.
-
 Missing/wrong keys, changed ownership and damaged ciphertext fail closed.
 Running the new backend supplies the vault to the provider reader. Native
 direct admission for migrated providers is independent of legacy cross-provider
@@ -438,10 +327,9 @@ This encrypts the provider credential tuple, not the entire SQLite database.
 The **backup and export intentionally contain plaintext**. Retired configuration,
 external copies, logs, filesystem snapshots and physical storage remnants are not
 securely erased by SQLite compaction. Keep artifacts private and apply the
-operator's retention policy; never commit or upload them. Reviewed client source
-adoption is separate from production deployment.
+operator's retention policy; never commit or upload them.
 Operator-managed private-network exceptions, bulk key rotation, production
 migration and coordinated rollback remain unqualified; this is not a complete
 encrypted-secrets acceptance claim. Addon
-storage and reviewed ownership/encryption commands are now covered by
+storage and reviewed ownership/encryption commands are covered by
 [the addon management/migration contract](ADDONS_V2.md).

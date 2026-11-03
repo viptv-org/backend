@@ -1,8 +1,6 @@
 # Delivery and migration
 
-Delivery policy (2026-09-27): backend has no automatic image publication, release or deployment
-workflow. Retain local Rust, frontend, static configuration and isolated gateway
-checks. Android/desktop/Roku/TV-web owning repositories provide their build artifacts.
+Backend has no automatic image publication, release or deployment workflow. Retain local Rust, frontend, static configuration and isolated gateway checks. The KMP app provides the client build artifacts.
 
 ## Frontend source pins
 
@@ -16,9 +14,8 @@ it does not qualify a production frontend package or imply that assets are live.
 The backend is a control plane: no embedded FFmpeg/GPU/media relay/WARP sidecar.
 Independent gateway settings and private operator environment remain separately
 owned. Preserve viptv_viptv_data, account/profile/history/provider/addon IDs,
-keyrings and exact HTTPS origin. Keep historical private deployment overlays/
-env for review and rollback; removed public overlays must not be reapplied as
-active backend configuration.
+keyrings and exact HTTPS origin. Keep private deployment overlays/env for review and rollback; removed public
+overlays must not be reapplied as active backend configuration.
 
 Production promotion, explicit ownership/encryption/retirement and rollback
 are separately approved. Follow DEPLOYMENT.md and docs/RUNTIME_RETIREMENT.md

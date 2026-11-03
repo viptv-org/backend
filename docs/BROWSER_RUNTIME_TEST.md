@@ -14,11 +14,10 @@ slash, dot, underscore or hyphen. Port 18445 must be free; an occupied port
 causes refusal, never replacement of a shared service.
 
 ```sh
-bash scripts/check-browser-runtime.sh --sudo viptv:qualification-27a0296 \
-  sha256:5b5900c8697b89e3519a31fb6685e21e75343b0e3caa3861de697b1aead8b6ef \
-  27a0296c69755e50412a6efeb9ad52564e029fd3 \
-  /mnt/ALPH/code/viptv-org/.local-https/certs/viptv.local.test.crt \
-  /mnt/ALPH/code/viptv-org/.local-https/certs/viptv.local.test.key
+bash scripts/check-browser-runtime.sh --sudo viptv:qualification \
+  <image-digest> <source-sha> \
+  /path/to/.local-https/certs/viptv.local.test.crt \
+  /path/to/.local-https/certs/viptv.local.test.key
 ```
 
 The disposable nonroot/read-only backend uses an internal Docker bridge, no
@@ -68,31 +67,3 @@ browser fixture does not qualify populated IPTV/VOD data, owner/operator routes,
 every authentication/expiry/cancellation permutation, gateway TLS/media,
 physical devices, native stress/PiP, 4K/tracks, production ingress or deployment.
 
-## Checked image — 2026-09-30
-
-The current command above passed eight groups at **both** viewports against
-exact image `5b5900c8697b89e3519a31fb6685e21e75343b0e3caa3861de697b1aead8b6ef`,
-source `27a0296c69755e50412a6efeb9ad52564e029fd3`. HTTP/container and the exact
-real-media gateway lifecycle fixtures passed separately. Private browser evidence
-is at `/tmp/viptv-browser-image.c4PmLb`; every owned resource was verified absent
-before PASS. An initial concurrent run encountered Chromium `ERR_NETWORK_CHANGED`
-during preferences GET while other Docker fixtures were building; it ran no
-complete browser groups and independently verified cleanup. The unchanged test
-passed when run sequentially. Avoid Docker network/interface churn during the
-browser fixture; a read error must remain visible rather than being hidden by
-automatic write replay or an unconditional harness retry.
-
-The earlier source checkpoint also passed eight groups at both viewports against exact image
-`9b2393c866d55321fabd21e61aba86035915e0e1ad1b28108bfb449cb9f94827`,
-source `205a70a06527a9b054e96b84e726e86a51b22fe1`, containing dashboard
-`93c9316` and viewing bundle `db9c5ab`. System Chrome was used explicitly;
-certificate errors were not ignored. Cleanup completed before PASS and verified
-the owned browser, proxy, container, network and fixture listener absent.
-Its private evidence is retained locally at `/tmp/viptv-browser-image.wmLzVQ`.
-
-Two earlier launcher attempts did not execute any browser groups: this host
-does not support publishing the internal bridge through the proposed loopback
-port, and its bundled Chromium cache was absent. Direct access to the verified
-owned container address and explicit installed-Chrome selection corrected those
-fixture dependencies. Both failed attempts independently verified cleanup; they
-are not counted as browser acceptance or backend application failures.

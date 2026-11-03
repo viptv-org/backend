@@ -63,7 +63,7 @@ Details, episodes and direct metadata recommendations retain the requested `addo
 
 ## Source discovery
 
-`POST /api/v2/streams` accepts optional `metadata_provider_id=simkl|stremio` and `metadata_addon_id`. The add-on ID requires Stremio. Preserve `series_id` from an episode's parent so a cache miss can fetch the correct parent metadata.
+`POST /api/streams` accepts optional `metadata_provider_id=simkl|stremio` and `metadata_addon_id`. The add-on ID requires Stremio. Preserve `series_id` from an episode's parent so a cache miss can fetch the correct parent metadata.
 
 Provenance is validated before discovery and before SDK cache use. Untrusted client IDs remain lookup hints. An add-on's opaque identifier cannot invoke Simkl mapping merely because it starts with `simkl:`. Legacy requests without these fields retain their previous behavior.
 
@@ -77,21 +77,6 @@ Regression coverage lives in `server/src/simkl/tests/unified_search.rs`, `server
 
 Implementation and tests are experimental source changes. They do not activate a deployment, restart a live service, install an app, or modify production data.
 
-### Local verification, 2026-10-15
-
-The final backend test build used `--locked -j 1 --lib --features live-runtime,vsources-runtime`. Relevant filters on that build passed **104 tests**:
-
-| Filter | Passed |
-| --- | ---: |
-| `simkl::tests` (including all seven grouped-search regressions and cancellation-safe OAuth rotation) | 67 |
-| `auth::tests` (including device denial and refresh replay isolation) | 30 |
-| `sources::metadata_tests` | 2 |
-| `engine_v3::continuation::tests` | 3 |
-| Existing exact-family library/Home metadata reuse regression | 1 |
-| Delayed metadata/original add-on revision regression | 1 |
-
-The source metadata batch covered 942 cases; the final recorded run took 284 ms. These are isolated synthetic-provider tests, not physical-TV, deployment or production-provider qualification.
-
 ## Continuation and subtitle provenance
 
 `POST /api/profiles/:profile/continue/next` accepts the existing `identity` and `parent_identity`, plus optional `metadata_provider_id` and `metadata_addon_id` as on source discovery. Explicit origins use assigned metadata even when the browsing default differs. The returned next Card retains its origin. Current episode/parent coordinates must agree with provider metadata; upcoming, ambiguous, unknown or exhausted episodes do not manufacture a successor or start playback.
@@ -102,6 +87,3 @@ The shared continuation cache records metadata origin and captured profile/add-o
 
 KMP uses a dedicated optional next-episode job, fenced by playback input, profile, connection, metadata origin and parent. It keeps playback running on lookup failure. Old-server 404 fallback and local paging use actual loaded/provider metadata identities only; no successor IDs are synthesized. An ended stream may retry unavailable next metadata, but playback always waits for an explicit user action.
 
-### Broader backend verification
-
-After the continuation/subtitle additions, the full backend library suite with `live-runtime,vsources-runtime`, one Cargo job and two test threads passed **456 tests, zero failures, ten pre-existing ignores**. All ten grouped-search/provenance cases passed. This supersedes the earlier targeted 104-test checkpoint for that source state; subsequent Live favorites/profile-age additions have their own gates.

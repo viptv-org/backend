@@ -37,11 +37,10 @@ from the host. The supplied `W3Account` board informs the KMP view; new confirma
 failure, empty and narrow-screen variants remain provisional. No existing running
 QA service or real account was changed by implementation/fixture checks.
 
-The combined Live/SDK server gate passed 438 checks with 10 ignored. Four focused
+Four focused
 HTTP/SQLite cases cover family visibility/ownership, per-device/all-device
 revocation, retained saved titles/progress, cookie CSRF/clearing and parent policy.
 Three additional legacy-auth regressions reject approval requests whose captured
 browser family was revoked before final dispatch; a live approval still succeeds.
-Focused existing auth login/refresh/recovery coverage also passed. These are
-synthetic isolated fixtures; neither real account revocation nor QA activation
+These are synthetic isolated fixtures; neither real account revocation nor QA activation
 was performed.

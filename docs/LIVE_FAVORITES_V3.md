@@ -13,5 +13,3 @@ The selected profile, account ownership, Live capability assignment, parent rest
 Favorites reads do not contact providers. For M3U/Xtream, load channels before reading favorites after a cold server start or configuration change. Registry TTL alone does not delete preferences. Actual playback still performs its existing current-source authorization.
 
 Five isolated server tests cover ownership/profile boundaries, idempotence and VOD separation, disabled/unassigned/absent channels, current native registry/revisions, cookie CSRF and kids restrictions, and capacity preservation. These do not qualify physical-TV input or real provider availability.
-
-Full backend library verification after integrating this API and the actual profile-age projection: **462 passed, zero failures, ten pre-existing ignores** (`live-runtime,vsources-runtime`, Cargo jobs1, test threads2; 66.63 seconds). No running TV/production services or provider accounts were changed.

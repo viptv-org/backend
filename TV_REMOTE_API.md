@@ -1,9 +1,7 @@
 # Remote viewing clients — additive API contract
 
-The TV-web rebuild consumes the unversioned `/api/*` surface and bootstrap
-`contract_version: 3`. These additions are shared with the concurrent Roku work;
-existing fields/routes remain compatible. They are local source changes, not a
-claim that production has adopted them.
+The viewing client consumes the unversioned `/api/*` surface and bootstrap
+`contract_version: 3`. Existing fields/routes remain compatible.
 
 ## User intent and presentation
 
@@ -107,9 +105,7 @@ fail visibly. Native torrent replacement is outside this extension.
 Playback uses `/api/playback`, its returned ID, heartbeat and DELETE routes.
 A cancelled/ambiguous admission can be released by
 `DELETE /api/playback-requests/:request_id`. URLs in `delivery` are transient
-media capabilities and are never backend control URLs. TV-web uses conservative
-H.264/AAC gateway delivery and the platform decoder; it runs no local torrent,
-inspection or remux engine. Track/seek changes use a replacement server lease.
+media capabilities and are never backend control URLs. Track/seek changes use a replacement server lease.
 Report observed progress through the existing profile progress/playback-event
 APIs; completion and continuation remain server decisions.
 
@@ -136,8 +132,7 @@ into the shared API merely for a platform's visual comparison.
 Library snapshots now include `default_query`, serialized from the shared
 `LibraryQuery::default()` and matching the normalized unfiltered request. Use
 it for Clear/reset previews, including optional null fields; do not copy a
-platform's hard-coded sort/filter defaults. This addresses the additional
-Library reset request in the Roku handoff.
+platform's hard-coded sort/filter defaults.
 
 The shared engine import is now checked by `scripts/sync-engine.py check` and,
 when the canonical checkout is available, `scripts/sync-engine.py check ../core`.
@@ -147,11 +142,8 @@ restores rating badges and the legacy observation path. Existing origin-scoped
 parental checks continue to evaluate the provider document through their own
 policy implementation; presentation fields are not grants.
 
-Roku handoff reviewed: `roku/docs/BACKEND_HANDOFF.md` (2026-10-23). Producer tests
-cover membership scope, surprising ranking, filters independent of best match,
-exact episode selection and v3 preference delivery. The configured QA binary
-has not been replaced: its reported viewing-action 404 is expected until the
-producer is built and deployed separately.
+Producer tests cover membership scope, surprising ranking, filters independent
+of best match, exact episode selection and v3 preference delivery.
 
 Guide responses add `view.current_program_id`, `view.now_millis`,
 `view.window_start_millis` and `view.window_end_millis`. Clients draw the timeline
@@ -175,51 +167,27 @@ query and its opaque paging cursor. The consumer renders each server-ordered
 result set independently and does not derive suggestions or program captions.
 
 Consumers preserve returned ordering and labels for routes they implement,
-omitting unknown/out-of-scope routes. For example, TV-web deliberately omits
+omitting unknown/out-of-scope routes. For example, a client deliberately omits
 Calendar even when the producer advertises it for another client. A temporary
 provider failure leaves its configured route available for a visible retry;
 it does not silently remove navigation. Configuration/profile revisions refresh
 the projection. The shared fixture includes configured, unconfigured,
 restricted and unselected-profile examples.
 
-## Optional hosting
-
-`VIPTV_TV_WEB_DIST=/absolute/path/to/tv-web/dist` mounts the shared viewing bundle
-at `/tv`, including assets and SPA fallback. TV launchers keep their platform
-query; browser TV mode is `/tv/?layout=tv`. The existing `VIPTV_TV_DIST` KMP root
-and `/device` account dashboard remain unchanged. The optional mount uses the
-same HTTPS/API origin and does not alter CORS or authorization.
-
-The public Rust `router_with_tv` remains compatible; `router_with_viewers` adds
-an explicit fourth optional TV-web path for hosts/tests. No environment or
-production routing is changed automatically by adopting this source patch.
-
 Shared synthetic fixtures: [`fixtures/remote-viewing-v3.json`](fixtures/remote-viewing-v3.json).
 The ordered card projection is asserted against this file by producer tests;
-Roku can consume it alongside its transport/lifecycle fixtures.
+Clients can consume it alongside their transport/lifecycle fixtures.
 
-## Source validation — 2026-10-23
+## Viewing-bundle mount
 
-The additive action/replacement/default-query producer and canonical engine
-`e42a97fd9734b850b92579e2eb10d800300e39f1` passed the complete single-threaded
-server library suite: **564 passed, 0 failed, 10 ignored** after the effective
-preference resolver/revision cases were added. The ignored cases
-retain their external-runtime requirements. The five parental-policy regression
-cases pass, including all three formerly failing certification observations.
-The native torrent case now feeds an actual producer envelope to the existing
-`NativeTorrentBridge` parser, guarding its closed response shape. Engine checks
-pass both offline and against the canonical commit (51 managed source files).
-These are source/test results, not deployment or physical-device evidence.
-
-The opt-in ignored `engine_v3::remote_tv_acceptance::remote_tv_backend` harness
-also serves the actual router and TV-web static mount from an in-memory fixture
-account. It requires an explicit loopback bind, owned add-on and static output.
-The associated TV-web HTTPS test exercises real device code/approval/token,
-bootstrap/profile selection, durable reload, scoped catalog/detail provenance,
-library save/read and preference persistence. No `/api` responses are intercepted
-in that browser test. Its external add-on content is synthetic, and this harness
-does not qualify gateway transcoding or torrent delivery. It never opens or
-replaces the shared QA database, runtime binary or serving paths.
+`VIPTV_TV_DIST` points at the KMP viewing bundle; `router_with_viewers(app,
+Some(dist))` serves it at the root with SPA fallback for client routes and
+`validate_tv_dist` refuses an incomplete bundle (see server/README.md). The
+`tv_web_mount_tests` and `engine_v3::remote_tv_acceptance::remote_tv_backend`
+names are legacy "tv-web" labels for that KMP mount. The opt-in `remote_tv_backend`
+fixture serves the real router and bundle from an in-memory account and an owned
+synthetic add-on over a loopback bind; it never opens or replaces the shared QA
+database, runtime binary or serving paths.
 
 ## Live directory pagination snapshots
 
@@ -240,7 +208,7 @@ Do not splice the returned later page onto old channels or infer identity from
 names, group labels, connection contents or a client counter. A failed reload
 is retryable; it does not restore the incompatible window. Changing queries or
 profiles also retires the previous window. Existing offset/limit and all other
-response fields remain compatible; this does not create a Roku-specific API.
+response fields remain compatible; this does not create a client-specific API.
 
 Producer tests cover stable identities across offsets/limits, changed
 group scope, configuration changes between pages, catalog/category generations,
@@ -296,7 +264,7 @@ is attached to the same scoped Home snapshot after card presentation decoration.
 
 Shared synthetic fixtures: [`fixtures/remote-viewing-v3.json`](fixtures/remote-viewing-v3.json).
 The ordered card projection is asserted against this file by producer tests;
-Roku can consume it alongside its transport/lifecycle fixtures.
+Clients can consume it alongside their transport/lifecycle fixtures.
 
 Live directory offsets accept the full existing unsigned 32-bit query range;
 they are not capped at 10,000. The per-page maximum remains 200, and query-string

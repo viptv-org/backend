@@ -40,25 +40,25 @@ implemented/fixture-tested; no production secret migration is inferred.
 All endpoints require a full account session and parent authorization when a
 selected kids profile is locked. Paired-device sessions cannot manage settings.
 
-- GET /api/v2/gateways: permitted gateway metadata and encryption-configuration
+- GET /api/gateways: permitted gateway metadata and encryption-configuration
   status. No integration keys or ciphertext are returned.
-- POST /api/v2/gateways: name, endpoint, namespace, integration_key, optional
+- POST /api/gateways: name, endpoint, namespace, integration_key, optional
   priority (default 100). The endpoint/key/scopes are checked before saving.
-- PATCH /api/v2/gateways/:id: change name, priority and/or enabled. Cosmetic or
+- PATCH /api/gateways/:id: change name, priority and/or enabled. Cosmetic or
   ranking changes do not change the credential revision.
-- PUT /api/v2/gateways/:id: replace connection configuration with an explicitly
+- PUT /api/gateways/:id: replace connection configuration with an explicitly
   supplied key, preserving the gateway ID and incrementing its revision. An
   existing hidden key is never silently sent to a newly entered endpoint.
-- POST /api/v2/gateways/:id/check: verify the saved credential and namespace.
+- POST /api/gateways/:id/check: verify the saved credential and namespace.
   Returns `ready`, `version` and additive `available` capacity hints
   (`inputs`, `outputs`, `viewers`), or `null` when the gateway omits hints. These
   describe the authorized integration key's capacity at check time, not a
   reservation or a server-wide account/job directory. Granted recipients may
   check capacity but cannot manage the registration or list its recipients.
-- DELETE /api/v2/gateways/:id: idempotent owner-only removal.
-- PUT /api/v2/gateways/:id/grants: account_id plus enabled, for a server operator
+- DELETE /api/gateways/:id: idempotent owner-only removal.
+- PUT /api/gateways/:id/grants: account_id plus enabled, for a server operator
   explicitly granting/revoking access to its own gateway.
-- GET /api/v2/gateways/:id/grants: the same operator/registration-owner boundary.
+- GET /api/gateways/:id/grants: the same operator/registration-owner boundary.
   Query `limit` defaults to 50 and permits 1–200; `cursor` is opaque and bound to
   that operator account and gateway. Returns `{items, next_cursor}` with only
   `account_id` and `enabled: true` per recipient. Revocation deletes the grant,
@@ -114,8 +114,7 @@ Playback lifecycle tests additionally cover native direct policy, mandatory
 Roku/Vizio gateway delivery, capacity/priority selection, active affinity,
 cross-account denial, grant/config revocation and late-start cancellation.
 An isolated container fixture also checks real HLS delivery through the separate
-gateway. Historical pre-cleanup runs kept the backend engine idle; its removal
-requires a rerun against the exact cleanup revision. See PLAYBACK_V2.md.
+gateway. See PLAYBACK_V2.md.
 
 Encryption and client candidates have their own source/fixture evidence.
 Remaining gates include production migration/rollback, coordinated rollout,

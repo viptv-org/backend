@@ -3,7 +3,7 @@
 Use synthetic fixtures and disposable databases. No test described here
 authorizes production mutation, real provider subscriptions or device installs.
 The obsolete embedded-media Compose/smoke/GPU/SSE/soak hooks were removed;
-historical source remains in Git and docs/RETIRED_TEST_AUDIT.md records coverage.
+their source remains in Git history.
 
 ## Runtime and preservation
 

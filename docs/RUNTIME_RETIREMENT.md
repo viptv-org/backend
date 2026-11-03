@@ -1,18 +1,14 @@
-# Engine-free runtime and offline retirement — 2026-09-30
+# Engine-free runtime and offline retirement
 
-This is an isolated source candidate, not a production operation. The Android
-v2 handoff is merged in source (viptv-org/android#6); still do not deploy this
-server under old media/catalog clients.
+This is an isolated source candidate, not a production operation.
 
-The backend no longer links `viptv-playback-engine`, configures FFmpeg/GPU/media
+The backend does not link `viptv-playback-engine`, configures FFmpeg/GPU/media
 directories, serves `/media` bytes, or starts family catalog/health/XMLTV workers.
 Its image omits FFmpeg and Intel media drivers. The independent gateway retains
 its separate engine and wire contract. `/catalogs`, `/discover`, `/meta`, account
 auth, profiles, history, favorites, queue and v2 API contracts remain.
-After the 2026-10-09 production cutover the `client_update_required` stubs for
-retired namespaces and `/media` were removed; those paths are unknown routes and
-never parse input or create jobs. Addons are managed only through
-`/api/v2/addons`. Historical composite IDs are unavailable
+Retired namespaces and `/media` are unknown routes and never parse input or create jobs. Addons are managed only through
+`/api/addons`. Historical composite IDs are unavailable
 for playback, retained exactly in storage, and never remapped to raw channels.
 
 Normal startup creates no retired configuration tables. Existing advanced
@@ -75,18 +71,9 @@ Synthetic offline fixtures verify backup/export contents and permissions,
 ID/history/match preservation, active-routing/ownership/encryption refusal, wrong-key/unknown-FK
 rollback, idempotence and no table resurrection at boot. Runtime retirement
 fixtures verify no job allocation/media relay, async responsiveness, exact
-raw/composite history IDs and quality-free writer preservation. The removed
-legacy API suite's shared cases are audited in RETIRED_TEST_AUDIT.md.
+raw/composite history IDs and quality-free writer preservation.
 
-The original runtime checkpoint passed 199 locked Rust tests (185 library + 14
-integration). The incoming-FK guard checkpoint passed 201 (187 library + 14
-integration), with two opt-in gateway fixtures ignored, strict all-target Clippy,
-formatting and original extraction inventory checks. Its new eight-case fixture
-failed against the pre-guard baseline because retirement incorrectly succeeded;
-the guarded run verifies CASCADE/SET NULL, empty/populated children, mixed-case
+The guard verifies CASCADE/SET NULL, empty/populated children, mixed-case
 targets, unusual child names, private artifacts and unchanged source/marker.
-This replaces retired fixture expectations explicitly rather
-than retaining backend media execution. Root's network-none real-gateway harness
-must be rerun on this exact
-source commit. Production ownership/migration/rollback, native TLS, real provider,
+Production ownership/migration/rollback, native TLS, real provider,
 physical decoder/4K/tracks and coordinated client rollout remain separate gates.

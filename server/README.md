@@ -42,14 +42,14 @@ Authentication, account/profile IDs, favorites, progress, Continue Watching,
 parent policy, manual VOD matches and addon metadata remain backend-owned.
 See AUTH.md, ../docs/V2_OPERATIONS.md, ../docs/ADDONS_V2.md and
 ../docs/CATALOGS_V2.md. /api/catalogs, /api/discover and /api/meta remain active;
-source discovery uses /api/v2/streams. Sources are opaque and caller-scoped.
+source discovery uses /api/streams. Sources are opaque and caller-scoped.
 
-Ordinary raw live viewing uses cursor-bound /api/v2/iptv/live/channels and
+Ordinary raw live viewing uses cursor-bound /api/iptv/live/channels and
 categories, native Xtream guide reads and exact-channel source resolution.
 Preserve provider ordering/IDs/logos; never reconstruct a full client playlist.
 There is no generic M3U/external XMLTV import or automatic family remapping.
 
-Playback uses /api/v2/playback start/status/heartbeat/release. Only account-
+Playback uses /api/playback start/status/heartbeat/release. Only account-
 authorized gateways are eligible; Roku/Vizio require one. Other eligible native
 clients may receive direct source URLs/headers deliberately after authorization.
 Actual decoder limits remain; profile maximum quality is retired. The backend
