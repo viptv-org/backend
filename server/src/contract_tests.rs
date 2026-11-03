@@ -710,6 +710,7 @@ async fn source_filter_labels_use_configured_producer_not_upstream_name() {
         let (cards, _) = app.register(source, vec![json!({"url":"https://example.invalid/video.mp4","name":"Release label 2160p","source_name":"Spoofed producer"})], "movie");
         assert_eq!(cards[0]["source"], source);
         assert_eq!(cards[0]["source_name"], name);
+        assert_eq!(cards[0]["presentation"]["provider_name"], cards[0]["source_name"]);
         assert_eq!(cards[0]["name"], "Release label 2160p");
     }
 }
