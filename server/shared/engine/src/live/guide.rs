@@ -177,7 +177,8 @@ pub fn parse_xmltv(raw: &str, epg: &str, channel: &str) -> Result<Vec<LiveProgra
             }
             Event::End(e) => {
                 depth = depth.checked_sub(1).ok_or(Error::InvalidQuery)?;
-                if e.local_name().as_ref() == b"programme" {
+                let name = e.local_name();
+                if name.as_ref() == b"programme" {
                     if let Some((start, end, title, description)) = active.take() {
                         if let Some(p) =
                             program(channel, None, title, Some(description), start, end)
@@ -188,8 +189,9 @@ pub fn parse_xmltv(raw: &str, epg: &str, channel: &str) -> Result<Vec<LiveProgra
                             }
                         }
                     }
+                } else if name.as_ref() == b"title" || name.as_ref() == b"desc" {
+                    field.clear();
                 }
-                field.clear();
             }
             Event::Empty(e) => {
                 if e.local_name().as_ref() == b"tv" {
