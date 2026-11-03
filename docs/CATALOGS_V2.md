@@ -71,10 +71,8 @@ restricted-profile protection. Storage fixtures cover repeatable additive schema
 provider ordering, successful/empty refresh generations, and rollback after a
 duplicate stream causes an insert failure following deletion.
 
-2026-09-29 backward paging checkpoint: exact previous-page order, first-page
-termination and authorization checks pass. Full backend suite: 281 passed,
-four opt-in tests ignored; strict all-target Clippy passes. React/Solid client
-cutover is in progress; this is not production or physical-device qualification.
+Backward paging preserves exact previous-page order, first-page termination
+and authorization.
 
 ## Source discovery and native Xtream guide
 
@@ -119,7 +117,7 @@ This does not finish account-owned Xtream: child-policy migration, detailed
 upstream error parity, client adoption and
 removal of legacy routes remain pending. Legacy global routes still exist until
 coordinated cutover; these v2 checks are not a claim that old clients are isolated.
-No production database or live IPTV subscription was used for these fixtures.
+No production database or live IPTV subscription is used for these fixtures.
 
 An offline provider-tuple encryption migration and reader are now implemented;
 see [V2 operations](V2_OPERATIONS.md). The migration is not approved for

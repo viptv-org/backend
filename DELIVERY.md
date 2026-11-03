@@ -14,9 +14,8 @@ it does not qualify a production frontend package or imply that assets are live.
 The backend is a control plane: no embedded FFmpeg/GPU/media relay/WARP sidecar.
 Independent gateway settings and private operator environment remain separately
 owned. Preserve viptv_viptv_data, account/profile/history/provider/addon IDs,
-keyrings and exact HTTPS origin. Keep historical private deployment overlays/
-env for review and rollback; removed public overlays must not be reapplied as
-active backend configuration.
+keyrings and exact HTTPS origin. Keep private deployment overlays/env for review and rollback; removed public
+overlays must not be reapplied as active backend configuration.
 
 Production promotion, explicit ownership/encryption/retirement and rollback
 are separately approved. Follow DEPLOYMENT.md and docs/RUNTIME_RETIREMENT.md

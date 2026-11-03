@@ -114,8 +114,7 @@ Playback lifecycle tests additionally cover native direct policy, mandatory
 Roku/Vizio gateway delivery, capacity/priority selection, active affinity,
 cross-account denial, grant/config revocation and late-start cancellation.
 An isolated container fixture also checks real HLS delivery through the separate
-gateway. Historical pre-cleanup runs kept the backend engine idle; its removal
-requires a rerun against the exact cleanup revision. See PLAYBACK_V2.md.
+gateway. See PLAYBACK_V2.md.
 
 Encryption and client candidates have their own source/fixture evidence.
 Remaining gates include production migration/rollback, coordinated rollout,

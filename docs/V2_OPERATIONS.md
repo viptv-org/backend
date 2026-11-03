@@ -17,15 +17,14 @@ a runtime fallback. Addon management is `/api/addons` only.
 ### Cursor size boundary
 
 Live next/previous tokens are bounded at 4096 characters; unmatched-VOD tokens
-retain their existing 2048-character bound. Encoders now enforce the same limit
+retain their existing 2048-character bound. Encoders enforce the same limit
 as their respective decoders. If a provider's original identifier makes a token
 too large, the page fails with a safe 502 `catalog_cursor_too_large` reason instead
 of returning a token that will fail on the next request. This does not truncate,
 filter, delete or rewrite stored provider IDs, change import policy, or add a
 playlist-swap UI. Synthetic HTTP fixtures cover both live directions, VOD and
-unchanged raw data; an encoder fixture checks the exact bounds. Full suite:
-213 passing tests, two opt-in fixtures ignored; Clippy/format/inventory pass.
-Actual source observations on physical devices remain separate acceptance.
+unchanged raw data; an encoder fixture checks the exact bounds. Actual source
+observations on physical devices remain separate acceptance.
 
 Viewing clients use POST `/api/iptv/live/:id/source` for one selected raw
 channel. It returns `{source}` with an opaque playback handle, provider identity
@@ -332,5 +331,5 @@ operator's retention policy; never commit or upload them.
 Operator-managed private-network exceptions, bulk key rotation, production
 migration and coordinated rollback remain unqualified; this is not a complete
 encrypted-secrets acceptance claim. Addon
-storage and reviewed ownership/encryption commands are now covered by
+storage and reviewed ownership/encryption commands are covered by
 [the addon management/migration contract](ADDONS_V2.md).

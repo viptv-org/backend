@@ -87,6 +87,3 @@ The shared continuation cache records metadata origin and captured profile/add-o
 
 KMP uses a dedicated optional next-episode job, fenced by playback input, profile, connection, metadata origin and parent. It keeps playback running on lookup failure. Old-server 404 fallback and local paging use actual loaded/provider metadata identities only; no successor IDs are synthesized. An ended stream may retry unavailable next metadata, but playback always waits for an explicit user action.
 
-### Broader backend verification
-
-After the continuation/subtitle additions, the full backend library suite with `live-runtime,vsources-runtime`, one Cargo job and two test threads passed **456 tests, zero failures, ten pre-existing ignores**. All ten grouped-search/provenance cases passed. Subsequent Live favorites/profile-age additions have their own gates.

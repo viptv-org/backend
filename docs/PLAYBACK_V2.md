@@ -224,9 +224,7 @@ a disposable Docker container with network none. It asserts no interface other
 than loopback exists, then adds a public-classified fixture address solely inside
 that namespace. No public/production network or production egress exception is
 used. With the real gateway executable and FFmpeg, it verifies HLS/segment bytes
-come from the gateway, heartbeat succeeds, stop denies media, and the backend
-embedded engine stayed idle in historical pre-cleanup runs. The cleanup candidate
-removes it altogether and requires its own exact-revision rerun. NET_ADMIN is needed only for that isolated fixture,
+come from the gateway, heartbeat succeeds, and stop denies media. NET_ADMIN is needed only for that isolated fixture,
 not production operation. Public HTTPS ingress and browser/device rendering are
 not covered by this fixture.
 

@@ -6,7 +6,7 @@ These are the existing local account/password and recovery-code contracts. They 
 
 Use the browser's Secure/HttpOnly/SameSite session cookies. Public register/login/recover calls require the pinned HTTPS Origin. `GET /api/auth/status` returns `registration_enabled`, `authenticated` and `csrf_token`; authenticated cookie mutations use that CSRF token. Status can report authenticated when the refresh cookie remains valid after access expiry. In that case refresh before relying on `/api/auth/me`.
 
-`GET /api/auth/me` returns the account `{id,username,name,role}`, selected `profile_id`, owned profiles, profile-management flags, `capabilities.manage_account` and CSRF token. `manage_account` is true only for the owner's browser or native sign-in session, and false for a member and for a paired TV, so a client no longer infers that from the platform. Account-only entry and TV approval do not require Home/catalog/profile metadata requests.
+`GET /api/auth/me` returns the account `{id,username,name,role}`, selected `profile_id`, owned profiles, profile-management flags, `capabilities.manage_account` and CSRF token. `manage_account` is true only for the owner's browser or native sign-in session, and false for a member and for a paired TV, so a client does not infer that from the platform. Account-only entry and TV approval do not require Home/catalog/profile metadata requests.
 
 ## Registration and recovery
 
@@ -55,6 +55,5 @@ Selecting another profile consumes an unlock grant and, when the selected profil
 
 The v3 profile-management projection preserves `kids` as a JSON boolean and returns the actual integer `max_age` alongside it. This is not a nested policy object. Older servers may omit `max_age`; clients should represent an unknown ceiling instead of fabricating one. A regression checks ordinary-profile `false/12` and an actual configured kids policy `true/7`.
 
-The browser TV-approval page uses **GET** `/api/auth/me` after status. The real router deliberately returns 405 for POST; its account-only restore test now asserts HTTP methods so a path-only mock cannot hide this mismatch. A real Chromium run against the disposable trusted-HTTPS normal backend verified fresh browser sign-in and explicit approval with the correct account and no selected device profile. A second run expired only that synthetic browser session's access timestamp during confirmation: deny performed one refresh and one successful mutation, removed its pairing, and made no Bootstrap, profile-list, or catalog requests. The corrected isolated frontend then passed the full real Chromium flow: expired restore used GET me401 → status/refresh200 → GET me200; explicit approval and expired-access denial passed with the expected account and profile-null device scope, 14 API requests, zero page errors, and no Bootstrap/catalog/profile requests. Completion screenshots contain no pairing code or credentials.
-
-The broader isolated integration gate also passed all **16** existing tests across account HTTP flows/surface, additive migration, dashboard mounts, provider/add-on ownership CLI, and retirement CLI. The full library gate is **462 passed, 10 existing ignored**. These fixtures do not validate production deployment or physical-TV behavior.
+The browser TV-approval page uses **GET** `/api/auth/me` after status; the router
+returns 405 for POST.

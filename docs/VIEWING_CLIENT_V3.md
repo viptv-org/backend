@@ -1,6 +1,6 @@
 # Shared viewing-client migration
 
-This experimental host contract serves the KMP app. Existing v1/v2 APIs remain available. Generated canonical content DTOs come from core `a7495e753ba9bdace3eb83d7cf99d86b9ed7f200`; authentication and playback retain their established HTTP envelopes. Client adapters translate those envelopes without interpreting provider IDs, opaque row IDs or source URLs.
+This experimental host contract serves the KMP app. Existing v1/v2 APIs remain available. Generated canonical content DTOs come from the shared core; authentication and playback retain their established HTTP envelopes. Client adapters translate those envelopes without interpreting provider IDs, opaque row IDs or source URLs.
 
 ## Startup and navigation budget
 
@@ -105,6 +105,6 @@ Live uses `GET /api/profiles/:id/live/channels` with advertised connection/group
 
 ## Qualification boundary
 
-Focused host fixtures cover scope replacement during metadata IO, canonical 1242-episode next lookup, honest airing statuses, restricted-profile reads/mutations, visibility undo, Next's real history anchor, explicit Home browse queries and both discovery-cancellation grant lifecycles. Full server runtime-feature suite: 405 passed, 10 intentionally ignored. Local trusted HTTPS runtime checks are recorded separately from builds. This is not production deployment, a decoder claim, or evidence that an HTTP200 source contains the requested title.
+Focused host fixtures cover scope replacement during metadata IO, canonical 1242-episode next lookup, honest airing statuses, restricted-profile reads/mutations, visibility undo, Next's real history anchor, explicit Home browse queries and both discovery-cancellation grant lifecycles. This is not production deployment, a decoder claim, or evidence that an HTTP200 source contains the requested title.
 
 Read-only trusted-HTTPS qualification on the owned fixture returned bootstrap in 348 ms, twelve continuation entries including eight prepared Next targets, five explicit row actions, and 24 cards from an executed server-authored Discover action. The forty-entry continuation page retained real anchor identities. A Naruto next lookup exactly matched the following authoritative metadata episode. Progress, favorite and tracking receipt counts were unchanged. The existing browser session was reused; no login, user-device approval or playback mutation was needed. These measured warm results are not a cold-latency guarantee.

@@ -1,13 +1,10 @@
 # Account-owned addon secrets
 
-Current contract at backend `8823114`: runtime addon credential readers and
-authenticated addon installs are encrypted-only. This supersedes the historical unkeyed
-installation/read-fallback descriptions, not the retained metadata compatibility
-wrappers below. Stored legacy records remain preserved for explicit offline
-migration; runtime does not silently encrypt, assign owners or read their secrets.
-Reviewed client source adoption is recorded in [V2 operations](V2_OPERATIONS.md),
-not inferred from these fixtures. Production cutover, operator-managed private-
-network exceptions and bulk key rotation remain separately unqualified.
+Runtime addon credential readers and authenticated addon installs are
+encrypted-only. Stored legacy records remain preserved for explicit offline
+migration; runtime does not silently encrypt, assign owners or read their
+secrets. Production cutover, operator-managed private-network exceptions and
+bulk key rotation remain separately unqualified.
 
 ## V2 management and protected requests
 
@@ -97,8 +94,7 @@ needed. Version-zero credentials fail with `source_credentials_migration_require
 missing keys, wrong owners or damaged/missing ciphertext fail safely, never
 falling back to stored plaintext. V2 management lists expose per-record safe
 configuration errors; compatibility catalog arrays contain only usable sources
-and preserve their existing shape. See the reviewed client pins rather than the
-historical old-UI checkpoint for adoption evidence.
+and preserve their existing shape.
 
 Removing the keyring cannot reopen plaintext installation, including for an
 unmigrated account or one that deleted every addon. Re-adding a legacy URL does
@@ -114,7 +110,7 @@ it does not make legacy routes or native clients v2-compliant automatically.
 
 ## Reviewed offline migration
 
-The historical `provider-owners` executable also handles addon ownership. Inspect
+The `provider-owners` executable also handles addon ownership. Inspect
 read-only first:
 
 ```sh
@@ -122,7 +118,7 @@ provider-owners inspect-addons /absolute/path/source.sqlite
 ```
 
 Inspection returns only unassigned IDs and existing ID/account pairs. Legacy
-initialization no longer grants unassigned addon secrets to the first owner-role
+initialization does not grant unassigned addon secrets to the first owner-role
 account. Supply an explicit complete map for unassigned addons (for example,
 `{"7":11}` uses illustrative IDs), retaining existing assignments:
 
@@ -174,11 +170,9 @@ late/cached source revocation and executable confirmation/keyring gates.
 Additional fixtures cover v2 management roles/cursors, private-address rejection,
 public and cross-origin redirects, loops and downgrade refusal, stale reinstall
 and revoked-session writes, cache trust separation and independent browsing slots.
-These are synthetic checkpoint fixtures, not production migration or physical-
-device/UI acceptance. Subsequent strict-read and legacy-POST refusal evidence is
-recorded in V2_OPERATIONS.md; historical tests of unkeyed behavior do not define
-today's contract. Client pin adoption, production migration/rollback, private-
-network exceptions and key rotation must each retain their own evidence boundary.
+These are synthetic fixtures, not production migration or physical-device/UI
+acceptance. Client pin adoption, production migration/rollback, private-network
+exceptions and key rotation must each retain their own evidence boundary.
 # Experimental v3 subtitle execution
 
 `GET /api/subtitles/{kind}/{id}` aggregates the active profile's enabled

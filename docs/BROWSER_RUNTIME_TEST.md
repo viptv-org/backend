@@ -14,11 +14,10 @@ slash, dot, underscore or hyphen. Port 18445 must be free; an occupied port
 causes refusal, never replacement of a shared service.
 
 ```sh
-bash scripts/check-browser-runtime.sh --sudo viptv:qualification-27a0296 \
-  sha256:5b5900c8697b89e3519a31fb6685e21e75343b0e3caa3861de697b1aead8b6ef \
-  27a0296c69755e50412a6efeb9ad52564e029fd3 \
-  /mnt/ALPH/code/viptv-org/.local-https/certs/viptv.local.test.crt \
-  /mnt/ALPH/code/viptv-org/.local-https/certs/viptv.local.test.key
+bash scripts/check-browser-runtime.sh --sudo viptv:qualification \
+  <image-digest> <source-sha> \
+  /path/to/.local-https/certs/viptv.local.test.crt \
+  /path/to/.local-https/certs/viptv.local.test.key
 ```
 
 The disposable nonroot/read-only backend uses an internal Docker bridge, no
