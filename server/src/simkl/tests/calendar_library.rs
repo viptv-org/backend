@@ -492,15 +492,17 @@ async fn a_library_anime_is_bucketed_as_anime_whatever_its_id_source() {
 
     let (status, anime) = calendar(&app, "?type=anime").await;
     assert_eq!(status, StatusCode::OK, "{anime}");
-    let ids = anime["entries"].as_array().unwrap().iter()
+    let mut ids = anime["entries"].as_array().unwrap().iter()
         .map(|entry| entry["card"]["identity"]["id"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
+    ids.sort();
     assert_eq!(ids, ["kitsu:40", "tmdb:600"], "{anime}");
 
     let (status, series) = calendar(&app, "?type=series").await;
     assert_eq!(status, StatusCode::OK, "{series}");
-    let ids = series["entries"].as_array().unwrap().iter()
+    let mut ids = series["entries"].as_array().unwrap().iter()
         .map(|entry| entry["card"]["identity"]["id"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
+    ids.sort();
     assert_eq!(ids, ["tmdb:500", "tt100"], "{series}");
 }
