@@ -226,10 +226,7 @@ fn is_anime(card: &Card) -> bool {
             .any(|prefix| card.identity.id.starts_with(prefix))
         || card.metadata.as_ref().is_some_and(|metadata| {
             metadata.genres.iter().any(|genre| {
-                matches!(
-                    genre.to_ascii_lowercase().as_str(),
-                    "anime" | "animation"
-                )
+                genre.eq_ignore_ascii_case("anime")
             })
         })
 }

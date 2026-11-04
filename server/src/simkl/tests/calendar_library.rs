@@ -487,6 +487,7 @@ async fn a_library_anime_is_bucketed_as_anime_whatever_its_id_source() {
     let _served = addon(&mut app, vec![(1, 2, t + DAY)]).await;
     save_series_card(&app, "kitsu:40", Some("anime"), &["Animation"]);
     save_series_card(&app, "tmdb:500", Some("series"), &["Animation"]);
+    save_series_card(&app, "tmdb:600", Some("series"), &["Anime"]);
     save_series_card(&app, "tt100", Some("series"), &["Drama"]);
 
     let (status, anime) = calendar(&app, "?type=anime").await;
@@ -494,12 +495,12 @@ async fn a_library_anime_is_bucketed_as_anime_whatever_its_id_source() {
     let ids = anime["entries"].as_array().unwrap().iter()
         .map(|entry| entry["card"]["identity"]["id"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(ids, ["kitsu:40", "tmdb:500"], "{anime}");
+    assert_eq!(ids, ["kitsu:40", "tmdb:600"], "{anime}");
 
     let (status, series) = calendar(&app, "?type=series").await;
     assert_eq!(status, StatusCode::OK, "{series}");
     let ids = series["entries"].as_array().unwrap().iter()
         .map(|entry| entry["card"]["identity"]["id"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(ids, ["tt100"], "{series}");
+    assert_eq!(ids, ["tmdb:500", "tt100"], "{series}");
 }
