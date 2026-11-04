@@ -55,11 +55,13 @@ fn label(raw: &str) -> String {
         .to_owned()
 }
 pub fn parse_m3u(raw: &str, base: &Url, connection: &str) -> Result<Vec<PrivateChannel>, Error> {
-    if raw.len() > 3 * 1024 * 1024
-        || !raw
-            .trim_start_matches('\u{feff}')
-            .trim_start()
-            .starts_with("#EXTM3U")
+    if raw.len() > LIVE_PLAYLIST_LIMIT {
+        return Err(Error::TooLarge);
+    }
+    if !raw
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with("#EXTM3U")
         || raw.contains("#EXT-X-")
     {
         return Err(Error::InvalidQuery);
@@ -68,7 +70,7 @@ pub fn parse_m3u(raw: &str, base: &Url, connection: &str) -> Result<Vec<PrivateC
     let mut positions = std::collections::HashMap::new();
     let mut info = None;
     let mut headers = BTreeMap::new();
-    for line in raw.lines().take(50000) {
+    for line in raw.lines() {
         let line = line.trim();
         if let Some(raw) = line.strip_prefix("#EXTINF:") {
             let mut quote = None;
@@ -191,9 +193,6 @@ pub fn parse_m3u(raw: &str, base: &Url, connection: &str) -> Result<Vec<PrivateC
                 existing.sources.push(source);
             }
             continue;
-        }
-        if output.len() >= 10000 {
-            break;
         }
         positions.insert(id.clone(), output.len());
         output.push(PrivateChannel {

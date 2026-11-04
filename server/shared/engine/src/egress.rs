@@ -230,7 +230,7 @@ impl ScopedHttp {
                 let chunk = chunk.map_err(|_| err())?;
                 if bytes.len() + chunk.len() > limit {
                     if !prefix {
-                        return Err(err());
+                        return Err(Error::TooLarge);
                     }
                     bytes.extend_from_slice(&chunk[..limit.saturating_sub(bytes.len())]);
                     truncated = true;

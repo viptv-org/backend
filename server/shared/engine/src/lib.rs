@@ -29,6 +29,8 @@ pub enum Error {
     Unresolved,
     #[error("Local data could not be read or saved")]
     Storage,
+    #[error("The requested data exceeds the supported size")]
+    TooLarge,
 }
 
 pub mod source_integration;

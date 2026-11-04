@@ -10,10 +10,14 @@ mod guide;
 #[cfg(feature = "source-runtime")]
 mod xmltv_body;
 #[cfg(feature = "source-runtime")]
-pub use xmltv_body::decode_xmltv_body;
+pub use xmltv_body::{decode_body, decode_xmltv_body};
 mod m3u;
 pub use guide::{parse_xmltv, parse_xtream_guide};
 pub use m3u::parse_m3u;
+/// Upper bound on a playlist document (M3U or Xtream JSON) the live runtime will
+/// fetch, decode and parse. Past it the fetch errors with a distinct code rather
+/// than truncating, so large channel lists never silently lose entries.
+pub const LIVE_PLAYLIST_LIMIT: usize = 50 * 1024 * 1024;
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct LiveGroup {
     pub id: String,
@@ -215,10 +219,13 @@ pub fn parse_xtream(
     connection: &str,
     configuration: &XtreamConfiguration,
 ) -> Result<Vec<PrivateChannel>, Error> {
+    if raw.len() > LIVE_PLAYLIST_LIMIT {
+        return Err(Error::TooLarge);
+    }
     let values: Vec<serde_json::Value> =
         serde_json::from_str(raw).map_err(|_| Error::InvalidQuery)?;
     let mut output = Vec::new();
-    for value in values.into_iter().take(10000) {
+    for value in values.into_iter() {
         let Some(stream) = viptv_provider::normalize::scalar(&value["stream_id"]) else {
             continue;
         };
@@ -274,7 +281,6 @@ pub fn xtream_groups(raw: &str) -> Result<Vec<LiveGroup>, Error> {
         serde_json::from_str(raw).map_err(|_| Error::InvalidQuery)?;
     Ok(values
         .into_iter()
-        .take(1000)
         .filter_map(|v| {
             Some(LiveGroup {
                 id: viptv_provider::normalize::scalar(&v["category_id"])?,

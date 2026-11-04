@@ -107,3 +107,100 @@ async fn native_directory_snapshot_survives_paging_but_changes_on_cache_replacem
     assert_ne!(second["snapshot_id"],changed["snapshot_id"]);
     assert_eq!(second["channels"],changed["channels"]);
 }
+
+#[tokio::test]
+async fn large_m3u_directory_loads_every_channel_and_pages_to_completion() {
+    let app = fixture();
+    let (status, _) = request(
+        &app,
+        "member-token-1",
+        "PUT",
+        "/api/profiles/1/source-integrations",
+        json!({"revision":0,"plugin_id":"m3u","configuration":{"playlist_url":"https://fixture.example/list.m3u"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, snapshot) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/source-integrations",
+        Value::Null,
+    )
+    .await;
+    let connection = snapshot["connections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["plugin_id"] == "m3u")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let mut playlist = String::from("#EXTM3U\n");
+    for i in 0..20_000 {
+        playlist.push_str(&format!(
+            "#EXTINF:-1 tvg-id=\"c{i}\",Channel {i}\nhttps://media.example/{i}.m3u8\n"
+        ));
+    }
+    let channels = viptv_engine::live::parse_m3u(
+        &playlist,
+        &url::Url::parse("https://fixture.example/list.m3u").unwrap(),
+        connection,
+    )
+    .unwrap();
+    assert_eq!(channels.len(), 20_000);
+    let groups = channels
+        .iter()
+        .flat_map(|channel| channel.groups.iter().cloned())
+        .collect();
+    app.live_cache.lock().await.insert(
+        connection.into(),
+        crate::engine_v3::live::Cache {
+            revision: 1,
+            expires: Instant::now() + Duration::from_secs(300),
+            channels,
+            groups,
+            guides: Default::default(),
+            xmltv: None,
+        },
+    );
+    let (status, first) = request(
+        &app,
+        "member-token-1",
+        "GET",
+        "/api/profiles/1/live/channels?limit=200",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["channels"].as_array().unwrap().len(), 200);
+    assert_eq!(first["complete"], false);
+    assert_eq!(first["next_cursor"], "200");
+    let mut seen = std::collections::HashSet::new();
+    let mut offset = 0u32;
+    loop {
+        let (status, page) = request(
+            &app,
+            "member-token-1",
+            "GET",
+            &format!("/api/profiles/1/live/channels?offset={offset}&limit=200"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        for channel in page["channels"].as_array().unwrap() {
+            seen.insert(channel["id"].as_str().unwrap().to_owned());
+        }
+        match page["next_cursor"].as_str() {
+            Some(cursor) => {
+                assert_eq!(page["complete"], false);
+                offset = cursor.parse().unwrap();
+            }
+            None => {
+                assert_eq!(page["complete"], true);
+                break;
+            }
+        }
+    }
+    assert_eq!(seen.len(), 20_000);
+}
