@@ -336,7 +336,7 @@ fn apply_episode(
         )
         .optional()
         .map_err(db_error)?;
-    if let Some((rowid, updated_at)) = existing {
+    if let Some((rowid, updated_at)) = existing.filter(|(rowid, _)| *rowid != row.rowid) {
         if updated_at >= row.updated_at {
             tx.execute("DELETE FROM progress WHERE rowid=?1", [row.rowid])
                 .map_err(db_error)?;

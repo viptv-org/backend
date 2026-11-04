@@ -301,6 +301,37 @@ async fn kitsu_release_episodes_move_to_the_show_and_unmapped_ones_stay() {
 }
 
 #[tokio::test]
+async fn show_level_release_episodes_move_to_the_show_when_simkl_is_unavailable() {
+    let (app, task) = stack().await;
+    for (id, release, season, number, at) in [
+        ("tt2560140:4:1", "mal:44511", 4, 1, 1),
+        ("tt2560140:3:13", "anilist:20954", 3, 13, 2),
+        ("tt2560140:2:1", "anidb:12345", 2, 1, 3),
+    ] {
+        imported(&app, id, release, season, number, 24.0, 100 + at);
+    }
+
+    run(&app).await.unwrap();
+
+    assert_eq!(
+        episodes(&app),
+        vec![
+            ("tt2560140:2:1".into(), SHOW.into()),
+            ("tt2560140:3:13".into(), SHOW.into()),
+            ("tt2560140:4:1".into(), SHOW.into()),
+        ]
+    );
+    let row = context_of(&app, "tt2560140:3:13");
+    assert_eq!(row["season"], 3);
+    assert_eq!(row["episode"], 13);
+    assert_eq!(row["series_id"], SHOW);
+    assert_eq!(row["engine_parent_identity"]["id"], SHOW);
+    let ids = row["engine_parent_identity"]["ids"].as_array().unwrap();
+    assert!(ids.contains(&json!({"namespace":"tvdb","value":"267440"})), "{ids:?}");
+    task.abort();
+}
+
+#[tokio::test]
 async fn running_the_migration_again_changes_no_kitsu_episode() {
     let (app, task) = stack().await;
     saved(&app, "kitsu:41982", 1);
