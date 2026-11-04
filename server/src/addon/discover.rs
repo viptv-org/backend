@@ -4,6 +4,31 @@ pub(super) use viptv_provider::discover::{enrich_episode_art, episode_art_url};
 
 const PAGE_DEADLINE: Duration = Duration::from_secs(6);
 
+pub(crate) struct AddonFailure {
+    addon_id: i64,
+    addon_name: String,
+    error_code: &'static str,
+}
+
+pub(crate) fn addon_failures_value(failures: &[AddonFailure]) -> Value {
+    Value::Array(
+        failures
+            .iter()
+            .map(|failure| {
+                json!({
+                    "addon_id": failure.addon_id,
+                    "addon_name": failure.addon_name,
+                    "error_code": failure.error_code,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn addon_failure_code(raw: &str) -> &'static str {
+    crate::service_errors::addon(raw).unwrap_or("addon_unavailable")
+}
+
 fn needs_episode_art(meta: &Value) -> bool {
     meta["videos"].as_array().is_some_and(|videos| {
         videos.iter().take(2000).any(|video| {
@@ -72,20 +97,68 @@ impl Addons {
             })
             .collect::<std::collections::BTreeSet<_>>();
         let owner = (owners.len() == 1).then(|| *owners.first().expect("one issuer"));
+        let mut endpoint_owners = std::collections::HashMap::new();
+        for entry in &entries {
+            let Ok(own) =
+                viptv_provider::discover::plan_discovery(std::slice::from_ref(entry), &request)
+            else {
+                continue;
+            };
+            let name = entry.2["name"].as_str().unwrap_or("Stremio addon").to_owned();
+            for endpoint in own.endpoints {
+                endpoint_owners.insert(endpoint, (entry.0, name.clone()));
+            }
+        }
+        let total = plan.endpoints.len();
         let deadline = tokio::time::Instant::now() + PAGE_DEADLINE;
         let mut requests = stream::iter(plan.endpoints.iter().cloned().enumerate().map(
             |(index, u)| {
+                let this_owner = endpoint_owners.get(&u).cloned();
                 let s = self.clone();
-                async move { (index, s.fetch(&u, 300).await) }
+                async move { (index, this_owner, s.fetch(&u, 300).await) }
             },
         ))
         .buffer_unordered(8);
         let mut responses = Vec::new();
+        let mut failures: Vec<AddonFailure> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut completed = vec![false; total];
         loop {
-            match tokio::time::timeout_at(deadline, requests.next()).await {
-                Ok(Some((index, Ok(value)))) => responses.push((index, value)),
-                Ok(Some((_, Err(_)))) => {}
-                Ok(None) | Err(_) => break,
+            let next = match tokio::time::timeout_at(deadline, requests.next()).await {
+                Ok(Some(next)) => next,
+                Ok(None) => break,
+                Err(_) => {
+                    for (index, u) in plan.endpoints.iter().enumerate() {
+                        if !completed[index] {
+                            if let Some((addon_id, addon_name)) = endpoint_owners.get(u) {
+                                if seen.insert(*addon_id) {
+                                    failures.push(AddonFailure {
+                                        addon_id: *addon_id,
+                                        addon_name: addon_name.clone(),
+                                        error_code: "addon_timeout",
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+            };
+            let (index, this_owner, result) = next;
+            completed[index] = true;
+            match result {
+                Ok(value) => responses.push((index, value)),
+                Err(error) => {
+                    if let Some((addon_id, addon_name)) = this_owner {
+                        if seen.insert(addon_id) {
+                            failures.push(AddonFailure {
+                                addon_id,
+                                addon_name,
+                                error_code: addon_failure_code(&error),
+                            });
+                        }
+                    }
+                }
             }
         }
         responses.sort_by_key(|(index, _)| *index);
@@ -93,8 +166,11 @@ impl Addons {
             .into_iter()
             .map(|(_, value)| value)
             .collect::<Vec<_>>();
-        viptv_provider::discover::aggregate_discovery(&results, &plan, request.skip)
-            .map(|value| (value, owner))
+        let mut value = viptv_provider::discover::aggregate_discovery(&results, &plan, request.skip)?;
+        if !failures.is_empty() {
+            value["failures"] = addon_failures_value(&failures);
+        }
+        Ok((value, owner))
     }
     pub(crate) async fn search_results(
         &self,
@@ -296,19 +372,22 @@ impl Addons {
         kind: &str,
         id: &str,
     ) -> Result<(Value, i64), String> {
-        self.meta_lookup(kind, id, false, true).await
+        self.meta_lookup(kind, id, false, true)
+            .await
+            .map(|(value, issuer, _)| (value, issuer))
     }
-    pub(crate) async fn meta_from_selected_addon(
+    pub(crate) async fn meta_with_failures(
         &self,
         kind: &str,
         id: &str,
-    ) -> Result<(Value, i64), String> {
-        self.meta_lookup(kind, id, true, true).await
+        selected: bool,
+    ) -> Result<(Value, i64, Vec<AddonFailure>), String> {
+        self.meta_lookup(kind, id, selected, true).await
     }
     pub(crate) async fn meta_identity(&self, kind: &str, id: &str) -> Result<Value, String> {
         self.meta_lookup(kind, id, false, false)
             .await
-            .map(|(value, _)| value)
+            .map(|(value, _, _)| value)
     }
     async fn meta_lookup(
         &self,
@@ -316,7 +395,7 @@ impl Addons {
         id: &str,
         selected: bool,
         enrich: bool,
-    ) -> Result<(Value, i64), String> {
+    ) -> Result<(Value, i64, Vec<AddonFailure>), String> {
         let revision = self.revision()?;
         let scoped = match &self.engine_ids {
             None => "all".to_owned(),
@@ -345,7 +424,7 @@ impl Addons {
                 if value.is_null() {
                     return Err("Metadata not found".into());
                 }
-                return Ok((value.clone(), *issuer));
+                return Ok((value.clone(), *issuer, Vec::new()));
             }
         }
         let endpoints = self
@@ -360,31 +439,60 @@ impl Addons {
                 }
             })
             .take(32)
-            .map(|(addon, u, _)| {
-                Self::endpoint(&u, &["meta", kind, &format!("{id}.json")]).map(|url| (addon, url))
+            .map(|(addon, u, m)| {
+                let name = m["name"].as_str().unwrap_or("Stremio addon").to_owned();
+                Self::endpoint(&u, &["meta", kind, &format!("{id}.json")]).map(|url| (addon, name, url))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let total = endpoints.len();
+        let owners: Vec<(i64, String)> = endpoints
+            .iter()
+            .map(|(addon, name, _)| (*addon, name.clone()))
+            .collect();
         let mut requests = stream::iter(endpoints.into_iter().enumerate().map(
-            |(index, (addon, u))| {
+            |(index, (addon, name, u))| {
                 let this = self.clone();
-                async move { (index, addon, this.fetch(&u, 3600).await) }
+                async move { (index, addon, name, this.fetch(&u, 3600).await) }
             },
         ))
         .buffer_unordered(8);
         let deadline = tokio::time::Instant::now() + PAGE_DEADLINE;
         let mut resolved = vec![false; total];
         let mut valid: Vec<(usize, i64, Value)> = Vec::new();
+        let mut failures: Vec<AddonFailure> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         loop {
-            let (index, issuer, result) =
-                match tokio::time::timeout_at(deadline, requests.next()).await {
-                    Ok(Some(next)) => next,
-                    Ok(None) | Err(_) => break,
-                };
+            let next = match tokio::time::timeout_at(deadline, requests.next()).await {
+                Ok(Some(next)) => next,
+                Ok(None) => break,
+                Err(_) => {
+                    for (index, (addon, name)) in owners.iter().enumerate() {
+                        if !resolved[index] {
+                            if seen.insert(*addon) {
+                                failures.push(AddonFailure {
+                                    addon_id: *addon,
+                                    addon_name: name.clone(),
+                                    error_code: "addon_timeout",
+                                });
+                            }
+                        }
+                    }
+                    break;
+                }
+            };
+            let (index, issuer, name, result) = next;
             resolved[index] = true;
-            if let Ok(v) = result {
-                if v["meta"].is_object() {
-                    valid.push((index, issuer, v));
+            match result {
+                Ok(v) if v["meta"].is_object() => valid.push((index, issuer, v)),
+                Ok(_) => {}
+                Err(error) => {
+                    if seen.insert(issuer) {
+                        failures.push(AddonFailure {
+                            addon_id: issuer,
+                            addon_name: name,
+                            error_code: addon_failure_code(&error),
+                        });
+                    }
                 }
             }
             let best = valid.iter().min_by_key(|(index, _, _)| *index);
@@ -425,7 +533,7 @@ impl Addons {
                     enrich_episode_art(&mut primary["meta"], &other["meta"]);
                 }
                 while needs_episode_art(&primary["meta"]) {
-                    let Ok(Some((_, _, result))) =
+                    let Ok(Some((_, _, _, result))) =
                         tokio::time::timeout_at(enrich_deadline, requests.next()).await
                     else {
                         break;
@@ -456,7 +564,7 @@ impl Addons {
             }
             cache.insert(result_key, (expiry, primary.clone(), issuer));
         }
-        Ok((primary, issuer))
+        Ok((primary, issuer, failures))
     }
     pub async fn streams(&self, u: &str, kind: &str, id: &str) -> Result<Vec<Value>, String> {
         let endpoint = Self::endpoint(u, &["stream", kind, &format!("{id}.json")])?;
