@@ -464,3 +464,42 @@ async fn a_date_only_release_stays_on_its_date_while_a_timed_release_keeps_its_i
     // A timed release stays an instant the client localizes.
     assert_eq!(entries[2]["date"], timed.as_str());
 }
+
+fn save_series_card(app: &App, id: &str, category: Option<&str>, genres: &[&str]) {
+    let context = json!({
+        "identity": {"id": id, "kind": "series", "ids": [], "episode": null, "edition": null},
+        "category": category,
+        "metadata": {"genres": genres},
+        "provider_id": "stremio",
+        "title": "Fixture Show",
+        "badges": []
+    });
+    app.db.lock().unwrap().execute(
+        "INSERT INTO favorites(profile_id,type,id,name,poster,context) VALUES(1,'series',?1,'Fixture Show',NULL,?2)",
+        params![id, context.to_string()],
+    ).unwrap();
+}
+
+#[tokio::test]
+async fn a_library_anime_is_bucketed_as_anime_whatever_its_id_source() {
+    let mut app = fixture();
+    let t = now();
+    let _served = addon(&mut app, vec![(1, 2, t + DAY)]).await;
+    save_series_card(&app, "kitsu:40", Some("anime"), &["Animation"]);
+    save_series_card(&app, "tmdb:500", Some("series"), &["Animation"]);
+    save_series_card(&app, "tt100", Some("series"), &["Drama"]);
+
+    let (status, anime) = calendar(&app, "?type=anime").await;
+    assert_eq!(status, StatusCode::OK, "{anime}");
+    let ids = anime["entries"].as_array().unwrap().iter()
+        .map(|entry| entry["card"]["identity"]["id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["kitsu:40", "tmdb:500"], "{anime}");
+
+    let (status, series) = calendar(&app, "?type=series").await;
+    assert_eq!(status, StatusCode::OK, "{series}");
+    let ids = series["entries"].as_array().unwrap().iter()
+        .map(|entry| entry["card"]["identity"]["id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["tt100"], "{series}");
+}
