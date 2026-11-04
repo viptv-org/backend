@@ -72,15 +72,16 @@ pub(crate) async fn page(
     if values.len() > 100 {
         return Err("Simkl trending exceeds the limit".into());
     }
-    let cards: Vec<Card> = values
-        .iter()
-        .skip(offset)
-        .take(24)
-        .filter_map(|v| viptv_engine::simkl::card(v, category).ok())
-        .collect();
-    let more = values.len() > offset + 24;
+    let cards: Vec<Card> = metadata::allowed(
+        app,
+        values
+            .iter()
+            .filter_map(|v| viptv_engine::simkl::card(v, category).ok())
+            .collect(),
+    )?;
+    let more = cards.len() > offset + 24;
     Ok(CatalogPage {
-        cards: metadata::allowed(app, cards)?,
+        cards: cards.into_iter().skip(offset).take(24).collect(),
         next_cursor: more.then(|| (offset + 24).to_string()),
         complete: !more,
     })

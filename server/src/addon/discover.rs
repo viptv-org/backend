@@ -103,12 +103,13 @@ impl Addons {
         catalog: Option<String>,
         query: String,
         budget: Duration,
+        refill: bool,
     ) -> Result<(Vec<Value>, bool, bool), String> {
-        let entries = self.async_entries().await?;
-        let mut endpoints = Vec::new();
+        let entries = std::sync::Arc::new(self.async_entries().await?);
+        let mut tasks = Vec::new();
         for kind in kinds {
             let plan = viptv_provider::discover::plan_discovery(
-                &entries,
+                entries.as_ref(),
                 &DiscoverOptions {
                     kind: kind.clone(),
                     catalog: catalog.clone(),
@@ -120,54 +121,122 @@ impl Addons {
                     values: vec![],
                 },
             )?;
-            endpoints.extend(plan.endpoints.into_iter().map(|url| (kind.clone(), url)));
+            let pageable = refill && plan.pageable && plan.single_catalog;
+            for url in plan.endpoints {
+                tasks.push((kind.clone(), url, pageable));
+            }
         }
-        endpoints.truncate(32);
-        if endpoints.is_empty() {
+        tasks.truncate(32);
+        if tasks.is_empty() {
             return Ok((vec![], true, false));
         }
-        let mut requests = stream::iter(endpoints.into_iter().enumerate().map(
-            |(index, (kind, url))| {
+        let deadline = tokio::time::Instant::now() + budget;
+        let mut requests = stream::iter(tasks.into_iter().enumerate().map(
+            |(index, (kind, first_url, pageable))| {
                 let this = self.clone();
-                async move { (index, kind, this.fetch(&url, 300).await) }
+                let entries = entries.clone();
+                let query = query.clone();
+                let catalog = catalog.clone();
+                async move {
+                    let mut metas: Vec<Value> = Vec::new();
+                    let mut seen = std::collections::HashSet::new();
+                    let mut skip = 0usize;
+                    let mut url = first_url;
+                    let mut failed = false;
+                    let mut answered = false;
+                    let mut denied = false;
+                    loop {
+                        if metas.len() >= 200 || tokio::time::Instant::now() >= deadline {
+                            if metas.is_empty() {
+                                failed = true;
+                            }
+                            break;
+                        }
+                        let value = match this.fetch(&url, 300).await {
+                            Ok(value) => value,
+                            Err(error) => {
+                                failed = true;
+                                if crate::service_errors::addon(&error)
+                                    == Some("addon_access_denied")
+                                {
+                                    denied = true;
+                                }
+                                break;
+                            }
+                        };
+                        let Some(raw) = value["metas"].as_array() else {
+                            failed = true;
+                            break;
+                        };
+                        answered = true;
+                        let raw_count = raw.len();
+                        for meta in raw {
+                            if metas.len() >= 200 {
+                                break;
+                            }
+                            let mut meta = meta.clone();
+                            if !meta.is_object() {
+                                failed = true;
+                                continue;
+                            }
+                            if meta["type"].is_null() {
+                                meta["type"] = json!(kind);
+                            }
+                            if seen.insert((
+                                meta["type"].as_str().unwrap_or("").to_owned(),
+                                meta["id"].as_str().unwrap_or("").to_owned(),
+                            )) {
+                                metas.push(meta);
+                            }
+                        }
+                        if !pageable {
+                            break;
+                        }
+                        let has_more =
+                            raw_count > 0 && skip.saturating_add(raw_count) <= 10000;
+                        if !has_more {
+                            break;
+                        }
+                        skip += raw_count;
+                        let next = viptv_provider::discover::plan_discovery(
+                            entries.as_ref(),
+                            &DiscoverOptions {
+                                kind: kind.clone(),
+                                catalog: catalog.clone(),
+                                addon: Some(addon),
+                                skip,
+                                search: Some(query.clone()),
+                                genre: None,
+                                extras: HashMap::new(),
+                                values: vec![],
+                            },
+                        )
+                        .ok()
+                        .and_then(|plan| plan.endpoints.into_iter().next());
+                        match next {
+                            Some(next_url) => url = next_url,
+                            None => break,
+                        }
+                    }
+                    Ok::<_, String>((index, metas, answered, failed, denied))
+                }
             },
         ))
         .buffer_unordered(8);
-        let deadline = tokio::time::Instant::now() + budget;
         let mut batches = Vec::new();
         let mut failed = false;
         let mut answered = false;
         let mut access_denied = false;
         loop {
             match tokio::time::timeout_at(deadline, requests.next()).await {
-                Ok(Some((index, kind, Ok(value)))) => {
-                    if let Some(metas) = value["metas"].as_array() {
-                        answered = true;
-                        let metas = metas
-                            .iter()
-                            .take(200)
-                            .cloned()
-                            .filter_map(|mut meta| {
-                                if !meta.is_object() {
-                                    failed = true;
-                                    return None;
-                                }
-                                if meta["type"].is_null() {
-                                    meta["type"] = json!(kind);
-                                }
-                                Some(meta)
-                            })
-                            .collect::<Vec<_>>();
-                        batches.push((index, metas));
-                    } else {
-                        failed = true;
-                    }
+                Ok(Some(Ok((index, metas, a, f, d)))) => {
+                    answered |= a;
+                    failed |= f;
+                    access_denied |= d;
+                    batches.push((index, metas));
                 }
-                Ok(Some((_, _, Err(error)))) => {
+                Ok(Some(Err(_))) => {
                     failed = true;
-                    if crate::service_errors::addon(&error) == Some("addon_access_denied") {
-                        access_denied = true;
-                    }
                 }
                 Ok(None) => break,
                 Err(_) => {

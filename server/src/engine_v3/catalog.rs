@@ -162,11 +162,72 @@ async fn discover_one(
         ));
     }
     let addon_revision = scoped.addons.revision()?;
-    let (value, issuer) =
-        crate::handlers_catalog::discover_origin(scoped.clone(), lease, q).await?;
-    let provider = issuer
-        .map(|id| format!("addon:{id}"))
-        .unwrap_or_else(|| "stremio".into());
+    let restricted = {
+        let db = scoped
+            .db
+            .lock()
+            .map_err(|_| ApiError::from("Database unavailable"))?;
+        kids::restricted(&db, &lease.principal)?
+    };
+    let (cards, next_cursor, complete) = if restricted {
+        let mut cards = Vec::new();
+        let mut skip = q.skip;
+        let mut provider: Option<String> = None;
+        let mut complete = false;
+        for _ in 0..24 {
+            let mut request = q.clone();
+            request.skip = skip;
+            let (value, issuer) =
+                crate::handlers_catalog::discover_origin(scoped.clone(), lease.clone(), request)
+                    .await?;
+            if provider.is_none() {
+                provider = Some(
+                    issuer
+                        .map(|id| format!("addon:{id}"))
+                        .unwrap_or_else(|| "stremio".into()),
+                );
+            }
+            let items = value["metas"].as_array().cloned().unwrap_or_default();
+            let provider = provider.as_deref().expect("provider resolved");
+            for chunk in items.chunks(24).take(9) {
+                cards.extend(projection::cards(&scoped, chunk.to_vec(), provider)?);
+            }
+            if value["has_more"].as_bool() != Some(true) {
+                complete = true;
+                break;
+            }
+            let Some(next) = value["next_skip"].as_u64().map(|n| n as usize) else {
+                complete = true;
+                break;
+            };
+            skip = next;
+            if cards.len() >= 24 {
+                break;
+            }
+        }
+        (
+            cards,
+            if complete { None } else { Some(skip.to_string()) },
+            complete,
+        )
+    } else {
+        let (value, issuer) =
+            crate::handlers_catalog::discover_origin(scoped.clone(), lease.clone(), q.clone())
+                .await?;
+        let provider = issuer
+            .map(|id| format!("addon:{id}"))
+            .unwrap_or_else(|| "stremio".into());
+        let items = value["metas"].as_array().cloned().unwrap_or_default();
+        let mut cards = Vec::new();
+        for items in items.chunks(24).take(9) {
+            cards.extend(projection::cards(&scoped, items.to_vec(), &provider)?);
+        }
+        (
+            cards,
+            value["next_skip"].as_u64().map(|n| n.to_string()),
+            value["has_more"].as_bool() == Some(false),
+        )
+    };
     configuration::validate_revision(&scoped, profile, revision)?;
     if scoped.addons.revision()? != addon_revision {
         return Err(ApiError(
@@ -174,16 +235,11 @@ async fn discover_one(
             "Catalog integrations changed. Try again.".into(),
         ));
     }
-    let items = value["metas"].as_array().cloned().unwrap_or_default();
-    let mut cards = Vec::new();
-    for items in items.chunks(24).take(9) {
-        cards.extend(projection::cards(&scoped, items.to_vec(), &provider)?);
-    }
 
     let page = CatalogPage {
         cards,
-        next_cursor: value["next_skip"].as_u64().map(|n| n.to_string()),
-        complete: value["has_more"].as_bool() == Some(false),
+        next_cursor,
+        complete,
     };
     Ok(axum::Json(
         serde_json::to_value(page).map_err(|_| ApiError::from("Catalog unavailable"))?,

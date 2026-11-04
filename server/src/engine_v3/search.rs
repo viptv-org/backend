@@ -507,6 +507,15 @@ async fn load(
             let budget = deadline
                 .saturating_duration_since(tokio::time::Instant::now())
                 .min(ROW_BUDGET);
+            let refill = if parent.is_some() {
+                false
+            } else {
+                let db = app
+                    .db
+                    .lock()
+                    .map_err(|_| ApiError::from("Database unavailable"))?;
+                kids::restricted(&db, &lease.principal)?
+            };
             let (items, mut failed, denied) = app
                 .addons
                 .search_results(
@@ -515,6 +524,7 @@ async fn load(
                     Some(catalog.clone()),
                     query.to_owned(),
                     budget,
+                    refill,
                 )
                 .await?;
             let mut cards = Vec::new();
@@ -568,7 +578,14 @@ pub(crate) async fn canonical_search(
     for id in ids {
         let (items, _, _) = scoped
             .addons
-            .search_results(id, vec![kind.to_owned()], None, query.to_owned(), ROW_BUDGET)
+            .search_results(
+                id,
+                vec![kind.to_owned()],
+                None,
+                query.to_owned(),
+                ROW_BUDGET,
+                false,
+            )
             .await?;
         for batch in items.chunks(24) {
             cards.extend(projection::cards(
