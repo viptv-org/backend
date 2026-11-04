@@ -34,6 +34,8 @@ pub(crate) const MSG_ACCOUNT_SESSION_REQUIRED: &str =
     "Manage account settings from an account session, not a paired TV.";
 pub(crate) const MSG_OWNER_REQUIRED: &str =
     "Only the server owner can manage accounts and devices.";
+pub(crate) const MSG_LIVE_PLAYLIST_TOO_LARGE: &str =
+    "This live playlist is too large to load.";
 pub(crate) const MSG_ACCOUNT_OWNER_REQUIRED: &str =
     "Only the account owner can change household settings.";
 pub(crate) const CODE_ACCOUNT_DELETE_REJECTED: &str = "account_delete_rejected";
@@ -66,6 +68,7 @@ impl ApiError {
             MSG_ACCOUNT_SESSION_REQUIRED => Some(CODE_ACCOUNT_SESSION_REQUIRED),
             MSG_OWNER_REQUIRED => Some(CODE_OWNER_REQUIRED),
             MSG_ACCOUNT_OWNER_REQUIRED => Some(CODE_OWNER_REQUIRED),
+            MSG_LIVE_PLAYLIST_TOO_LARGE => Some("live_playlist_too_large"),
             MSG_PROFILE_POLICY_CHANGED => Some("profile_policy_changed"),
             MSG_AUTHORIZATION_PENDING => Some(MSG_AUTHORIZATION_PENDING),
             MSG_ACCESS_DENIED => Some(MSG_ACCESS_DENIED),
@@ -164,6 +167,17 @@ mod display_error_tests {
             ApiError(StatusCode::TOO_MANY_REQUESTS, "Too many requests".into()).api_error_code(),
             None
         );
+    }
+    #[tokio::test]
+    async fn oversized_playlist_error_carries_a_distinct_code() {
+        let response = ApiError::from(MSG_LIVE_PLAYLIST_TOO_LARGE).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error_code"], "live_playlist_too_large");
+        assert_eq!(body["error"], "This live playlist is too large to load.");
     }
 }
 pub(crate) fn db_error(_: rusqlite::Error) -> ApiError {

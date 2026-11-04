@@ -67,15 +67,21 @@ pub(super) async fn request(
     )
     .await
     .map_err(|_| ApiError::from("Live data temporarily unavailable"))?
-    .map_err(|_| ApiError::from("Live data temporarily unavailable"))?;
+    .map_err(live_fetch_error)?;
     if !(200..300).contains(&response.status) {
         return Err("Live data temporarily unavailable".into());
     }
     Ok((
         response.url.to_string(),
-        viptv_engine::live::decode_xmltv_body(&response.body)
-            .map_err(|_| ApiError::from("Live data temporarily unavailable"))?,
+        viptv_engine::live::decode_body(&response.body, limit).map_err(live_fetch_error)?,
     ))
+}
+fn live_fetch_error(error: viptv_engine::Error) -> ApiError {
+    if error == viptv_engine::Error::TooLarge {
+        ApiError::from(MSG_LIVE_PLAYLIST_TOO_LARGE)
+    } else {
+        ApiError::from("Live data temporarily unavailable")
+    }
 }
 async fn directory(
     app: &App,
@@ -106,7 +112,7 @@ async fn directory(
         revision,
         connection,
         &credentials.playlist_url,
-        3 * 1024 * 1024,
+        viptv_engine::live::LIVE_PLAYLIST_LIMIT,
     )
     .await?;
     let channels = parse_m3u(
@@ -114,7 +120,10 @@ async fn directory(
         &url::Url::parse(&base).map_err(|_| ApiError::from("Invalid playlist"))?,
         &connection.id,
     )
-    .map_err(|_| ApiError::from("Playlist data unsupported"))?;
+    .map_err(|error| match error {
+        viptv_engine::Error::TooLarge => ApiError::from(MSG_LIVE_PLAYLIST_TOO_LARGE),
+        _ => ApiError::from("Playlist data unsupported"),
+    })?;
     let mut groups = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for channel in &channels {

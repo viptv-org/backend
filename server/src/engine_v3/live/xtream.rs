@@ -35,7 +35,7 @@ pub(super) async fn directory(
             revision,
             connection,
             streams.as_str(),
-            3 * 1024 * 1024
+            viptv_engine::live::LIVE_PLAYLIST_LIMIT
         ),
         native::request(
             app,
@@ -44,18 +44,27 @@ pub(super) async fn directory(
             revision,
             connection,
             groups.as_str(),
-            3 * 1024 * 1024
+            viptv_engine::live::LIVE_PLAYLIST_LIMIT
         )
     )?;
     let mut channels = parse_xtream(&streams, &connection.id, &credentials)
-        .map_err(|_| ApiError::from("Live data unsupported"))?;
+        .map_err(|error| match error {
+            viptv_engine::Error::TooLarge => ApiError::from(MSG_LIVE_PLAYLIST_TOO_LARGE),
+            _ => ApiError::from("Live data unsupported"),
+        })?;
     let groups = xtream_groups(&groups).map_err(|_| ApiError::from("Live groups unsupported"))?;
+    let group_names: std::collections::HashMap<&str, &str> = groups
+        .iter()
+        .map(|group| (group.id.as_str(), group.label.as_str()))
+        .collect();
     for channel in &mut channels {
-        if let Some(group) = groups
-            .iter()
-            .find(|group| channel.channel.group_id.as_ref() == Some(&group.id))
+        if let Some(label) = channel
+            .channel
+            .group_id
+            .as_ref()
+            .and_then(|id| group_names.get(id.as_str()))
         {
-            channel.channel.group_name = Some(group.label.clone());
+            channel.channel.group_name = Some((*label).to_owned());
         }
     }
     xtream_configuration::validate(app, lease, profile, revision, connection)?;
