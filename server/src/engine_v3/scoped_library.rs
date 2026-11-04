@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use viptv_engine::{
     continuation::{ContinuationEntry, ContinuationStatus, NextEpisodeResult},
     library::{Entry, LibraryMembershipSnapshot, LibraryStatistics},
@@ -10,7 +10,7 @@ use viptv_engine::{
     presentation::Card,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub(crate) struct Key(pub String, pub String, pub String);
 #[derive(Clone)]
 pub(crate) struct Saved<T> {
@@ -987,6 +987,19 @@ pub(crate) fn cache_next_db(
     db.execute("DELETE FROM engine_scoped_next WHERE profile_id=?1 AND rowid NOT IN(SELECT rowid FROM engine_scoped_next WHERE profile_id=?1 ORDER BY updated_at_millis DESC,rowid DESC LIMIT 200)",[profile]).map_err(db_error)?;
     Ok(())
 }
+fn hidden_keys(db: &Connection, profile: i64) -> Result<HashSet<Key>, ApiError> {
+    let mut q = db
+        .prepare(
+            "SELECT identity_scope,kind,identity_id FROM engine_scoped_queue_hidden WHERE profile_id=?1",
+        )
+        .map_err(db_error)?;
+    let rows = q
+        .query_map([profile], |r| Ok(Key(r.get(0)?, r.get(1)?, r.get(2)?)))
+        .map_err(db_error)?
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(db_error)?;
+    Ok(rows)
+}
 pub(crate) fn continuation_db(
     db: &Connection,
     app: &App,
@@ -1002,10 +1015,10 @@ pub(crate) fn continuation_db(
             groups.insert(key, saved);
         }
     }
+    let hidden = hidden_keys(db, profile)?;
     let mut entries = Vec::new();
     for (key, saved) in groups {
-        let hidden:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM engine_scoped_queue_hidden WHERE profile_id=?1 AND identity_scope=?2 AND kind=?3 AND identity_id=?4)",params![profile,key.0,key.1,key.2],|r|r.get(0)).map_err(db_error)?;
-        if hidden {
+        if hidden.contains(&key) {
             continue;
         }
         let record = saved.value;
