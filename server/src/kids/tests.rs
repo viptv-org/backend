@@ -24,6 +24,14 @@ async fn fixture() -> (App, tokio::task::JoinHandle<()>) {
                 meta["contentRating"] = json!("TV-Y");
                 meta["certification"] = json!("R");
             }
+            "anime-r18" => {
+                meta["ageRating"] = json!("R18+");
+                meta["genres"] = json!(["Animation"]);
+            }
+            "adult-plus" => meta["certification"] = json!("18+"),
+            "mystery" => meta["certification"] = json!("Zz-Restricted"),
+            "hentai" => meta["genres"] = json!(["Animation", " HENTAI "]),
+            "blank" => meta["certification"] = json!("  "),
             "cartoon" => meta["contentRating"] = json!("TV-Y"),
             "teen-series" => meta["contentRating"] = json!("TV-14"),
             _ => {}
@@ -40,7 +48,19 @@ async fn fixture() -> (App, tokio::task::JoinHandle<()>) {
         let ids: Vec<&str> = if kind == "series" {
             vec!["cartoon", "teen-series"]
         } else {
-            vec!["pg", "pg13", "r", "adult", "unrated", "conflict"]
+            vec![
+                "pg",
+                "pg13",
+                "r",
+                "adult",
+                "unrated",
+                "conflict",
+                "anime-r18",
+                "adult-plus",
+                "mystery",
+                "hentai",
+                "blank",
+            ]
         };
         let items = ids
             .into_iter()
@@ -297,6 +317,114 @@ async fn unrated_titles_stay_hidden_until_the_profile_allows_them() {
     policy(&a, &id, json!({"enabled":true,"max_age":17,"movie_rating":"PG"})).await;
     switch(&a, &id).await;
     assert_eq!(catalog_ids(&a, "movie").await, vec!["pg", "unrated"]);
+    task.abort();
+}
+
+#[test]
+fn rating_markers_map_to_minimum_ages_and_unknown_markers_do_not() {
+    let cases: [(&str, i64); 40] = [
+        ("G", 0),
+        ("pg", 10),
+        (" PG-13 ", 13),
+        ("Rated R", 17),
+        ("NC-17", 18),
+        ("nc 17", 18),
+        ("X", 18),
+        ("TV-Y", 0),
+        ("tv-y7-fv", 7),
+        ("TV-PG", 10),
+        ("TV-14", 14),
+        ("TV-MA", 18),
+        ("AO", 18),
+        ("18", 18),
+        ("18+", 18),
+        ("16", 16),
+        ("21+", 18),
+        ("FSK 18", 18),
+        ("FSK ab 12", 12),
+        ("FSK16", 16),
+        ("BBFC 18", 18),
+        ("12A", 12),
+        ("15", 15),
+        ("R18", 18),
+        ("PEGI 18", 18),
+        ("PEGI 7", 7),
+        ("KR 19", 18),
+        ("KR-15", 15),
+        ("JP R18", 18),
+        ("R-18", 18),
+        ("R15+", 15),
+        ("PG12", 12),
+        ("MA15+", 15),
+        ("R18+", 18),
+        ("US:PG-13", 13),
+        ("G - All Ages", 0),
+        ("PG-13 - Teens 13 or older", 13),
+        ("R - 17+ (violence & profanity)", 17),
+        ("R+ - Mild Nudity", 17),
+        ("Rx - Hentai", 18),
+    ];
+    for (marker, age) in cases {
+        assert_eq!(metadata::known_age(marker), Some(age), "{marker}");
+    }
+    for marker in ["Zz-Restricted", "Not Rated", "99", "US", "ABC"] {
+        assert_eq!(metadata::known_age(marker), None, "{marker}");
+    }
+}
+
+#[test]
+fn present_unknown_ratings_and_adult_genres_are_restricted_but_absent_ones_are_unrated() {
+    let restricted = Some(metadata::RESTRICTED_AGE);
+    assert_eq!(
+        metadata::assessment(&json!({"certification":"Zz-Restricted"})),
+        (restricted, true)
+    );
+    assert_eq!(
+        metadata::assessment(&json!({"ageRating":["R18+"]})),
+        (restricted, true)
+    );
+    for genre in ["Hentai", "EROTICA", "adult", "Porn"] {
+        assert_eq!(
+            metadata::assessment(&json!({"certification":"PG","genres":[genre]})).0,
+            restricted,
+            "{genre}"
+        );
+    }
+    for meta in [
+        json!({}),
+        json!({"certification":null}),
+        json!({"certification":"  ","contentRating":""}),
+    ] {
+        assert_eq!(metadata::assessment(&meta), (None, false), "{meta}");
+    }
+    assert_eq!(
+        metadata::assessment(&json!({"certification":"PG-13"})),
+        (Some(13), false)
+    );
+}
+
+#[tokio::test]
+async fn allowing_unrated_titles_never_admits_adult_or_unrecognised_ratings() {
+    let (a, task) = fixture().await;
+    let movies = catalog(&a, "movie").await;
+    let hidden = ["anime-r18", "adult-plus", "mystery", "hentai"];
+    for title in ["pg", "unrated", "blank"].into_iter().chain(hidden) {
+        observe(&a, "movie", &movies, title).await;
+    }
+    let id = create_kids(&a, json!({"max_age":17,"movie_rating":"R","allow_unrated":true})).await;
+    switch(&a, &id).await;
+    assert_eq!(catalog_ids(&a, "movie").await, vec!["pg", "unrated", "blank"]);
+    for title in hidden {
+        assert_eq!(
+            detail(&a, "movie", &card_of(&movies, title)).await.0,
+            StatusCode::FORBIDDEN,
+            "{title}"
+        );
+    }
+    assert_eq!(
+        detail(&a, "movie", &card_of(&movies, "unrated")).await.0,
+        StatusCode::OK
+    );
     task.abort();
 }
 
