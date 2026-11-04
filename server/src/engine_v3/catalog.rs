@@ -2,6 +2,8 @@ use super::*;
 use crate::gateway::diagnostics::{timed, timed_sync};
 use viptv_engine::presentation::{CatalogPage, DetailSnapshot};
 
+const PAGE_DEADLINE: Duration = Duration::from_secs(6);
+
 pub(crate) async fn discover(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -162,11 +164,91 @@ async fn discover_one(
         ));
     }
     let addon_revision = scoped.addons.revision()?;
-    let (value, issuer) =
-        crate::handlers_catalog::discover_origin(scoped.clone(), lease, q).await?;
-    let provider = issuer
-        .map(|id| format!("addon:{id}"))
-        .unwrap_or_else(|| "stremio".into());
+    let restricted = {
+        let db = scoped
+            .db
+            .lock()
+            .map_err(|_| ApiError::from("Database unavailable"))?;
+        kids::restricted(&db, &lease.principal)?
+    };
+    let (cards, next_cursor, complete, failures) = if restricted {
+        let mut cards = Vec::new();
+        let mut skip = q.skip;
+        let mut provider: Option<String> = None;
+        let mut complete = false;
+        let mut failures: Vec<Value> = Vec::new();
+        let mut seen_failures = HashSet::new();
+        let page_deadline = tokio::time::Instant::now() + PAGE_DEADLINE;
+        for _ in 0..5 {
+            if tokio::time::Instant::now() >= page_deadline {
+                break;
+            }
+            let mut request = q.clone();
+            request.skip = skip;
+            let (value, issuer) =
+                crate::handlers_catalog::discover_origin(scoped.clone(), lease.clone(), request)
+                    .await?;
+            if let Some(page_failures) = value.get("failures").and_then(Value::as_array) {
+                for failure in page_failures {
+                    if seen_failures.insert(failure.get("addon_id").cloned()) {
+                        failures.push(failure.clone());
+                    }
+                }
+            }
+            if provider.is_none() {
+                provider = Some(
+                    issuer
+                        .map(|id| format!("addon:{id}"))
+                        .unwrap_or_else(|| "stremio".into()),
+                );
+            }
+            let items = value["metas"].as_array().cloned().unwrap_or_default();
+            let provider = provider.as_deref().expect("provider resolved");
+            for chunk in items.chunks(24).take(9) {
+                cards.extend(projection::cards(&scoped, chunk.to_vec(), provider)?);
+            }
+            if value["has_more"].as_bool() != Some(true) {
+                complete = true;
+                break;
+            }
+            let Some(next) = value["next_skip"].as_u64().map(|n| n as usize) else {
+                complete = true;
+                break;
+            };
+            skip = next;
+            if cards.len() >= 24 {
+                break;
+            }
+        }
+        (
+            cards,
+            if complete { None } else { Some(skip.to_string()) },
+            complete,
+            failures,
+        )
+    } else {
+        let (value, issuer) =
+            crate::handlers_catalog::discover_origin(scoped.clone(), lease.clone(), q.clone())
+                .await?;
+        let provider = issuer
+            .map(|id| format!("addon:{id}"))
+            .unwrap_or_else(|| "stremio".into());
+        let items = value["metas"].as_array().cloned().unwrap_or_default();
+        let mut cards = Vec::new();
+        for items in items.chunks(24).take(9) {
+            cards.extend(projection::cards(&scoped, items.to_vec(), &provider)?);
+        }
+        (
+            cards,
+            value["next_skip"].as_u64().map(|n| n.to_string()),
+            value["has_more"].as_bool() == Some(false),
+            value
+                .get("failures")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        )
+    };
     configuration::validate_revision(&scoped, profile, revision)?;
     if scoped.addons.revision()? != addon_revision {
         return Err(ApiError(
@@ -174,21 +256,16 @@ async fn discover_one(
             "Catalog integrations changed. Try again.".into(),
         ));
     }
-    let items = value["metas"].as_array().cloned().unwrap_or_default();
-    let mut cards = Vec::new();
-    for items in items.chunks(24).take(9) {
-        cards.extend(projection::cards(&scoped, items.to_vec(), &provider)?);
-    }
 
     let page = CatalogPage {
         cards,
-        next_cursor: value["next_skip"].as_u64().map(|n| n.to_string()),
-        complete: value["has_more"].as_bool() == Some(false),
+        next_cursor,
+        complete,
     };
     let mut result =
         serde_json::to_value(page).map_err(|_| ApiError::from("Catalog unavailable"))?;
-    if let Some(failures) = value.get("failures") {
-        result["failures"] = failures.clone();
+    if !failures.is_empty() {
+        result["failures"] = Value::Array(failures);
     }
     Ok(axum::Json(result))
 }

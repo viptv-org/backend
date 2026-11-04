@@ -202,15 +202,13 @@ pub(crate) async fn page(
         app,
         values
             .iter()
-            .skip(skip)
-            .take(24)
             .filter_map(|v| viptv_engine::simkl::card(v, category).ok())
             .collect(),
     )?;
     store::validate(app, profile, &access)?;
-    let more = values.len() > skip + 24;
+    let more = cards.len() > skip + 24;
     Ok(CatalogPage {
-        cards,
+        cards: cards.into_iter().skip(skip).take(24).collect(),
         next_cursor: more.then(|| (skip + 24).to_string()),
         complete: !more,
     })
