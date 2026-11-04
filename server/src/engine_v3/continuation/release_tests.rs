@@ -310,6 +310,48 @@ async fn credits_count_as_finished_and_the_newest_finished_episode_is_drawn_watc
 }
 
 #[tokio::test]
+async fn a_short_episode_finishes_only_by_the_shared_95_percent_rule() {
+    let start = now();
+    let show = show(vec![(1, start - 30 * DAY), (2, start - 20 * DAY)]).await;
+    let app = &show.app;
+    let progress = |position_millis: u64| {
+        json!({"ended":false,"record":{"identity":episode(1),"parent_identity":series(),"provider_id":"stremio","title":"Fixture Show","poster":null,"landscape":null,"position_millis":position_millis,"duration_millis":180_000,"updated_at_millis":1,"completed_at_millis":null}})
+    };
+    let (status, value) = request(app, "member-token-1", "PUT", "/api/profiles/1/progress", progress(170_000)).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["status"], "Resume", "{entry}");
+    assert_eq!(entry["card"]["identity"]["id"], "tt100:1:1", "{entry}");
+    assert!(entry["card"]["badges"].as_array().unwrap().is_empty(), "{entry}");
+
+    let (status, value) = request(app, "member-token-1", "PUT", "/api/profiles/1/progress", progress(172_000)).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    resolve(app, 1).await;
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["status"], "Next", "{entry}");
+    assert_eq!(entry["card"]["identity"]["id"], "tt100:1:2", "{entry}");
+
+    let (status, history) = request(app, "member-token-1", "GET", "/api/profiles/1/history", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    let finished = history.as_array().unwrap().iter().find(|e| e["card"]["identity"]["id"] == "tt100:1:1").cloned().unwrap();
+    assert_eq!(finished["watched"], json!(true), "{finished}");
+    assert_eq!(finished["position"], json!(172.0), "{finished}");
+}
+
+#[tokio::test]
+async fn a_long_episode_still_finishes_in_the_closing_seconds() {
+    let start = now();
+    let show = show(vec![(1, start - 30 * DAY), (2, start - 20 * DAY)]).await;
+    let app = &show.app;
+    let (status, value) = request(app, "member-token-1", "PUT", "/api/profiles/1/progress", json!({"ended":false,"record":{"identity":episode(1),"parent_identity":series(),"provider_id":"stremio","title":"Fixture Show","poster":null,"landscape":null,"position_millis":2_690_000,"duration_millis":2_700_000,"updated_at_millis":1,"completed_at_millis":null}})).await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    resolve(app, 1).await;
+    let entry = show_entry(&queue(app).await);
+    assert_eq!(entry["status"], "Next", "{entry}");
+    assert_eq!(entry["card"]["identity"]["id"], "tt100:1:2", "{entry}");
+}
+
+#[tokio::test]
 async fn an_opened_episode_before_a_watched_one_leaves_the_series_at_the_watched_one() {
     let start = now();
     let show = show(vec![

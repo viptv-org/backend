@@ -130,7 +130,7 @@ pub async fn correct(
         let updated=activity_time(&tx,profile)?;
         let settled=engine_v3::scoped_library::correct_db(&tx,profile,kind,id,(position*1000.0).round() as u64,(duration*1000.0).round() as u64,action=="watched",updated.max(0) as u64*1000)?;
         if let Some((at,total))=settled {position=at;duration=total;}
-        let completed = action=="watched"||duration>0.0&&position/duration>=0.95;
+        let completed = watched(&json!({"position":position,"duration":duration}), &merged);
         engine_v3::library_stats::observe(&tx,profile,kind,id,completed)?;
         tx.execute("INSERT INTO progress(profile_id,id,type,name,poster,position,duration,updated_at,context,title_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(profile_id,type,id) DO UPDATE SET name=excluded.name,poster=COALESCE(excluded.poster,progress.poster),position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at,context=excluded.context,title_id=excluded.title_id",params![profile,id,kind,name,item["poster"].as_str(),position,duration,updated,merged.to_string(),title]).map_err(db_error)?;
         tx.execute("DELETE FROM continuation_cache WHERE profile_id=?1 AND series_id=?2",params![profile,title]).map_err(db_error)?;
