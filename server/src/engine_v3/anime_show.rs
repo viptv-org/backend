@@ -838,9 +838,20 @@ async fn resolve_with(
         if segments.is_empty() && simkl.is_none() {
             segments = release_segments(&release.id, &videos);
         }
-        Layout::Segments {
-            release_season: single_season(&videos),
-            segments,
+        if segments.is_empty() && simkl.is_none() && show_level_document(&identity, &videos) {
+            Layout::Aired
+        } else {
+            if segments.is_empty() && simkl.is_none() {
+                tracing::warn!(
+                    release = %release.id,
+                    videos = videos.len(),
+                    "Path A has no episode layout for this release"
+                );
+            }
+            Layout::Segments {
+                release_season: single_season(&videos),
+                segments,
+            }
         }
     };
     Some(AnimeShow {
@@ -890,6 +901,42 @@ fn release_segments(release: &str, videos: &[Value]) -> Vec<Segment> {
         let (season, episode) = show_coordinates(video)?;
         Some((number, season, episode))
     }))
+}
+
+fn show_level_document(identity: &MediaIdentity, videos: &[Value]) -> bool {
+    let keys: Vec<String> = ["imdb", "tvdb", "tmdb"]
+        .into_iter()
+        .filter_map(|namespace| {
+            let value = id_of(identity, namespace)?;
+            Some(if namespace == "imdb" {
+                value.to_owned()
+            } else {
+                format!("{namespace}:{value}")
+            })
+        })
+        .collect();
+    videos
+        .iter()
+        .take(MAX_ROWS)
+        .filter_map(|video| video["id"].as_str())
+        .any(|id| {
+            keys.iter().any(|key| {
+                id.strip_prefix(key.as_str())
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    .is_some_and(season_episode)
+            })
+        })
+}
+
+fn season_episode(rest: &str) -> bool {
+    let mut parts = rest.split(':');
+    let (Some(season), Some(episode), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !season.is_empty()
+        && season.bytes().all(|byte| byte.is_ascii_digit())
+        && !episode.is_empty()
+        && episode.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn episode_suffix(id: &str, release: &str) -> Option<u32> {
@@ -971,8 +1018,8 @@ async fn simkl_lookup(app: &App, identity: &MediaIdentity) -> Option<(u64, Arc<V
         let Some(value) = id_of(identity, namespace) else {
             continue;
         };
-        let Ok(document) =
-            crate::simkl::public_document(app, &format!("/search/id?{namespace}={value}")).await
+        let Some(document) =
+            public_lookup(app, &format!("/search/id?{namespace}={value}")).await
         else {
             continue;
         };
@@ -996,17 +1043,23 @@ async fn simkl_lookup(app: &App, identity: &MediaIdentity) -> Option<(u64, Arc<V
 }
 
 async fn simkl_record(app: &App, id: u64) -> Option<Arc<Value>> {
-    let document = crate::simkl::public_document(app, &format!("/anime/{id}?extended=full"))
-        .await
-        .ok()?;
+    let document = public_lookup(app, &format!("/anime/{id}?extended=full")).await?;
     (viptv_engine::simkl::id(&document) == Some(id)).then_some(document)
 }
 
 async fn simkl_episodes(app: &App, id: u64) -> Option<Vec<Value>> {
-    let document = crate::simkl::public_document(app, &format!("/anime/episodes/{id}"))
-        .await
-        .ok()?;
+    let document = public_lookup(app, &format!("/anime/episodes/{id}")).await?;
     Some(document.as_array()?.clone())
+}
+
+async fn public_lookup(app: &App, path: &str) -> Option<Arc<Value>> {
+    match crate::simkl::public_document(app, path).await {
+        Ok(document) => Some(document),
+        Err(error) => {
+            tracing::warn!(path, error = %error.1, "Simkl public lookup failed");
+            None
+        }
+    }
 }
 
 fn simkl_anime(id: &str) -> Option<u64> {

@@ -121,12 +121,18 @@ fn meta_of(addon: i64, id: &str) -> Value {
             "videos":[{"id":"mal:31:1","season":1,"episode":1}]}}),
         (15, "mal:9") => json!({"meta":{"id":"mal:9","type":"series","name":"Unmapped","_malId":"9",
             "videos":[{"id":"mal:9:1","season":1,"episode":1}]}}),
+        (15, "mal:44511") => json!({"meta":{"id":"mal:44511","type":"series","name":"Attack on Titan","imdb_id":"tt2560140","_tvdbId":"267440","_tmdbId":"1429","_malId":"44511",
+            "videos":tvdb_videos("tt2560140", &ATTACK_ON_TITAN_SEASONS)}}),
         (16, "kitsu:11") => json!({"meta":{"id":"kitsu:11","type":"series","name":"Naruto","imdb_id":"tt0409591","kitsu_id":"11"}}),
         (16, "kitsu:41982") => json!({"meta":{"id":"kitsu:41982","type":"series","name":"Attack on Titan Season 3 Part 2","imdb_id":"tt2560140","kitsu_id":"41982",
             "videos":kitsu_videos("kitsu:41982", 10, 3, 12)}}),
         (16, "kitsu:9") => json!({"meta":{"id":"kitsu:9","type":"series","name":"Unmapped Kitsu","kitsu_id":"9"}}),
         (18, "anilist:6702") => json!({"meta":{"id":"anilist:6702","type":"series","name":"Fairy Tail","anilist_id":"6702",
             "videos":[{"id":"anilist:6702:1:1","season":1,"episode":1,"name":"The Fairy Tail","released":"2009-10-12T00:00:00.000Z"},{"id":"anilist:6702:1:2","season":1,"episode":2,"name":"Fire Dragon, Monkey, and Bull","released":"2009-10-19T00:00:00.000Z"}]}}),
+        (18, "anilist:20954") => json!({"meta":{"id":"anilist:20954","type":"series","name":"Attack on Titan","imdb_id":"tt2560140","_tvdbId":"267440","_tmdbId":"1429","anilist_id":"20954",
+            "videos":tvdb_videos("tt2560140", &ATTACK_ON_TITAN_SEASONS)}}),
+        (19, "anidb:12345") => json!({"meta":{"id":"anidb:12345","type":"series","name":"Attack on Titan","imdb_id":"tt2560140","_tvdbId":"267440","_tmdbId":"1429","anidb_id":"12345",
+            "videos":tvdb_videos("tt2560140", &ATTACK_ON_TITAN_SEASONS)}}),
         _ => json!({}),
     }
 }
@@ -167,7 +173,18 @@ fn catalog_search_metas(kind: &str, query: &str) -> Value {
     json!({"metas": metas})
 }
 
-async fn simkl_search(Query(query): Query<HashMap<String, String>>) -> axum::Json<Value> {
+async fn simkl_search(Query(query): Query<HashMap<String, String>>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if [("mal", "44511"), ("anilist", "20954"), ("anidb", "12345")]
+        .into_iter()
+        .any(|(namespace, value)| query.get(namespace).map(String::as_str) == Some(value))
+    {
+        return (
+            StatusCode::BAD_GATEWAY,
+            axum::Json(json!({"error":"user_token_required","code":401})),
+        )
+            .into_response();
+    }
     let id = match (
         query.get("mal").map(String::as_str),
         query.get("kitsu").map(String::as_str),
@@ -183,6 +200,7 @@ async fn simkl_search(Query(query): Query<HashMap<String, String>>) -> axum::Jso
         Some(id) => json!([{"ids":{"simkl":id}}]),
         None => json!([]),
     })
+    .into_response()
 }
 
 async fn simkl_title(Path(id): Path<String>) -> axum::Json<Value> {
@@ -280,6 +298,11 @@ pub(super) async fn stack() -> (App, tokio::task::JoinHandle<()>) {
             18i64,
             "Animeo Meta",
             json!({"id":"animeometa","name":"Animeo Meta","resources":["meta"],"types":["movie","series"],"idPrefixes":["anilist"]}),
+        ),
+        (
+            19i64,
+            "AniDB Metadata",
+            json!({"id":"anidbmeta","name":"AniDB Metadata","resources":["meta"],"types":["movie","series"],"idPrefixes":["anidb"]}),
         ),
     ] {
         app.db
@@ -465,6 +488,42 @@ async fn a_kitsu_release_document_maps_its_episodes_to_the_show_without_simkl() 
             episode: 10
         })
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_show_level_release_document_maps_its_episodes_without_simkl() {
+    let (app, task) = stack().await;
+    for (release_id, namespace, value, season, number) in [
+        ("mal:44511", "mal", "44511", 4, 1),
+        ("anilist:20954", "anilist", "20954", 3, 13),
+        ("anidb:12345", "anidb", "12345", 2, 1),
+    ] {
+        let show = resolve(&app, &release(release_id, &[(namespace, value)]))
+            .await
+            .unwrap_or_else(|| panic!("{release_id} did not resolve"));
+        assert_eq!(show.identity().id, "tt2560140", "{release_id}");
+        assert_eq!(id_of(show.identity(), "tvdb"), Some("267440".into()), "{release_id}");
+        assert_eq!(
+            show.tvdb_episode(&episode(season, number)),
+            Some(TvdbEpisode {
+                season,
+                episode: number
+            }),
+            "{release_id}"
+        );
+        assert_eq!(
+            show.release_episode(TvdbEpisode {
+                season,
+                episode: number
+            }),
+            Some(ReleaseEpisode {
+                season: Some(season),
+                episode: number
+            }),
+            "{release_id}"
+        );
+    }
     task.abort();
 }
 
