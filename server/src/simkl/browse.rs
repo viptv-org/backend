@@ -1,6 +1,6 @@
 use super::*;
 use viptv_engine::{
-    presentation::CatalogPage,
+    presentation::{Card, CatalogPage},
     query::{Choice, ControlKind, QueryControl},
 };
 impl Service {
@@ -198,19 +198,17 @@ pub(crate) async fn page(
         .as_array()
         .filter(|v| v.len() <= 500)
         .ok_or("Simkl catalog was invalid")?;
-    let cards = metadata::allowed(
+    let cards: Vec<Card> = metadata::allowed(
         app,
         values
             .iter()
-            .skip(skip)
-            .take(24)
             .filter_map(|v| viptv_engine::simkl::card(v, category).ok())
             .collect(),
     )?;
     store::validate(app, profile, &access)?;
-    let more = values.len() > skip + 24;
+    let more = cards.len() > skip + 24;
     Ok(CatalogPage {
-        cards,
+        cards: cards.into_iter().skip(skip).take(24).collect(),
         next_cursor: more.then(|| (skip + 24).to_string()),
         complete: !more,
     })

@@ -83,6 +83,45 @@ async fn fixture() -> (App, tokio::task::JoinHandle<()>) {
     (a, task)
 }
 
+async fn pageable_fixture() -> (App, tokio::task::JoinHandle<()>) {
+    let mut a = crate::auth_integration_tests::fixture();
+    a.addons.allow_test_loopback = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let catalog = get(
+        |AxumPath((kind, _catalog, extra)): AxumPath<(String, String, String)>| async move {
+            let skip = extra
+                .trim_end_matches(".json")
+                .strip_prefix("skip=")
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            let metas = (skip..(skip + 24).min(120))
+                .map(|i| json!({ "id": format!("tt{i}"), "type": kind, "name": format!("Title {i}") }))
+                .collect::<Vec<_>>();
+            Json(json!({ "metas": metas }))
+        },
+    );
+    let service = Router::new()
+        .route("/", any(|| async { "ok" }))
+        .route("/catalog/:kind/:catalog/:extra", catalog);
+    let task = tokio::spawn(async move { axum::serve(listener, service).await.unwrap() });
+    {
+        let db = a.db.lock().unwrap();
+        db.execute(
+            "INSERT INTO addons(account_id,name,manifest_url,manifest) VALUES(1,'Fixture',?1,?2)",
+            params![
+                format!("http://{address}/manifest.json"),
+                json!({"id":"fixture","name":"Fixture","resources":["catalog"],"types":["movie"],"catalogs":[{"id":"top","type":"movie","extra":[{"name":"skip"}]}]})
+                    .to_string()
+            ],
+        )
+        .unwrap();
+    }
+    crate::test_support::encrypt_fixture_sources(&a);
+    crate::test_support::send_port_probe(address).await;
+    (a, task)
+}
+
 async fn catalog(a: &App, kind: &str) -> Vec<Value> {
     let (status, page) = request(
         a,
@@ -684,5 +723,55 @@ async fn restricted_catalogs_are_empty_and_discover_stays_filtered() {
     assert_eq!(body, json!([]));
     assert_eq!(catalog_ids(&a, "movie").await, vec!["pg"]);
     assert_eq!(catalog_ids(&a, "series").await, vec!["cartoon"]);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_kids_profile_pages_over_a_mixed_catalog_to_full_filtered_pages() {
+    let (a, task) = pageable_fixture().await;
+    {
+        let db = a.db.lock().unwrap();
+        for i in 0..120usize {
+            let age = if i % 24 < 6 { Some(0) } else { Some(18) };
+            db.execute(
+                "INSERT INTO kids_media(account_id,kind,id,parent_id,metadata,age,conflict,updated_at) VALUES(1,'movie',?1,?1,?2,?3,0,1)",
+                params![format!("tt{i}"), json!({ "name": format!("Title {i}") }).to_string(), age],
+            )
+            .unwrap();
+        }
+    }
+    let id = create_kids(&a, json!({ "max_age": 17 })).await;
+    switch(&a, &id).await;
+
+    let (status, first) =
+        request(&a, "member-token-1", "GET", "/api/discover?type=movie", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let first_cards = first["cards"].as_array().unwrap();
+    assert_eq!(first_cards.len(), 24);
+    for card in first_cards {
+        let index: usize = card["identity"]["id"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("tt")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(index % 24 < 6, "adult title {index} leaked into a kids page");
+    }
+    assert_eq!(first["next_cursor"], "96");
+    assert_eq!(first["complete"], false);
+
+    let (status, rest) = request(
+        &a,
+        "member-token-1",
+        "GET",
+        "/api/discover?type=movie&skip=96",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rest}");
+    assert_eq!(rest["cards"].as_array().unwrap().len(), 6);
+    assert_eq!(rest["next_cursor"], Value::Null);
+    assert_eq!(rest["complete"], true);
     task.abort();
 }
