@@ -16,6 +16,7 @@ pub(crate) struct Episode {
     pub(crate) series: Card,
     pub(crate) episode: Card,
     pub(crate) released_at_millis: u64,
+    pub(crate) released_at_date: Option<String>,
     pub(crate) keys: Vec<String>,
 }
 
@@ -213,6 +214,7 @@ async fn fetch(
                 series: series.clone(),
                 episode,
                 released_at_millis: at,
+                released_at_date: entry.released_at_date.clone(),
                 keys: keys.clone(),
             });
         }

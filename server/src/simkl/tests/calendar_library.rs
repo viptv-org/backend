@@ -404,3 +404,63 @@ async fn a_merged_request_keeps_library_rows_over_public_on_every_type() {
         }
     }
 }
+
+async fn raw_addon(app: &mut App, episodes: Vec<(u32, u32, String)>) -> Served {
+    app.addons.allow_test_loopback = true;
+    let routes = Router::new().route(
+        "/meta/series/:file",
+        get(move |Path(file): Path<String>| {
+            let id = file.trim_end_matches(".json").to_owned();
+            let videos = episodes
+                .iter()
+                .map(|(season, number, released)| {
+                    json!({"id":format!("{id}:{season}:{number}"),"title":format!("Chapter {number}"),"season":season,"episode":number,"released":released})
+                })
+                .collect::<Vec<_>>();
+            async move {
+                axum::Json(json!({"meta":{"id":id,"type":"series","name":"Fixture Show","poster":"https://img.invalid/poster.jpg","videos":videos}})).into_response()
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(1,'Metadata',?1,?2,1)",params![format!("http://{address}/manifest.json"),json!({"id":"metadata","name":"Metadata","version":"1","resources":["meta"],"types":["series"]}).to_string()]).unwrap();
+    crate::test_support::encrypt_fixture_sources(app);
+    Served {
+        calls: Arc::new(AtomicUsize::new(0)),
+        tasks: vec![task],
+    }
+}
+
+#[tokio::test]
+async fn a_date_only_release_stays_on_its_date_while_a_timed_release_keeps_its_instant() {
+    let mut app = fixture();
+    let t = now();
+    let bare = day(t + DAY);
+    let midnight = day(t + 2 * DAY);
+    let timed = iso(t + 3 * DAY);
+    let _served = raw_addon(
+        &mut app,
+        vec![
+            (1, 1, bare.clone()),
+            (1, 2, format!("{midnight}T00:00:00Z")),
+            (1, 3, timed.clone()),
+        ],
+    )
+    .await;
+    save_series(&app, "tt100");
+    let window = format!("?start={}&end={}", day(t - DAY), day(t + 5 * DAY));
+    let (status, page) = calendar(&app, &window).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let entries = page["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 3, "{page}");
+    // Date-only releases (bare and midnight-UTC) carry the plain date, so no
+    // device zone can shift them to the previous day.
+    assert_eq!(entries[0]["date"], bare.as_str());
+    assert_eq!(entries[1]["date"], midnight.as_str());
+    assert_eq!(entries[0]["date"].as_str().unwrap().len(), 10);
+    assert_eq!(entries[1]["date"].as_str().unwrap().len(), 10);
+    // A timed release stays an instant the client localizes.
+    assert_eq!(entries[2]["date"], timed.as_str());
+}

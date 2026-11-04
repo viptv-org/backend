@@ -24,6 +24,8 @@ struct Stored {
     #[serde(default)]
     parent_identity: Option<MediaIdentity>,
     released_at_millis: Option<u64>,
+    #[serde(default)]
+    released_at_date: Option<String>,
     aired: Option<bool>,
     #[serde(default)]
     card: Option<Card>,
@@ -95,6 +97,7 @@ pub(crate) fn store_db(
                 identity: entry.card.identity.clone(),
                 parent_identity: entry.card.parent_identity.clone(),
                 released_at_millis: entry.released_at_millis,
+                released_at_date: entry.released_at_date.clone(),
                 aired: entry.aired,
                 card: (index <= STORED_CARDS).then(|| entry.card.clone()),
             })
@@ -214,6 +217,7 @@ fn bare(identity: MediaIdentity, parent_identity: Option<MediaIdentity>) -> Card
         parent_identity,
         added_at_millis: None,
         released_at_millis: None,
+        released_at_date: None,
         metadata_origin: None,
     }
 }
@@ -469,6 +473,7 @@ fn availability(stored: Vec<Stored>) -> Vec<EpisodeAvailability> {
                 .card
                 .unwrap_or_else(|| bare(stored.identity, stored.parent_identity)),
             released_at_millis: stored.released_at_millis,
+            released_at_date: stored.released_at_date,
             aired: stored.aired,
         })
         .collect()

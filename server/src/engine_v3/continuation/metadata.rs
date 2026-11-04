@@ -165,9 +165,15 @@ pub(super) async fn document(
         .into_iter()
         .filter_map(|card| {
             let row = by_id.get(card.identity.id.as_str())?;
+            let released_at_millis = clock(&row["released"]).or_else(|| clock(&row["date"]));
+            let released_at_date = super::release_date(&row["released"])
+                .or_else(|| super::release_date(&row["date"]));
+            let mut card = card;
+            card.released_at_date = released_at_date.clone();
             Some(EpisodeAvailability {
                 card,
-                released_at_millis: clock(&row["released"]).or_else(|| clock(&row["date"])),
+                released_at_millis,
+                released_at_date,
                 aired: row["aired"].as_bool(),
             })
         })

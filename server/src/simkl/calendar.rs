@@ -228,11 +228,18 @@ fn library_entry(
     let Some(timestamp) = DateTime::from_timestamp_millis(found.released_at_millis as i64) else {
         return Ok(None);
     };
-    let day = timestamp.date_naive();
+    let date = match &found.released_at_date {
+        Some(date) => date.clone(),
+        None => timestamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    };
+    let day = match &found.released_at_date {
+        Some(date) => NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| ApiError::from("Calendar unavailable"))?,
+        None => timestamp.date_naive(),
+    };
     if day < start || day > end {
         return Ok(None);
     }
-    let date = timestamp.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let coordinates = found.episode.identity.episode.as_ref();
     let title = found.episode.title.as_str();
     let episode_title = (!title.is_empty()
