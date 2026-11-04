@@ -816,6 +816,104 @@ async fn metadata_falls_back_in_priority_order() {
     );
     assert!(addons.meta("movie", "other").await.is_err());
 }
+#[tokio::test]
+async fn discover_fan_out_returns_within_deadline_without_the_slow_addon() {
+    use axum::{routing::get, Router};
+    let mock = Router::new()
+        .route("/", get(|| async { "ok" }))
+        .route(
+            "/fast/catalog/movie/top/search=x.json",
+            get(|| async {
+                axum::Json(json!({"metas":[{"id":"tt-fast","type":"movie","name":"Fast"}]}))
+            }),
+        )
+        .route(
+            "/slow/catalog/movie/top/search=x.json",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(20)).await;
+                axum::Json(json!({"metas":[{"id":"tt-slow","type":"movie","name":"Slow"}]}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    crate::test_support::send_port_probe(host).await;
+    let addons = test_addons();
+    let manifest = json!({"resources":["catalog"],"types":["movie"],"catalogs":[{"id":"top","type":"movie","extra":[{"name":"search"}]}]});
+    insert(
+        &addons,
+        "Fast",
+        &format!("http://{host}/fast/manifest.json"),
+        manifest.clone(),
+        0,
+    );
+    insert(
+        &addons,
+        "Slow",
+        &format!("http://{host}/slow/manifest.json"),
+        manifest,
+        1,
+    );
+    let started = std::time::Instant::now();
+    let page = addons
+        .discover("movie".into(), None, None, 0, Some("x".into()), None)
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "discover exceeded the page deadline: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(page["metas"].as_array().unwrap().len(), 1);
+    assert_eq!(page["metas"][0]["id"], "tt-fast");
+    server.abort();
+}
+#[tokio::test]
+async fn meta_fan_out_falls_back_to_fast_addon_within_deadline() {
+    use axum::{routing::get, Router};
+    let mock = Router::new()
+        .route("/", get(|| async { "ok" }))
+        .route(
+            "/slow/meta/movie/tt1.json",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(20)).await;
+                axum::Json(json!({"meta":{"id":"tt1","name":"Slow"}}))
+            }),
+        )
+        .route(
+            "/fast/meta/movie/tt1.json",
+            get(|| async { axum::Json(json!({"meta":{"id":"tt1","name":"Fast"}})) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    crate::test_support::send_port_probe(host).await;
+    let addons = test_addons();
+    let manifest = json!({"resources":["meta"],"types":["movie"],"idPrefixes":["tt"]});
+    insert(
+        &addons,
+        "Slow",
+        &format!("http://{host}/slow/manifest.json"),
+        manifest.clone(),
+        0,
+    );
+    insert(
+        &addons,
+        "Fast",
+        &format!("http://{host}/fast/manifest.json"),
+        manifest,
+        1,
+    );
+    let started = std::time::Instant::now();
+    let meta = addons.meta("movie", "tt1").await.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "meta exceeded the page deadline: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(meta["meta"]["name"], "Fast");
+    server.abort();
+}
 #[test]
 fn root_prefixes_and_search_extras() {
     assert!(!supports(
