@@ -1,9 +1,13 @@
 use super::*;
 fn millis(raw: &str) -> Option<u64> {
-    let value = chrono::DateTime::parse_from_str(raw, "%Y%m%d%H%M%S %z")
-        .ok()?
-        .timestamp_millis();
-    u64::try_from(value).ok()
+    let raw = raw.trim();
+    let instant = chrono::DateTime::parse_from_str(raw, "%Y%m%d%H%M%S %z")
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .or_else(|_| {
+            chrono::NaiveDateTime::parse_from_str(raw, "%Y%m%d%H%M%S")
+                .map(|naive| naive.and_utc())
+        });
+    u64::try_from(instant.ok()?.timestamp_millis()).ok()
 }
 fn program(
     channel: &str,
