@@ -28,6 +28,40 @@ pub(crate) fn require_item(
         Err(forbidden())
     }
 }
+fn allow_keys(
+    db: &Connection,
+    p: &auth::Principal,
+    keys: &[(String, String)],
+) -> Result<HashSet<(String, String)>, ApiError> {
+    if keys.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let auth::Principal::Account { profile_id, .. } = p;
+    let encoded = serde_json::to_string(
+        &keys
+            .iter()
+            .map(|(kind, id)| json!({"k": kind, "i": id}))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|_| ApiError::from("Title unavailable"))?;
+    let allowed = sql_allowed("json_extract(j.value,'$.k')", "json_extract(j.value,'$.i')", "?2");
+    let mut stmt = db
+        .prepare(&format!(
+            "SELECT json_extract(j.value,'$.k'),json_extract(j.value,'$.i') FROM json_each(?1) AS j WHERE {allowed}"
+        ))
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(
+            params![encoded, profile_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .map_err(db_error)?;
+    let mut allowed_keys = HashSet::new();
+    for row in rows {
+        allowed_keys.insert(row.map_err(db_error)?);
+    }
+    Ok(allowed_keys)
+}
 pub(crate) fn filter_items(
     db: &Connection,
     p: &auth::Principal,
@@ -36,20 +70,31 @@ pub(crate) fn filter_items(
     if !restricted(db, p)? {
         return Ok(values);
     }
+    let keys: Vec<(String, String)> = values
+        .iter()
+        .map(|value| {
+            (
+                value["type"].as_str().unwrap_or("").to_owned(),
+                value["id"].as_str().unwrap_or("").to_owned(),
+            )
+        })
+        .collect();
+    let allowed = allow_keys(db, p, &keys)?;
+    let metadata = media_batch(db, p, &keys)?;
     let mut safe = Vec::new();
-    for mut value in values {
-        let kind = value["type"].as_str().unwrap_or("");
-        let id = value["id"].as_str().unwrap_or("");
-        if allow_item(db, p, kind, id)? {
-            if let Some((metadata, _, _, _)) = media(db, p, kind, id)? {
-                for key in ["name", "poster", "background", "series_id"] {
-                    if !metadata[key].is_null() {
-                        value[key] = metadata[key].clone();
-                    }
+    for (value, key) in values.into_iter().zip(keys) {
+        if !allowed.contains(&key) {
+            continue;
+        }
+        let mut value = value;
+        if let Some(metadata) = metadata.get(&key) {
+            for field in ["name", "poster", "background", "series_id"] {
+                if !metadata[field].is_null() {
+                    value[field] = metadata[field].clone();
                 }
             }
-            safe.push(value);
         }
+        safe.push(value);
     }
     Ok(safe)
 }

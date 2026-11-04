@@ -219,6 +219,41 @@ pub(super) fn prune_observations(db: &Connection, account: i64) -> Result<(), Ap
     Ok(())
 }
 pub(super) type MediaRecord = (Value, String, Option<i64>, bool);
+pub(super) fn media_batch(
+    db: &Connection,
+    p: &auth::Principal,
+    keys: &[(String, String)],
+) -> Result<HashMap<(String, String), Value>, ApiError> {
+    let mut out = HashMap::new();
+    if keys.is_empty() {
+        return Ok(out);
+    }
+    let encoded = serde_json::to_string(
+        &keys
+            .iter()
+            .map(|(kind, id)| json!({"k": kind, "i": id}))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|_| ApiError::from("Title metadata unavailable"))?;
+    let mut stmt = db
+        .prepare(
+            "SELECT json_extract(j.value,'$.k'),json_extract(j.value,'$.i'),m.metadata FROM json_each(?1) AS j JOIN kids_media m ON m.account_id=?2 AND m.kind=json_extract(j.value,'$.k') AND m.id=json_extract(j.value,'$.i')",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(
+            params![encoded, p.account_id()],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
+        )
+        .map_err(db_error)?;
+    for row in rows {
+        let (kind, id, metadata) = row.map_err(db_error)?;
+        let metadata: Value = serde_json::from_str(&metadata)
+            .map_err(|_| ApiError::from("Title metadata unavailable"))?;
+        out.insert((kind, id), metadata);
+    }
+    Ok(out)
+}
 pub(super) fn media(
     db: &Connection,
     p: &auth::Principal,
