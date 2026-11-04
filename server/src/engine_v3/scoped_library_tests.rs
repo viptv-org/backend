@@ -1024,6 +1024,56 @@ fn table_reads(db: &Connection, table: &str, f: impl FnOnce()) -> usize {
     counted.load(Ordering::Relaxed)
 }
 
+fn statement_steps(db: &Connection, sql_contains: &str, f: impl FnOnce()) -> i32 {
+    use std::ffi::CStr;
+    use std::os::raw::{c_char, c_int, c_uint, c_void};
+
+    struct Measured {
+        needle: String,
+        steps: i32,
+    }
+
+    unsafe extern "C" fn profile(
+        mask: c_uint,
+        ctx: *mut c_void,
+        stmt: *mut c_void,
+        sql: *mut c_void,
+    ) -> c_int {
+        if mask != rusqlite::ffi::SQLITE_TRACE_PROFILE as c_uint {
+            return 0;
+        }
+        let measured = &mut *(ctx as *mut Measured);
+        let text = CStr::from_ptr(sql as *const c_char).to_string_lossy();
+        if text.contains(measured.needle.as_str()) {
+            measured.steps = rusqlite::ffi::sqlite3_stmt_status(
+                stmt as *mut rusqlite::ffi::sqlite3_stmt,
+                rusqlite::ffi::SQLITE_STMTSTATUS_RUN as c_int,
+                0,
+            );
+        }
+        0
+    }
+
+    let mut measured = Measured {
+        needle: sql_contains.to_owned(),
+        steps: 0,
+    };
+    let handle = unsafe { db.handle() };
+    unsafe {
+        rusqlite::ffi::sqlite3_trace_v2(
+            handle,
+            rusqlite::ffi::SQLITE_TRACE_PROFILE as c_uint,
+            Some(profile),
+            &mut measured as *mut Measured as *mut c_void,
+        );
+    }
+    f();
+    unsafe {
+        rusqlite::ffi::sqlite3_trace_v2(handle, 0, None, std::ptr::null_mut());
+    }
+    measured.steps
+}
+
 fn old_continuation_keys(db: &Connection, profile: i64) -> Vec<Key> {
     let mut groups: std::collections::BTreeMap<Key, Saved<PlaybackRecord>> = Default::default();
     for saved in rows::<PlaybackRecord>(db, profile, "playback", 50000).unwrap() {
@@ -1109,5 +1159,193 @@ async fn continue_watching_reads_hidden_queue_once_across_large_rows() {
     assert!(
         old_reads >= 500,
         "old continue path reads the hidden queue per entry: {old_reads}"
+    );
+}
+
+fn old_home_favorites(db: &Connection, app: &App, profile: i64) -> Vec<Card> {
+    app.require_profile(db, profile).unwrap();
+    app.request_lease().validate(db).unwrap();
+    let allowed = kids::sql_allowed("favorites.type", "favorites.id", "?1");
+    let mut q = db
+        .prepare(&format!(
+            "SELECT id,type,name,poster,context,added_at_millis FROM favorites WHERE profile_id=?1 AND {allowed} ORDER BY added_at_millis DESC,name COLLATE NOCASE,type,id LIMIT 12"
+        ))
+        .unwrap();
+    let items = q
+        .query_map([profile], |r| {
+            Ok(json!({
+                "id": r.get::<_, String>(0)?,
+                "type": r.get::<_, String>(1)?,
+                "name": r.get::<_, String>(2)?,
+                "poster": r.get::<_, Option<String>>(3)?,
+                "engine_favorite": serde_json::from_str::<Value>(&r.get::<_, String>(4)?)
+                    .unwrap_or(Value::Null),
+                "added_at_millis": r.get::<_, Option<u64>>(5)?,
+            }))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let mut cards: std::collections::BTreeMap<Key, Card> =
+        super::super::library::cards(db, &app.identity(), items)
+            .unwrap()
+            .into_iter()
+            .map(|c| Ok((raw_key(&c).unwrap(), c)))
+            .collect::<Result<_, ApiError>>()
+            .unwrap();
+    let mut accepted = 0;
+    let mut offset = 0;
+    while accepted < 12 && offset <= 10000 {
+        let mut q = db
+            .prepare(
+                "SELECT identity_scope,kind,identity_id,value,added_at_millis FROM engine_scoped_records WHERE profile_id=?1 AND record_kind='favorite' ORDER BY added_at_millis DESC,json_extract(value,'$.title') COLLATE NOCASE,kind,identity_id LIMIT 24 OFFSET ?2",
+            )
+            .unwrap();
+        let batch = q
+            .query_map(params![profile, offset], |r| {
+                Ok((
+                    Key(r.get(0)?, r.get(1)?, r.get(2)?),
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<u64>>(4)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let count = batch.len();
+        for (key, raw, added) in batch {
+            let mut card: Card = decode(&raw).unwrap();
+            if kids::scoped::require_card_db(db, &app.identity(), &card).is_err() {
+                continue;
+            }
+            card.added_at_millis = added;
+            card.progress = None;
+            cards.insert(key, card);
+            accepted += 1;
+            if accepted == 12 {
+                break;
+            }
+        }
+        if count < 24 {
+            break;
+        }
+        offset += 24;
+    }
+    let mut cards = cards.into_iter().collect::<Vec<_>>();
+    cards.sort_by(|(ka, a), (kb, b)| {
+        b.added_at_millis
+            .cmp(&a.added_at_millis)
+            .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+            .then_with(|| ka.cmp(kb))
+    });
+    cards.into_iter().take(12).map(|(_, c)| c).collect()
+}
+
+#[tokio::test]
+async fn home_favorites_reads_engine_records_once_across_large_rows() {
+    let app = fixture();
+    let owned = profile_app(&app);
+    let origin_raw = json!({"provider_id":"simkl","connection_id":null,"incarnation":null}).to_string();
+    {
+        let db = app.db.lock().unwrap();
+        for i in 0..500 {
+            let id = format!("fav-{i}");
+            let identity = json!({"id": id.clone(), "kind": "movie", "ids": [], "episode": null, "edition": null});
+            let card = json!({
+                "identity": identity,
+                "provider_id": "simkl",
+                "title": format!("Fixture {i}"),
+                "subtitle": null,
+                "description": null,
+                "poster": null,
+                "landscape": null,
+                "logo": null,
+                "progress": null,
+                "badges": [],
+                "parent_identity": null,
+                "metadata_origin": json!({"provider_id":"simkl","connection_id":null,"incarnation":null}),
+            });
+            db.execute(
+                "INSERT INTO engine_scoped_records(profile_id,record_kind,identity_scope,kind,identity_id,lookup_origin,lookup_id,lookup_identity,value,added_at_millis,updated_at_millis,verified) VALUES(?1,'favorite','shared','movie',?2,?3,?2,?4,?5,?6,1,0)",
+                params![1, id, origin_raw.as_str(), identity.to_string(), card.to_string(), i as u64],
+            )
+            .unwrap();
+        }
+        db.execute(
+            "INSERT INTO kids_profiles(profile_id,enabled,max_age,revision) VALUES(1,1,7,0) ON CONFLICT(profile_id) DO UPDATE SET enabled=1,max_age=7,revision=kids_profiles.revision+1",
+            [],
+        )
+        .unwrap();
+    }
+
+    let db = app.db.lock().unwrap();
+    let new_cards = home_favorites_db(&db, &owned, 1).unwrap();
+    let old_cards = old_home_favorites(&db, &owned, 1);
+    assert_eq!(encode(&new_cards).unwrap(), encode(&old_cards).unwrap());
+
+    let new_reads = table_reads(&db, "engine_scoped_records", || {
+        home_favorites_db(&db, &owned, 1).unwrap();
+    });
+    let old_reads = table_reads(&db, "engine_scoped_records", || {
+        old_home_favorites(&db, &owned, 1);
+    });
+    assert!(
+        new_reads <= 12,
+        "home favourites re-query engine records {new_reads} times"
+    );
+    assert!(
+        old_reads >= 200,
+        "old home favourites path scans engine records per batch: {old_reads}"
+    );
+    let new_steps = statement_steps(&db, "engine_scoped_records", || {
+        home_favorites_db(&db, &owned, 1).unwrap();
+    });
+    assert!(
+        new_steps <= 600,
+        "restricted home favourites scan the list but stay bounded: {new_steps} steps"
+    );
+}
+
+#[tokio::test]
+async fn home_favorites_reads_about_twelve_rows_when_unrestricted() {
+    let app = fixture();
+    let owned = profile_app(&app);
+    let origin_raw = json!({"provider_id":"simkl","connection_id":null,"incarnation":null}).to_string();
+    {
+        let db = app.db.lock().unwrap();
+        for i in 0..500 {
+            let id = format!("fav-{i}");
+            let identity = json!({"id": id.clone(), "kind": "movie", "ids": [], "episode": null, "edition": null});
+            let card = json!({
+                "identity": identity,
+                "provider_id": "simkl",
+                "title": format!("Fixture {i}"),
+                "subtitle": null,
+                "description": null,
+                "poster": null,
+                "landscape": null,
+                "logo": null,
+                "progress": null,
+                "badges": [],
+                "parent_identity": null,
+                "metadata_origin": json!({"provider_id":"simkl","connection_id":null,"incarnation":null}),
+            });
+            db.execute(
+                "INSERT INTO engine_scoped_records(profile_id,record_kind,identity_scope,kind,identity_id,lookup_origin,lookup_id,lookup_identity,value,added_at_millis,updated_at_millis,verified) VALUES(?1,'favorite','shared','movie',?2,?3,?2,?4,?5,?6,1,0)",
+                params![1, id, origin_raw.as_str(), identity.to_string(), card.to_string(), i as u64],
+            )
+            .unwrap();
+        }
+    }
+
+    let db = app.db.lock().unwrap();
+    let cards = home_favorites_db(&db, &owned, 1).unwrap();
+    assert_eq!(cards.len(), 12);
+    let steps = statement_steps(&db, "engine_scoped_records", || {
+        home_favorites_db(&db, &owned, 1).unwrap();
+    });
+    assert!(
+        steps <= 16,
+        "home favourites read {steps} rows just to produce 12 cards"
     );
 }

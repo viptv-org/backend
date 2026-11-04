@@ -1202,46 +1202,41 @@ pub(crate) fn home_favorites_db(
 ) -> Result<Vec<Card>, ApiError> {
     app.require_profile(db, profile)?;
     app.request_lease().validate(db)?;
+    let principal = app.identity();
+    let restricted = kids::restricted(db, &principal)?;
     let allowed = kids::sql_allowed("favorites.type", "favorites.id", "?1");
     let mut q=db.prepare(&format!("SELECT id,type,name,poster,context,added_at_millis FROM favorites WHERE profile_id=?1 AND {allowed} ORDER BY added_at_millis DESC,name COLLATE NOCASE,type,id LIMIT 12")).map_err(db_error)?;
     let items=q.query_map([profile],|r|Ok(json!({"id":r.get::<_,String>(0)?,"type":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"poster":r.get::<_,Option<String>>(3)?,"engine_favorite":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(Value::Null),"added_at_millis":r.get::<_,Option<u64>>(5)?}))).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
-    let mut cards: BTreeMap<Key, Card> = super::library::cards(db, &app.identity(), items)?
+    let mut cards: BTreeMap<Key, Card> = super::library::cards(db, &principal, items)?
         .into_iter()
         .map(|c| Ok((raw_key(&c)?, c)))
         .collect::<Result<_, ApiError>>()?;
     let mut accepted = 0;
-    let mut offset = 0;
-    while accepted < 12 && offset <= 10000 {
-        let mut q=db.prepare("SELECT identity_scope,kind,identity_id,value,added_at_millis FROM engine_scoped_records WHERE profile_id=?1 AND record_kind='favorite' ORDER BY added_at_millis DESC,json_extract(value,'$.title') COLLATE NOCASE,kind,identity_id LIMIT 24 OFFSET ?2").map_err(db_error)?;
-        let batch = q
-            .query_map(params![profile, offset], |r| {
-                Ok((
-                    Key(r.get(0)?, r.get(1)?, r.get(2)?),
-                    r.get::<_, String>(3)?,
-                    r.get::<_, Option<u64>>(4)?,
-                ))
-            })
-            .map_err(db_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(db_error)?;
-        let count = batch.len();
-        for (key, raw, added) in batch {
-            let mut card: Card = decode(&raw)?;
-            if kids::scoped::require_card_db(db, &app.identity(), &card).is_err() {
-                continue;
-            }
-            card.added_at_millis = added;
-            card.progress = None;
-            cards.insert(key, card);
-            accepted += 1;
-            if accepted == 12 {
-                break;
-            }
+    let mut stmt = db
+        .prepare(
+            "SELECT identity_scope,kind,identity_id,value,added_at_millis FROM engine_scoped_records WHERE profile_id=?1 AND record_kind='favorite' ORDER BY added_at_millis DESC,json_extract(value,'$.title') COLLATE NOCASE,kind,identity_id",
+        )
+        .map_err(db_error)?;
+    let mut rows = stmt.query([profile]).map_err(db_error)?;
+    while let Some(row) = rows.next().map_err(db_error)? {
+        let key = Key(
+            row.get(0).map_err(db_error)?,
+            row.get(1).map_err(db_error)?,
+            row.get(2).map_err(db_error)?,
+        );
+        let raw: String = row.get(3).map_err(db_error)?;
+        let added: Option<u64> = row.get(4).map_err(db_error)?;
+        let mut card: Card = decode(&raw)?;
+        if kids::scoped::require_card(db, &principal, restricted, &card).is_err() {
+            continue;
         }
-        if count < 24 {
+        card.added_at_millis = added;
+        card.progress = None;
+        cards.insert(key, card);
+        accepted += 1;
+        if accepted == 12 {
             break;
         }
-        offset += 24;
     }
     let mut cards = cards.into_iter().collect::<Vec<_>>();
     cards.sort_by(|(ka, a), (kb, b)| {
