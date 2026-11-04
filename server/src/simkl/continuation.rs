@@ -86,6 +86,7 @@ pub(crate) async fn episodes(
         available.push(EpisodeAvailability {
             card,
             released_at_millis: crate::engine_v3::continuation::release_millis(&raw["date"]),
+            released_at_date: crate::engine_v3::continuation::release_date(&raw["date"]),
             aired: raw["aired"].as_bool(),
         });
     }

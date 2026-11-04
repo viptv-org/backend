@@ -69,6 +69,16 @@ pub(crate) fn release_millis(value: &Value) -> Option<u64> {
         })
 }
 
+pub(crate) fn release_date(value: &Value) -> Option<String> {
+    let s = value.as_str()?;
+    if chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok() {
+        return Some(s.to_owned());
+    }
+    let date = chrono::DateTime::parse_from_rfc3339(s).ok()?;
+    let utc = date.with_timezone(&chrono::Utc);
+    (utc.time() == chrono::NaiveTime::MIN).then(|| utc.date_naive().to_string())
+}
+
 fn revision_db(db: &Connection, profile: i64, expected: u64) -> Result<(), ApiError> {
     let current: u64 = db
         .query_row(

@@ -783,6 +783,7 @@ mod tests {
             parent_identity: None,
             added_at_millis: None,
             released_at_millis: None,
+            released_at_date: None,
             category: Some(kind.into()),
             metadata: Some(CardMetadata {
                 year,

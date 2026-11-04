@@ -108,6 +108,7 @@ pub fn card(value: &Value, category: &str) -> Result<Card, Error> {
         parent_identity: None,
         added_at_millis: None,
         released_at_millis: None,
+        released_at_date: None,
     })
 }
 
@@ -162,6 +163,7 @@ pub fn episodes(value: &Value, parent: &Card) -> Result<Vec<Card>, Error> {
             description::text(&value["description"]).or_else(|| description::text(&value["overview"]));
         card.landscape = image(&value["img"], "episodes", "w");
         card.released_at_millis = release_millis(&value["date"]);
+        card.released_at_date = release_date(&value["date"]);
         cards.push(card);
     }
     cards.sort_by_key(|card| {
@@ -274,6 +276,21 @@ pub(crate) fn release_millis(value: &Value) -> Option<u64> {
                 .and_then(|date| u64::try_from(date.and_utc().timestamp_millis()).ok())
         })
 }
+/// The calendar date of a release value that carries no time-of-day, so a
+/// client renders it as a date instead of localizing a made-up instant. Bare
+/// `YYYY-MM-DD` values are dates directly; a midnight-UTC timestamp is the
+/// date that instant belongs to, which is how metadata servers spell a
+/// date-only release. A value with a real time-of-day is a timed release and
+/// yields `None`.
+pub(crate) fn release_date(value: &Value) -> Option<String> {
+    let raw = value.as_str()?;
+    if chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").is_ok() {
+        return Some(raw.to_owned());
+    }
+    let date = chrono::DateTime::parse_from_rfc3339(raw).ok()?;
+    let utc = date.with_timezone(&chrono::Utc);
+    (utc.time() == chrono::NaiveTime::MIN).then(|| utc.date_naive().to_string())
+}
 
 fn year(value: &Value) -> Option<u32> {
     if let Some(year) = value["year"]
@@ -366,4 +383,24 @@ pub(crate) fn runtime_minutes(value: &Value) -> Option<u32> {
         .checked_mul(60)?
         .checked_add(minutes.unwrap_or(0))?;
     (total > 0 && total <= 10000).then_some(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_date_reads_bare_and_midnight_values_as_dates() {
+        for (raw, expected) in [
+            ("2020-01-01", Some("2020-01-01")),
+            ("2020-01-01T00:00:00Z", Some("2020-01-01")),
+            ("2020-01-01T00:00:00.000Z", Some("2020-01-01")),
+            ("2020-01-01T00:00:00+00:00", Some("2020-01-01")),
+            ("2020-01-01T04:00:00Z", None),
+            ("2020-01-01T00:00:00+09:00", None),
+            ("not a date", None),
+        ] {
+            assert_eq!(release_date(&Value::String(raw.into())).as_deref(), expected, "{raw}");
+        }
+    }
 }

@@ -127,6 +127,8 @@ pub fn episode_cards(meta: &Value, provider: &str, item: &Card) -> Result<Vec<Ca
             card.parent_identity = Some(item.identity.clone());
             card.released_at_millis = crate::simkl::release_millis(&video["date"])
                 .or_else(|| crate::simkl::release_millis(&video["released"]));
+            card.released_at_date = crate::simkl::release_date(&video["date"])
+                .or_else(|| crate::simkl::release_date(&video["released"]));
             episodes.push(card);
         }
     }
@@ -187,6 +189,7 @@ pub fn cards(raw: &str, provider: &str) -> Result<Vec<Card>, Error> {
                 parent_identity: None,
                 added_at_millis: None,
                 released_at_millis: None,
+                released_at_date: None,
                 category: Some(kind.clone()),
                 metadata: Some(crate::presentation::CardMetadata {
                     year: field(v, "releaseInfo", 256)
@@ -455,10 +458,23 @@ mod identity_proof_tests {
                 .unwrap()
                 .released_at_millis
         };
+        let date = |episode: u32| {
+            detail
+                .episodes
+                .iter()
+                .find(|card| card.identity.episode.as_ref().is_some_and(|e| e.episode == episode))
+                .unwrap()
+                .released_at_date
+                .clone()
+        };
         assert_eq!(at(1), Some(1_772_582_400_000));
         assert_eq!(at(2), Some(1_711_929_600_000));
         assert_eq!(at(3), Some(1_773_187_200_000));
         assert_eq!(at(4), None);
+        assert_eq!(date(1).as_deref(), Some("2026-03-04"));
+        assert_eq!(date(2).as_deref(), Some("2024-04-01"));
+        assert_eq!(date(3).as_deref(), Some("2026-03-11"));
+        assert_eq!(date(4), None);
     }
 
     #[test]

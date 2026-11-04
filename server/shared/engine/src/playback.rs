@@ -68,6 +68,7 @@ impl PlaybackRecord {
             parent_identity: self.parent_identity.clone(),
             added_at_millis: None,
             released_at_millis: None,
+            released_at_date: None,
             category: None,
             metadata: None,
         });
