@@ -2,6 +2,8 @@ use super::*;
 
 pub(super) use viptv_provider::discover::{enrich_episode_art, episode_art_url};
 
+const PAGE_DEADLINE: Duration = Duration::from_secs(6);
+
 fn needs_episode_art(meta: &Value) -> bool {
     meta["videos"].as_array().is_some_and(|videos| {
         videos.iter().take(2000).any(|video| {
@@ -70,16 +72,27 @@ impl Addons {
             })
             .collect::<std::collections::BTreeSet<_>>();
         let owner = (owners.len() == 1).then(|| *owners.first().expect("one issuer"));
-        let results: Vec<Value> = stream::iter(plan.endpoints.iter().cloned().map(|u| {
-            let s = self.clone();
-            async move { s.fetch(&u, 300).await }
-        }))
-        .buffered(8)
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
+        let deadline = tokio::time::Instant::now() + PAGE_DEADLINE;
+        let mut requests = stream::iter(plan.endpoints.iter().cloned().enumerate().map(
+            |(index, u)| {
+                let s = self.clone();
+                async move { (index, s.fetch(&u, 300).await) }
+            },
+        ))
+        .buffer_unordered(8);
+        let mut responses = Vec::new();
+        loop {
+            match tokio::time::timeout_at(deadline, requests.next()).await {
+                Ok(Some((index, Ok(value)))) => responses.push((index, value)),
+                Ok(Some((_, Err(_)))) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+        responses.sort_by_key(|(index, _)| *index);
+        let results = responses
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect::<Vec<_>>();
         viptv_provider::discover::aggregate_discovery(&results, &plan, request.skip)
             .map(|value| (value, owner))
     }
@@ -282,67 +295,99 @@ impl Addons {
                 Self::endpoint(&u, &["meta", kind, &format!("{id}.json")]).map(|url| (addon, url))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut results = stream::iter(endpoints.into_iter().map(|(addon, u)| {
-            let this = self.clone();
-            async move { (addon, this.fetch(&u, 3600).await) }
-        }))
-        .buffered(8);
-        while let Some((issuer, result)) = results.next().await {
+        let total = endpoints.len();
+        let mut requests = stream::iter(endpoints.into_iter().enumerate().map(
+            |(index, (addon, u))| {
+                let this = self.clone();
+                async move { (index, addon, this.fetch(&u, 3600).await) }
+            },
+        ))
+        .buffer_unordered(8);
+        let deadline = tokio::time::Instant::now() + PAGE_DEADLINE;
+        let mut resolved = vec![false; total];
+        let mut valid: Vec<(usize, i64, Value)> = Vec::new();
+        loop {
+            let (index, issuer, result) =
+                match tokio::time::timeout_at(deadline, requests.next()).await {
+                    Ok(Some(next)) => next,
+                    Ok(None) | Err(_) => break,
+                };
+            resolved[index] = true;
             if let Ok(v) = result {
                 if v["meta"].is_object() {
-                    let mut primary = v;
-                    if enrich && kind == "series" && primary["meta"]["videos"].is_array() {
-                        crate::gateway::diagnostics::timed("episode_enrich", async {
-                            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-                            while needs_episode_art(&primary["meta"]) {
-                                let Ok(Some((_, next))) =
-                                    tokio::time::timeout_at(deadline, results.next()).await
-                                else {
-                                    break;
-                                };
-                                if let Ok(other) = next {
-                                    enrich_episode_art(&mut primary["meta"], &other["meta"]);
-                                }
-                            }
-                            if let Some(videos) = primary["meta"]["videos"].as_array_mut() {
-                                for video in videos.iter_mut().take(2000) {
-                                    if let Some(image) = episode_art_url(&video["thumbnail"]) {
-                                        video["thumbnail"] = json!(image);
-                                    }
-                                }
-                            }
-                        })
-                        .await;
-                    }
-                    if enrich {
-                        let mut cache = self.meta_results.lock().unwrap();
-                        cache.retain(|_, (expiry, _, _)| *expiry > now());
-                        let expiry = now() + 3600;
-                        if cache.len() >= 256 {
-                            let drop: Vec<_> = cache.keys().take(64).cloned().collect();
-                            for key in drop {
-                                cache.remove(&key);
-                            }
-                        }
-                        cache.insert(result_key, (expiry, primary.clone(), issuer));
-                    }
-                    return Ok((primary, issuer));
+                    valid.push((index, issuer, v));
                 }
             }
+            let best = valid.iter().min_by_key(|(index, _, _)| *index);
+            if best.is_some_and(|(index, _, _)| resolved[..*index].iter().all(|&done| done)) {
+                break;
+            }
+        }
+        let primary_index = match valid.iter().map(|(index, _, _)| *index).min() {
+            Some(index) => index,
+            None => {
+                if enrich {
+                    let mut cache = self.meta_results.lock().unwrap();
+                    cache.retain(|_, (expiry, _, _)| *expiry > now());
+                    let expiry = now() + META_NOT_FOUND_TTL;
+                    if cache.len() >= 256 {
+                        let drop: Vec<_> = cache.keys().take(64).cloned().collect();
+                        for key in drop {
+                            cache.remove(&key);
+                        }
+                    }
+                    cache.insert(result_key, (expiry, Value::Null, 0));
+                }
+                return Err("Metadata not found".into());
+            }
+        };
+        let at = valid
+            .iter()
+            .position(|(index, _, _)| *index == primary_index)
+            .expect("selected meta present");
+        let (_, issuer, mut primary) = valid.swap_remove(at);
+        if enrich && kind == "series" && primary["meta"]["videos"].is_array() {
+            crate::gateway::diagnostics::timed("episode_enrich", async {
+                let enrich_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                for (_, _, other) in valid.iter() {
+                    if !needs_episode_art(&primary["meta"]) {
+                        break;
+                    }
+                    enrich_episode_art(&mut primary["meta"], &other["meta"]);
+                }
+                while needs_episode_art(&primary["meta"]) {
+                    let Ok(Some((_, _, result))) =
+                        tokio::time::timeout_at(enrich_deadline, requests.next()).await
+                    else {
+                        break;
+                    };
+                    if let Ok(other) = result {
+                        enrich_episode_art(&mut primary["meta"], &other["meta"]);
+                    }
+                }
+                if let Some(videos) = primary["meta"]["videos"].as_array_mut() {
+                    for video in videos.iter_mut().take(2000) {
+                        if let Some(image) = episode_art_url(&video["thumbnail"]) {
+                            video["thumbnail"] = json!(image);
+                        }
+                    }
+                }
+            })
+            .await;
         }
         if enrich {
             let mut cache = self.meta_results.lock().unwrap();
             cache.retain(|_, (expiry, _, _)| *expiry > now());
-            let expiry = now() + META_NOT_FOUND_TTL;
+            let expiry = now() + 3600;
             if cache.len() >= 256 {
                 let drop: Vec<_> = cache.keys().take(64).cloned().collect();
                 for key in drop {
                     cache.remove(&key);
                 }
             }
-            cache.insert(result_key, (expiry, Value::Null, 0));
+            cache.insert(result_key, (expiry, primary.clone(), issuer));
         }
-        Err("Metadata not found".into())
+        Ok((primary, issuer))
     }
     pub async fn streams(&self, u: &str, kind: &str, id: &str) -> Result<Vec<Value>, String> {
         let endpoint = Self::endpoint(u, &["stream", kind, &format!("{id}.json")])?;
