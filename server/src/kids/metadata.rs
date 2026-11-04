@@ -1,37 +1,155 @@
 use super::*;
 
+pub(super) const RESTRICTED_AGE: i64 = 18;
+const ADULT_GENRES: [&str; 6] = ["adult", "porn", "pornography", "hentai", "erotica", "erotic"];
+const RATING_AGES: [(&str, i64); 63] = [
+    ("G", 0),
+    ("TVG", 0),
+    ("TVY", 0),
+    ("TVY7", 7),
+    ("TVY7FV", 7),
+    ("PG", 10),
+    ("GP", 10),
+    ("TVPG", 10),
+    ("PG13", 13),
+    ("TV14", 14),
+    ("R", 17),
+    ("NC17", 18),
+    ("TVMA", 18),
+    ("X", 18),
+    ("XX", 18),
+    ("XXX", 18),
+    ("NR18", 18),
+    ("EC", 0),
+    ("E", 0),
+    ("E10", 10),
+    ("T", 13),
+    ("M", 17),
+    ("AO", 18),
+    ("U", 0),
+    ("UC", 0),
+    ("12A", 12),
+    ("15A", 15),
+    ("16A", 16),
+    ("R18", 18),
+    ("R21", 18),
+    ("M18", 18),
+    ("NC16", 16),
+    ("MA15", 15),
+    ("X18", 18),
+    ("RC", 18),
+    ("R13", 13),
+    ("R15", 15),
+    ("R16", 16),
+    ("RP13", 13),
+    ("RP16", 16),
+    ("RP18", 18),
+    ("PG12", 12),
+    ("RX", 18),
+    ("ALL", 0),
+    ("L", 0),
+    ("AL", 0),
+    ("TP", 0),
+    ("C", 0),
+    ("C8", 8),
+    ("14A", 14),
+    ("18A", 18),
+    ("UA", 12),
+    ("UA7", 7),
+    ("UA13", 13),
+    ("UA16", 16),
+    ("A", 18),
+    ("S", 18),
+    ("ADULT", 18),
+    ("ADULTSONLY", 18),
+    ("HENTAI", 18),
+    ("PORN", 18),
+    ("EROTICA", 18),
+    ("EROTIC", 18),
+];
+const RATING_PREFIXES: [&str; 31] = [
+    "RATED", "MPAA", "ESRB", "BBFC", "FSK", "AB", "PEGI", "KMRB", "EIRIN", "ACB", "OFLC", "CBFC",
+    "USA", "US", "UK", "GB", "DE", "JP", "JA", "KR", "KO", "AU", "NZ", "CA", "FR", "BR", "IN",
+    "IE", "NL", "ES", "IT",
+];
+
+fn marker_age(key: &str) -> Option<i64> {
+    if !key.is_empty() && key.bytes().all(|b| b.is_ascii_digit()) {
+        return key
+            .parse::<i64>()
+            .ok()
+            .filter(|age| *age <= 21)
+            .map(|age| age.min(RESTRICTED_AGE));
+    }
+    RATING_AGES
+        .iter()
+        .find(|(marker, _)| *marker == key)
+        .map(|(_, age)| *age)
+}
 pub(super) fn known_age(value: &str) -> Option<i64> {
-    match value.trim().to_uppercase().as_str() {
-        "G" | "TV-G" | "TV-Y" => Some(0),
-        "TV-Y7" | "TV-Y7-FV" => Some(7),
-        "PG" | "TV-PG" => Some(10),
-        "PG-13" => Some(13),
-        "TV-14" => Some(14),
-        "R" => Some(17),
-        "NC-17" | "TV-MA" => Some(18),
-        _ => None,
+    marker_text_age(value).or_else(|| {
+        value
+            .split_once(" - ")
+            .and_then(|(marker, _)| marker_text_age(marker))
+    })
+}
+fn marker_text_age(marker: &str) -> Option<i64> {
+    let tokens: Vec<String> = marker
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(str::to_uppercase)
+        .collect();
+    let mut start = 0;
+    while start < tokens.len() {
+        let key = tokens[start..].concat();
+        if let Some(age) = marker_age(&key) {
+            return Some(age);
+        }
+        let glued = RATING_PREFIXES.iter().find_map(|prefix| {
+            key.strip_prefix(prefix)
+                .filter(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+        });
+        if let Some(rest) = glued {
+            return marker_age(rest);
+        }
+        if !RATING_PREFIXES.contains(&tokens[start].as_str()) {
+            return None;
+        }
+        start += 1;
+    }
+    None
+}
+fn rating_age(value: &Value) -> Option<Option<i64>> {
+    match value {
+        Value::Null => None,
+        Value::String(text) if text.trim().is_empty() => None,
+        Value::String(text) => Some(known_age(text)),
+        Value::Number(number) => Some(known_age(&number.to_string())),
+        _ => Some(None),
     }
 }
 pub(super) fn assessment(meta: &Value) -> (Option<i64>, bool) {
     let mut ages = HashSet::new();
     let mut unknown = false;
     for key in ["certification", "contentRating", "ageRating", "mpaaRating"] {
-        if let Some(v) = meta.get(key) {
-            if let Some(age) = v.as_str().and_then(known_age) {
+        match meta.get(key).and_then(rating_age) {
+            None => {}
+            Some(Some(age)) => {
                 ages.insert(age);
-            } else {
+            }
+            Some(None) => {
                 unknown = true;
+                ages.insert(RESTRICTED_AGE);
             }
         }
     }
     if meta["genres"].as_array().is_some_and(|v| {
         v.iter().any(|v| {
-            v.as_str().is_some_and(|v| {
-                matches!(v.to_lowercase().as_str(), "adult" | "porn" | "pornography")
-            })
+            v.as_str()
+                .is_some_and(|v| ADULT_GENRES.contains(&v.trim().to_lowercase().as_str()))
         })
     }) {
-        ages.insert(18);
+        ages.insert(RESTRICTED_AGE);
     }
     let age = ages.iter().max().copied();
     (age, unknown || ages.len() > 1)
