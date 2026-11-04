@@ -1,13 +1,8 @@
 use crate::{auth_integration_tests::fixture, test_support::request, *};
 
 #[tokio::test]
-async fn paired_profile_can_save_private_xtream_without_creating_account_shared_provider() {
+async fn private_xtream_save_stays_profile_scoped_without_account_shared_provider() {
     let app = fixture();
-    app.db
-        .lock()
-        .unwrap()
-        .execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
-        .unwrap();
     let(status,body)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({
         "revision":0,"plugin_id":"xtream","configuration":{"server_url":"https://provider.example","username":"fixture-user","password":"fixture-password"}
     })).await;
@@ -29,11 +24,6 @@ async fn paired_profile_can_save_private_xtream_without_creating_account_shared_
 
 pub(super) async fn setup() -> (App, String) {
     let app = fixture();
-    app.db
-        .lock()
-        .unwrap()
-        .execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
-        .unwrap();
     let(status,_)=request(&app,"member-token-1","PUT","/api/profiles/1/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":"https://provider.example","username":"fixture-user","password":"fixture-password"}})).await;
     assert_eq!(status, StatusCode::OK);
     let (status, snapshot) = request(
@@ -135,14 +125,19 @@ async fn private_xtream_updates_one_encrypted_connection_and_preserves_metadata_
 
 #[tokio::test]
 async fn paired_profile_removal_cannot_delete_a_legacy_account_shared_provider() {
-    let (app, _) = setup().await;
+    let app = fixture();
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE auth_sessions SET kind='device' WHERE id='s1'", [])
+        .unwrap();
     {
         let db = app.db.lock().unwrap();
         db.execute("INSERT INTO providers(id,name,url,username,password) VALUES(10,'Shared','https://provider.example','fixture','secret')",[]).unwrap();
         db.execute("INSERT INTO provider_ownership VALUES(10,1)", [])
             .unwrap();
     }
-    let (status, _) = request(
+    let (status, body) = request(
         &app,
         "member-token-1",
         "DELETE",
@@ -150,7 +145,8 @@ async fn paired_profile_removal_cannot_delete_a_legacy_account_shared_provider()
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error_code"], "account_session_required");
     assert_eq!(
         app.db
             .lock()

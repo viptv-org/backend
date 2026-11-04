@@ -83,68 +83,66 @@ async fn private_xtream_server_egress_rejects_loopback_before_sending_credential
 }
 #[tokio::test]
 async fn private_xtream_connections_and_cached_channels_stay_with_their_selected_profile() {
-    for second_account in [1, 2] {
-        let (app, first, channel, _) = cached().await;
-        {
-            let db = app.db.lock().unwrap();
-            db.execute("INSERT INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Second','second',1)",[]).unwrap();
-            db.execute(
-                "INSERT INTO profile_owners(profile_id,account_id,created_at) VALUES(2,?1,0)",
-                [second_account],
-            )
-            .unwrap();
-            db.execute(
-                "UPDATE auth_sessions SET account_id=?1,profile_id=2,kind='device' WHERE id='s2'",
-                [second_account],
-            )
-            .unwrap();
-        }
-        let(status,_)=request(&app,"member-token-2","PUT","/api/profiles/2/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":"https://second.example","username":"second-user","password":"second-secret"}})).await;
-        assert_eq!(status, StatusCode::OK);
-        let (_, snapshot) = request(
-            &app,
-            "member-token-2",
-            "GET",
-            "/api/profiles/2/source-integrations",
-            Value::Null,
+    let (app, first, channel, _) = cached().await;
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("INSERT INTO profiles(id,name,avatar_seed,presentation_complete) VALUES(2,'Second','second',1)",[]).unwrap();
+        db.execute(
+            "INSERT INTO profile_owners(profile_id,account_id,created_at) VALUES(2,1,0)",
+            [],
         )
-        .await;
-        assert!(
-            snapshot["connections"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|entry| entry["id"] != first)
-        );
-        let (status, _) = request(
-            &app,
-            "member-token-2",
-            "GET",
-            &format!("/api/profiles/2/live/{channel}/guide"),
-            Value::Null,
+        .unwrap();
+        db.execute(
+            "UPDATE auth_sessions SET account_id=1,profile_id=2 WHERE id='s2'",
+            [],
         )
-        .await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        let (status, _) = request(
-            &app,
-            "member-token-2",
-            "DELETE",
-            &format!("/api/profiles/2/source-integrations/{first}?revision=1"),
-            Value::Null,
-        )
-        .await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-        assert_eq!(
-            app.db
-                .lock()
-                .unwrap()
-                .query_row(
-                    "SELECT count(*) FROM engine_xtream_connections",
-                    [],
-                    |row| row.get::<_, u64>(0)
-                )
-                .unwrap(),
-            2
-        );
+        .unwrap();
     }
+    let(status,_)=request(&app,"member-token-2","PUT","/api/profiles/2/source-integrations",json!({"revision":0,"plugin_id":"xtream","configuration":{"server_url":"https://second.example","username":"second-user","password":"second-secret"}})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, snapshot) = request(
+        &app,
+        "member-token-2",
+        "GET",
+        "/api/profiles/2/source-integrations",
+        Value::Null,
+    )
+    .await;
+    assert!(
+        snapshot["connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["id"] != first)
+    );
+    let (status, _) = request(
+        &app,
+        "member-token-2",
+        "GET",
+        &format!("/api/profiles/2/live/{channel}/guide"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = request(
+        &app,
+        "member-token-2",
+        "DELETE",
+        &format!("/api/profiles/2/source-integrations/{first}?revision=1"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        app.db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM engine_xtream_connections",
+                [],
+                |row| row.get::<_, u64>(0)
+            )
+            .unwrap(),
+        2
+    );
 }

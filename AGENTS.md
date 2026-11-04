@@ -16,8 +16,8 @@ mounted web app. Read the workspace `AGENTS.md` first.
 ## Checks
 
 - `cargo test --manifest-path server/Cargo.toml`
-- `cargo test --manifest-path server/Cargo.toml --features live-runtime --no-run`:
-  default runs never compile the feature-gated tests.
+- `cargo test --manifest-path server/Cargo.toml --features live-runtime`:
+  runs the feature-gated tests the default run never compiles.
 - `python3 scripts/sync-engine.py check`
 
 The same three run in `.github/workflows/checks.yml` on pull requests into `edge`
