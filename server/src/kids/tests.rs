@@ -6,6 +6,8 @@ use axum::{
     Json, Router,
 };
 use serde_json::json;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 async fn fixture() -> (App, tokio::task::JoinHandle<()>) {
     let mut a = crate::auth_integration_tests::fixture();
@@ -687,13 +689,17 @@ async fn restricted_catalogs_are_empty_and_discover_stays_filtered() {
     task.abort();
 }
 
-async fn pageable_fixture() -> (App, tokio::task::JoinHandle<()>) {
+async fn pageable_fixture() -> (App, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
     let mut a = crate::auth_integration_tests::fixture();
     a.addons.allow_test_loopback = true;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let catalog = get(
-        |AxumPath((kind, _catalog, extra)): AxumPath<(String, String, String)>| async move {
+    let count = Arc::new(AtomicUsize::new(0));
+    let calls = count.clone();
+    let catalog = get(move |AxumPath((kind, _catalog, extra)): AxumPath<(String, String, String)>| {
+        let calls = calls.clone();
+        async move {
+            calls.fetch_add(1, Ordering::SeqCst);
             let skip = extra
                 .trim_end_matches(".json")
                 .strip_prefix("skip=")
@@ -705,8 +711,8 @@ async fn pageable_fixture() -> (App, tokio::task::JoinHandle<()>) {
                 })
                 .collect::<Vec<_>>();
             Json(json!({"metas": metas}))
-        },
-    );
+        }
+    });
     let service = Router::new()
         .route("/", any(|| async { "ok" }))
         .route("/catalog/:kind/:catalog/:extra", catalog);
@@ -725,12 +731,12 @@ async fn pageable_fixture() -> (App, tokio::task::JoinHandle<()>) {
     }
     crate::test_support::encrypt_fixture_sources(&a);
     crate::test_support::send_port_probe(address).await;
-    (a, task)
+    (a, task, count)
 }
 
 #[tokio::test]
 async fn a_kids_profile_pages_a_mixed_catalog_into_full_filtered_pages_and_ends_cleanly() {
-    let (a, task) = pageable_fixture().await;
+    let (a, task, _) = pageable_fixture().await;
     {
         let db = a.db.lock().unwrap();
         for i in 0..120usize {
@@ -779,6 +785,56 @@ async fn a_kids_profile_pages_a_mixed_catalog_into_full_filtered_pages_and_ends_
     .await;
     assert_eq!(status, StatusCode::OK, "{rest}");
     assert_eq!(rest["cards"].as_array().unwrap().len(), 6);
+    assert_eq!(rest["next_cursor"], Value::Null);
+    assert_eq!(rest["complete"], true);
+    task.abort();
+}
+
+#[tokio::test]
+async fn a_fully_restricted_catalog_stops_at_the_page_cap_with_a_cursor_that_advances() {
+    let (a, task, calls) = pageable_fixture().await;
+    {
+        let db = a.db.lock().unwrap();
+        for i in 0..120usize {
+            db.execute(
+                "INSERT INTO kids_media(account_id,kind,id,parent_id,metadata,age,conflict,updated_at) VALUES(1,'movie',?1,?1,?2,18,0,1)",
+                params![format!("tt{i}"), json!({"name": format!("Title {i}")}).to_string()],
+            )
+            .unwrap();
+        }
+    }
+    let id = create_kids(&a, json!({"max_age": 17})).await;
+    switch(&a, &id).await;
+
+    let before = calls.load(Ordering::SeqCst);
+    let (status, first) = request(
+        &a,
+        "member-token-1",
+        "GET",
+        "/api/discover?type=movie",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert!(first["cards"].as_array().unwrap().is_empty());
+    assert_eq!(first["next_cursor"], "120");
+    assert_eq!(first["complete"], false);
+    assert_eq!(
+        calls.load(Ordering::SeqCst) - before,
+        5,
+        "the over-fetch stops at the page cap instead of pages forever"
+    );
+
+    let (status, rest) = request(
+        &a,
+        "member-token-1",
+        "GET",
+        "/api/discover?type=movie&skip=120",
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rest}");
+    assert!(rest["cards"].as_array().unwrap().is_empty());
     assert_eq!(rest["next_cursor"], Value::Null);
     assert_eq!(rest["complete"], true);
     task.abort();

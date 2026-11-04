@@ -2,6 +2,8 @@ use super::*;
 use crate::gateway::diagnostics::{timed, timed_sync};
 use viptv_engine::presentation::{CatalogPage, DetailSnapshot};
 
+const PAGE_DEADLINE: Duration = Duration::from_secs(6);
+
 pub(crate) async fn discover(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -174,7 +176,11 @@ async fn discover_one(
         let mut skip = q.skip;
         let mut provider: Option<String> = None;
         let mut complete = false;
-        for _ in 0..24 {
+        let page_deadline = tokio::time::Instant::now() + PAGE_DEADLINE;
+        for _ in 0..5 {
+            if tokio::time::Instant::now() >= page_deadline {
+                break;
+            }
             let mut request = q.clone();
             request.skip = skip;
             let (value, issuer) =
