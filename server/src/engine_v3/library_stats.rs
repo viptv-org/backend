@@ -1,5 +1,13 @@
 use super::*;
 use viptv_engine::library::{Entry, LibraryStatistics};
+
+struct HistoryRow {
+    updated_millis: u64,
+    watched: bool,
+    counts_last: bool,
+    has_episode: bool,
+    count: Option<u64>,
+}
 pub(crate) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS engine_watch_counts(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,type TEXT NOT NULL,id TEXT NOT NULL,count INTEGER,PRIMARY KEY(profile_id,type,id));CREATE TRIGGER IF NOT EXISTS engine_watch_counts_delete AFTER DELETE ON progress BEGIN DELETE FROM engine_watch_counts WHERE profile_id=OLD.profile_id AND type=OLD.type AND id=OLD.id;END;")
 }
@@ -62,28 +70,60 @@ pub(crate) fn entries(
     let mut cards = super::library::cards(&db, &app.identity(), items)?;
     super::source_integrations::merge_cached_with_db(app, lease, revision, &db, &mut cards);
     let imports = crate::simkl::imports::Imports::load(&db, profile)?;
-    let mut progress=db.prepare("SELECT p.id,p.type,p.position,p.duration,p.updated_at,p.context,p.title_id,w.count FROM progress p LEFT JOIN engine_watch_counts w ON w.profile_id=p.profile_id AND w.type=p.type AND w.id=p.id WHERE p.profile_id=?1 AND p.type IN ('movie','series') LIMIT 50001").map_err(db_error)?;
-    let history = progress
-        .query_map([profile], |r| {
-            let kind = r.get::<_, String>(1)?;
-            let id = r.get::<_, String>(0)?;
-            let parent = r.get::<_, Option<String>>(6)?;
-            Ok((
-                crate::simkl::key::media(&kind, &id).into_owned(),
-                kind,
-                r.get::<_, f64>(2)?,
-                r.get::<_, f64>(3)?,
-                r.get::<_, u64>(4)?,
-                r.get::<_, String>(5)?,
-                parent.map(|parent| crate::simkl::key::media("series", &parent).into_owned()),
-                r.get::<_, Option<u64>>(7)?,
-            ))
-        })
-        .map_err(db_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(db_error)?;
-    if history.len() > 50000 {
-        return Err("History exceeds its bounded item limit".into());
+    let mut history = Vec::<HistoryRow>::new();
+    let mut by_title = std::collections::HashMap::<(String, String), Vec<usize>>::new();
+    {
+        let mut progress = db
+            .prepare(
+                "SELECT p.id,p.type,p.position,p.duration,p.updated_at,p.context,p.title_id,w.count FROM progress p LEFT JOIN engine_watch_counts w ON w.profile_id=p.profile_id AND w.type=p.type AND w.id=p.id WHERE p.profile_id=?1 AND p.type IN ('movie','series') LIMIT 50001",
+            )
+            .map_err(db_error)?;
+        for row in progress
+            .query_map([profile], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)?,
+                    r.get::<_, f64>(3)?,
+                    r.get::<_, u64>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<u64>>(7)?,
+                ))
+            })
+            .map_err(db_error)?
+        {
+            let (id, kind, position, duration, updated, context_raw, parent, count) =
+                row.map_err(db_error)?;
+            let item = json!({ "position": position, "duration": duration });
+            let context: Value = serde_json::from_str(&context_raw).unwrap_or(Value::Null);
+            let watched = crate::library::watched(&item, &context);
+            let idx = history.len();
+            history.push(HistoryRow {
+                updated_millis: updated.saturating_mul(1000),
+                watched,
+                counts_last: context["stremio_watch_date_unknown"] != true
+                    && (position > 0.0 || watched),
+                has_episode: serde_json::from_value::<viptv_engine::identity::MediaIdentity>(
+                    context["engine_identity"].clone(),
+                )
+                .ok()
+                .is_some_and(|identity| identity.episode.is_some()),
+                count,
+            });
+            let media_id = crate::simkl::key::media(&kind, &id).into_owned();
+            by_title
+                .entry((kind.clone(), media_id))
+                .or_default()
+                .push(idx);
+            if let Some(parent) = parent {
+                let parent = crate::simkl::key::media("series", &parent).into_owned();
+                by_title.entry((kind, parent)).or_default().push(idx);
+            }
+        }
+        if history.len() > 50000 {
+            return Err("History exceeds its bounded item limit".into());
+        }
     }
     let mut entries: Vec<Entry> = cards
         .into_iter()
@@ -91,56 +131,26 @@ pub(crate) fn entries(
             imports.enrich(&mut card);
             crate::simkl::key::card(&mut card);
             let mut statistics = LibraryStatistics::empty(card.identity.clone());
-            let matched = history
-                .iter()
-                .filter(|(id, kind, _, _, _, _, parent, _)| {
-                    kind == &card.identity.kind
-                        && (id == &card.identity.id || parent.as_ref() == Some(&card.identity.id))
-                })
-                .collect::<Vec<_>>();
+            let matched = by_title
+                .get(&(card.identity.kind.clone(), card.identity.id.clone()))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             statistics.last_watched_millis = matched
                 .iter()
-                .filter(|(_, _, position, duration, _, context, _, _)| {
-                    let context = serde_json::from_str::<Value>(context).unwrap_or(Value::Null);
-                    context["stremio_watch_date_unknown"] != true
-                        && (*position > 0.0
-                            || crate::library::watched(
-                                &json!({"position":position,"duration":duration}),
-                                &context,
-                            ))
-                })
-                .map(|(_, _, _, _, updated, _, _, _)| updated.saturating_mul(1000))
+                .filter(|&&i| history[i].counts_last)
+                .map(|&i| history[i].updated_millis)
                 .filter(|n| *n > 0)
                 .max();
-            statistics.watched =
-                matched
-                    .iter()
-                    .any(|(_, _, position, duration, _, context, _, _)| {
-                        crate::library::watched(
-                            &json!({"position":position,"duration":duration}),
-                            &serde_json::from_str::<Value>(context).unwrap_or(Value::Null),
-                        )
-                    });
-            let episodes = matched
+            statistics.watched = matched.iter().any(|&i| history[i].watched);
+            let episodes: Vec<usize> = matched
                 .iter()
-                .filter(|(_, _, _, _, _, context, _, _)| {
-                    serde_json::from_str::<Value>(context)
-                        .ok()
-                        .and_then(|c| {
-                            serde_json::from_value::<viptv_engine::identity::MediaIdentity>(
-                                c["engine_identity"].clone(),
-                            )
-                            .ok()
-                        })
-                        .is_some_and(|identity| identity.episode.is_some())
-                })
-                .collect::<Vec<_>>();
+                .copied()
+                .filter(|&i| history[i].has_episode)
+                .collect();
             statistics.times_watched = if episodes.is_empty() {
                 matched
                     .iter()
-                    .try_fold(0u64, |sum, (_, _, _, _, _, _, _, count)| {
-                        count.map(|count| sum.saturating_add(count))
-                    })
+                    .try_fold(0u64, |sum, &i| history[i].count.map(|c| sum.saturating_add(c)))
             } else {
                 None
             };
@@ -148,12 +158,7 @@ pub(crate) fn entries(
                 statistics.watched_episode_count = Some(
                     episodes
                         .iter()
-                        .filter(|(_, _, position, duration, _, context, _, _)| {
-                            crate::library::watched(
-                                &json!({"position":position,"duration":duration}),
-                                &serde_json::from_str::<Value>(context).unwrap_or(Value::Null),
-                            )
-                        })
+                        .filter(|&&i| history[i].watched)
                         .count() as u64,
                 );
             }
@@ -208,3 +213,7 @@ pub(crate) fn entries(
     }
     Ok(entries)
 }
+
+#[cfg(test)]
+#[path = "library_stats_tests.rs"]
+mod tests;
