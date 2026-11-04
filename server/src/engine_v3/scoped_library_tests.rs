@@ -1005,3 +1005,109 @@ async fn non_restricted_reads_children_restriction_once_across_large_rows() {
         encode(&old_membership(&db, &principal, 1)).unwrap()
     );
 }
+
+fn table_reads(db: &Connection, table: &str, f: impl FnOnce()) -> usize {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    let counted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = counted.clone();
+    let wanted = table.to_owned();
+    db.authorizer(Some(move |ctx: AuthContext<'_>| {
+        if let AuthAction::Read { table_name, .. } = ctx.action {
+            if table_name == wanted.as_str() {
+                seen.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Authorization::Allow
+    }));
+    f();
+    db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    counted.load(Ordering::Relaxed)
+}
+
+fn old_continuation_keys(db: &Connection, profile: i64) -> Vec<Key> {
+    let mut groups: std::collections::BTreeMap<Key, Saved<PlaybackRecord>> = Default::default();
+    for saved in rows::<PlaybackRecord>(db, profile, "playback", 50000).unwrap() {
+        let key = parent_key(&saved)
+            .unwrap()
+            .unwrap_or_else(|| saved.key.clone());
+        if groups.get(&key).is_none_or(|old| old.updated < saved.updated) {
+            groups.insert(key, saved);
+        }
+    }
+    let mut keys = Vec::new();
+    for (key, _saved) in groups {
+        let hidden: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM engine_scoped_queue_hidden WHERE profile_id=?1 AND identity_scope=?2 AND kind=?3 AND identity_id=?4)",
+                params![profile, key.0, key.1, key.2],
+                |r| r.get(0),
+            )
+            .unwrap();
+        if hidden {
+            continue;
+        }
+        keys.push(key);
+    }
+    keys
+}
+
+#[tokio::test]
+async fn continue_watching_reads_hidden_queue_once_across_large_rows() {
+    let app = fixture();
+    let owned = profile_app(&app);
+    let origin_raw = json!({"provider_id":"simkl","connection_id":null,"incarnation":null}).to_string();
+    {
+        let db = app.db.lock().unwrap();
+        for i in 0..500 {
+            let id = format!("pb-{i}");
+            let identity = json!({"id": id.clone(), "kind": "movie", "ids": [], "episode": null, "edition": null});
+            let value = json!({
+                "identity": identity,
+                "provider_id": "simkl",
+                "title": format!("Progress {i}"),
+                "poster": null,
+                "landscape": null,
+                "position_millis": 1000,
+                "duration_millis": 5000,
+                "updated_at_millis": 1,
+                "completed_at_millis": null,
+            });
+            db.execute(
+                "INSERT INTO engine_scoped_records(profile_id,record_kind,identity_scope,kind,identity_id,lookup_origin,lookup_id,lookup_identity,value,added_at_millis,updated_at_millis,verified) VALUES(?1,'playback','shared','movie',?2,?3,?2,?4,?5,NULL,1,0)",
+                params![1, id, origin_raw.as_str(), identity.to_string(), value.to_string()],
+            )
+            .unwrap();
+        }
+        for i in 0..10 {
+            db.execute(
+                "INSERT INTO engine_scoped_queue_hidden(profile_id,identity_scope,kind,identity_id) VALUES(1,'shared','movie',?1)",
+                [format!("pb-{i}")],
+            )
+            .unwrap();
+        }
+    }
+
+    let db = app.db.lock().unwrap();
+    let new_keys: Vec<Key> = continuation_db(&db, &owned, 1)
+        .unwrap()
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    let new_reads = table_reads(&db, "engine_scoped_queue_hidden", || {
+        continuation_db(&db, &owned, 1).unwrap();
+    });
+    let old_reads = table_reads(&db, "engine_scoped_queue_hidden", || {
+        old_continuation_keys(&db, 1);
+    });
+    let old_keys = old_continuation_keys(&db, 1);
+    assert_eq!(new_keys, old_keys);
+    assert_eq!(new_keys.len(), 490);
+    assert!(
+        new_reads <= 4,
+        "continue watching re-queries the hidden queue {new_reads} times"
+    );
+    assert!(
+        old_reads >= 500,
+        "old continue path reads the hidden queue per entry: {old_reads}"
+    );
+}
