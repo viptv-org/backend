@@ -516,3 +516,179 @@ async fn modern_simkl_alias_removal_never_erases_ambiguous_legacy_namespace_coll
         "Unrelated old provider title"
     );
 }
+
+fn table_reads(db: &rusqlite::Connection, table: &str, f: impl FnOnce()) -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    let counted = Arc::new(AtomicUsize::new(0));
+    let seen = counted.clone();
+    let wanted = table.to_owned();
+    db.authorizer(Some(move |ctx: AuthContext<'_>| {
+        if let AuthAction::Read { table_name, .. } = ctx.action {
+            if table_name == wanted.as_str() {
+                seen.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        Authorization::Allow
+    }));
+    f();
+    db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    counted.load(Ordering::Relaxed)
+}
+
+#[tokio::test]
+async fn local_lookup_index_and_batched_load_preserve_enrich_and_merge() {
+    use viptv_engine::identity::MediaIdentity;
+    use viptv_engine::library::LibraryStatistics;
+    use viptv_engine::presentation::Card;
+
+    let app = crate::auth_integration_tests::fixture();
+    let db = app.db.lock().unwrap();
+
+    let indexed: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='simkl_import_entries_local')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(indexed);
+    let mut plan = db
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT card FROM simkl_import_entries WHERE profile_id=?1 AND local_kind=?2 AND local_id=?3 ORDER BY remote_id",
+        )
+        .unwrap();
+    let plan: Vec<String> = plan
+        .query_map(params![1, "movie", "tt0000000"], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    let plan = plan.join("\n");
+    assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+    assert!(plan.contains("simkl_import_entries_local"), "{plan}");
+
+    let identity = |id: &str| MediaIdentity {
+        id: id.to_owned(),
+        kind: "movie".into(),
+        ids: vec![],
+        episode: None,
+        edition: None,
+    };
+    let card_value = |id: &str, poster: Option<&str>, description: Option<&str>| {
+        json!({
+            "identity": {"id": id, "kind": "movie", "ids": [], "episode": null, "edition": null},
+            "provider_id": "simkl",
+            "title": format!("Imported {id}"),
+            "subtitle": null,
+            "description": description,
+            "poster": poster,
+            "landscape": null,
+            "logo": null,
+            "progress": null,
+            "badges": [],
+            "parent_identity": null,
+        })
+        .to_string()
+    };
+    let stats_value = |id: &str, rating: f64, watched: bool| {
+        let stats: LibraryStatistics = serde_json::from_value(json!({
+            "identity": {"id": id, "kind": "movie", "ids": [], "episode": null, "edition": null},
+            "watched": watched,
+            "last_watched_millis": 1000,
+            "times_watched": null,
+            "user_rating": rating,
+            "watched_episode_count": null,
+            "total_episode_count": 12,
+            "aired_episode_count": 10,
+            "has_unwatched_aired_episodes": null,
+            "status": null,
+            "next_episode": null,
+            "next_air_millis": null,
+        }))
+        .unwrap();
+        serde_json::to_string(&stats).unwrap()
+    };
+
+    for i in 0..500 {
+        let local = format!("tt{i:07}");
+        let remote = format!("simkl:movie:{i}");
+        db.execute(
+            "INSERT INTO simkl_import_entries(profile_id,remote_id,remote_kind,local_id,local_kind,card,statistics,link_revision) VALUES(1,?1,'movie',?2,'movie',?3,?4,0)",
+            params![remote, local, card_value(&local, Some("https://poster"), Some("A description")), stats_value(&local, 7.0, true)],
+        )
+        .unwrap();
+    }
+    db.execute(
+        "INSERT INTO simkl_import_entries(profile_id,remote_id,remote_kind,local_id,local_kind,card,statistics,link_revision) VALUES(1,'simkl:movie:999','movie','tt0000000','movie',?1,?2,0)",
+        params![card_value("tt0000000", Some("https://poster/alt"), Some("Second description")), stats_value("tt0000000", 8.0, false)],
+    )
+    .unwrap();
+
+    let new_reads = table_reads(&db, "simkl_import_entries", || {
+        membership::Imports::load(&db, 1).unwrap();
+    });
+    assert!(
+        new_reads <= 10,
+        "batched load reads simkl_import_entries {new_reads} column times"
+    );
+
+    let old_reads = table_reads(&db, "simkl_import_entries", || {
+        for i in 0..500 {
+            let local = format!("tt{i:07}");
+            let _: Vec<String> = db
+                .prepare(
+                    "SELECT card FROM simkl_import_entries WHERE profile_id=?1 AND local_kind=?2 AND local_id=?3 ORDER BY remote_id",
+                )
+                .unwrap()
+                .query_map(params![1, "movie", local], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            let _: Vec<String> = db
+                .prepare(
+                    "SELECT statistics FROM simkl_import_entries WHERE profile_id=?1 AND local_kind=?2 AND local_id=?3 ORDER BY remote_id",
+                )
+                .unwrap()
+                .query_map(params![1, "movie", local], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+        }
+    });
+    assert!(
+        old_reads >= 4000,
+        "old per-favourite path reads simkl_import_entries {old_reads} column times"
+    );
+
+    let imports = membership::Imports::load(&db, 1).unwrap();
+    for local in ["tt0000000", "tt0000123", "tt0000499"] {
+        let base: Card = serde_json::from_str(&card_value(local, None, None)).unwrap();
+        let mut new_card = base.clone();
+        imports.enrich(&mut new_card);
+        let mut old_card = base;
+        enrich(&db, 1, &mut old_card).unwrap();
+        assert_eq!(
+            serde_json::to_string(&new_card).unwrap(),
+            serde_json::to_string(&old_card).unwrap()
+        );
+
+        let mut new_stats = LibraryStatistics::empty(identity(local));
+        imports.merge(&mut new_stats);
+        let values: Vec<String> = db
+            .prepare(
+                "SELECT statistics FROM simkl_import_entries WHERE profile_id=?1 AND local_kind=?2 AND local_id=?3 ORDER BY remote_id",
+            )
+            .unwrap()
+            .query_map(params![1, "movie", local], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let mut old_stats = LibraryStatistics::empty(identity(local));
+        membership::apply_merge(&mut old_stats, &values);
+        assert_eq!(
+            serde_json::to_string(&new_stats).unwrap(),
+            serde_json::to_string(&old_stats).unwrap()
+        );
+    }
+}

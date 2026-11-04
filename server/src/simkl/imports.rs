@@ -9,7 +9,7 @@ mod paused;
 mod progress;
 pub(in crate::simkl) mod schema;
 mod worker;
-pub(crate) use membership::{enrich, merge};
+pub(crate) use membership::{enrich, Imports};
 pub(super) use schema::init;
 #[derive(Clone, Default)]
 pub(crate) struct Status {

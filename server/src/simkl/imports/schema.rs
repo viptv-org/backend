@@ -1,6 +1,7 @@
 use super::*;
 pub(in crate::simkl) fn init(db: &Connection) -> rusqlite::Result<()> {
     db.execute_batch("CREATE TABLE IF NOT EXISTS simkl_import_entries(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,remote_id TEXT NOT NULL,remote_kind TEXT NOT NULL,local_id TEXT NOT NULL,local_kind TEXT NOT NULL,card TEXT NOT NULL,statistics TEXT NOT NULL,link_revision INTEGER NOT NULL,PRIMARY KEY(profile_id,remote_kind,remote_id));
+    CREATE INDEX IF NOT EXISTS simkl_import_entries_local ON simkl_import_entries(profile_id,local_kind,local_id,remote_id);
     CREATE TRIGGER IF NOT EXISTS simkl_import_entries_revision_insert AFTER INSERT ON simkl_import_entries BEGIN INSERT INTO engine_library_revisions(profile_id,revision) SELECT NEW.profile_id,1 WHERE EXISTS(SELECT 1 FROM profiles WHERE id=NEW.profile_id) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1;END;
     CREATE TRIGGER IF NOT EXISTS simkl_import_entries_revision_update AFTER UPDATE ON simkl_import_entries BEGIN INSERT INTO engine_library_revisions(profile_id,revision) SELECT NEW.profile_id,1 WHERE EXISTS(SELECT 1 FROM profiles WHERE id=NEW.profile_id) ON CONFLICT(profile_id) DO UPDATE SET revision=revision+1;END;
     CREATE TABLE IF NOT EXISTS library_removals(profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,type TEXT NOT NULL,id TEXT NOT NULL,PRIMARY KEY(profile_id,type,id));

@@ -88,23 +88,10 @@ pub(super) fn apply_canonical(
     }
     Ok(inserted)
 }
-pub(crate) fn merge(
-    db: &Connection,
-    profile: i64,
-    statistics: &mut LibraryStatistics,
-) -> Result<(), ApiError> {
-    let mut query=db.prepare("SELECT statistics FROM simkl_import_entries WHERE profile_id=?1 AND local_kind=?2 AND local_id=?3 ORDER BY remote_id").map_err(db_error)?;
-    let values = query
-        .query_map(
-            params![profile, statistics.identity.kind, statistics.identity.id],
-            |r| r.get::<_, String>(0),
-        )
-        .map_err(db_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(db_error)?;
+pub(in crate::simkl::imports) fn apply_merge(statistics: &mut LibraryStatistics, values: &[String]) {
     let local = statistics.clone();
     for value in values {
-        let Ok(remote) = serde_json::from_str::<LibraryStatistics>(&value) else {
+        let Ok(remote) = serde_json::from_str::<LibraryStatistics>(value) else {
             continue;
         };
         let newer_local = local
@@ -139,7 +126,65 @@ pub(crate) fn merge(
         statistics.total_episode_count = remote.total_episode_count;
         statistics.aired_episode_count = remote.aired_episode_count;
     }
-    Ok(())
+}
+
+fn apply_cards(card: &mut viptv_engine::presentation::Card, values: &[String]) {
+    for value in values {
+        if let Ok(metadata) = serde_json::from_str::<viptv_engine::presentation::Card>(value) {
+            *card = viptv_engine::presentation::enrich_card(card, &metadata);
+        }
+    }
+}
+
+pub(crate) struct Imports {
+    cards: std::collections::BTreeMap<(String, String), Vec<String>>,
+    statistics: std::collections::BTreeMap<(String, String), Vec<String>>,
+}
+impl Imports {
+    pub(crate) fn load(db: &Connection, profile: i64) -> Result<Self, ApiError> {
+        let mut cards: std::collections::BTreeMap<(String, String), Vec<String>> = Default::default();
+        let mut statistics: std::collections::BTreeMap<(String, String), Vec<String>> =
+            Default::default();
+        let mut query = db
+            .prepare(
+                "SELECT local_kind,local_id,card,statistics FROM simkl_import_entries WHERE profile_id=?1 ORDER BY local_kind,local_id,remote_id",
+            )
+            .map_err(db_error)?;
+        for row in query
+            .query_map([profile], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(db_error)?
+        {
+            let (kind, id, card, stats) = row.map_err(db_error)?;
+            cards.entry((kind.clone(), id.clone())).or_default().push(card);
+            statistics.entry((kind, id)).or_default().push(stats);
+        }
+        Ok(Self { cards, statistics })
+    }
+    pub(crate) fn enrich(&self, card: &mut viptv_engine::presentation::Card) {
+        let target = card
+            .parent_identity
+            .as_ref()
+            .unwrap_or(&card.identity)
+            .clone();
+        if let Some(values) = self.cards.get(&(target.kind, target.id)) {
+            apply_cards(card, values);
+        }
+    }
+    pub(crate) fn merge(&self, statistics: &mut LibraryStatistics) {
+        if let Some(values) = self
+            .statistics
+            .get(&(statistics.identity.kind.clone(), statistics.identity.id.clone()))
+        {
+            apply_merge(statistics, values);
+        }
+    }
 }
 
 pub(crate) fn enrich(
@@ -153,17 +198,13 @@ pub(crate) fn enrich(
         .unwrap_or(&card.identity)
         .clone();
     let mut query=db.prepare("SELECT card FROM simkl_import_entries WHERE profile_id=?1 AND local_kind=?2 AND local_id=?3 ORDER BY remote_id").map_err(db_error)?;
-    for value in query
+    let values = query
         .query_map(params![profile, target.kind, target.id], |r| {
             r.get::<_, String>(0)
         })
         .map_err(db_error)?
-    {
-        if let Ok(metadata) =
-            serde_json::from_str::<viptv_engine::presentation::Card>(&value.map_err(db_error)?)
-        {
-            *card = viptv_engine::presentation::enrich_card(card, &metadata);
-        }
-    }
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    apply_cards(card, &values);
     Ok(())
 }
