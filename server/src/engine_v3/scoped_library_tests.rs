@@ -772,3 +772,236 @@ async fn canonical_unsave_removes_shared_backing_but_preserves_private_legacy_co
     );
     server.abort();
 }
+
+fn kids_profiles_reads(db: &Connection, f: impl FnOnce()) -> usize {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    let counted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = counted.clone();
+    db.authorizer(Some(move |ctx: AuthContext<'_>| {
+        if matches!(
+            ctx.action,
+            AuthAction::Read {
+                table_name: "kids_profiles",
+                ..
+            }
+        ) {
+            seen.fetch_add(1, Ordering::Relaxed);
+        }
+        Authorization::Allow
+    }));
+    f();
+    db.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    counted.load(Ordering::Relaxed)
+}
+
+fn old_membership(
+    db: &Connection,
+    p: &auth::Principal,
+    profile: i64,
+) -> LibraryMembershipSnapshot {
+    use viptv_engine::{identity::MediaIdentity, origin::MetadataOrigin};
+    let mut result = LibraryMembershipSnapshot {
+        identities: vec![],
+        revision: 0,
+        complete: false,
+        scoped_identities: vec![],
+        legacy_identities: vec![],
+    };
+    let mut q = db
+        .prepare(
+            "SELECT identity_scope,kind,identity_id,lookup_origin,lookup_identity,json_extract(value,'$.parent_identity') FROM engine_scoped_records WHERE profile_id=?1 AND record_kind='favorite' ORDER BY identity_scope,kind,identity_id LIMIT 10001",
+        )
+        .unwrap();
+    for row in q
+        .query_map([profile], |r| {
+            Ok((
+                Key(r.get(0)?, r.get(1)?, r.get(2)?),
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, Option<String>>(5)?,
+            ))
+        })
+        .unwrap()
+    {
+        let (key, raw_origin, raw_identity, raw_parent) = row.unwrap();
+        let origin: MetadataOrigin = decode(&raw_origin).unwrap();
+        let identity: MediaIdentity = decode(&raw_identity).unwrap();
+        let parent: Option<MediaIdentity> = raw_parent.as_deref().map(decode).transpose().unwrap();
+        if kids::scoped::require_identity(
+            db,
+            p,
+            kids::restricted(db, p).unwrap(),
+            &origin,
+            &identity,
+            parent.as_ref(),
+        )
+        .is_err()
+        {
+            continue;
+        }
+        if key.0 == "shared" {
+            let mut shared = identity.clone();
+            shared.id = key.2.clone();
+            shared.kind = key.1.clone();
+            shared.ids.clear();
+            result.identities.push(shared);
+        }
+        result.scoped_identities.push(ScopedMediaIdentity {
+            metadata_origin: origin,
+            identity,
+        });
+    }
+    result
+        .identities
+        .sort_by(|a, b| (&a.kind, &a.id).cmp(&(&b.kind, &b.id)));
+    result
+        .identities
+        .dedup_by(|a, b| a.kind == b.kind && a.id == b.id);
+    result
+}
+
+#[tokio::test]
+async fn non_restricted_reads_children_restriction_once_across_large_rows() {
+    let app = fixture();
+    let owned = profile_app(&app);
+    let origin_raw = json!({"provider_id":"simkl","connection_id":null,"incarnation":null}).to_string();
+    {
+        let db = app.db.lock().unwrap();
+        for i in 0..500 {
+            let id = format!("fav-{i}");
+            let identity = json!({"id": id.clone(), "kind": "movie", "ids": [], "episode": null, "edition": null});
+            let card = json!({
+                "identity": identity,
+                "provider_id": "simkl",
+                "title": format!("Fixture {i}"),
+                "subtitle": null,
+                "description": null,
+                "poster": null,
+                "landscape": null,
+                "logo": null,
+                "progress": null,
+                "badges": [],
+                "parent_identity": null,
+                "metadata_origin": json!({"provider_id":"simkl","connection_id":null,"incarnation":null}),
+            });
+            db.execute(
+                "INSERT INTO engine_scoped_records(profile_id,record_kind,identity_scope,kind,identity_id,lookup_origin,lookup_id,lookup_identity,value,added_at_millis,updated_at_millis,verified) VALUES(?1,'favorite','shared','movie',?2,?3,?2,?4,?5,?6,1,0)",
+                params![1, id, origin_raw.as_str(), identity.to_string(), card.to_string(), i as u64],
+            )
+            .unwrap();
+        }
+        for i in 0..5000 {
+            let id = format!("pb-{i}");
+            let identity = json!({"id": id.clone(), "kind": "movie", "ids": [], "episode": null, "edition": null});
+            let value = json!({
+                "identity": identity,
+                "provider_id": "simkl",
+                "title": format!("Progress {i}"),
+                "poster": null,
+                "landscape": null,
+                "position_millis": 1000,
+                "duration_millis": 5000,
+                "updated_at_millis": 1,
+                "completed_at_millis": null,
+            });
+            db.execute(
+                "INSERT INTO engine_scoped_records(profile_id,record_kind,identity_scope,kind,identity_id,lookup_origin,lookup_id,lookup_identity,value,added_at_millis,updated_at_millis,verified) VALUES(?1,'playback','shared','movie',?2,?3,?2,?4,?5,NULL,1,0)",
+                params![1, id, origin_raw.as_str(), identity.to_string(), value.to_string()],
+            )
+            .unwrap();
+        }
+    }
+
+    let db = app.db.lock().unwrap();
+    let principal = owned.identity();
+
+    let fav_reads = kids_profiles_reads(&db, || {
+        favorites_db(&db, &owned, 1).unwrap();
+    });
+    assert!(fav_reads <= 2, "favorites re-query kids_profiles {fav_reads} times");
+
+    let playback_reads = kids_profiles_reads(&db, || {
+        playback_db(&db, &owned, 1).unwrap();
+    });
+    assert!(
+        playback_reads <= 2,
+        "playback re-queries kids_profiles {playback_reads} times"
+    );
+
+    let membership_reads = kids_profiles_reads(&db, || {
+        let mut snapshot = LibraryMembershipSnapshot {
+            identities: vec![],
+            revision: 0,
+            complete: false,
+            scoped_identities: vec![],
+            legacy_identities: vec![],
+        };
+        membership_db(&db, &owned, 1, &mut snapshot, std::collections::BTreeSet::new()).unwrap();
+        assert_eq!(snapshot.scoped_identities.len(), 500);
+        assert_eq!(snapshot.identities.len(), 500);
+    });
+    assert!(
+        membership_reads <= 2,
+        "membership re-queries kids_profiles {membership_reads} times"
+    );
+
+    let fav_new: Vec<Key> = favorites_db(&db, &owned, 1)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.key)
+        .collect();
+    let fav_old_reads = kids_profiles_reads(&db, || {
+        rows::<Card>(&db, 1, "favorite", 10000)
+            .unwrap()
+            .into_iter()
+            .filter(|s| kids::scoped::require_card_db(&db, &principal, &s.value).is_ok())
+            .count();
+    });
+    let fav_old: Vec<Key> = rows::<Card>(&db, 1, "favorite", 10000)
+        .unwrap()
+        .into_iter()
+        .filter(|s| kids::scoped::require_card_db(&db, &principal, &s.value).is_ok())
+        .map(|s| s.key)
+        .collect();
+    assert_eq!(fav_new, fav_old);
+    assert_eq!(fav_new.len(), 500);
+    assert!(fav_old_reads >= 500, "old favorites path reads per row: {fav_old_reads}");
+
+    let playback_new: Vec<Key> = playback_db(&db, &owned, 1)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.key)
+        .collect();
+    let playback_old_reads = kids_profiles_reads(&db, || {
+        rows::<PlaybackRecord>(&db, 1, "playback", 50000)
+            .unwrap()
+            .into_iter()
+            .filter(|s| kids::scoped::require_card_db(&db, &principal, &s.value.card()).is_ok())
+            .count();
+    });
+    let playback_old: Vec<Key> = rows::<PlaybackRecord>(&db, 1, "playback", 50000)
+        .unwrap()
+        .into_iter()
+        .filter(|s| kids::scoped::require_card_db(&db, &principal, &s.value.card()).is_ok())
+        .map(|s| s.key)
+        .collect();
+    assert_eq!(playback_new, playback_old);
+    assert_eq!(playback_new.len(), 5000);
+    assert!(
+        playback_old_reads >= 5000,
+        "old playback path reads per row: {playback_old_reads}"
+    );
+
+    let mut membership_new = LibraryMembershipSnapshot {
+        identities: vec![],
+        revision: 0,
+        complete: false,
+        scoped_identities: vec![],
+        legacy_identities: vec![],
+    };
+    membership_db(&db, &owned, 1, &mut membership_new, std::collections::BTreeSet::new()).unwrap();
+    assert_eq!(
+        encode(&membership_new).unwrap(),
+        encode(&old_membership(&db, &principal, 1)).unwrap()
+    );
+}
