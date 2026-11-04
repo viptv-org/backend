@@ -61,6 +61,7 @@ pub(crate) fn entries(
     }
     let mut cards = super::library::cards(&db, &app.identity(), items)?;
     super::source_integrations::merge_cached_with_db(app, lease, revision, &db, &mut cards);
+    let imports = crate::simkl::imports::Imports::load(&db, profile)?;
     let mut progress=db.prepare("SELECT p.id,p.type,p.position,p.duration,p.updated_at,p.context,p.title_id,w.count FROM progress p LEFT JOIN engine_watch_counts w ON w.profile_id=p.profile_id AND w.type=p.type AND w.id=p.id WHERE p.profile_id=?1 AND p.type IN ('movie','series') LIMIT 50001").map_err(db_error)?;
     let history = progress
         .query_map([profile], |r| {
@@ -87,7 +88,7 @@ pub(crate) fn entries(
     let mut entries: Vec<Entry> = cards
         .into_iter()
         .map(|mut card| {
-            crate::simkl::imports::enrich(&db, profile, &mut card)?;
+            imports.enrich(&mut card);
             crate::simkl::key::card(&mut card);
             let mut statistics = LibraryStatistics::empty(card.identity.clone());
             let matched = history
@@ -156,7 +157,7 @@ pub(crate) fn entries(
                         .count() as u64,
                 );
             }
-            crate::simkl::imports::merge(&db, profile, &mut statistics)?;
+            imports.merge(&mut statistics);
             Ok(Entry { card, statistics })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
@@ -181,7 +182,7 @@ pub(crate) fn entries(
         if key.0 == "shared" {
             entry.statistics.identity.id = key.2.clone();
             entry.statistics.identity.kind = key.1.clone();
-            crate::simkl::imports::merge(&db, profile, &mut entry.statistics)?;
+            imports.merge(&mut entry.statistics);
             entry.statistics.identity = entry.card.identity.clone();
             entry.statistics.metadata_origin = entry.card.metadata_origin.clone();
             if observed.last_watched_millis.is_some() {
