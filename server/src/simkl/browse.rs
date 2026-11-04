@@ -211,5 +211,6 @@ pub(crate) async fn page(
         cards: cards.into_iter().skip(skip).take(24).collect(),
         next_cursor: more.then(|| (skip + 24).to_string()),
         complete: !more,
+        failures: vec![],
     })
 }

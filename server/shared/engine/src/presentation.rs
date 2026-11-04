@@ -81,6 +81,13 @@ pub struct HomeSnapshot {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
+pub struct AddonFailure {
+    pub addon_id: i64,
+    pub addon_name: String,
+    pub error_code: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct DetailSnapshot {
     pub item: Card,
     #[serde(default)]
@@ -89,6 +96,8 @@ pub struct DetailSnapshot {
     pub next_cursor: Option<String>,
     #[serde(default)]
     pub seasons: Vec<EpisodeSeason>,
+    #[serde(default)]
+    pub failures: Vec<AddonFailure>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct EpisodeSeason {
@@ -102,6 +111,8 @@ pub struct CatalogPage {
     pub cards: Vec<Card>,
     pub next_cursor: Option<String>,
     pub complete: bool,
+    #[serde(default)]
+    pub failures: Vec<AddonFailure>,
 }
 
 impl Card {

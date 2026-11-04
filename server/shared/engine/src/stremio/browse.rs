@@ -93,6 +93,7 @@ pub fn catalog_page(
         cards,
         next_cursor: more.then(|| next.to_string()),
         complete: !more,
+        failures: vec![],
     })
 }
 pub fn catalog_pageable(catalog: &Value) -> bool {

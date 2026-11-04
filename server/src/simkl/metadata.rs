@@ -150,6 +150,7 @@ pub(crate) async fn search(
             cards,
             next_cursor,
             complete,
+            failures: vec![],
         })
         .map_err(|_| ApiError::from("Catalog unavailable"))?,
     ))
@@ -308,6 +309,7 @@ pub(crate) async fn detail(
             episodes,
             next_cursor,
             seasons,
+            failures: vec![],
         })
         .map_err(|_| ApiError::from("Title unavailable"))?,
     ))

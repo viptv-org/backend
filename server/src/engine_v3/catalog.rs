@@ -116,6 +116,7 @@ async fn discover_cards(
             cards,
             next_cursor: None,
             complete,
+            failures: vec![],
         })
         .map_err(|_| ApiError::from("Search unavailable"))?,
     ))
@@ -261,6 +262,7 @@ async fn discover_one(
         cards,
         next_cursor,
         complete,
+        failures: vec![],
     };
     let mut result =
         serde_json::to_value(page).map_err(|_| ApiError::from("Catalog unavailable"))?;
@@ -819,6 +821,7 @@ async fn resolve(
         episodes,
         next_cursor,
         seasons,
+        failures: vec![],
     })
     .map_err(|_| ApiError::from("Title unavailable"))?;
     super::source_integrations::cache_detail(&app, &lease, revision, &addon_revision, &value);
