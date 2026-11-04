@@ -258,12 +258,7 @@ pub(crate) fn queue_items(
             item = anchor;
             manual_watched = true;
         }
-        let position = item["position"].as_f64().unwrap_or(0.0);
-        let duration = item["duration"].as_f64().unwrap_or(0.0);
-        let near_end = duration > 10.0 && position >= duration - 10.0;
-        // Finished by the same rule as History and the Watched badge (95 %),
-        // so stopping in the credits still moves on to the next episode.
-        let finished = near_end || manual_watched || item["watched"] == true;
+        let finished = manual_watched || item["watched"] == true;
         if item["type"] == "series" && finished {
             item["queue_status"] = json!("pending");
             let cached: Option<String> = db.query_row("SELECT result FROM continuation_cache WHERE profile_id=?1 AND series_id=?2 AND from_id=?3 AND updated_at>?4",params![profile,series,item["id"].as_str(),util::now()-3600],|r|r.get(0)).optional().map_err(db_error)?;
