@@ -1024,6 +1024,56 @@ fn table_reads(db: &Connection, table: &str, f: impl FnOnce()) -> usize {
     counted.load(Ordering::Relaxed)
 }
 
+fn statement_steps(db: &Connection, sql_contains: &str, f: impl FnOnce()) -> i32 {
+    use std::ffi::CStr;
+    use std::os::raw::{c_char, c_int, c_uint, c_void};
+
+    struct Measured {
+        needle: String,
+        steps: i32,
+    }
+
+    unsafe extern "C" fn profile(
+        mask: c_uint,
+        ctx: *mut c_void,
+        stmt: *mut c_void,
+        sql: *mut c_void,
+    ) -> c_int {
+        if mask != rusqlite::ffi::SQLITE_TRACE_PROFILE as c_uint {
+            return 0;
+        }
+        let measured = &mut *(ctx as *mut Measured);
+        let text = CStr::from_ptr(sql as *const c_char).to_string_lossy();
+        if text.contains(measured.needle.as_str()) {
+            measured.steps = rusqlite::ffi::sqlite3_stmt_status(
+                stmt as *mut rusqlite::ffi::sqlite3_stmt,
+                rusqlite::ffi::SQLITE_STMTSTATUS_RUN as c_int,
+                0,
+            );
+        }
+        0
+    }
+
+    let mut measured = Measured {
+        needle: sql_contains.to_owned(),
+        steps: 0,
+    };
+    let handle = unsafe { db.handle() };
+    unsafe {
+        rusqlite::ffi::sqlite3_trace_v2(
+            handle,
+            rusqlite::ffi::SQLITE_TRACE_PROFILE as c_uint,
+            Some(profile),
+            &mut measured as *mut Measured as *mut c_void,
+        );
+    }
+    f();
+    unsafe {
+        rusqlite::ffi::sqlite3_trace_v2(handle, 0, None, std::ptr::null_mut());
+    }
+    measured.steps
+}
+
 fn old_continuation_keys(db: &Connection, profile: i64) -> Vec<Key> {
     let mut groups: std::collections::BTreeMap<Key, Saved<PlaybackRecord>> = Default::default();
     for saved in rows::<PlaybackRecord>(db, profile, "playback", 50000).unwrap() {
@@ -1246,5 +1296,56 @@ async fn home_favorites_reads_engine_records_once_across_large_rows() {
     assert!(
         old_reads >= 200,
         "old home favourites path scans engine records per batch: {old_reads}"
+    );
+    let new_steps = statement_steps(&db, "engine_scoped_records", || {
+        home_favorites_db(&db, &owned, 1).unwrap();
+    });
+    assert!(
+        new_steps <= 600,
+        "restricted home favourites scan the list but stay bounded: {new_steps} steps"
+    );
+}
+
+#[tokio::test]
+async fn home_favorites_reads_about_twelve_rows_when_unrestricted() {
+    let app = fixture();
+    let owned = profile_app(&app);
+    let origin_raw = json!({"provider_id":"simkl","connection_id":null,"incarnation":null}).to_string();
+    {
+        let db = app.db.lock().unwrap();
+        for i in 0..500 {
+            let id = format!("fav-{i}");
+            let identity = json!({"id": id.clone(), "kind": "movie", "ids": [], "episode": null, "edition": null});
+            let card = json!({
+                "identity": identity,
+                "provider_id": "simkl",
+                "title": format!("Fixture {i}"),
+                "subtitle": null,
+                "description": null,
+                "poster": null,
+                "landscape": null,
+                "logo": null,
+                "progress": null,
+                "badges": [],
+                "parent_identity": null,
+                "metadata_origin": json!({"provider_id":"simkl","connection_id":null,"incarnation":null}),
+            });
+            db.execute(
+                "INSERT INTO engine_scoped_records(profile_id,record_kind,identity_scope,kind,identity_id,lookup_origin,lookup_id,lookup_identity,value,added_at_millis,updated_at_millis,verified) VALUES(?1,'favorite','shared','movie',?2,?3,?2,?4,?5,?6,1,0)",
+                params![1, id, origin_raw.as_str(), identity.to_string(), card.to_string(), i as u64],
+            )
+            .unwrap();
+        }
+    }
+
+    let db = app.db.lock().unwrap();
+    let cards = home_favorites_db(&db, &owned, 1).unwrap();
+    assert_eq!(cards.len(), 12);
+    let steps = statement_steps(&db, "engine_scoped_records", || {
+        home_favorites_db(&db, &owned, 1).unwrap();
+    });
+    assert!(
+        steps <= 16,
+        "home favourites read {steps} rows just to produce 12 cards"
     );
 }

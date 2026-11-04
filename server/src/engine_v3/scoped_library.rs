@@ -1212,18 +1212,20 @@ pub(crate) fn home_favorites_db(
         .map(|c| Ok((raw_key(&c)?, c)))
         .collect::<Result<_, ApiError>>()?;
     let mut accepted = 0;
-    let mut q=db.prepare("SELECT identity_scope,kind,identity_id,value,added_at_millis FROM engine_scoped_records WHERE profile_id=?1 AND record_kind='favorite' ORDER BY added_at_millis DESC,json_extract(value,'$.title') COLLATE NOCASE,kind,identity_id LIMIT 10000").map_err(db_error)?;
-    for row in q
-        .query_map([profile], |r| {
-            Ok((
-                Key(r.get(0)?, r.get(1)?, r.get(2)?),
-                r.get::<_, String>(3)?,
-                r.get::<_, Option<u64>>(4)?,
-            ))
-        })
-        .map_err(db_error)?
-    {
-        let (key, raw, added) = row.map_err(db_error)?;
+    let mut stmt = db
+        .prepare(
+            "SELECT identity_scope,kind,identity_id,value,added_at_millis FROM engine_scoped_records WHERE profile_id=?1 AND record_kind='favorite' ORDER BY added_at_millis DESC,json_extract(value,'$.title') COLLATE NOCASE,kind,identity_id",
+        )
+        .map_err(db_error)?;
+    let mut rows = stmt.query([profile]).map_err(db_error)?;
+    while let Some(row) = rows.next().map_err(db_error)? {
+        let key = Key(
+            row.get(0).map_err(db_error)?,
+            row.get(1).map_err(db_error)?,
+            row.get(2).map_err(db_error)?,
+        );
+        let raw: String = row.get(3).map_err(db_error)?;
+        let added: Option<u64> = row.get(4).map_err(db_error)?;
         let mut card: Card = decode(&raw)?;
         if kids::scoped::require_card(db, &principal, restricted, &card).is_err() {
             continue;
