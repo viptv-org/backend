@@ -274,7 +274,7 @@ pub(crate) async fn bootstrap(
             crate::simkl::imports::schedule(&app.clone().with_lease(lease.clone()), &lease, profile)
         })
         .map(|s| s.json());
-    let mut value=json!({"contract_version":3,"identity":identity,"integrations":integrations,"home":initial.as_ref().map(|home| &home.snapshot),"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions});
+    let mut value=json!({"contract_version":3,"identity":identity,"capabilities":auth::account_capabilities(&lease.principal),"integrations":integrations,"home":initial.as_ref().map(|home| &home.snapshot),"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions});
     value["navigation"] = navigation;
     if let Some(membership)=membership.as_ref(){
         let show_ratings = bootstrap_preferences

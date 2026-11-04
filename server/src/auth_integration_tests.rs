@@ -3605,6 +3605,20 @@ async fn native_account_sessions_manage_devices_and_the_household_pin_by_role() 
 }
 
 #[tokio::test]
+async fn bootstrap_projects_manage_account_matching_auth_me() {
+    let a = fixture();
+    let tv = secondary_session(&a, "paired-tv", 1, "device");
+    for (token, expected) in [("member-token-1", true), (tv.as_str(), false)] {
+        let (status, me) = request(&a, token, "GET", "/api/auth/me", Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{token} {me}");
+        let (status, bootstrap) = request(&a, token, "GET", "/api/bootstrap", Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{token} {bootstrap}");
+        assert_eq!(bootstrap["capabilities"]["manage_account"], expected, "{token} {bootstrap}");
+        assert_eq!(bootstrap["capabilities"], me["capabilities"], "{token}");
+    }
+}
+
+#[tokio::test]
 async fn server_admin_routes_stay_owner_only() {
     let a = fixture();
     for path in ["/api/auth/accounts", "/api/admin/devices"] {

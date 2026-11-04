@@ -1,6 +1,16 @@
 use super::*;
 use axum::{extract::OriginalUri, http::HeaderMap, Json};
 
+pub(crate) fn account_capabilities(principal: &Principal) -> Value {
+    json!({
+        "create_profiles": true,
+        "can_create_profile": true,
+        "manage_profiles": true,
+        "can_manage_profiles": true,
+        "manage_account": principal.is_owner(),
+    })
+}
+
 pub(crate) async fn remove(
     state: State<App>,
     uri: OriginalUri,
@@ -101,7 +111,7 @@ pub(crate) async fn info(
                 "profile_id":profile_id.map(|value| value.to_string()),
                 "restricted":crate::kids::restricted(&db,&p)?,
                 "profiles":profiles,
-                "capabilities":{"create_profiles":true,"can_create_profile":true,"manage_profiles":true,"can_manage_profiles":true,"manage_account":role=="owner"},
+                "capabilities":account_capabilities(&p),
                 "can_create_profile":true,
                 "can_manage_profiles":true,
                 "profile_setup_required":presentation_required,

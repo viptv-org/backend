@@ -28,7 +28,7 @@ pub(crate) use avatars::{
 };
 pub(crate) use device_actions::dispatch_devices;
 pub(crate) use device_pairing::device_qr;
-pub(crate) use handlers::{info, remove, status};
+pub(crate) use handlers::{account_capabilities, info, remove, status};
 pub(crate) use middleware::{
     auth_error, auth_error_with_retry, bearer, canonical_origin, constant_eq, cookie,
     csrf_for_session, device_origin, device_path, forbidden, issue_csrf, origin, required_origins,
