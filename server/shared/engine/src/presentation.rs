@@ -41,6 +41,8 @@ pub struct Card {
     pub added_at_millis: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub released_at_millis: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released_at_date: Option<String>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub metadata_origin:Option<crate::origin::MetadataOrigin>,
 }

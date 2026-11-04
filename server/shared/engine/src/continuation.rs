@@ -20,6 +20,8 @@ pub enum ContinuationStatus {
 pub struct NextEpisode {
     pub identity: MediaIdentity,
     pub released_at_millis: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released_at_date: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, Facet)]
 pub struct ContinuationEntry {
@@ -71,6 +73,7 @@ pub struct QueueVisibilityReceipt {
 pub struct EpisodeAvailability {
     pub card: Card,
     pub released_at_millis: Option<u64>,
+    pub released_at_date: Option<String>,
     pub aired: Option<bool>,
 }
 /// Keep validation shared; caller-supplied external mappings remain hints, never proof.
@@ -203,6 +206,7 @@ pub fn upcoming_episode(
     Some(NextEpisode {
         identity: next.card.identity.clone(),
         released_at_millis: next.released_at_millis,
+        released_at_date: next.released_at_date.clone(),
     })
 }
 
