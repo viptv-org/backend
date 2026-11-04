@@ -17,7 +17,7 @@ pub(crate) fn adult(meta: &Value) -> bool {
     metadata::assessment(meta).0.is_some_and(|age| age >= 18)
 }
 
-use metadata::{media, prune_observations};
+use metadata::{media, media_batch, prune_observations};
 pub(crate) use metadata::observe;
 pub(crate) use pin::{set_pin, unlock, PIN_CPU_PERMITS};
 pub(crate) use policy::{after, before, filter_items, require_item, sql_allowed};

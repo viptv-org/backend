@@ -77,6 +77,8 @@ pub(crate) mod revisions;
 #[cfg(test)]
 mod revisions_tests;
 mod projection;
+#[cfg(test)]
+mod projection_tests;
 mod provider_identity;
 #[cfg(test)]
 mod provider_identity_tests;

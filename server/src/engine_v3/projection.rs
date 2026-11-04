@@ -48,58 +48,74 @@ pub(super) fn cards(app: &App, items: Vec<Value>, provider: &str) -> Result<Vec<
         provider,
     )?;
     let restricted = kids::restricted(&db, &app.identity())?;
-    let mut cards = Vec::new();
+    if !restricted {
+        let mut cards = Vec::new();
+        for item in items.iter().take(24) {
+            let Some(mut projected) = card(item, provider) else {
+                continue;
+            };
+            projected.metadata_origin = origin.clone();
+            cards.push(projected);
+        }
+        return Ok(cards);
+    }
+    enum Slot {
+        Stored(Card),
+        Pending(Value),
+    }
+    let mut slots = Vec::new();
     for item in items.iter().take(24) {
         let Some(mut projected) = card(item, provider) else {
             continue;
         };
         projected.metadata_origin = origin.clone();
-        if restricted {
-            if projected.identity.id.starts_with("simkl:")
-                && (provider == "stremio" || provider.starts_with("addon:"))
-            {
-                continue;
-            }
-            if let Some(origin) = &origin {
-                if let Ok(stored) = kids::scoped::lookup_db(
-                    &db,
-                    &app.identity(),
-                    origin,
-                    &projected.identity.kind,
-                    &projected.identity.id,
-                    Some(&projected),
-                ) {
-                    cards.push(stored);
-                    continue;
-                }
-            }
-            if origin.as_ref().is_some_and(|origin| {
-                !kids::titles::canonical(
-                    &origin.provider_id,
-                    &projected.identity.kind,
-                    &projected.identity.id,
-                )
-            }) {
-                continue;
-            }
-            if kids::require_item(
+        if projected.identity.id.starts_with("simkl:")
+            && (provider == "stremio" || provider.starts_with("addon:"))
+        {
+            continue;
+        }
+        if let Some(origin) = &origin {
+            if let Ok(stored) = kids::scoped::lookup_db(
                 &db,
                 &app.identity(),
+                origin,
                 &projected.identity.kind,
                 &projected.identity.id,
-            )
-            .is_err()
-            {
+                Some(&projected),
+            ) {
+                slots.push(Slot::Stored(stored));
                 continue;
             }
-            let safe = kids::filter_items(&db, &app.identity(), vec![item.clone()])?;
-            let Some(mut projected) = safe.first().and_then(|item| card(item, provider)) else {
+            if !kids::titles::canonical(
+                &origin.provider_id,
+                &projected.identity.kind,
+                &projected.identity.id,
+            ) {
                 continue;
-            };
-            projected.metadata_origin = origin.clone();
-            cards.push(projected);
-        } else {
-            cards.push(projected);
+            }
+        }
+        slots.push(Slot::Pending(item.clone()));
+    }
+    let pending: Vec<Value> = slots
+        .iter()
+        .filter_map(|slot| match slot {
+            Slot::Pending(item) => Some(item.clone()),
+            Slot::Stored(_) => None,
+        })
+        .collect();
+    let mut safe = kids::filter_items(&db, &app.identity(), pending)?.into_iter();
+    let mut cards = Vec::new();
+    for slot in slots {
+        match slot {
+            Slot::Stored(stored) => cards.push(stored),
+            Slot::Pending(_) => {
+                if let Some(item) = safe.next() {
+                    if let Some(mut projected) = card(&item, provider) {
+                        projected.metadata_origin = origin.clone();
+                        cards.push(projected);
+                    }
+                }
+            }
         }
     }
     Ok(cards)
