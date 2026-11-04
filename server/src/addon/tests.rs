@@ -125,17 +125,74 @@ async fn catalog_cache_and_protocol_without_skip() {
     task.abort();
 }
 fn test_addons() -> Addons {
-    let mut addons = Addons::new(
-        Arc::new(Mutex::new(Connection::open_in_memory().unwrap())),
-        reqwest::Client::new(),
-    )
-    .unwrap();
+    let mut addons = Addons::new(Arc::new(Mutex::new(Connection::open_in_memory().unwrap())))
+        .unwrap();
     addons.db.lock().unwrap().execute_batch("CREATE TABLE auth_accounts(id INTEGER PRIMARY KEY,disabled INTEGER NOT NULL DEFAULT 0); INSERT INTO auth_accounts VALUES(1,0)").unwrap();
     addons.account_id = 1;
     addons.vault = Some(crate::test_support::vault());
     addons.allow_test_loopback = true;
     remove(&addons, 1);
     addons
+}
+#[tokio::test]
+async fn without_a_vault_private_and_metadata_addon_urls_are_rejected() {
+    let mut addons = test_addons();
+    addons.vault = None;
+    addons.allow_test_loopback = false;
+    for url in [
+        "http://127.0.0.1:1/catalog/movie/top.json",
+        "http://169.254.169.254/latest/meta-data",
+        "http://10.0.0.1/catalog/movie/top.json",
+        "http://10.255.255.1/catalog/movie/top.json",
+    ] {
+        assert_eq!(
+            addons.fetch(url, 60).await.unwrap_err(),
+            "addon_private_destination",
+            "{url}"
+        );
+    }
+}
+#[tokio::test]
+async fn without_a_vault_redirects_to_private_addresses_are_rejected() {
+    use axum::{routing::get, Router};
+    let mut addons = test_addons();
+    addons.vault = None;
+    addons.allow_test_loopback = true;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/meta",
+                    get(|| async {
+                        axum::response::Redirect::temporary(
+                            "http://169.254.169.254/latest/meta-data",
+                        )
+                    }),
+                )
+                .route(
+                    "/ten",
+                    get(|| async {
+                        axum::response::Redirect::temporary(
+                            "http://10.0.0.1/catalog/movie/top.json",
+                        )
+                    }),
+                ),
+        )
+        .await
+        .unwrap();
+    });
+    assert_eq!(
+        addons.fetch(&format!("{base}/meta"), 60).await.unwrap_err(),
+        "addon_private_destination"
+    );
+    assert_eq!(
+        addons.fetch(&format!("{base}/ten"), 60).await.unwrap_err(),
+        "addon_private_destination"
+    );
+    server.abort();
 }
 #[test]
 fn consecutive_search_denials_cool_down_and_one_success_clears() {
@@ -387,11 +444,8 @@ fn seed_migration_and_restarts_never_restore_deleted_addons() {
             .as_nanos()
     ));
     let open = || {
-        Addons::new(
-            Arc::new(Mutex::new(Connection::open(&path).unwrap())),
-            reqwest::Client::new(),
-        )
-        .unwrap()
+        Addons::new(Arc::new(Mutex::new(Connection::open(&path).unwrap())))
+            .unwrap()
     };
     let addons = open();
     assert_eq!(saved(&addons).len(), 1);
@@ -424,7 +478,7 @@ fn seed_migration_and_restarts_never_restore_deleted_addons() {
         }
         let db = Arc::new(Mutex::new(db));
         for _ in 0..2 {
-            let addons = Addons::new(db.clone(), reqwest::Client::new()).unwrap();
+            let addons = Addons::new(db.clone()).unwrap();
             let list = saved(&addons);
             assert_eq!(addons.revision().unwrap().len(), 32);
             assert_eq!(list.len(), usize::from(populated));

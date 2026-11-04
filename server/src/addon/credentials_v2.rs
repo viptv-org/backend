@@ -467,7 +467,7 @@ mod tests {
           CREATE TABLE addons(id INTEGER PRIMARY KEY,name TEXT NOT NULL,manifest_url TEXT UNIQUE NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,manifest TEXT NOT NULL);
           INSERT INTO addons VALUES(7,'Legacy','https://fixture.invalid/private-token/manifest.json',1,'{}');").unwrap();
         let db = Arc::new(Mutex::new(db));
-        let addons = Addons::new(db.clone(), reqwest::Client::new()).unwrap();
+        let addons = Addons::new(db.clone()).unwrap();
         assert!(addons.for_account(1).entries().unwrap().is_empty());
         assert_eq!(
             ownership(&db.lock().unwrap()).unwrap()["unassigned"],

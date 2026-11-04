@@ -396,7 +396,7 @@ impl App {
         stremio_import::init(&db).map_err(|_| "Import schema initialization failed")?;
         let stremio_import = stremio_import::Service::new()?;
         let db = Arc::new(Mutex::new(db));
-        let mut addons = Addons::new(db.clone(), client.clone())?;
+        let mut addons = Addons::new(db.clone())?;
         addons.vault = secret_vault.clone();
         let mut providers = ProviderService::new(db.clone(), client);
         providers.vault = secret_vault.clone();
