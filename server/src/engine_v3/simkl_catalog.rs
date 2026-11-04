@@ -40,11 +40,11 @@ pub(super) async fn discover(
             }),
         )
         .await?;
-        value["next_cursor"] = if value["next_cursor"].is_string() {
-            json!((q.skip + 24).to_string())
-        } else {
-            Value::Null
-        };
+        value["next_cursor"] = value["next_cursor"]
+            .as_str()
+            .and_then(|page| page.parse::<usize>().ok())
+            .map(|page| json!(((page - 1) * 24).to_string()))
+            .unwrap_or(Value::Null);
         return Ok(axum::Json(value));
     }
     let page = crate::simkl::page(&app, profile, category, q.skip).await?;
