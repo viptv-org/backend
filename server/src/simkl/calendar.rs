@@ -127,9 +127,7 @@ pub(crate) async fn get(
         let (matching, own): (Vec<&Entry>, Vec<&Entry>) = if *category == "movie" {
             (Vec::new(), Vec::new())
         } else {
-            library.iter().partition(|entry| {
-                entry.card.identity.id.starts_with("simkl:anime:") == (*category == "anime")
-            })
+            library.iter().partition(|entry| is_anime(&entry.card) == (*category == "anime"))
         };
         let shown = matching.len();
         let mut found: Vec<Entry> = matching.into_iter().cloned().collect();
@@ -218,6 +216,19 @@ fn stable_id(value: impl Serialize) -> Result<String, ApiError> {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect())
+}
+
+fn is_anime(card: &Card) -> bool {
+    card.category.as_deref() == Some("anime")
+        || card.identity.id.starts_with("simkl:anime:")
+        || ["mal:", "kitsu:", "anilist:", "anidb:"]
+            .iter()
+            .any(|prefix| card.identity.id.starts_with(prefix))
+        || card.metadata.as_ref().is_some_and(|metadata| {
+            metadata.genres.iter().any(|genre| {
+                genre.eq_ignore_ascii_case("anime")
+            })
+        })
 }
 
 fn library_entry(
