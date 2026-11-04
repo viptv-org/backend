@@ -171,11 +171,13 @@ async fn discover_one(
             .map_err(|_| ApiError::from("Database unavailable"))?;
         kids::restricted(&db, &lease.principal)?
     };
-    let (cards, next_cursor, complete) = if restricted {
+    let (cards, next_cursor, complete, failures) = if restricted {
         let mut cards = Vec::new();
         let mut skip = q.skip;
         let mut provider: Option<String> = None;
         let mut complete = false;
+        let mut failures: Vec<Value> = Vec::new();
+        let mut seen_failures = HashSet::new();
         let page_deadline = tokio::time::Instant::now() + PAGE_DEADLINE;
         for _ in 0..5 {
             if tokio::time::Instant::now() >= page_deadline {
@@ -186,6 +188,13 @@ async fn discover_one(
             let (value, issuer) =
                 crate::handlers_catalog::discover_origin(scoped.clone(), lease.clone(), request)
                     .await?;
+            if let Some(page_failures) = value.get("failures").and_then(Value::as_array) {
+                for failure in page_failures {
+                    if seen_failures.insert(failure.get("addon_id").cloned()) {
+                        failures.push(failure.clone());
+                    }
+                }
+            }
             if provider.is_none() {
                 provider = Some(
                     issuer
@@ -215,6 +224,7 @@ async fn discover_one(
             cards,
             if complete { None } else { Some(skip.to_string()) },
             complete,
+            failures,
         )
     } else {
         let (value, issuer) =
@@ -232,6 +242,11 @@ async fn discover_one(
             cards,
             value["next_skip"].as_u64().map(|n| n.to_string()),
             value["has_more"].as_bool() == Some(false),
+            value
+                .get("failures")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
         )
     };
     configuration::validate_revision(&scoped, profile, revision)?;
@@ -249,8 +264,8 @@ async fn discover_one(
     };
     let mut result =
         serde_json::to_value(page).map_err(|_| ApiError::from("Catalog unavailable"))?;
-    if let Some(failures) = value.get("failures") {
-        result["failures"] = failures.clone();
+    if !failures.is_empty() {
+        result["failures"] = Value::Array(failures);
     }
     Ok(axum::Json(result))
 }
