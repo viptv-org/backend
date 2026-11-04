@@ -4,6 +4,8 @@ use viptv_engine::{
     simkl as projection,
 };
 
+const PAGE_DEADLINE: Duration = Duration::from_secs(6);
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Search {
@@ -42,6 +44,37 @@ pub(super) fn allowed(app: &App, mut cards: Vec<Card>) -> Result<Vec<Card>, ApiE
         .collect())
 }
 
+async fn search_page(
+    app: &App,
+    profile: i64,
+    credential: &store::Credential,
+    category: &str,
+    page: usize,
+    query: &str,
+) -> Result<Vec<Value>, ApiError> {
+    let encoded = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("q", query)
+        .append_pair("page", &page.to_string())
+        .append_pair("limit", "24")
+        .append_pair("extended", "full")
+        .finish();
+    let value = store::request(
+        app,
+        profile,
+        credential,
+        &format!("/search/{category}?{encoded}"),
+        None,
+    )
+    .await?;
+    let values = value
+        .as_array()
+        .ok_or_else(|| ApiError(StatusCode::BAD_GATEWAY, "Simkl search was invalid".into()))?;
+    if values.len() > 24 {
+        return Err("Simkl page exceeds the limit".into());
+    }
+    Ok(values.clone())
+}
+
 pub(crate) async fn search(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -55,40 +88,68 @@ pub(crate) async fn search(
         return Err("Invalid Simkl search".into());
     }
     let credential = store::credential(&app, profile, Capability::Search)?;
-    let query = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("q", q.query.trim())
-        .append_pair("page", &q.page.to_string())
-        .append_pair("limit", "24")
-        .append_pair("extended", "full")
-        .finish();
-    let value = store::request(
-        &app,
-        profile,
-        &credential,
-        &format!("/search/{category}?{query}"),
-        None,
-    )
-    .await?;
-    let values = value
-        .as_array()
-        .ok_or_else(|| ApiError(StatusCode::BAD_GATEWAY, "Simkl search was invalid".into()))?;
-    if values.len() > 24 {
-        return Err("Simkl page exceeds the limit".into());
-    }
-    let more = values.len() == 24 && q.page < 20;
-    let mut cards = allowed(
-        &app,
-        values
-            .iter()
-            .filter_map(|v| projection::card(v, category).ok())
-            .collect(),
-    )?;
+    let restricted = {
+        let db = app
+            .db
+            .lock()
+            .map_err(|_| ApiError::from("Database unavailable"))?;
+        kids::restricted(&db, &app.identity())?
+    };
+
+    let (mut cards, next_page, complete) = if restricted {
+        let page_deadline = tokio::time::Instant::now() + PAGE_DEADLINE;
+        let mut cards = Vec::new();
+        let mut page = q.page;
+        let mut complete = false;
+        for _ in 0..5 {
+            if tokio::time::Instant::now() >= page_deadline {
+                break;
+            }
+            let values =
+                search_page(&app, profile, &credential, category, page, q.query.trim()).await?;
+            let full = values.len() == 24;
+            cards.extend(allowed(
+                &app,
+                values
+                    .iter()
+                    .filter_map(|v| projection::card(v, category).ok())
+                    .collect(),
+            )?);
+            page += 1;
+            if !full || page > 20 {
+                complete = true;
+                break;
+            }
+            if cards.len() >= 24 {
+                break;
+            }
+        }
+        (cards, page, complete)
+    } else {
+        let values =
+            search_page(&app, profile, &credential, category, q.page, q.query.trim()).await?;
+        let more = values.len() == 24 && q.page < 20;
+        let cards = allowed(
+            &app,
+            values
+                .iter()
+                .filter_map(|v| projection::card(v, category).ok())
+                .collect(),
+        )?;
+        (cards, q.page + 1, !more)
+    };
+
     viptv_engine::search::rank(&mut cards, &q.query);
+    let next_cursor = if complete {
+        None
+    } else {
+        Some(next_page.to_string())
+    };
     Ok(axum::Json(
         serde_json::to_value(CatalogPage {
             cards,
-            next_cursor: more.then(|| (q.page + 1).to_string()),
-            complete: !more,
+            next_cursor,
+            complete,
         })
         .map_err(|_| ApiError::from("Catalog unavailable"))?,
     ))
