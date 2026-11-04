@@ -968,6 +968,99 @@ async fn meta_fan_out_falls_back_to_fast_addon_within_deadline() {
     assert_eq!(meta["meta"]["name"], "Fast");
     server.abort();
 }
+#[tokio::test]
+async fn discover_reports_failed_addons_alongside_partial_results() {
+    use axum::{routing::get, Router};
+    let mock = Router::new()
+        .route("/", get(|| async { "ok" }))
+        .route(
+            "/fast/catalog/movie/top/search=x.json",
+            get(|| async {
+                axum::Json(json!({"metas":[{"id":"tt-fast","type":"movie","name":"Fast"}]}))
+            }),
+        )
+        .route(
+            "/broken/catalog/movie/top/search=x.json",
+            get(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    crate::test_support::send_port_probe(host).await;
+    let addons = test_addons();
+    let manifest = |name: &str| {
+        json!({"name":name,"resources":["catalog"],"types":["movie"],"catalogs":[{"id":"top","type":"movie","extra":[{"name":"search"}]}]})
+    };
+    insert(
+        &addons,
+        "Fast",
+        &format!("http://{host}/fast/manifest.json"),
+        manifest("Fast"),
+        0,
+    );
+    let broken = insert(
+        &addons,
+        "Broken",
+        &format!("http://{host}/broken/manifest.json"),
+        manifest("Broken"),
+        1,
+    );
+    let page = addons
+        .discover("movie".into(), None, None, 0, Some("x".into()), None)
+        .await
+        .unwrap();
+    assert_eq!(page["metas"].as_array().unwrap().len(), 1);
+    assert_eq!(page["metas"][0]["id"], "tt-fast");
+    assert_eq!(page["failures"].as_array().unwrap().len(), 1);
+    assert_eq!(page["failures"][0]["addon_id"], broken);
+    assert_eq!(page["failures"][0]["addon_name"], "Broken");
+    assert_eq!(page["failures"][0]["error_code"], "addon_unavailable");
+    server.abort();
+}
+#[tokio::test]
+async fn meta_reports_failed_addons_alongside_the_winning_result() {
+    use axum::{routing::get, Router};
+    let mock = Router::new()
+        .route("/", get(|| async { "ok" }))
+        .route(
+            "/broken/meta/movie/tt1.json",
+            get(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+        )
+        .route(
+            "/fast/meta/movie/tt1.json",
+            get(|| async { axum::Json(json!({"meta":{"id":"tt1","name":"Fast"}})) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    crate::test_support::send_port_probe(host).await;
+    let addons = test_addons();
+    let manifest = |name: &str| {
+        json!({"name":name,"resources":["meta"],"types":["movie"],"idPrefixes":["tt"]})
+    };
+    let broken = insert(
+        &addons,
+        "Broken",
+        &format!("http://{host}/broken/manifest.json"),
+        manifest("Broken"),
+        0,
+    );
+    insert(
+        &addons,
+        "Fast",
+        &format!("http://{host}/fast/manifest.json"),
+        manifest("Fast"),
+        1,
+    );
+    let (value, _, failures) = addons.meta_with_failures("movie", "tt1", false).await.unwrap();
+    assert_eq!(value["meta"]["name"], "Fast");
+    let failures = crate::addon::addon_failures_value(&failures);
+    assert_eq!(failures.as_array().unwrap().len(), 1);
+    assert_eq!(failures[0]["addon_id"], broken);
+    assert_eq!(failures[0]["addon_name"], "Broken");
+    assert_eq!(failures[0]["error_code"], "addon_unavailable");
+    server.abort();
+}
 #[test]
 fn root_prefixes_and_search_extras() {
     assert!(!supports(

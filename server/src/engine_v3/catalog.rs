@@ -185,9 +185,12 @@ async fn discover_one(
         next_cursor: value["next_skip"].as_u64().map(|n| n.to_string()),
         complete: value["has_more"].as_bool() == Some(false),
     };
-    Ok(axum::Json(
-        serde_json::to_value(page).map_err(|_| ApiError::from("Catalog unavailable"))?,
-    ))
+    let mut result =
+        serde_json::to_value(page).map_err(|_| ApiError::from("Catalog unavailable"))?;
+    if let Some(failures) = value.get("failures") {
+        result["failures"] = failures.clone();
+    }
+    Ok(axum::Json(result))
 }
 
 fn simkl_searches(
@@ -531,6 +534,7 @@ async fn resolve(
         ));
     }
     configuration::validate_revision(&app, profile, revision)?;
+    let mut failures = Vec::<crate::addon::AddonFailure>::new();
     let (issuer, mut parent, meta) = if let Some(canonical) = canonical {
         (
             page.addon_id.expect("canonical add-on id"),
@@ -538,12 +542,10 @@ async fn resolve(
             canonical.document,
         )
     } else {
-        let (value, issuer) = timed("addons_meta", async {
-            if page.addon_id.is_some() {
-                app.addons.meta_from_selected_addon(&kind, lookup).await
-            } else {
-                app.addons.meta_with_origin(&kind, lookup).await
-            }
+        let (value, issuer, got_failures) = timed("addons_meta", async {
+            app.addons
+                .meta_with_failures(&kind, lookup, page.addon_id.is_some())
+                .await
         })
         .await
         .map_err(|error| {
@@ -561,6 +563,7 @@ async fn resolve(
                 ApiError::from(error)
             }
         })?;
+        failures = got_failures;
         let meta = if value["meta"].is_object() {
             value["meta"].clone()
         } else {
@@ -749,6 +752,9 @@ async fn resolve(
     }
     if let Some(episode) = focus_episode {
         value["focus_episode"] = json!(episode);
+    }
+    if !failures.is_empty() {
+        value["failures"] = crate::addon::addon_failures_value(&failures);
     }
     Ok(axum::Json(value))
 }
