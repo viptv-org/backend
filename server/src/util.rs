@@ -1,41 +1,12 @@
-use futures::StreamExt;
-use serde_json::Value;
-
 pub use viptv_provider::validate_url;
+
 pub fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
 }
-pub async fn json_get(client: &reqwest::Client, url: &str) -> Result<Value, String> {
-    validate_url(url)?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|_| "Upstream request failed".to_string())?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "Upstream returned HTTP {}",
-            response.status().as_u16()
-        ));
-    }
-    let mut body = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| "Upstream body failed".to_string())?;
-        if body.len() + chunk.len() > 32 * 1024 * 1024 {
-            return Err("Upstream response exceeds size limit".into());
-        }
-        body.extend_from_slice(&chunk);
-    }
-    tokio::task::spawn_blocking(move || {
-        serde_json::from_slice(&body).map_err(|_| "Upstream returned invalid JSON".to_string())
-    })
-    .await
-    .map_err(|_| "Upstream parser stopped".to_string())?
-}
+
 #[cfg(test)]
 mod tests {
     use super::*;

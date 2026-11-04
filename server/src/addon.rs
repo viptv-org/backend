@@ -1,4 +1,4 @@
-use crate::util::{json_get, now, validate_url};
+use crate::util::{now, validate_url};
 use futures::{stream, StreamExt};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
@@ -61,7 +61,6 @@ struct SearchHealth {
 #[derive(Clone)]
 pub struct Addons {
     db: Arc<Mutex<Connection>>,
-    client: reqwest::Client,
     cache: CachedResponses,
     flights: Arc<Mutex<HashMap<String, Weak<FetchFlight>>>>,
     gate: Arc<Semaphore>,
@@ -78,7 +77,7 @@ pub struct Addons {
     pub(crate) allow_test_loopback: bool,
 }
 impl Addons {
-    pub fn new(db: Arc<Mutex<Connection>>, client: reqwest::Client) -> Result<Self, String> {
+    pub fn new(db: Arc<Mutex<Connection>>) -> Result<Self, String> {
         {
             let mut db = db.lock().map_err(|_| "Database unavailable")?;
             let tx = db
@@ -119,7 +118,6 @@ impl Addons {
         }
         Ok(Self {
             db,
-            client,
             cache: Default::default(),
             flights: Default::default(),
             gate: Arc::new(Semaphore::new(12)),
@@ -223,10 +221,8 @@ impl Addons {
             return Err("invalid_addon_endpoint".into());
         }
         let url = validate_url(raw).map_err(|_| "invalid_addon_endpoint")?;
-        if self.protected() {
-            crate::source_http::validate(&url, self.fixture_transport())
-                .map_err(|e| e.addon_code())?;
-        }
+        crate::source_http::validate(&url, self.fixture_transport())
+            .map_err(|e| e.addon_code())?;
         Ok(url)
     }
     fn manifest_url(&self, url: &str) -> Result<url::Url, String> {
@@ -263,24 +259,15 @@ impl Addons {
             .map_err(|_| "addon_timeout")?
     }
     async fn fetch_manifest(&self, url: url::Url) -> Result<(String, Value), String> {
-        let manifest = if self.protected() {
-            crate::source_http::json(
-                url.clone(),
-                32 * 1024 * 1024,
-                Duration::from_secs(25),
-                self.fixture_transport(),
-                true,
-            )
-            .await
-            .map_err(|e| e.addon_code().to_owned())?
-        } else {
-            tokio::time::timeout(
-                Duration::from_secs(25),
-                json_get(&self.client, url.as_str()),
-            )
-            .await
-            .map_err(|_| "Upstream timed out")??
-        };
+        let manifest = crate::source_http::json(
+            url.clone(),
+            32 * 1024 * 1024,
+            Duration::from_secs(25),
+            self.fixture_transport(),
+            true,
+        )
+        .await
+        .map_err(|e| e.addon_code().to_owned())?;
         if !manifest["name"]
             .as_str()
             .is_some_and(|n| !n.trim().is_empty() && n.len() <= 256)
@@ -399,9 +386,7 @@ impl Addons {
         .unwrap_or(false)
     }
     async fn fetch(&self, url: &str, ttl: i64) -> Result<Value, String> {
-        if self.protected() {
-            self.checked_url(url)?;
-        }
+        self.checked_url(url)?;
         let key = self.cache_key(url)?;
         if let Some((expiry, v, _)) = self.cache.lock().unwrap().get(&key) {
             if *expiry > now() {
@@ -437,22 +422,15 @@ impl Addons {
                 return Ok(value.clone());
             }
         }
-        let v = if self.protected() {
-            crate::source_http::json(
-                self.checked_url(url)?,
-                32 * 1024 * 1024,
-                Duration::from_secs(25),
-                self.fixture_transport(),
-                true,
-            )
-            .await
-            .map_err(|e| e.addon_code().to_owned())
-        } else {
-            match tokio::time::timeout(Duration::from_secs(25), json_get(&self.client, url)).await {
-                Err(_) => Err("Upstream timed out".to_owned()),
-                Ok(result) => result,
-            }
-        };
+        let v = crate::source_http::json(
+            self.checked_url(url)?,
+            32 * 1024 * 1024,
+            Duration::from_secs(25),
+            self.fixture_transport(),
+            true,
+        )
+        .await
+        .map_err(|e| e.addon_code().to_owned());
         let v = match v {
             Err(error) => {
                 let mut failures = self.fetch_failures.lock().unwrap();
