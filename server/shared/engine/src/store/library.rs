@@ -60,6 +60,7 @@ impl Store {
             cards,
             next_cursor: (next < total).then(|| next.to_string()),
             complete: next >= total,
+            failures: vec![],
         })
     }
     pub fn save_favorite(&mut self, scope: &Scope, card: &Card) -> Result<(), Error> {

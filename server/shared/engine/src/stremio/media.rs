@@ -66,6 +66,7 @@ pub fn detail_page(
         episodes,
         next_cursor,
         seasons,
+        failures: vec![],
     })
 }
 
