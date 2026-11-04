@@ -712,8 +712,10 @@ pub(crate) fn playback_db(
     app: &App,
     profile: i64,
 ) -> Result<Vec<Saved<PlaybackRecord>>, ApiError> {
+    let principal = app.identity();
+    let restricted = kids::restricted(db, &principal)?;
     let mut records = rows::<PlaybackRecord>(db, profile, "playback", 50000)?;
-    records.retain(|s| kids::scoped::require_card_db(db, &app.identity(), &s.value.card()).is_ok());
+    records.retain(|s| kids::scoped::require_card(db, &principal, restricted, &s.value.card()).is_ok());
     Ok(records)
 }
 pub(crate) fn favorites_db(
@@ -721,8 +723,10 @@ pub(crate) fn favorites_db(
     app: &App,
     profile: i64,
 ) -> Result<Vec<Saved<Card>>, ApiError> {
+    let principal = app.identity();
+    let restricted = kids::restricted(db, &principal)?;
     let mut records = rows::<Card>(db, profile, "favorite", 10000)?;
-    records.retain(|s| kids::scoped::require_card_db(db, &app.identity(), &s.value).is_ok());
+    records.retain(|s| kids::scoped::require_card(db, &principal, restricted, &s.value).is_ok());
     for s in &mut records {
         s.value.added_at_millis = s.added;
         s.value.progress = None;
@@ -739,6 +743,7 @@ pub(crate) fn membership_db(
 ) -> Result<(), ApiError> {
     use viptv_engine::{identity::MediaIdentity, origin::MetadataOrigin};
     let principal = app.identity();
+    let restricted = kids::restricted(db, &principal)?;
     let mut seen = std::collections::BTreeSet::new();
     let mut bytes = 0usize;
     // Read only the bounded identity columns: full cards for 10k memberships do not fit.
@@ -767,8 +772,15 @@ pub(crate) fn membership_db(
         if bytes > 16 * 1024 * 1024 {
             return Err(invalid());
         }
-        if kids::scoped::require_identity_db(db, &principal, &origin, &identity, parent.as_ref())
-            .is_err()
+        if kids::scoped::require_identity(
+            db,
+            &principal,
+            restricted,
+            &origin,
+            &identity,
+            parent.as_ref(),
+        )
+        .is_err()
         {
             continue;
         }
@@ -810,8 +822,15 @@ pub(crate) fn membership_db(
         let origin: MetadataOrigin = decode(&raw_origin)?;
         let identity: MediaIdentity = decode(&raw_identity)?;
         let parent: Option<MediaIdentity> = raw_parent.as_deref().map(decode).transpose()?;
-        if kids::scoped::require_identity_db(db, &principal, &origin, &identity, parent.as_ref())
-            .is_ok()
+        if kids::scoped::require_identity(
+            db,
+            &principal,
+            restricted,
+            &origin,
+            &identity,
+            parent.as_ref(),
+        )
+        .is_ok()
             && seen.insert((raw_origin, raw_identity))
         {
             result.scoped_identities.push(ScopedMediaIdentity {

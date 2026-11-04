@@ -98,8 +98,13 @@ pub(crate) fn observe(
     db.execute("INSERT INTO kids_origin_media(account_id,origin,kind,lookup_id,policy_key,parent_key,card,age,conflict,updated_at)VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(account_id,origin,kind,lookup_id,policy_key)DO UPDATE SET current=1,parent_key=excluded.parent_key,card=excluded.card,age=excluded.age,conflict=excluded.conflict,updated_at=excluded.updated_at",params![account,origin_key(origin)?,card.identity.kind,card.identity.id,policy,parent_key,serde_json::to_string(card).map_err(|_|ApiError::from("Invalid metadata"))?,age,conflict,util::now()]).map_err(db_error)?;
     Ok(())
 }
-fn permitted(db: &Connection, p: &auth::Principal, card: &Card) -> Result<bool, ApiError> {
-    if !restricted(db, p)? {
+fn permitted(
+    db: &Connection,
+    p: &auth::Principal,
+    restricted: bool,
+    card: &Card,
+) -> Result<bool, ApiError> {
+    if !restricted {
         return Ok(true);
     }
     let auth::Principal::Account {
@@ -140,7 +145,15 @@ pub(crate) fn require_card_db(
     p: &auth::Principal,
     card: &Card,
 ) -> Result<(), ApiError> {
-    if permitted(db, p, card)? {
+    require_card(db, p, restricted(db, p)?, card)
+}
+pub(crate) fn require_card(
+    db: &Connection,
+    p: &auth::Principal,
+    restricted: bool,
+    card: &Card,
+) -> Result<(), ApiError> {
+    if permitted(db, p, restricted, card)? {
         Ok(())
     } else {
         Err(forbidden())
@@ -319,16 +332,17 @@ pub(crate) fn invalidate_mismatch(
     Ok(())
 }
 
-pub(crate) fn require_identity_db(
+pub(crate) fn require_identity(
     db: &Connection,
     p: &auth::Principal,
+    restricted: bool,
     origin: &viptv_engine::origin::MetadataOrigin,
     identity: &viptv_engine::identity::MediaIdentity,
     parent: Option<&viptv_engine::identity::MediaIdentity>,
 ) -> Result<(), ApiError> {
-    if !restricted(db, p)? {
+    if !restricted {
         return Ok(());
     }
     let card:Card=serde_json::from_value(json!({"identity":identity,"parent_identity":parent,"metadata_origin":origin,"provider_id":origin.provider_id,"title":"Stored title","badges":[]})).map_err(|_|ApiError::from("Stored identity unavailable"))?;
-    require_card_db(db, p, &card)
+    require_card(db, p, restricted, &card)
 }
