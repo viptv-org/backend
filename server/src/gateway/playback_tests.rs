@@ -360,6 +360,8 @@ async fn setup() -> (App, Peer) {
     let frame_attempts = Arc::new(AtomicUsize::new(0));
     let frame_route_attempts = frame_attempts.clone();
     let protocol_mode = mode.clone();
+    let session_mode = mode.clone();
+    let renew_mode = mode.clone();
     let protocol = axum::routing::get(move || { let mode=protocol_mode.clone(); async move { Json(if mode.load(Ordering::SeqCst)==8 { json!({"version":2,"first_frame_ack":false}) } else { json!({"version":2,"first_frame_ack":true}) }) } });
     let create = axum::routing::post(move |Json(value): Json<Value>| {
         let created = created.clone();
@@ -428,14 +430,28 @@ async fn setup() -> (App, Peer) {
             if not_ready { return (StatusCode::CONFLICT, Json(json!({"error":{"code":"session_not_ready"}}))).into_response(); }
             StatusCode::NO_CONTENT.into_response()
         }}))
-        .route("/v1/sessions/:id",axum::routing::get(|Path(id):Path<String>|async move{Json(remote(&id))}).delete(move|Path(id):Path<String>|{let deleted=deleted.clone();let events=deleted_events.clone();async move{deleted.fetch_add(1,Ordering::SeqCst);events.lock().unwrap().push(format!("delete:{id}"));StatusCode::NO_CONTENT}}))
+        .route("/v1/sessions/:id",axum::routing::get(move |Path(id):Path<String>|{let mode=session_mode.clone();async move{
+            let mut value=remote(&id);
+            if mode.load(Ordering::SeqCst)==14 {
+                value["status"]=json!("failed");
+                value["error_code"]=json!("processing_failed");
+                value["playback"]=Value::Null;
+            }
+            Json(value)
+        }}).delete(move|Path(id):Path<String>|{let deleted=deleted.clone();let events=deleted_events.clone();async move{deleted.fetch_add(1,Ordering::SeqCst);events.lock().unwrap().push(format!("delete:{id}"));StatusCode::NO_CONTENT}}))
         .route("/v1/sessions/:id/captions",axum::routing::post(move |Path(id):Path<String>,headers:axum::http::HeaderMap,Json(body):Json<Value>|{let received=received_captions.clone();async move {
             assert!(headers["authorization"].to_str().unwrap().starts_with("Bearer pgk_"));
             assert!(!headers.contains_key("cookie"));assert_eq!(body.as_object().unwrap().len(),1);
             received.lock().unwrap().push(body);
             Json(json!({"url":format!("/media/{id}/pgm_fixture/caption_{}.srt","c".repeat(64)),"format":"srt","timeline_offset_seconds":0.0}))
         }}))
-        .route("/v1/sessions/:id/renew",axum::routing::post(|Path(id):Path<String>|async move{Json(remote(&id))}));
+        .route("/v1/sessions/:id/renew",axum::routing::post(move|Path(id):Path<String>|{let mode=renew_mode.clone();async move{
+            match mode.load(Ordering::SeqCst) {
+                14 => (StatusCode::GONE, Json(json!({"error":{"code":"session_expired"}}))).into_response(),
+                15 => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error":{"code":"not_ready"}}))).into_response(),
+                _ => Json(remote(&id)).into_response(),
+            }
+        }}));
     let task = tokio::spawn(async move {
         axum::serve(listener, routes).await.unwrap();
     });
@@ -1191,6 +1207,62 @@ async fn gateway_selection_affinity_renewal_and_grant_revocation_are_scoped() {
     })
     .await
     .unwrap();
+}
+#[tokio::test]
+async fn renewal_reports_the_failure_that_ended_the_viewer_and_releases_it() {
+    let (app, peer) = setup().await;
+    let source = source(&app);
+    gateway(&app, "first", 0);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&source, "one", "roku"),
+    )
+    .await;
+    let id = start["id"].as_str().unwrap().to_owned();
+    let path = format!("/api/playback/{id}");
+    assert_eq!(settled(&app, &id).await["status"], "ready");
+    peer.mode.store(15, Ordering::SeqCst);
+    let (status, transient) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        &format!("/api/playback/{id}/heartbeat"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(transient["error_code"], "gateway_not_ready");
+    let (_, still_ready) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
+    assert_eq!(
+        still_ready["status"], "ready",
+        "a renewal the gateway could not answer must not end playback"
+    );
+    peer.mode.store(14, Ordering::SeqCst);
+    let (status, ended) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        &format!("/api/playback/{id}/heartbeat"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        ended["error_code"], "gateway_processing_failed",
+        "the failure the session records must reach the viewer, not an expired authorization"
+    );
+    let (_, failed) = request(&app, "member-token-1", "GET", &path, Value::Null).await;
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["error_code"], "gateway_processing_failed");
+    assert!(failed["delivery"].is_null());
+    assert_eq!(
+        peer.stops.load(Ordering::SeqCst),
+        1,
+        "the viewer the gateway ended must be released"
+    );
 }
 #[tokio::test]
 async fn source_mutation_and_remote_failures_are_closed_and_actionable() {

@@ -309,6 +309,52 @@ async fn public_pairing_qr_guesses_use_a_global_rate_limit() {
 }
 
 #[tokio::test]
+async fn a_paired_tv_cannot_approve_codes_but_a_native_account_session_can() {
+    let a = fixture();
+    {
+        let db = a.db.lock().unwrap();
+        for (token, origin, name) in [
+            ("paired-tv-token", "tv", "Living room TV"),
+            ("native-token", "native", "Pixel"),
+        ] {
+            let hash = format!("{:x}", Sha256::digest(token.as_bytes()));
+            db.execute("INSERT INTO auth_sessions(id,account_id,profile_id,access_hash,refresh_hash,csrf_hash,kind,origin,device_name,access_expires,refresh_expires,created_at) VALUES(?1,1,1,?2,?3,'unused','device',?4,?5,?6,?7,0)",params![format!("{origin}-session"),hash,format!("{origin}-refresh"),origin,name,util::now()+3600,util::now()+3600]).unwrap();
+        }
+    }
+    let device_sessions = |a: &App| -> i64 {
+        a.db.lock()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM auth_sessions WHERE kind='device'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    let before = device_sessions(&a);
+    let (_, code) = request(&a, "", "POST", "/api/auth/device/code", json!({"device_name":"Living room TV"})).await;
+    let user_code = code["user_code"].clone();
+    for path in ["/api/device/lookup", "/api/auth/device/lookup", "/api/device/approve", "/api/auth/device/approve"] {
+        let (status, error) = request(&a, "paired-tv-token", "POST", path, json!({"user_code":user_code})).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}: {error}");
+        assert_eq!(error["error_code"], "account_session_required", "{path}");
+    }
+    let (status, pending) = request(&a, "", "POST", "/api/auth/device/token", json!({"device_code":code["device_code"]})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{pending}");
+    assert_eq!(pending["error_code"], "authorization_pending");
+    assert_eq!(device_sessions(&a), before);
+    let (status, looked) = request(&a, "native-token", "POST", "/api/device/lookup", json!({"user_code":user_code})).await;
+    assert_eq!(status, StatusCode::OK, "{looked}");
+    assert_eq!(looked["device"]["device_name"], "Living room TV");
+    let (status, approved) = request(&a, "native-token", "POST", "/api/auth/device/approve", json!({"user_code":user_code})).await;
+    assert_eq!(status, StatusCode::OK, "{approved}");
+    let (status, grant) = request(&a, "", "POST", "/api/auth/device/token", json!({"device_code":code["device_code"]})).await;
+    assert_eq!(status, StatusCode::OK, "{grant}");
+    assert_eq!(grant["account_id"], 1);
+    assert_eq!(device_sessions(&a), before + 1);
+}
+
+#[tokio::test]
 async fn profile_lists_are_filtered_and_new_profiles_are_granted_atomically() {
     let a = fixture();
     let (_, first) = request(&a, "member-token-1", "GET", "/api/profiles", Value::Null).await;

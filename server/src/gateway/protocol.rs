@@ -227,6 +227,9 @@ impl Session {
     pub(crate) fn awaiting_delivery(&self) -> bool {
         matches!(self.status.as_str(), "prepared" | "starting")
     }
+    pub(crate) fn live(&self) -> bool {
+        matches!(self.status.as_str(), "prepared" | "starting" | "ready")
+    }
     pub(crate) fn failure(&self) -> &'static str {
         failure_code(self.error_code.as_deref()).unwrap_or({
             if matches!(self.status.as_str(), "released" | "expired") {
