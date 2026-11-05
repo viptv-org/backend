@@ -72,6 +72,14 @@ returned expiry. Resuming after backgrounding should renew/validate before
 trusting a cached URL. Terminal responses include an actionable error and stable
 error_code; no provider diagnostics, credentials or gateway error text are echoed.
 
+Gateway answers keep their own classification instead of a gateway-connectivity
+failure: `playback_starting` while a viewer is not ready yet (retryable, never
+terminal), `caption_invalid` and `caption_capacity` for a subtitle the gateway
+rejected or has no room for, `gateway_worker_unavailable` for a lost torrent
+worker, `gateway_not_ready` while the gateway is not admitting, and
+`playback_expired` when the media behind a ready viewer is gone. Codes the
+backend does not know are classified by HTTP status, never echoed.
+
 The same request ID/body within the same account/profile/session reuses its
 playback ID. A changed body conflicts. Released/failed/expired requests do not
 restart implicitly; an intentional retry needs a new request ID. Startup is

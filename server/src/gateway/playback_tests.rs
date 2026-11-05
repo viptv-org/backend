@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     app_state::ResourceLease, auth, auth_integration_tests::fixture, test_support::request, App,
 };
-use axum::{extract::Path, http::StatusCode, Json, Router};
+use axum::{extract::Path, http::StatusCode, response::IntoResponse, Json, Router};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::{
@@ -355,7 +355,10 @@ async fn setup() -> (App, Peer) {
     let received_captions = captions.clone();
     let frames = Arc::new(Mutex::new(Vec::new()));
     let received_frames = frames.clone();
-    let received_frames_v2 = frames.clone();
+    let returned_frames = frames.clone();
+    let frame_mode = mode.clone();
+    let frame_attempts = Arc::new(AtomicUsize::new(0));
+    let frame_route_attempts = frame_attempts.clone();
     let protocol_mode = mode.clone();
     let protocol = axum::routing::get(move || { let mode=protocol_mode.clone(); async move { Json(if mode.load(Ordering::SeqCst)==8 { json!({"version":2,"first_frame_ack":false}) } else { json!({"version":2,"first_frame_ack":true}) }) } });
     let create = axum::routing::post(move |Json(value): Json<Value>| {
@@ -418,7 +421,13 @@ async fn setup() -> (App, Peer) {
         .route("/torrent-runtime-protocol", protocol.clone())
         .route("/v2/torrent-runtime-protocol", protocol)
         .route("/torrent-sessions/:id/first-frame", axum::routing::post(move |Path(id):Path<String>, Json(body):Json<Value>| { let frames=received_frames; async move { assert_eq!(body,json!({}));frames.lock().unwrap().push(id);StatusCode::NO_CONTENT }}))
-        .route("/v2/torrent-sessions/:id/first-frame", axum::routing::post(move |Path(id):Path<String>, Json(body):Json<Value>| { let frames=received_frames_v2; async move { assert_eq!(body,json!({}));frames.lock().unwrap().push(id);StatusCode::NO_CONTENT }}))
+        .route("/v2/torrent-sessions/:id/first-frame", axum::routing::post(move |Path(id):Path<String>, Json(body):Json<Value>| { let frames=frames.clone(); let mode=frame_mode.clone(); let attempts=frame_route_attempts.clone(); async move {
+            assert_eq!(body,json!({}));
+            frames.lock().unwrap().push(id);
+            let not_ready = match mode.load(Ordering::SeqCst) { 12 => attempts.fetch_add(1, Ordering::SeqCst) < 2, 13 => true, _ => false };
+            if not_ready { return (StatusCode::CONFLICT, Json(json!({"error":{"code":"session_not_ready"}}))).into_response(); }
+            StatusCode::NO_CONTENT.into_response()
+        }}))
         .route("/v1/sessions/:id",axum::routing::get(|Path(id):Path<String>|async move{Json(remote(&id))}).delete(move|Path(id):Path<String>|{let deleted=deleted.clone();let events=deleted_events.clone();async move{deleted.fetch_add(1,Ordering::SeqCst);events.lock().unwrap().push(format!("delete:{id}"));StatusCode::NO_CONTENT}}))
         .route("/v1/sessions/:id/captions",axum::routing::post(move |Path(id):Path<String>,headers:axum::http::HeaderMap,Json(body):Json<Value>|{let received=received_captions.clone();async move {
             assert!(headers["authorization"].to_str().unwrap().starts_with("Bearer pgk_"));
@@ -434,7 +443,7 @@ async fn setup() -> (App, Peer) {
         app,
         Peer {
             captions,
-            frames,
+            frames: returned_frames,
             inputs,
             outputs,
             task,
@@ -1729,6 +1738,93 @@ async fn decoder_start_brokers_frames_without_renewing_or_bypassing_source_autho
         StatusCode::OK
     );
     assert_eq!(peer.frames.lock().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn first_frame_waits_for_a_gateway_viewer_that_is_not_ready_yet() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 0);
+    source(&app);
+    let (sources, _) = app.clone().with_lease(lease()).register(
+        "addon:1",
+        vec![json!({"url":"magnet:?xt=urn:btih:1111111111111111111111111111111111111111"})],
+        "movie",
+    );
+    let source = sources[0]["id"].as_str().unwrap();
+    peer.mode.store(12, Ordering::SeqCst);
+    let (status, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback-decoder-start",
+        body(source, "first-frame-wait", "web"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = start["id"].as_str().unwrap().to_owned();
+    assert_eq!(settled(&app, &id).await["status"], "ready");
+    let (status, value) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        &format!("/api/playback/{id}/first-frame"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{value}");
+    assert_eq!(peer.frames.lock().unwrap().len(), 3);
+    assert_eq!(peer.stops.load(Ordering::SeqCst), 0);
+    assert_eq!(settled(&app, &id).await["status"], "ready");
+}
+
+#[tokio::test]
+async fn first_frame_that_stays_not_ready_keeps_the_playback_alive() {
+    let (app, peer) = setup().await;
+    gateway(&app, "first", 0);
+    source(&app);
+    let (sources, _) = app.clone().with_lease(lease()).register(
+        "addon:1",
+        vec![json!({"url":"magnet:?xt=urn:btih:1111111111111111111111111111111111111111"})],
+        "movie",
+    );
+    let source = sources[0]["id"].as_str().unwrap();
+    peer.mode.store(12, Ordering::SeqCst);
+    let (status, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback-decoder-start",
+        body(source, "first-frame-retry", "web"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = start["id"].as_str().unwrap().to_owned();
+    assert_eq!(settled(&app, &id).await["status"], "ready");
+    peer.mode.store(13, Ordering::SeqCst);
+    let (status, value) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        &format!("/api/playback/{id}/first-frame"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{value}");
+    assert_eq!(value["error_code"], "playback_starting");
+    assert_eq!(peer.stops.load(Ordering::SeqCst), 0);
+    assert_eq!(settled(&app, &id).await["status"], "ready");
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "POST",
+            &format!("/api/playback/{id}/heartbeat"),
+            json!({})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
 }
 
 #[tokio::test]

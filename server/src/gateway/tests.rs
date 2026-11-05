@@ -80,7 +80,15 @@ async fn gateway_http_and_async_failures_share_only_allowlisted_classifications(
         assert_eq!(session.failure(), expected);
         task.abort();
     }
-    for (status, expected) in [(403, "gateway_scope_missing"), (429, "gateway_unavailable")] {
+    for (status, expected) in [
+        (403, "gateway_scope_missing"),
+        (429, "gateway_capacity"),
+        (400, "invalid_playback_request"),
+        (409, "playback_starting"),
+        (410, "playback_expired"),
+        (422, "delivery_unsupported"),
+        (503, "gateway_unavailable"),
+    ] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let client = client::Client::fixture(
             format!("http://{}/", listener.local_addr().unwrap())
@@ -112,6 +120,89 @@ async fn gateway_http_and_async_failures_share_only_allowlisted_classifications(
     }
     let session = protocol::Session::parse(json!({"id":"viewer","status":"failed","expires_at":0,"error_code":"untrusted-private-password","error":"connection limit reached"})).unwrap();
     assert_eq!(session.failure(), "gateway_processing_failed");
+}
+#[test]
+fn every_gateway_control_failure_code_keeps_its_own_human_classification() {
+    let unclassified = crate::account_api::details("unclassified_gateway_answer");
+    assert_eq!(
+        unclassified.1,
+        "IPTV data is temporarily unavailable. Try again."
+    );
+    assert_eq!(protocol::failure_code(None), None);
+    assert_eq!(protocol::failure_code(Some("unclassified_gateway_answer")), None);
+    let cases = [
+        ("unauthorized", "gateway_key_rejected", StatusCode::UNPROCESSABLE_ENTITY),
+        ("forbidden", "gateway_scope_missing", StatusCode::UNPROCESSABLE_ENTITY),
+        ("not_ready", "gateway_not_ready", StatusCode::BAD_GATEWAY),
+        ("credential_store_unavailable", "gateway_unavailable", StatusCode::BAD_GATEWAY),
+        ("session_store_unavailable", "gateway_unavailable", StatusCode::BAD_GATEWAY),
+        ("media_storage_unavailable", "gateway_unavailable", StatusCode::BAD_GATEWAY),
+        ("torrent_cache_unavailable", "gateway_unavailable", StatusCode::BAD_GATEWAY),
+        ("clock_unavailable", "gateway_unavailable", StatusCode::BAD_GATEWAY),
+        ("invalid_request", "invalid_playback_request", StatusCode::BAD_REQUEST),
+        ("invalid_input", "invalid_playback_request", StatusCode::BAD_REQUEST),
+        ("invalid_headers", "invalid_playback_request", StatusCode::BAD_REQUEST),
+        ("invalid_output", "invalid_playback_request", StatusCode::BAD_REQUEST),
+        ("invalid_position", "invalid_playback_request", StatusCode::BAD_REQUEST),
+        ("invalid_idempotency_key", "invalid_playback_request", StatusCode::BAD_REQUEST),
+        ("invalid_torrent_configuration", "invalid_playback_request", StatusCode::BAD_REQUEST),
+        ("request_too_large", "invalid_playback_request", StatusCode::BAD_REQUEST),
+        ("method_not_allowed", "gateway_protocol_invalid", StatusCode::UNPROCESSABLE_ENTITY),
+        ("not_found", "gateway_protocol_invalid", StatusCode::UNPROCESSABLE_ENTITY),
+        ("session_not_found", "playback_expired", StatusCode::GONE),
+        ("session_expired", "playback_expired", StatusCode::GONE),
+        ("media_unauthorized", "playback_expired", StatusCode::GONE),
+        ("media_unavailable", "playback_expired", StatusCode::GONE),
+        ("media_not_found", "playback_expired", StatusCode::GONE),
+        ("source_preparation_cancelled", "playback_expired", StatusCode::GONE),
+        ("session_not_ready", "playback_starting", StatusCode::SERVICE_UNAVAILABLE),
+        ("input_cleanup_pending", "gateway_cleanup_pending", StatusCode::CONFLICT),
+        ("viewer_capacity", "gateway_capacity", StatusCode::SERVICE_UNAVAILABLE),
+        ("input_capacity", "gateway_capacity", StatusCode::SERVICE_UNAVAILABLE),
+        ("output_capacity", "gateway_capacity", StatusCode::SERVICE_UNAVAILABLE),
+        ("session_capacity", "gateway_capacity", StatusCode::SERVICE_UNAVAILABLE),
+        ("torrent_cache_capacity", "gateway_capacity", StatusCode::SERVICE_UNAVAILABLE),
+        ("source_connection_limit", "provider_connection_limit", StatusCode::TOO_MANY_REQUESTS),
+        ("source_preparation_failed", "source_unavailable", StatusCode::BAD_GATEWAY),
+        ("source_unavailable", "source_unavailable", StatusCode::BAD_GATEWAY),
+        ("egress_unavailable", "source_unavailable", StatusCode::BAD_GATEWAY),
+        ("unsupported_output", "delivery_unsupported", StatusCode::NOT_ACCEPTABLE),
+        ("unsupported_media", "delivery_unsupported", StatusCode::NOT_ACCEPTABLE),
+        ("startup_timeout", "gateway_startup_timeout", StatusCode::GATEWAY_TIMEOUT),
+        ("torrent_no_peers", "native_no_peers", StatusCode::GATEWAY_TIMEOUT),
+        ("torrent_metadata_timeout", "native_metadata_timeout", StatusCode::GATEWAY_TIMEOUT),
+        ("torrent_archive_timeout", "native_archive_timeout", StatusCode::GATEWAY_TIMEOUT),
+        ("torrent_buffering_timeout", "native_buffering_timeout", StatusCode::GATEWAY_TIMEOUT),
+        ("compressed_archive_unsupported", "native_archive_compressed", StatusCode::NOT_ACCEPTABLE),
+        ("encrypted_archive_unsupported", "native_archive_encrypted", StatusCode::NOT_ACCEPTABLE),
+        ("archive_volume_missing", "native_archive_missing", StatusCode::NOT_ACCEPTABLE),
+        ("archive_metadata_invalid", "native_archive_invalid", StatusCode::NOT_ACCEPTABLE),
+        ("processing_failed", "gateway_processing_failed", StatusCode::BAD_GATEWAY),
+        ("idempotency_conflict", "playback_conflict", StatusCode::CONFLICT),
+        ("invalid_caption", "caption_invalid", StatusCode::BAD_REQUEST),
+        ("caption_capacity", "caption_capacity", StatusCode::TOO_MANY_REQUESTS),
+        ("torrent_worker_unavailable", "gateway_worker_unavailable", StatusCode::SERVICE_UNAVAILABLE),
+        ("torrent_worker_unsettled", "gateway_worker_unavailable", StatusCode::SERVICE_UNAVAILABLE),
+    ];
+    for (gateway_code, code, status) in cases {
+        assert_eq!(protocol::failure_code(Some(gateway_code)), Some(code), "{gateway_code}");
+        let (actual, message) = crate::account_api::details(code);
+        assert_eq!(actual, status, "{gateway_code} -> {code}");
+        assert_ne!(message, unclassified.1, "{gateway_code} -> {code}");
+    }
+}
+#[test]
+fn every_documented_session_status_is_accepted_and_only_prepared_and_starting_await_delivery() {
+    let status = |status: &str| {
+        protocol::Session::parse(json!({"id":"viewer","status":status,"expires_at":60})).unwrap()
+    };
+    for prepared in ["prepared", "starting"] {
+        assert!(status(prepared).awaiting_delivery(), "{prepared}");
+    }
+    for terminal in ["ready", "failed", "released", "expired"] {
+        assert!(!status(terminal).awaiting_delivery(), "{terminal}");
+    }
+    assert!(protocol::Session::parse(json!({"id":"viewer","status":"deferred","expires_at":60})).is_err());
 }
 async fn setup() -> (App, Peer) {
     let mut app = fixture();

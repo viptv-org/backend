@@ -1850,7 +1850,7 @@ async fn prepare(
             if remote.status == "ready" {
                 break;
             }
-            if remote.status != "starting" {
+            if !remote.awaiting_delivery() {
                 return Err(Error::Code(remote.failure()));
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -2015,6 +2015,25 @@ pub(crate) async fn first_frame(
         state.remote.clone()
     };
     if let Some(remote) = remote.filter(|remote| remote.client_frame_ack) {
+        let outcome = await_first_frame(&entry, &remote).await;
+        if let Err(code) = outcome {
+            if code != "playback_starting" {
+                if let Some(remote) = terminate(&entry, "failed", Some(code)) {
+                    release_remote(&remote.client, &remote.target, &remote.viewer).await;
+                }
+            }
+            return Err(Error::Code(code));
+        }
+    }
+    validate_entry(&app, &entry).await?;
+    refresh_grant(&app, &entry);
+    Ok(Json(json!({"ok":true})))
+}
+const FIRST_FRAME_WAIT: Duration = Duration::from_secs(6);
+const FIRST_FRAME_POLL: Duration = Duration::from_millis(250);
+async fn await_first_frame(entry: &Entry, remote: &Remote) -> Result<(), &'static str> {
+    let deadline = Instant::now() + FIRST_FRAME_WAIT;
+    loop {
         let outcome = remote
             .client
             .request(
@@ -2027,16 +2046,15 @@ pub(crate) async fn first_frame(
                 Duration::from_secs(5),
             )
             .await;
-        if let Err(code) = outcome {
-            if let Some(remote) = terminate(&entry, "failed", Some(code)) {
-                release_remote(&remote.client, &remote.target, &remote.viewer).await;
+        match outcome {
+            Err("playback_starting")
+                if Instant::now() < deadline && !entry.cancelled.load(Ordering::Acquire) =>
+            {
+                tokio::time::sleep(FIRST_FRAME_POLL).await;
             }
-            return Err(Error::Code(code));
+            outcome => return outcome.map(|_| ()),
         }
     }
-    validate_entry(&app, &entry).await?;
-    refresh_grant(&app, &entry);
-    Ok(Json(json!({"ok":true})))
 }
 fn refresh_grant(app: &App, entry: &Entry) {
     app.refresh_stream(&entry.scope, entry.lease.session_id.as_deref(), &entry.stream_id);
@@ -2118,7 +2136,7 @@ pub(crate) async fn renew(
         if remote.id != viewer {
             return Err(Error::Code("gateway_protocol_invalid"));
         }
-        if !matches!(remote.status.as_str(), "starting" | "ready")
+        if !matches!(remote.status.as_str(), "prepared" | "starting" | "ready")
             || remote.expires_at <= util::now() as u64
         {
             let failure = remote.failure();

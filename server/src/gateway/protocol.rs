@@ -14,8 +14,12 @@ pub(crate) fn failure_code(code: Option<&str>) -> Option<&'static str> {
         | "torrent_cache_capacity" => "gateway_capacity",
         "input_cleanup_pending" => "gateway_cleanup_pending",
         "processing_failed" => "gateway_processing_failed",
+        "not_ready" => "gateway_not_ready",
+        "torrent_worker_unavailable" | "torrent_worker_unsettled" => "gateway_worker_unavailable",
         "source_connection_limit" => "provider_connection_limit",
-        "source_preparation_failed" | "source_unavailable" => "source_unavailable",
+        "source_preparation_failed" | "source_unavailable" | "egress_unavailable" => {
+            "source_unavailable"
+        },
         "unsupported_output" | "unsupported_media" => "delivery_unsupported",
         "startup_timeout" => "gateway_startup_timeout",
         "torrent_no_peers" => "native_no_peers",
@@ -29,8 +33,27 @@ pub(crate) fn failure_code(code: Option<&str>) -> Option<&'static str> {
         "source_preparation_cancelled"
         | "session_expired"
         | "session_not_found"
-        | "media_unauthorized" => "playback_expired",
+        | "media_unauthorized"
+        | "media_unavailable"
+        | "media_not_found" => "playback_expired",
+        "session_not_ready" => "playback_starting",
         "idempotency_conflict" => "playback_conflict",
+        "invalid_caption" => "caption_invalid",
+        "caption_capacity" => "caption_capacity",
+        "invalid_request"
+        | "invalid_input"
+        | "invalid_headers"
+        | "invalid_output"
+        | "invalid_position"
+        | "invalid_idempotency_key"
+        | "invalid_torrent_configuration"
+        | "request_too_large" => "invalid_playback_request",
+        "method_not_allowed" | "not_found" => "gateway_protocol_invalid",
+        "credential_store_unavailable"
+        | "session_store_unavailable"
+        | "media_storage_unavailable"
+        | "clock_unavailable"
+        | "torrent_cache_unavailable" => "gateway_unavailable",
         _ => return None,
     })
 }
@@ -143,7 +166,7 @@ impl Session {
         if !identifier(&session.id)
             || !matches!(
                 session.status.as_str(),
-                "starting" | "ready" | "failed" | "released" | "expired"
+                "prepared" | "starting" | "ready" | "failed" | "released" | "expired"
             )
         {
             return Err("gateway_protocol_invalid");
@@ -200,6 +223,9 @@ impl Session {
         Ok(Some(
             json!({"kind":"gateway","url":url.as_str(),"format":media.format,"mode":media.mode,"video_mode":media.video_mode,"audio_mode":media.audio_mode,"position":if media.format=="mp4" {media.position} else {0.0},"timeline_offset_seconds":if media.live || media.format=="mp4" {0.0} else {media.position},"duration":media.duration,"live":media.live,"audio_tracks":audio,"subtitle_tracks":subtitles,"selected_audio":media.selected_audio.as_ref().map(track).transpose()?,"selected_subtitle":media.selected_subtitle.as_ref().map(track).transpose()?,"subtitles_supported":media.subtitles_supported,"external_subtitles_supported":!media.live && self.external_captions.iter().any(|format|format=="srt")}),
         ))
+    }
+    pub(crate) fn awaiting_delivery(&self) -> bool {
+        matches!(self.status.as_str(), "prepared" | "starting")
     }
     pub(crate) fn failure(&self) -> &'static str {
         failure_code(self.error_code.as_deref()).unwrap_or({
