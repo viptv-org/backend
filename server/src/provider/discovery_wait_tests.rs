@@ -32,9 +32,20 @@ fn setup() -> (App, Arc<Job>) {
         .insert("wait-job".into(), job.clone());
     (app, job)
 }
+fn wait_entered(app: &mut App) -> impl std::future::Future<Output = ()> {
+    let (entered, receiver) = std::sync::mpsc::sync_channel(1);
+    app.wait_entered = Some(entered);
+    async move {
+        tokio::task::spawn_blocking(move || receiver.recv_timeout(Duration::from_secs(10)))
+            .await
+            .unwrap()
+            .expect("the long poll never entered its wait loop");
+    }
+}
 #[tokio::test]
 async fn long_poll_wakes_for_partial_results_then_returns_terminal_without_waiting() {
-    let (app, job) = setup();
+    let (mut app, job) = setup();
+    let entered = wait_entered(&mut app);
     let poller = app.clone();
     let waiting = tokio::spawn(async move {
         request(
@@ -46,6 +57,7 @@ async fn long_poll_wakes_for_partial_results_then_returns_terminal_without_waiti
         )
         .await
     });
+    entered.await;
     assert!(!waiting.is_finished());
     {
         let mut state = job.state.lock().unwrap();
@@ -54,13 +66,7 @@ async fn long_poll_wakes_for_partial_results_then_returns_terminal_without_waiti
             .push(json!({"seq":1,"source":"fixture","streams":[]}));
         state.pending = 1;
     }
-    loop {
-        job.notify.notify_waiters();
-        if waiting.is_finished() {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+    job.notify.notify_waiters();
     let (status, response) = tokio::time::timeout(Duration::from_secs(5), waiting)
         .await
         .unwrap()
@@ -90,7 +96,7 @@ async fn long_poll_wakes_for_partial_results_then_returns_terminal_without_waiti
 }
 #[tokio::test(start_paused = true)]
 async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting() {
-    let (app, _) = setup();
+    let (mut app, _) = setup();
     let started = tokio::time::Instant::now();
     let (status, response) = request(
         &app,
@@ -127,6 +133,7 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
         .0,
         StatusCode::BAD_REQUEST
     );
+    let entered = wait_entered(&mut app);
     let poller = app.clone();
     let waiting = tokio::spawn(async move {
         request(
@@ -138,9 +145,7 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
         )
         .await
     });
-    tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(50)))
-        .await
-        .unwrap();
+    entered.await;
     assert!(!waiting.is_finished());
     app.db
         .lock()
@@ -151,6 +156,19 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
     let (status, _) = waiting.await.unwrap();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(revoked_at.elapsed() >= Duration::from_secs(1));
+    assert_eq!(
+        request(
+            &app,
+            "member-token-1",
+            "GET",
+            "/api/streams/wait-job?wait_ms=10000",
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN,
+        "only the in-flight lease expires; a session with no selected profile is asked to pick one"
+    );
 }
 #[tokio::test]
 async fn cancellation_is_owned_idempotent_and_preserves_published_events(){
