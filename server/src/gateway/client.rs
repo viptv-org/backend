@@ -79,6 +79,10 @@ pub(crate) struct Capabilities {
     #[serde(default)]
     pub scopes: Vec<String>,
     pub available: Option<Capacity>,
+    #[serde(default)]
+    pub viewer_lease_seconds: Option<u64>,
+    #[serde(default)]
+    pub renew_after_seconds: Option<u64>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Capacity {
