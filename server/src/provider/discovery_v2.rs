@@ -87,6 +87,8 @@ pub(crate) async fn poll(
         let notified=waiting_job.notify.notified();tokio::pin!(notified);notified.as_mut().enable();
         let waiting={let state=waiting_job.state.lock().unwrap();state.pending>0&&state.events.len()<=query.after};
         if waiting {
+            #[cfg(test)]
+            if let Some(entered)=app.wait_entered.as_ref(){let _=entered.try_send(());}
             let deadline=tokio::time::sleep(Duration::from_millis(query.wait_ms));tokio::pin!(deadline);
             let mut guard=tokio::time::interval(Duration::from_secs(1));guard.tick().await;
             loop {tokio::select!{

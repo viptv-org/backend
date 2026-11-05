@@ -221,6 +221,8 @@ pub struct App {
     pub(crate) principal: Option<auth::Principal>,
     pub(crate) resource_owners: Arc<Mutex<HashMap<String, ResourceOwner>>>,
     pub(crate) lease: Option<ResourceLease>,
+    #[cfg(test)]
+    pub(crate) wait_entered: Option<std::sync::mpsc::SyncSender<()>>,
 }
 #[derive(Clone)]
 pub(crate) struct ResourceLease {
@@ -433,6 +435,8 @@ impl App {
             principal: None,
             resource_owners: Default::default(),
             lease: None,
+            #[cfg(test)]
+            wait_entered: None,
         })
     }
     pub(crate) fn identity(&self) -> auth::Principal {
