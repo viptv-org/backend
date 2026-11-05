@@ -52,6 +52,7 @@ chrono-tz = "0.10"
 rusqlite = { version = "0.32", features = ["functions", "hooks"] }
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
+tokio = { version = "1", features = ["full", "test-util"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

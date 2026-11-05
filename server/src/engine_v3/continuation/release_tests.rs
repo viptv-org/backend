@@ -16,6 +16,18 @@ fn iso(millis: u64) -> String {
         .unwrap()
         .to_rfc3339()
 }
+fn lease() -> ResourceLease {
+    ResourceLease {
+        policy_revision: 0,
+        principal: auth::Principal::Account {
+            account_id: 1,
+            role: "owner".into(),
+            profile_id: Some(1),
+            session_id: Some("s1".into()),
+        },
+        session_id: Some("s1".into()),
+    }
+}
 fn episode(number: u32) -> Value {
     json!({"id":format!("tt100:1:{number}"),"kind":"series","ids":[],"episode":{"order":"aired","season":1,"episode":number},"edition":null})
 }
@@ -419,7 +431,7 @@ async fn home_refreshes_stale_release_facts_in_the_background_and_bumps_the_revi
     }
     assert_eq!(badge, json!(["+1"]));
     assert!(revision() > before);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    super::releases::wait(app, 1).await;
     let calls = show.calls.load(Ordering::SeqCst);
     assert!((1..=2).contains(&calls), "{calls}");
     request(
@@ -430,7 +442,7 @@ async fn home_refreshes_stale_release_facts_in_the_background_and_bumps_the_revi
         Value::Null,
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    super::releases::wait(app, 1).await;
     assert_eq!(show.calls.load(Ordering::SeqCst), calls);
 }
 
@@ -557,7 +569,7 @@ async fn one_run_refreshes_every_finished_series_and_never_evicts_their_verdicts
     for n in 0..60 {
         import(app, &format!("tt{}", 5000 + n), start - (n as u64 + 1) * HOUR);
     }
-    request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
+    super::releases::schedule(app, &lease(), 1);
     let checked = || -> i64 {
         app.db.lock().unwrap().query_row("SELECT COUNT(*) FROM continuation_releases WHERE document IS NOT NULL", [], |r| r.get(0)).unwrap()
     };
@@ -568,17 +580,15 @@ async fn one_run_refreshes_every_finished_series_and_never_evicts_their_verdicts
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(checked(), 60);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let calls = show.calls.load(Ordering::SeqCst);
-    assert!((60..=72).contains(&calls), "{calls}");
+    assert_eq!(show.calls.load(Ordering::SeqCst), 60);
     let verdicts = super::releases::verdicts_db(&app.db.lock().unwrap(), 1).unwrap();
     assert_eq!(verdicts.len(), 60);
     assert!(verdicts.values().all(|(_, status)| *status == "caught_up"));
     let soonest: i64 = app.db.lock().unwrap().query_row("SELECT MIN(next_check_at) FROM continuation_releases", [], |r| r.get(0)).unwrap();
     assert!(soonest >= (start / 1000) as i64 + 24 * 3600 - 60, "{soonest}");
-    request(app, "member-token-1", "GET", "/api/profiles/1/home", Value::Null).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(show.calls.load(Ordering::SeqCst), calls);
+    super::releases::schedule(app, &lease(), 1);
+    super::releases::wait(app, 1).await;
+    assert_eq!(show.calls.load(Ordering::SeqCst), 60);
 }
 
 fn restart(app: &App) {
