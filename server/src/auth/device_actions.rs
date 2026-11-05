@@ -12,6 +12,7 @@ pub(crate) fn dispatch_devices(
     match path {
         "/auth/device/deny" => {
             let principal = p.as_ref().ok_or_else(unauthorized)?;
+            principal.require_account_session()?;
             let code = pairing_code(v)?;
             let owner_account = db
                 .query_row(
@@ -118,7 +119,9 @@ pub(crate) fn dispatch_devices(
             ))
         }
         "/auth/device/lookup" => {
-            let _principal = p.as_ref().ok_or_else(unauthorized)?;
+            p.as_ref()
+                .ok_or_else(unauthorized)?
+                .require_account_session()?;
             let code = pairing_code(v)?;
             let row = db.query_row(
                 "SELECT device_name,expires,account_id IS NOT NULL FROM auth_pairings WHERE code_hash=?1 AND expires>?2 AND denied=0",
@@ -132,6 +135,7 @@ pub(crate) fn dispatch_devices(
         }
         "/auth/device/approve" => {
             let principal = p.as_ref().ok_or_else(unauthorized)?;
+            principal.require_account_session()?;
             if v.get("account_id").is_some() || v.get("profile_ids").is_some() {
                 return Err("Pairing scope is determined by the signed-in account".into());
             }
