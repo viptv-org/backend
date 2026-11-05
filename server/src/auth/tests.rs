@@ -720,12 +720,18 @@ fn refresh_replay_revokes_only_its_family_and_devices_are_not_admins() {
     .is_err());
 }
 #[test]
-fn signed_in_native_device_can_approve_and_deny_another_devices_code_but_nothing_else() {
+fn paired_tv_cannot_look_up_approve_or_deny_codes_but_an_account_session_can() {
     let db = db();
     claim(&db);
-    let device = || Principal::Account {
+    let paired_tv = || Principal::Account {
         account_id: 1,
         role: "device".into(),
+        profile_id: Some(1),
+        session_id: None,
+    };
+    let account_session = || Principal::Account {
+        account_id: 1,
+        role: "owner".into(),
         profile_id: Some(1),
         session_id: None,
     };
@@ -735,21 +741,44 @@ fn signed_in_native_device_can_approve_and_deny_another_devices_code_but_nothing
             .0
     };
     let code = new_code(&db);
-    let looked = dispatch(&db, "/auth/device/lookup", Some(device()), &headers(), &json!({"user_code":code["user_code"]}), SESSION_TOKEN)
+    for path in [
+        "/auth/device/lookup",
+        "/auth/device/approve",
+        "/auth/device/deny",
+    ] {
+        let error = dispatch(
+            &db,
+            path,
+            Some(paired_tv()),
+            &headers(),
+            &json!({"user_code":code["user_code"]}),
+            SESSION_TOKEN,
+        )
+        .unwrap_err();
+        assert_eq!(error.0, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(
+            error.api_error_code(),
+            Some(CODE_ACCOUNT_SESSION_REQUIRED),
+            "{path}"
+        );
+    }
+    let pending = dispatch(&db, "/auth/device/token", None, &HeaderMap::new(), &json!({"device_code":code["device_code"]}), SESSION_TOKEN).unwrap_err();
+    assert_eq!(pending.1, MSG_AUTHORIZATION_PENDING);
+    let looked = dispatch(&db, "/auth/device/lookup", Some(account_session()), &headers(), &json!({"user_code":code["user_code"]}), SESSION_TOKEN)
         .unwrap()
         .0;
     assert_eq!(looked["device"]["device_name"], "Living room TV");
     assert_eq!(looked["device"]["status"], "pending");
-    dispatch(&db, "/auth/device/approve", Some(device()), &headers(), &json!({"user_code":code["user_code"]}), SESSION_TOKEN).unwrap();
+    dispatch(&db, "/auth/device/approve", Some(account_session()), &headers(), &json!({"user_code":code["user_code"]}), SESSION_TOKEN).unwrap();
     let approved = dispatch(&db, "/auth/device/token", None, &HeaderMap::new(), &json!({"device_code":code["device_code"]}), SESSION_TOKEN)
         .unwrap()
         .0;
     assert_eq!(identifier(&approved, "account_id").unwrap(), 1);
     let other = new_code(&db);
-    dispatch(&db, "/auth/device/deny", Some(device()), &headers(), &json!({"user_code":other["user_code"]}), SESSION_TOKEN).unwrap();
-    assert!(dispatch(&db, "/auth/device/lookup", Some(device()), &headers(), &json!({"user_code":other["user_code"]}), SESSION_TOKEN).is_err());
+    dispatch(&db, "/auth/device/deny", Some(account_session()), &headers(), &json!({"user_code":other["user_code"]}), SESSION_TOKEN).unwrap();
+    assert!(dispatch(&db, "/auth/device/lookup", Some(account_session()), &headers(), &json!({"user_code":other["user_code"]}), SESSION_TOKEN).is_err());
     for path in ["/auth/accounts", "/auth/device/revoke-admin", "/auth/devices-own"] {
-        assert!(dispatch(&db, path, Some(device()), &headers(), &json!({}), SESSION_TOKEN).is_err(), "{path}");
+        assert!(dispatch(&db, path, Some(paired_tv()), &headers(), &json!({}), SESSION_TOKEN).is_err(), "{path}");
     }
 }
 #[test]
