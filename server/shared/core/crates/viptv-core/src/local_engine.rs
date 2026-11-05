@@ -8,6 +8,7 @@ mod addons;
 mod detail;
 mod detail_cache;
 mod browse;
+mod discovery_cursor;
 mod history;
 mod library;
 mod profiles;

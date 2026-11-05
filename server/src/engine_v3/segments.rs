@@ -250,7 +250,7 @@ impl Service {
         let (Some(mal), Some(episode)) = (target.mal, target.release_episode) else {
             return Vec::new();
         };
-        if mal == 0 || episode == 0 {
+        if mal == 0 {
             return Vec::new();
         }
         let url = format!(
@@ -593,9 +593,7 @@ fn ids_of(card: &Card) -> Vec<ExternalId> {
 
 pub(crate) async fn target(app: &App, lease: &ResourceLease, card: &Card) -> Option<Target> {
     let coordinates = card.identity.episode.as_ref()?;
-    if coordinates.episode == 0 {
-        return None;
-    }
+    let season = coordinates.season_number();
     let own = card.identity.ids.as_slice();
     let parent = card
         .parent_identity
@@ -616,22 +614,19 @@ pub(crate) async fn target(app: &App, lease: &ResourceLease, card: &Card) -> Opt
         if let Some(show) =
             super::anime_show::resolve(&app.clone().with_lease(lease.clone()), release).await
         {
-            if let Some(season) = coordinates.season {
-                release_episode = show
-                    .release_episode(super::anime_show::TvdbEpisode {
-                        season,
-                        episode: coordinates.episode,
-                    })
-                    .filter(|release_episode| release_episode.episode > 0)
-                    .map(|release_episode| release_episode.episode);
-            }
+            release_episode = show
+                .release_episode(super::anime_show::TvdbEpisode {
+                    season,
+                    episode: coordinates.episode,
+                })
+                .map(|release_episode| release_episode.episode);
             tvdb = tvdb.or_else(|| id_u64(&show.identity().ids, "tvdb"));
             tmdb = tmdb.or_else(|| id_u64(&show.identity().ids, "tmdb"));
             imdb = imdb.or_else(|| id_str(&show.identity().ids, "imdb"));
         }
     }
     Some(Target {
-        season: coordinates.season,
+        season: Some(season),
         episode: coordinates.episode,
         mal: cross.mal.or_else(|| id_u64(&ids, "mal")),
         anilist: cross.anilist.or_else(|| id_u64(&ids, "anilist")),

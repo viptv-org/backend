@@ -87,7 +87,7 @@ pub(super) async fn detail(
         detail.item.identity.id=id.clone();
         for episode in &mut detail.episodes {
             let coordinates=episode.identity.episode.as_ref().ok_or_else(||ApiError::from("Invalid mapped episode"))?;
-            let season=coordinates.season.ok_or_else(||ApiError::from("Invalid mapped season"))?;
+            let season=coordinates.season_number();
             episode.identity.id=format!("{id}:{season}:{}",coordinates.episode);episode.parent_identity=Some(detail.item.identity.clone());
         }
         value=serde_json::to_value(detail).map_err(|_|ApiError::from("Invalid mapped detail"))?;

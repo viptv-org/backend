@@ -49,12 +49,9 @@ impl AnimeShow {
     }
 
     pub(crate) fn tvdb_episode(&self, release: &EpisodeCoordinates) -> Option<TvdbEpisode> {
-        if release.episode == 0 {
-            return None;
-        }
         match &self.layout {
             Layout::Aired => Some(TvdbEpisode {
-                season: release.season?,
+                season: release.season_number(),
                 episode: release.episode,
             }),
             Layout::Segments { segments, .. } => {
@@ -62,7 +59,7 @@ impl AnimeShow {
                     .iter()
                     .find(|segment| (segment.first..=segment.last).contains(&release.episode))?;
                 let episode = i64::from(release.episode) + segment.offset;
-                (1..=i64::from(MAX_EPISODES))
+                (0..=i64::from(MAX_EPISODES))
                     .contains(&episode)
                     .then(|| TvdbEpisode {
                         season: segment.season,
@@ -79,10 +76,7 @@ impl AnimeShow {
     }
 
     pub(crate) fn canonical_episode(&self, release: &EpisodeCoordinates) -> Option<TvdbEpisode> {
-        if release.episode == 0 {
-            return None;
-        }
-        let season = release.season?;
+        let season = release.season_number();
         if self
             .document
             .as_ref()
@@ -97,9 +91,6 @@ impl AnimeShow {
     }
 
     pub(crate) fn release_episode(&self, tvdb: TvdbEpisode) -> Option<ReleaseEpisode> {
-        if tvdb.episode == 0 {
-            return None;
-        }
         let (season, episode) = match &self.layout {
             Layout::Aired => (Some(tvdb.season), tvdb.episode),
             Layout::Segments {
@@ -674,7 +665,7 @@ pub(crate) async fn show_episode(
     episode: &str,
     coordinates: &EpisodeCoordinates,
 ) -> Option<(MediaIdentity, TvdbEpisode)> {
-    if parent.kind != "series" || parent.episode.is_some() || coordinates.episode == 0 {
+    if parent.kind != "series" || parent.episode.is_some() {
         return None;
     }
     let show = match resolve(app, parent).await {
@@ -682,7 +673,7 @@ pub(crate) async fn show_episode(
         None => resolve(app, &anime_source(parent)?).await?,
     };
     let tvdb = TvdbEpisode {
-        season: coordinates.season?,
+        season: coordinates.season_number(),
         episode: coordinates.episode,
     };
     if !episode.starts_with(&format!("{}:", show.identity().id)) || !show.lists(tvdb) {
@@ -961,7 +952,7 @@ fn segments_from(items: impl Iterator<Item = (u32, u32, u32)>) -> Vec<Segment> {
     let mut pairs = std::collections::BTreeMap::new();
     let mut conflicting = HashSet::new();
     for (number, season, episode) in items {
-        if !(1..=MAX_EPISODES).contains(&number) || episode == 0 {
+        if !(0..=MAX_EPISODES).contains(&number) {
             continue;
         }
         if pairs

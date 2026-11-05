@@ -87,7 +87,7 @@ fn coordinates(identity: &MediaIdentity, season: &str, episode: &str) -> bool {
                     .unwrap_or(false)
                 && episode
                     .parse::<u32>()
-                    .is_ok_and(|v| v > 0 && v == e.episode && v.to_string() == episode)
+                    .is_ok_and(|v| v == e.episode && v.to_string() == episode)
         })
 }
 

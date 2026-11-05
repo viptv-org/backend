@@ -35,18 +35,14 @@ pub(super) fn identity_value(
     }
     let mut value = json!({"id":identity.id,"type":identity.kind});
     if let Some(episode) = &identity.episode {
-        if identity.kind != "series"
-            || episode.order != "aired"
-            || episode.season.is_none()
-            || episode.episode == 0
-        {
+        if identity.kind != "series" || episode.order != "aired" {
             return Err("An exact aired episode is required".into());
         }
         let parent = parent
             .filter(|p| p.kind == "series" && p.episode.is_none())
             .ok_or("A parent title identity is required")?;
         value["series_id"] = json!(parent.id);
-        value["season"] = json!(episode.season);
+        value["season"] = json!(episode.season_number());
         value["episode"] = json!(episode.episode);
     } else if parent.is_some() {
         return Err("Unexpected parent title identity".into());

@@ -452,6 +452,27 @@ async fn an_anime_episode_asks_for_its_mal_release_episode_and_serves_both_segme
 }
 
 #[tokio::test]
+async fn episode_zero_and_an_absent_season_still_name_a_target() {
+    let (mut app, stack_task) = stack().await;
+    let source = source(fixture_rows()).await;
+    let fribb = fribb(json!([])).await;
+    app.segments = Arc::new(Service::fixture(Some(&source.base), None, None, None));
+    app.cross_ids = Arc::new(super::cross_ids::Service::fixture(&fribb.base));
+    let prologue = episode_card(3, 0);
+    let resolved = target(&app, &lease(), &prologue).await.unwrap();
+    assert_eq!(resolved.season, Some(3));
+    assert_eq!(resolved.episode, 0);
+    assert_eq!(resolved.mal, Some(38524));
+    let mut flat = episode_card(3, 23);
+    flat.identity.episode.as_mut().unwrap().season = None;
+    let resolved = target(&app, &lease(), &flat).await.unwrap();
+    assert_eq!(resolved.season, Some(1));
+    assert_eq!(resolved.episode, 23);
+    assert_eq!(answer(&app, &lease(), Some(&prologue)).await, json!({"segments":[]}));
+    stack_task.abort();
+}
+
+#[tokio::test]
 async fn an_episode_card_whose_own_ids_are_opaque_uses_its_parent_show() {
     let (mut app, stack_task) = stack().await;
     let source = source(fixture_rows()).await;

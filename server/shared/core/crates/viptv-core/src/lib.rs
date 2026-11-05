@@ -174,7 +174,7 @@ pub fn vizio_platform_support(platform: String) -> String {
         .expect("SmartCast support is serializable")
 }
 
-/// Stateful SmartCast workflow used by Android mobile and Tauri desktop.
+/// Stateful SmartCast workflow used by the Android app.
 ///
 /// The shell executes each returned request and resolves it by ID. The bridge
 /// keeps pairing credentials, fresh hash values, retry state, and command

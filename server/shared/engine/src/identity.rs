@@ -15,6 +15,13 @@ pub struct EpisodeCoordinates {
     pub episode: u32,
 }
 
+impl EpisodeCoordinates {
+    /// An absent season number is Season 1.
+    pub fn season_number(&self) -> u32 {
+        self.season.unwrap_or(1)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Facet)]
 pub struct MediaIdentity {
     pub id: String,

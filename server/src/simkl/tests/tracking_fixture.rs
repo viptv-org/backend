@@ -33,7 +33,7 @@ pub(super) async fn tracking_server_with_failed_stop(
     let mock=axum::Router::new()
         .route("/movies/10",get(||async{axum::Json(json!({"title":"Movie","ids":{"simkl":10}}))}))
         .route("/tv/20",get(||async{axum::Json(json!({"title":"Show","ids":{"simkl":20}}))}))
-        .route("/tv/episodes/20",get(||async{axum::Json(json!([{"season":1,"episode":2,"ids":{"simkl":30}}]))}))
+        .route("/tv/episodes/20",get(||async{axum::Json(json!([{"season":1,"episode":0,"ids":{"simkl":29}},{"season":1,"episode":2,"ids":{"simkl":30}}]))}))
         .route("/anime/40",get(||async{axum::Json(json!({"title":"Anime","anime_type":"tv","ids":{"simkl":40}}))}))
         .route("/anime/41",get(||async{axum::Json(json!({"title":"Mapped Anime","anime_type":"tv","ids":{"simkl":41,"tvdb":267440,"tmdb":1429}}))}))
         .route("/anime/50",get(||async{axum::Json(json!({"title":"Anime Film","anime_type":"movie","ids":{"simkl":50}}))}))

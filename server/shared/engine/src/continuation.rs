@@ -92,7 +92,7 @@ pub fn validate_identity(identity: &MediaIdentity) -> Result<(), Error> {
         || identity
             .episode
             .as_ref()
-            .is_some_and(|e| identity.kind != "series" || e.episode == 0 || !bounded(&e.order, 64))
+            .is_some_and(|e| identity.kind != "series" || !bounded(&e.order, 64))
     {
         return Err(Error::InvalidQuery);
     }
@@ -129,12 +129,12 @@ fn sequence<'a>(
     {
         return Err(());
     }
-    let season = at.season.ok_or(())?;
+    let season = at.season_number();
     let mut later = episodes
         .iter()
         .filter_map(|e| {
             let c = e.card.identity.episode.as_ref()?;
-            Some((c.season?, c.episode, c.order.as_str(), e))
+            Some((c.season_number(), c.episode, c.order.as_str(), e))
         })
         .filter(|(s, e, order, _)| {
             *order == at.order

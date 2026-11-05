@@ -403,6 +403,48 @@ async fn an_attack_on_titan_cour_lands_on_its_show_and_tvdb_season() {
 }
 
 #[tokio::test]
+async fn an_episode_zero_and_an_absent_season_keep_their_coordinates() {
+    let (app, task) = stack().await;
+    let show = resolve(&app, &release("simkl:anime:5000", &[("simkl", "5000")]))
+        .await
+        .unwrap();
+    assert_eq!(
+        show.tvdb_episode(&episode(3, 0)),
+        Some(TvdbEpisode {
+            season: 3,
+            episode: 0
+        })
+    );
+    assert_eq!(
+        show.release_episode(TvdbEpisode {
+            season: 3,
+            episode: 0
+        }),
+        Some(ReleaseEpisode {
+            season: Some(3),
+            episode: 0
+        })
+    );
+    let mut flat = episode(3, 5);
+    flat.season = None;
+    assert_eq!(
+        show.tvdb_episode(&flat),
+        Some(TvdbEpisode {
+            season: 1,
+            episode: 5
+        })
+    );
+    assert_eq!(
+        show.canonical_episode(&flat),
+        Some(TvdbEpisode {
+            season: 1,
+            episode: 5
+        })
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn absolute_numbering_maps_to_tvdb_coordinates_in_both_directions() {
     let (app, task) = stack().await;
     let show = resolve(&app, &release("mal:21", &[("mal", "21")]))
