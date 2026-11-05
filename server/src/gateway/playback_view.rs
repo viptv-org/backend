@@ -120,7 +120,7 @@ pub(super) async fn replace(
     {
         let state = previous.state.lock().unwrap();
         if !matches!(state.status, "ready" | "released")
-            || state.touched.elapsed() >= LEASE
+            || state.touched.elapsed() >= state.viewer_lease.window
             || previous.live != input.live
             || !same_target(&previous.proof, &input.proof)
         {

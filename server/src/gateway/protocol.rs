@@ -73,6 +73,8 @@ pub(crate) struct Session {
     pub playback: Option<Playback>,
     #[serde(default)]
     pub external_captions: Vec<String>,
+    #[serde(default)]
+    pub renew_after_seconds: Option<u64>,
 }
 #[derive(Deserialize)]
 pub(crate) struct Playback {

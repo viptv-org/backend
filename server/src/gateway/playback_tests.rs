@@ -408,6 +408,7 @@ async fn setup() -> (App, Peer) {
             let position = value["position_seconds"].clone();
             let mut value = remote(&id);
             if state.load(Ordering::SeqCst)==10 {value["external_captions"]=json!(["srt"]);}
+            if state.load(Ordering::SeqCst)==19 {value["renew_after_seconds"]=json!(7);}
             value["playback"]["position"] = position;
             if native_mp4 {value["playback"]["format"]=json!("mp4");value["playback"]["mode"]=json!("direct");value["playback"]["url"]=json!(format!("/media/{id}/pgm_fixture/source.mp4"));}
             if state.load(Ordering::SeqCst) == 1 {
@@ -420,7 +421,10 @@ async fn setup() -> (App, Peer) {
         let first=headers.get("authorization").and_then(|value|value.to_str().ok()).is_some_and(|value|value.ends_with('a'));
         let capacity=if (mode.load(Ordering::SeqCst)==4 && first)||mode.load(Ordering::SeqCst)==16{0}else{2};
         let scopes=if mode.load(Ordering::SeqCst)==6 {json!(["capabilities","create"])}else{json!(["capabilities","create","read","renew","release"])};
-        Json(json!({"version":1,"ready":true,"torrent":mode.load(Ordering::SeqCst)!=5,"required_audio_index":mode.load(Ordering::SeqCst)!=11,"protocols":if mode.load(Ordering::SeqCst)==9{json!(["hls","native_mp4"])}else{json!(["hls"])},"namespaces":["first","second"],"scopes":scopes,"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
+        let mut value=json!({"version":1,"ready":true,"torrent":mode.load(Ordering::SeqCst)!=5,"required_audio_index":mode.load(Ordering::SeqCst)!=11,"protocols":if mode.load(Ordering::SeqCst)==9{json!(["hls","native_mp4"])}else{json!(["hls"])},"namespaces":["first","second"],"scopes":scopes,"available":{"inputs":capacity,"outputs":capacity,"viewers":5}});
+        if mode.load(Ordering::SeqCst)==17 {value["viewer_lease_seconds"]=json!(20);value["renew_after_seconds"]=json!(10);}
+        if mode.load(Ordering::SeqCst)==18 {value["viewer_lease_seconds"]=json!(30);value["renew_after_seconds"]=json!(45);}
+        Json(value)
     }}))
         .route("/v1/preparations/:id",axum::routing::get(||async{Json(json!({"stage":"fetching_metadata","private_extra":"never-forward"}))}))
         .route("/v1/sessions", create.clone())
@@ -1451,6 +1455,60 @@ async fn a_gateway_refusal_reaches_the_viewer_instead_of_a_capacity_guess() {
     let refused = settled(&app, start["id"].as_str().unwrap()).await;
     assert_eq!(refused["status"], "failed");
     assert_eq!(refused["error_code"], "gateway_cleanup_pending");
+}
+
+#[tokio::test]
+async fn gateway_lease_timings_come_from_the_gateway_and_fall_back_when_it_omits_them() {
+    let (app, peer) = setup().await;
+    let source = source(&app);
+    gateway(&app, "first", 0);
+    for (mode, renew_after, window) in [(0, 20u64, 60u64), (17, 10, 20)] {
+        peer.mode.store(mode, Ordering::SeqCst);
+        let (_, start) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/playback",
+            body(&source, &format!("timings-{mode}"), "roku"),
+        )
+        .await;
+        let ready = settled(&app, start["id"].as_str().unwrap()).await;
+        assert_eq!(ready["status"], "ready", "{ready}");
+        assert_eq!(
+            ready["renew_after_seconds"], renew_after,
+            "the gateway's renewal cadence must reach the app: {ready}"
+        );
+        let expires = ready["expires_at"].as_u64().unwrap() as i64;
+        let expected = crate::util::now() + window as i64;
+        assert!(
+            (expires - expected).abs() <= 2,
+            "the advertised {window}s lease must bound expiry: {ready}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_renewal_cadence_is_kept_inside_the_lease_it_renews() {
+    let (app, peer) = setup().await;
+    let source = source(&app);
+    gateway(&app, "first", 0);
+    for (mode, renew_after) in [(18, 30u64), (19, 7)] {
+        peer.mode.store(mode, Ordering::SeqCst);
+        let (_, start) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/playback",
+            body(&source, &format!("cadence-{mode}"), "roku"),
+        )
+        .await;
+        let ready = settled(&app, start["id"].as_str().unwrap()).await;
+        assert_eq!(ready["status"], "ready", "{ready}");
+        assert_eq!(
+            ready["renew_after_seconds"], renew_after,
+            "a cadence longer than the lease is clamped to it, and a session's own cadence wins: {ready}"
+        );
+    }
 }
 
 #[cfg(target_os = "linux")]
