@@ -166,6 +166,13 @@ pub(crate) fn session(
 ) -> Result<(Value, Option<(String, String)>), ApiError> {
     session_from(db, id, profile, kind, name, if kind == "device" { Some("tv") } else { None })
 }
+pub(crate) fn refresh_expiry(kind: &str, origin: Option<&str>, issued: i64) -> i64 {
+    if kind == "device" && origin != Some("native") {
+        DEVICE_EXPIRY
+    } else {
+        issued + REFRESH
+    }
+}
 pub(crate) fn session_from(
     db: &Connection,
     id: i64,
@@ -255,7 +262,7 @@ pub(crate) fn session_from(
             origin,
             name,
             now() + ACCESS,
-            if kind == "device" { DEVICE_EXPIRY } else { now() + REFRESH },
+            refresh_expiry(kind, origin, now()),
             now()
         ],
     )

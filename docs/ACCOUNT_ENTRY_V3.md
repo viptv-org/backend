@@ -37,7 +37,7 @@ Usernames are trimmed/lowercased ASCII alphanumeric strings with `.`, `_`, `-`, 
 
 Capture and present the replacement recovery kit immediately after a successful register/recover response, before optional bootstrap requests. If bootstrap fails, retain the one-time kit in memory and retry bootstrap, rather than replaying the account mutation. Passwords and recovery codes must not enter preference/session storage, logs, analytics or diagnostic `toString()` output. Acknowledge the recovery kit before moving on.
 
-Recovery retains profiles, saved titles and watch progress. The old password, used recovery code and old session families must fail afterward. A paired TV cannot administer account entry through its restricted device role; a native sign-in session acts for its own account and can change its password or regenerate its recovery code.
+Recovery retains profiles, saved titles and watch progress. The old password, used recovery code and old session families must fail afterward. A paired TV cannot administer account entry through its restricted device role; a native sign-in session acts for its own account and can change its password or regenerate its recovery code. A native sign-in session's refresh token expires after 30 days and rotation renews it, like a browser session's, so sign in again when `POST /api/auth/device/refresh` answers `401`; a paired TV's grant does not expire.
 
 ## First profile and parent administration
 

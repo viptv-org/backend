@@ -575,6 +575,65 @@ fn native_sign_in_records_its_origin_and_keeps_the_account_role() {
     assert!(promoted.validate_scope(&db).is_err());
 }
 #[test]
+fn native_sign_in_sessions_expire_with_the_browser_window_while_paired_tvs_keep_the_permanent_grant() {
+    let db = db();
+    claim(&db);
+    let refresh_expires = |session: &str| {
+        db.query_row(
+            "SELECT refresh_expires FROM auth_sessions WHERE id=?1",
+            [session],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap()
+    };
+    let browser_window = |session: &str| (refresh_expires(session) - now() - REFRESH).abs() <= 2;
+    let native = dispatch(
+        &db,
+        "/auth/device/login",
+        None,
+        &headers(),
+        &json!({"username":"owner","password":"a-long-owner-password","device_name":"Pixel"}),
+        SESSION_TOKEN,
+    )
+    .unwrap()
+    .0;
+    let native_sid = native["session_id"].as_str().unwrap().to_owned();
+    assert!(browser_window(&native_sid), "a native sign-in session ages out like a browser session");
+    let rotated = dispatch(
+        &db,
+        "/auth/device/refresh",
+        None,
+        &HeaderMap::new(),
+        &json!({"refresh_token":native["refresh_token"]}),
+        SESSION_TOKEN,
+    )
+    .unwrap()
+    .0;
+    assert_eq!(rotated["session_id"], json!(native_sid));
+    assert!(browser_window(&native_sid), "rotation keeps the browser window instead of extending it");
+    let tv = session(&db, 1, None, "device", "Living room TV").unwrap().0;
+    let tv_sid = tv["session_id"].as_str().unwrap().to_owned();
+    assert_eq!(refresh_expires(&tv_sid), DEVICE_EXPIRY);
+    dispatch(
+        &db,
+        "/auth/device/refresh",
+        None,
+        &HeaderMap::new(),
+        &json!({"refresh_token":tv["refresh_token"]}),
+        SESSION_TOKEN,
+    )
+    .unwrap();
+    assert_eq!(refresh_expires(&tv_sid), DEVICE_EXPIRY, "a paired TV's grant stays permanent across rotation");
+    db.execute(
+        "UPDATE auth_sessions SET refresh_expires=?1 WHERE id=?2",
+        params![DEVICE_EXPIRY, native_sid],
+    )
+    .unwrap();
+    init(&db).unwrap();
+    assert!(browser_window(&native_sid), "boot clamps a native session that still carries the permanent grant");
+    assert_eq!(refresh_expires(&tv_sid), DEVICE_EXPIRY, "boot keeps a paired TV's permanent grant");
+}
+#[test]
 fn recovery_codes_regenerate_and_invalidate_the_previous_code() {
     let db = db();
     let (claimed, _) = claim(&db);
