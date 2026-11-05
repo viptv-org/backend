@@ -40,8 +40,12 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
     let tx = db.unchecked_transaction()?;
     init_schema(&tx)?;
     tx.execute(
-        "UPDATE auth_sessions SET refresh_expires=?1 WHERE kind='device' AND refresh_expires>?2",
+        "UPDATE auth_sessions SET refresh_expires=?1 WHERE kind='device' AND COALESCE(origin,'tv')<>'native' AND refresh_expires>?2",
         [DEVICE_EXPIRY, now()],
+    )?;
+    tx.execute(
+        "UPDATE auth_sessions SET refresh_expires=?1 WHERE kind='device' AND COALESCE(origin,'tv')='native' AND refresh_expires>?1",
+        [now() + REFRESH],
     )?;
     crate::kids::init(&tx)?;
     tx.commit()
