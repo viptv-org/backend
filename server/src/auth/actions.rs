@@ -176,6 +176,13 @@ pub(crate) fn dispatch(
     dispatch_prepared(db, path, p, h, v, &prepared)
 }
 
+fn ends_only_the_callers_session(path: &str, principal: &Principal) -> bool {
+    match path {
+        "/auth/logout" | "/auth/device/revoke-own" => true,
+        "/auth/device/revoke" => principal.is_device(),
+        _ => false,
+    }
+}
 pub(crate) fn dispatch_prepared(
     db: &Connection,
     path: &str,
@@ -203,7 +210,7 @@ pub(crate) fn dispatch_prepared(
         return Err(forbidden());
     }
     if let Some(ref principal) = p {
-        if path != "/auth/profile" {
+        if path != "/auth/profile" && !ends_only_the_callers_session(path, principal) {
             crate::kids::require_parent(db, principal)?;
         }
     }

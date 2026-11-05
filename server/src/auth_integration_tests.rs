@@ -1587,6 +1587,88 @@ async fn kids_policy_requires_parent_pin_and_blocks_unknown_content_and_exit() {
 }
 
 #[tokio::test]
+async fn a_kids_session_signs_out_and_revokes_its_own_grant_but_stays_out_of_profile_and_pin_changes() {
+    let a = fixture();
+    let (_, child) = request(
+        &a,
+        "member-token-1",
+        "POST",
+        "/api/profiles",
+        json!({"name":"Kids"}),
+    )
+    .await;
+    let kid = child["id"].as_str().unwrap().parse::<i64>().unwrap();
+    for (method, path, body) in [
+        ("PUT", "/api/parent/pin", json!({"pin":"7248"})),
+        ("PUT", &format!("/api/profiles/{kid}/kids"), json!({"enabled":true,"max_age":12})),
+        ("POST", "/api/auth/profile", json!({"profile_id":kid.to_string()})),
+    ] {
+        assert_eq!(
+            request(&a, "member-token-1", method, path, body).await.0,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+    {
+        let db = a.db.lock().unwrap();
+        for (token, session) in [("kids-tv", "kids-tv-session"), ("kids-legacy", "kids-legacy-session")] {
+            db.execute("INSERT INTO auth_sessions(id,account_id,profile_id,access_hash,refresh_hash,csrf_hash,kind,origin,device_name,access_expires,refresh_expires,created_at) VALUES(?1,1,?2,?3,?4,'unused','device','tv','Living room TV',?5,?5,0)",params![session,kid,auth::hash(token),format!("{session}-refresh"),util::now()+3600]).unwrap();
+        }
+    }
+    for token in ["member-token-1", "kids-tv"] {
+        for (method, path, body) in [
+            ("POST", "/api/auth/profile", json!({"profile_id":"1"})),
+            ("POST", "/api/auth/password", json!({"current_password":"a-long-owner-password","new_password":"another-long-password"})),
+            ("POST", "/api/auth/recovery-codes", json!({})),
+            ("POST", "/api/profiles", json!({"name":"Escape"})),
+        ] {
+            let (status, error) = request(&a, token, method, path, body).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{token} {path}: {error}");
+            assert_eq!(error["error_code"], "parent_required", "{token} {path}");
+        }
+        assert_eq!(
+            request(&a, token, "PUT", &format!("/api/profiles/{kid}/kids"), json!({"enabled":false,"max_age":12})).await.0,
+            StatusCode::FORBIDDEN,
+            "{token} still needs the PIN to change the kids policy"
+        );
+    }
+    let (sibling_status, sibling) = request(&a, "kids-tv", "POST", "/api/auth/device/revoke", json!({"session_id":"kids-legacy-session"})).await;
+    assert_eq!(sibling_status, StatusCode::FORBIDDEN, "a kids device still cannot revoke a sibling session: {sibling}");
+    for (token, path) in [
+        ("kids-tv", "/api/device/revoke-own"),
+        ("kids-legacy", "/api/auth/device/revoke"),
+    ] {
+        assert_eq!(
+            request(&a, token, "POST", path, json!({})).await.0,
+            StatusCode::OK,
+            "{path}"
+        );
+        assert_eq!(
+            request(&a, token, "GET", "/api/auth/me", Value::Null).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{path} ends only the caller's grant"
+        );
+    }
+    let household = || {
+        let db = a.db.lock().unwrap();
+        (
+            db.query_row("SELECT pin_hash FROM parent_controls WHERE account_id=1", [], |row| row.get::<_, String>(0)).unwrap(),
+            db.query_row("SELECT enabled FROM kids_profiles WHERE profile_id=?1", [kid], |row| row.get::<_, bool>(0)).unwrap(),
+        )
+    };
+    let before = household();
+    assert_eq!(
+        request(&a, "member-token-1", "POST", "/api/auth/logout", json!({})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&a, "member-token-1", "GET", "/api/auth/me", Value::Null).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(household(), before, "signing out leaves the PIN and kids mode as they were");
+}
+
+#[tokio::test]
 async fn library_pages_and_atomic_toggle_are_profile_scoped() {
     let a = fixture();
     for id in ["c", "a", "b"] {
@@ -2105,9 +2187,15 @@ async fn kids_library_uses_trusted_ratings_approvals_and_exact_episode_membershi
         "parent_required"
     );
     assert_eq!(
-        request(&a, "member-token-1", "POST", "/api/auth/logout", json!({}))
-            .await
-            .1["error_code"],
+        request(
+            &a,
+            "member-token-1",
+            "POST",
+            "/api/auth/recovery-codes",
+            json!({})
+        )
+        .await
+        .1["error_code"],
         "parent_required"
     );
     assert_eq!(
