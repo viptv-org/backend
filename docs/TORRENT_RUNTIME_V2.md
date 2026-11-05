@@ -53,8 +53,11 @@ uses `/v2/torrent-sessions` and retains the original gateway viewer identity.
 
 POST `/api/playback/:id/first-frame` accepts exactly `{}`. It checks the
 current account/profile/session, source ownership/configuration, ready lease
-and gateway configuration before brokering the scoped acknowledgement. It does
-not update backend touch time or gateway expiry. Ordinary direct/legacy gateway
+and gateway configuration before brokering the scoped acknowledgement. A
+gateway still reporting `session_not_ready` is polled for a bounded wait; it
+never ends the playback entry, and an unanswered wait returns the retryable
+`playback_starting`. It does not update backend touch time or gateway expiry.
+Ordinary direct/legacy gateway
 sessions require no runtime acknowledgement; native sessions report directly to
 their local worker. Stop and replaced authority still revoke access.
 

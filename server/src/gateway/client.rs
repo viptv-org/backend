@@ -288,6 +288,12 @@ impl Client {
                 .unwrap_or(match status {
                     401 => "gateway_key_rejected",
                     403 => "gateway_scope_missing",
+                    400 | 413 => "invalid_playback_request",
+                    404 | 405 => "gateway_protocol_invalid",
+                    410 => "playback_expired",
+                    422 => "delivery_unsupported",
+                    429 => "gateway_capacity",
+                    409 => "playback_starting",
                     _ => "gateway_unavailable",
                 }));
             }
