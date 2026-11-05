@@ -46,7 +46,6 @@ async fn long_poll_wakes_for_partial_results_then_returns_terminal_without_waiti
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(!waiting.is_finished());
     {
         let mut state = job.state.lock().unwrap();
@@ -55,8 +54,14 @@ async fn long_poll_wakes_for_partial_results_then_returns_terminal_without_waiti
             .push(json!({"seq":1,"source":"fixture","streams":[]}));
         state.pending = 1;
     }
-    job.notify.notify_waiters();
-    let (status, response) = tokio::time::timeout(Duration::from_secs(1), waiting)
+    loop {
+        job.notify.notify_waiters();
+        if waiting.is_finished() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let (status, response) = tokio::time::timeout(Duration::from_secs(5), waiting)
         .await
         .unwrap()
         .unwrap();
@@ -68,7 +73,7 @@ async fn long_poll_wakes_for_partial_results_then_returns_terminal_without_waiti
     }
     job.notify.notify_waiters();
     let (status, response) = tokio::time::timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(5),
         request(
             &app,
             "member-token-1",
@@ -83,10 +88,10 @@ async fn long_poll_wakes_for_partial_results_then_returns_terminal_without_waiti
     assert_eq!(response["done"], true);
     assert!(response["events"].as_array().unwrap().is_empty());
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting() {
     let (app, _) = setup();
-    let started = Instant::now();
+    let started = tokio::time::Instant::now();
     let (status, response) = request(
         &app,
         "member-token-1",
@@ -97,7 +102,7 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(response["done"], false);
-    assert!(started.elapsed() >= Duration::from_millis(30));
+    assert!(started.elapsed() >= Duration::from_millis(40));
     assert_eq!(
         request(
             &app,
@@ -133,17 +138,19 @@ async fn long_poll_times_out_safely_and_rechecks_profile_authority_while_waiting
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_millis(50)))
+        .await
+        .unwrap();
+    assert!(!waiting.is_finished());
     app.db
         .lock()
         .unwrap()
         .execute("UPDATE auth_sessions SET profile_id=NULL WHERE id='s1'", [])
         .unwrap();
-    let (status, _) = tokio::time::timeout(Duration::from_secs(2), waiting)
-        .await
-        .unwrap()
-        .unwrap();
+    let revoked_at = tokio::time::Instant::now();
+    let (status, _) = waiting.await.unwrap();
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(revoked_at.elapsed() >= Duration::from_secs(1));
 }
 #[tokio::test]
 async fn cancellation_is_owned_idempotent_and_preserves_published_events(){
