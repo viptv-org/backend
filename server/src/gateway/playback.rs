@@ -70,8 +70,9 @@ impl ViewerLease {
         .bounded()
     }
     fn bounded(self) -> Self {
+        let inside = (self.window.as_secs() * 2 / 3).max(1);
         Self {
-            renew_after: self.renew_after.clamp(1, self.window.as_secs().max(1)),
+            renew_after: self.renew_after.clamp(1, inside),
             ..self
         }
     }

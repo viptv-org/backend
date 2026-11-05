@@ -1492,7 +1492,7 @@ async fn a_renewal_cadence_is_kept_inside_the_lease_it_renews() {
     let (app, peer) = setup().await;
     let source = source(&app);
     gateway(&app, "first", 0);
-    for (mode, renew_after) in [(18, 30u64), (19, 7)] {
+    for (mode, renew_after) in [(18, 20u64), (19, 7)] {
         peer.mode.store(mode, Ordering::SeqCst);
         let (_, start) = request(
             &app,
@@ -1506,7 +1506,7 @@ async fn a_renewal_cadence_is_kept_inside_the_lease_it_renews() {
         assert_eq!(ready["status"], "ready", "{ready}");
         assert_eq!(
             ready["renew_after_seconds"], renew_after,
-            "a cadence longer than the lease is clamped to it, and a session's own cadence wins: {ready}"
+            "a cadence that would reach the lease is clamped strictly inside it, and a session's own cadence wins: {ready}"
         );
     }
 }
