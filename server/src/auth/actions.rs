@@ -401,7 +401,7 @@ pub(crate) fn dispatch_prepared(
             }
             db.execute("DELETE FROM auth_refresh_used WHERE expires<=?1", [now()])
                 .map_err(crate::db_error)?;
-            let row=db.query_row("SELECT s.id,s.account_id,s.profile_id,s.csrf_hash,s.device_name FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id WHERE s.refresh_hash=?1 AND s.refresh_expires>?2 AND s.kind=?3 AND a.disabled=0",params![hash(supplied),now(),if device{"device"}else{"browser"}],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,Option<i64>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).optional().map_err(crate::db_error)?.ok_or_else(unauthorized)?;
+            let row=db.query_row("SELECT s.id,s.account_id,s.profile_id,s.csrf_hash,s.device_name,s.origin FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id WHERE s.refresh_hash=?1 AND s.refresh_expires>?2 AND s.kind=?3 AND a.disabled=0",params![hash(supplied),now(),if device{"device"}else{"browser"}],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,Option<i64>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?))).optional().map_err(crate::db_error)?.ok_or_else(unauthorized)?;
             if !device {
                 csrf_for_session(db, h, &row.0, &row.3)?;
             }
@@ -441,9 +441,14 @@ pub(crate) fn dispatch_prepared(
             }
             let access = token();
             let refresh = token();
+            let refresh_expires = refresh_expiry(
+                if device { "device" } else { "browser" },
+                row.5.as_deref(),
+                now(),
+            );
             db.execute(
                 "UPDATE auth_sessions SET access_hash=?1,refresh_hash=?2,access_expires=?3,refresh_expires=?4 WHERE id=?5",
-                params![hash(&access),hash(&refresh),now()+ACCESS,if device { DEVICE_EXPIRY } else { now()+REFRESH },row.0],
+                params![hash(&access),hash(&refresh),now()+ACCESS,refresh_expires,row.0],
             ).map_err(crate::db_error)?;
             event(db, "session_rotated", Some(row.1))?;
             let mut out = json!({"session_id":row.0,"account_id":row.1,"profile_id":row.2,"expires_in":ACCESS});

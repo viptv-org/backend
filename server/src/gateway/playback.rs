@@ -40,6 +40,43 @@ pub(crate) use captions::attach as attach_subtitle;
 pub(crate) use playback_segments::segments as skip_segments;
 
 const LEASE: Duration = Duration::from_secs(60);
+const RENEW_AFTER: u64 = 20;
+
+#[derive(Clone, Copy)]
+struct ViewerLease {
+    window: Duration,
+    renew_after: u64,
+}
+impl ViewerLease {
+    const DEFAULT: Self = Self {
+        window: LEASE,
+        renew_after: RENEW_AFTER,
+    };
+    fn from_gateway(capabilities: &super::client::Capabilities) -> Self {
+        Self {
+            window: capabilities
+                .viewer_lease_seconds
+                .filter(|seconds| (1..=600).contains(seconds))
+                .map_or(LEASE, Duration::from_secs),
+            renew_after: capabilities.renew_after_seconds.unwrap_or(RENEW_AFTER),
+        }
+        .bounded()
+    }
+    fn renewing(self, renew_after: Option<u64>) -> Self {
+        Self {
+            renew_after: renew_after.unwrap_or(self.renew_after),
+            ..self
+        }
+        .bounded()
+    }
+    fn bounded(self) -> Self {
+        let inside = (self.window.as_secs() * 2 / 3).max(1);
+        Self {
+            renew_after: self.renew_after.clamp(1, inside),
+            ..self
+        }
+    }
+}
 const REQUEST_QUOTA: usize = 4096;
 const MAX_NATIVE_GRANTS_PER_SESSION: usize = 2;
 const MAX_PREPARED_PER_SESSION: usize = 4;
@@ -266,13 +303,14 @@ struct StateData {
     error: Option<&'static str>,
     touched: Instant,
     local_expires_at: u64,
+    viewer_lease: ViewerLease,
     remote: Option<Remote>,
     preparing_gateway: Option<GatewayPreparation>,
 }
 impl StateData {
     fn touch(&mut self) {
         self.touched = Instant::now();
-        self.local_expires_at = util::now() as u64 + LEASE.as_secs();
+        self.local_expires_at = util::now() as u64 + self.viewer_lease.window.as_secs();
     }
 }
 struct Entry {
@@ -651,7 +689,8 @@ fn response(entry: &Entry) -> Value {
         util::now() as u64
     };
     tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), status = state.status, expires_at, error_code = state.error.unwrap_or("none"), gateway_session_tag = %state.remote.as_ref().map(|remote| super::diagnostics::tag(&remote.viewer)).unwrap_or_default(), "Playback lease state");
-    let mut value = json!({"id":entry.id,"status":state.status,"delivery":state.delivery,"live":entry.live,"error_code":state.error,"error":error,"expires_at":expires_at,"renew_after_seconds":20});
+    let renew_after = state.viewer_lease.renew_after;
+    let mut value = json!({"id":entry.id,"status":state.status,"delivery":state.delivery,"live":entry.live,"error_code":state.error,"error":error,"expires_at":expires_at,"renew_after_seconds":renew_after});
     if let Some(prepared) = state.prepared.as_ref() { value["plan"] = prepared.plan(); }
     if state.native.is_none() { value["actions"] = viewing::actions(entry,&state); }
     value
@@ -660,7 +699,7 @@ fn holds_lease(status: &str) -> bool {
     matches!(status, "prepared" | "starting" | "ready")
 }
 fn expired(state: &StateData) -> bool {
-    state.touched.elapsed() >= LEASE
+    state.touched.elapsed() >= state.viewer_lease.window
         || state
             .native
             .as_ref()
@@ -1207,7 +1246,7 @@ async fn choose(
     identity: [u8; 32],
     requires_torrent: bool,
     client_frame_ack: bool,
-) -> Result<Arc<AuthorizedGateway>, Error> {
+) -> Result<(Arc<AuthorizedGateway>, ViewerLease), Error> {
     let actor = account(&lease);
     let vault = app
         .secret_vault
@@ -1247,17 +1286,18 @@ async fn choose(
                 .await
             {
                 Ok(capabilities) if !requires_torrent || capabilities.torrent => {
+                    let viewer_lease = ViewerLease::from_gateway(&capabilities);
                     if client_frame_ack {
                         match app
                             .gateway_client
                             .torrent_startup(&target.gateway.endpoint, target.key.expose())
                             .await
                         {
-                            Ok(()) => return Ok(target.clone()),
+                            Ok(()) => return Ok((target.clone(), viewer_lease)),
                             Err(reason) => affinity_error = Some(reason),
                         }
                     } else {
-                        return Ok(target.clone());
+                        return Ok((target.clone(), viewer_lease));
                     }
                 }
                 Ok(_) => affinity_error = Some("delivery_unsupported"),
@@ -1294,10 +1334,11 @@ async fn choose(
                             .torrent_startup(&candidate.gateway.endpoint, candidate.key.expose())
                             .await?;
                     }
+                    let viewer_lease = ViewerLease::from_gateway(&capabilities);
                     let available = capabilities.available.ok_or("gateway_protocol_invalid")?;
                     let room =
                         available.inputs > 0 && available.outputs > 0 && available.viewers > 0;
-                    Ok::<_, &'static str>((candidate, room))
+                    Ok::<_, &'static str>((candidate, room, viewer_lease))
                 }
                 .boxed()
             })
@@ -1306,10 +1347,10 @@ async fn choose(
         let mut roomless = None;
         while let Some(result) = candidates.next().await {
             match result {
-                Ok((candidate, true)) => return Ok(candidate),
-                Ok((candidate, false)) => {
+                Ok((candidate, true, viewer_lease)) => return Ok((candidate, viewer_lease)),
+                Ok((candidate, false, viewer_lease)) => {
                     if roomless.is_none() {
-                        roomless = Some(candidate);
+                        roomless = Some((candidate, viewer_lease));
                     }
                 }
                 Err(reason) => error = reason,
@@ -1634,6 +1675,7 @@ async fn start_mode(
                 error: None,
                 touched: Instant::now(),
                 local_expires_at: util::now() as u64 + LEASE.as_secs(),
+                viewer_lease: ViewerLease::DEFAULT,
                 remote: None,
                 preparing_gateway: None,
             }),
@@ -1794,7 +1836,7 @@ async fn prepare(
             && source.requires_torrent_gateway
             && !url::Url::parse(&source.url)
                 .is_ok_and(|url| url.path().to_ascii_lowercase().ends_with(".rar"));
-        let target = choose(
+        let (target, viewer_lease) = choose(
             app.clone(),
             entry.lease.clone(),
             source.identity,
@@ -1866,6 +1908,7 @@ async fn prepare(
             if entry.cancelled.load(Ordering::Acquire) {
                 return Err(Error::Code("playback_expired"));
             }
+            state.viewer_lease = viewer_lease.renewing(remote.renew_after_seconds);
             state.remote = Some(Remote {
                 client_frame_ack,
                 target: target.clone(),
