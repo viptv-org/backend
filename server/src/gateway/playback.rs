@@ -706,6 +706,33 @@ async fn release_remote(client: &Client, target: &AuthorizedGateway, viewer: &st
         )
         .await;
 }
+/// The reason a viewer the gateway refuses to renew has already ended, read from the session the
+/// gateway keeps for it. `None` when the session is still live, so a transient renewal failure
+/// never terminates playback.
+async fn ended_session_reason(
+    app: &App,
+    target: &AuthorizedGateway,
+    viewer: &str,
+) -> Option<&'static str> {
+    let value = app
+        .gateway_client
+        .request(
+            &target.gateway.endpoint,
+            target.key.expose(),
+            reqwest::Method::GET,
+            &format!("v1/sessions/{viewer}"),
+            None,
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .ok()?;
+    let session = protocol::Session::parse(value).ok()?;
+    if session.id != viewer || session.live() {
+        return None;
+    }
+    Some(session.failure())
+}
 async fn cancel_gateway_preparation(entry: &Arc<Entry>) {
     let target = entry.state.lock().unwrap().preparing_gateway.take();
     if let Some(preparation) = target {
@@ -2120,7 +2147,7 @@ pub(crate) async fn renew(
     entry.state.lock().unwrap().touch();
     let remote = entry.state.lock().unwrap().remote.clone();
     if let Some(Remote { target, viewer, .. }) = remote {
-        let value = app
+        let renewal = app
             .gateway_client
             .request(
                 &target.gateway.endpoint,
@@ -2131,14 +2158,26 @@ pub(crate) async fn renew(
                 None,
                 Duration::from_secs(5),
             )
-            .await?;
+            .await;
+        let value = match renewal {
+            Ok(value) => value,
+            // A viewer the gateway no longer renews answers without its reason; the session
+            // itself still carries the failure the job recorded.
+            Err(error) => {
+                let Some(reason) = ended_session_reason(&app, &target, &viewer).await else {
+                    return Err(Error::Code(error));
+                };
+                if let Some(remote) = terminate(&entry, "failed", Some(reason)) {
+                    release_remote(&remote.client, &remote.target, &remote.viewer).await;
+                }
+                return Err(Error::Code(reason));
+            }
+        };
         let remote = protocol::Session::parse(value)?;
         if remote.id != viewer {
             return Err(Error::Code("gateway_protocol_invalid"));
         }
-        if !matches!(remote.status.as_str(), "prepared" | "starting" | "ready")
-            || remote.expires_at <= util::now() as u64
-        {
+        if !remote.live() || remote.expires_at <= util::now() as u64 {
             let failure = remote.failure();
             if let Some(remote) = terminate(&entry, "failed", Some(failure)) {
                 release_remote(&remote.client, &remote.target, &remote.viewer).await;
