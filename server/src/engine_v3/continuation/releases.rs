@@ -72,8 +72,7 @@ pub(crate) fn store_db(
             entry.card.identity.id == anchor.id
                 || entry.card.identity.episode.as_ref().is_some_and(|c| {
                     c.order == at.order
-                        && c.season.is_some()
-                        && (c.season, c.episode) > (at.season, at.episode)
+                        && (c.season_number(), c.episode) > (at.season_number(), at.episode)
                 })
         })
         .collect::<Vec<_>>();
@@ -81,7 +80,7 @@ pub(crate) fn store_db(
         let c = entry.card.identity.episode.as_ref();
         (
             entry.card.identity.id != anchor.id,
-            c.and_then(|c| c.season),
+            c.map(|c| c.season_number()),
             c.map(|c| c.episode),
         )
     });

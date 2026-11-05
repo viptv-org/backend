@@ -261,3 +261,62 @@ async fn mapped_anime_scrobble_uses_show_ids_and_tvdb_coordinates() {
     assert!(body.get("use_tvdb_anime_seasons").is_none());
     task.abort();
 }
+
+#[test]
+fn episode_zero_and_a_missing_season_reach_the_simkl_value() {
+    let parent: viptv_engine::identity::MediaIdentity =
+        serde_json::from_value(media_identity("simkl:tv:20", "series", None)).unwrap();
+    let identity: viptv_engine::identity::MediaIdentity = serde_json::from_value(media_identity(
+        "simkl:tv:20:1:0",
+        "series",
+        Some(json!({"order":"aired","season":1,"episode":0})),
+    ))
+    .unwrap();
+    let value = crate::simkl::lifecycle::identity_value(&identity, Some(&parent)).unwrap();
+    assert_eq!(value["season"], json!(1));
+    assert_eq!(value["episode"], json!(0));
+    let flat_parent: viptv_engine::identity::MediaIdentity =
+        serde_json::from_value(media_identity("tt100", "series", None)).unwrap();
+    let flat: viptv_engine::identity::MediaIdentity = serde_json::from_value(media_identity(
+        "tt100:2",
+        "series",
+        Some(json!({"order":"aired","season":null,"episode":2})),
+    ))
+    .unwrap();
+    let value = crate::simkl::lifecycle::identity_value(&flat, Some(&flat_parent)).unwrap();
+    assert_eq!(value["season"], json!(1));
+    assert_eq!(value["episode"], json!(2));
+}
+
+#[tokio::test]
+async fn lifecycle_scrobbles_a_verified_episode_zero() {
+    let (app, task, writes) = tracking_server().await;
+    let mut event = json!({
+        "attempt_id":"zero",
+        "sequence":1,
+        "identity":media_identity("simkl:tv:20:1:0","series",Some(json!({"order":"aired","season":1,"episode":0}))),
+        "parent_identity":media_identity("simkl:tv:20","series",None),
+        "event":"start",
+        "position_millis":0,
+        "duration_millis":100_000,
+        "ended":false
+    });
+    let endpoint = "/api/profiles/1/playback-events";
+    assert_eq!(
+        request(&app, "member-token-1", "POST", endpoint, event.clone())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    event["sequence"] = json!(2);
+    event["event"] = json!("stop");
+    event["position_millis"] = json!(100_000);
+    event["ended"] = json!(true);
+    let (status, response) = request(&app, "member-token-1", "POST", endpoint, event).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response["state"], "recorded", "{response}");
+    let writes = writes.lock().unwrap();
+    let body = &writes.last().unwrap()["body"];
+    assert_eq!(body["episode"], json!({"season":1,"number":0}), "{writes:?}");
+    task.abort();
+}

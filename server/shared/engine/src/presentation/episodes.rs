@@ -8,7 +8,7 @@ pub fn canonical_episodes(mut cards: Vec<Card>) -> Vec<Card> {
             card.identity
                 .episode
                 .as_ref()
-                .map(|e| (e.season.unwrap_or(u32::MAX), e.episode))
+                .map(|e| (e.season_number(), e.episode))
                 .unwrap_or((u32::MAX, u32::MAX))
         };
         coordinates(a)
@@ -17,11 +17,11 @@ pub fn canonical_episodes(mut cards: Vec<Card>) -> Vec<Card> {
     });
     cards
 }
-/// Index only explicit provider seasons; unknown coordinates never create Season 1.
+/// Index the displayed season of every episode; only a card without coordinates has none.
 pub fn episode_seasons(cards: &[Card]) -> Vec<EpisodeSeason> {
     let mut seasons = std::collections::BTreeMap::<Option<u32>, EpisodeSeason>::new();
     for (offset, card) in cards.iter().enumerate() {
-        let season = card.identity.episode.as_ref().and_then(|e| e.season);
+        let season = card.identity.episode.as_ref().map(|e| e.season_number());
         let Ok(offset) = u32::try_from(offset) else {
             continue;
         };

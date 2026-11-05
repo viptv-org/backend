@@ -1,4 +1,4 @@
-use super::addons::{CatalogRequest, PendingHome};
+use super::addons::{CatalogRequest, DiscoverPart, DiscoverState, PendingHome};
 use super::*;
 use serde::Deserialize;
 use serde_json::json;
@@ -16,6 +16,7 @@ struct Query {
     connection_id: Option<String>,
     #[serde(default)]
     skip: usize,
+    cursor: Option<String>,
     search: Option<String>,
     genre: Option<String>,
     #[serde(default)]
@@ -119,7 +120,7 @@ impl LocalEngine {
             .map_err(|_| CoreError::Bridge)?
             .remove(&operation)
             .ok_or(CoreError::InvalidInput)?;
-        let (skip, pageable) = pending.discover.ok_or(CoreError::InvalidInput)?;
+        let discover = pending.discover.ok_or(CoreError::InvalidInput)?;
         let store = self.store.lock().map_err(|_| CoreError::Bridge)?;
         let current = store
             .profile(&pending.scope)
@@ -132,18 +133,27 @@ impl LocalEngine {
             cards: Vec::new(),
             next_cursor: None,
             complete: true,
+            failures: vec![],
         };
         let mut seen = std::collections::HashSet::new();
         let mut success = false;
-        for request in pending.rows {
+        let mut offsets = std::collections::HashMap::new();
+        for request in &pending.rows {
+            let part = discover
+                .parts
+                .iter()
+                .find(|part| part.id == request.id)
+                .ok_or(CoreError::InvalidInput)?;
+            let skip = part.skip.ok_or(CoreError::InvalidInput)?;
             let Some(raw) = responses
                 .iter()
                 .find(|v| v["id"].as_str() == Some(&request.id))
                 .and_then(|v| v["body"].as_str())
             else {
+                offsets.insert(request.id.clone(), Some(skip));
                 continue;
             };
-            let mut page = stremio::catalog_page(raw, &request.provider_id, skip, pageable)
+            let mut page = stremio::catalog_page(raw, &request.provider_id, skip, part.pageable)
                 .map_err(|_| CoreError::InvalidInput)?;
             store
                 .validate_metadata_origin(&pending.scope, &request.origin)
@@ -154,8 +164,12 @@ impl LocalEngine {
                 origins::stamp_card(card, &origin);
             }
             success = true;
-            result.next_cursor = page.next_cursor;
-            result.complete &= page.complete;
+            offsets.insert(
+                request.id.clone(),
+                page.next_cursor
+                    .as_deref()
+                    .and_then(|next| next.parse::<u32>().ok()),
+            );
             for card in page.cards {
                 if result.cards.len() < 200
                     && seen.insert((card.identity.kind.clone(), card.identity.id.clone()))
@@ -167,6 +181,24 @@ impl LocalEngine {
         if !success {
             return Err(CoreError::Bridge);
         }
+        let next: Vec<(String, Option<u32>)> = discover
+            .parts
+            .iter()
+            .map(|part| {
+                (
+                    part.id.clone(),
+                    part.skip
+                        .and_then(|_| offsets.get(&part.id).copied().flatten()),
+                )
+            })
+            .collect();
+        result.complete = next.iter().all(|(_, offset)| offset.is_none());
+        result.next_cursor = if discover.composite {
+            (!result.complete).then(|| discovery_cursor::encode(&next))
+        } else {
+            next.iter().find_map(|(_, offset)| *offset)
+                .map(|offset| offset.to_string())
+        };
         serde_json::to_string(&result).map_err(|_| CoreError::Bridge)
     }
     pub fn plan_discover(&self, profile: String, query_json: String) -> Result<String, CoreError> {
@@ -181,9 +213,21 @@ impl LocalEngine {
                 .search
                 .as_ref()
                 .is_some_and(|v| v.chars().count() > 256)
+            || query
+                .cursor
+                .as_deref()
+                .is_some_and(|v| v.len() > discovery_cursor::MAX_LENGTH)
         {
             return Err(CoreError::InvalidInput);
         }
+        let cursor: std::collections::HashMap<String, Option<u32>> =
+            match query.cursor.as_deref() {
+                Some(raw) => discovery_cursor::decode(raw)
+                    .ok_or(CoreError::InvalidInput)?
+                    .into_iter()
+                    .collect(),
+                None => std::collections::HashMap::new(),
+            };
         if !query.values.is_empty() && (query.catalog.is_none() || query.connection_id.is_none()) {
             return Err(CoreError::InvalidInput);
         }
@@ -203,12 +247,25 @@ impl LocalEngine {
             return Err(CoreError::InvalidInput);
         }
         let mut rows = Vec::new();
-        let mut pageable = false;
+        let mut parts = Vec::new();
         for connection in connections
             .into_iter()
             .filter(|c| query.connection_id.as_ref().is_none_or(|id| c.id == *id))
             .take(8)
         {
+            let first = format!("discover:{}:0", connection.id);
+            let skip = match cursor.get(&first) {
+                Some(None) => {
+                    parts.push(DiscoverPart {
+                        id: first,
+                        skip: None,
+                        pageable: false,
+                    });
+                    continue;
+                }
+                Some(Some(skip)) => *skip,
+                None => query.skip as u32,
+            };
             let stored = self.addon(&connection.id)?;
             let plan = stremio::discovery_plan(
                 &stored.manifest_url,
@@ -217,7 +274,7 @@ impl LocalEngine {
                     kind: query.kind.clone(),
                     catalog: query.catalog.clone(),
                     addon: query.connection_id.as_ref().map(|_| 1),
-                    skip: query.skip,
+                    skip: skip as usize,
                     search: query.search.clone(),
                     genre: query.genre.clone(),
                     extras: query.extras.clone(),
@@ -232,8 +289,17 @@ impl LocalEngine {
                 },
             )
             .map_err(|_| CoreError::InvalidInput)?;
-            pageable = plan.pageable;
+            let pageable = plan.pageable && !plan.aggregated && plan.endpoints.len() == 1;
             for (index, url) in plan.endpoints.into_iter().enumerate().take(12 - rows.len()) {
+                let id = format!("discover:{}:{index}", connection.id);
+                if matches!(cursor.get(&id), Some(None)) {
+                    parts.push(DiscoverPart {
+                        id,
+                        skip: None,
+                        pageable: false,
+                    });
+                    continue;
+                }
                 rows.push(CatalogRequest {
                     origin: self
                         .store
@@ -242,10 +308,15 @@ impl LocalEngine {
                         .metadata_origin(&profile.scope, &connection.id)
                         .map_err(|_| CoreError::InvalidInput)?,
                     browse: None,
-                    id: format!("discover:{}:{index}", connection.id),
+                    id: id.clone(),
                     title: connection.name.clone(),
                     provider_id: connection.id.clone(),
                     url: Some(url),
+                });
+                parts.push(DiscoverPart {
+                    id,
+                    skip: Some(skip),
+                    pageable,
                 });
             }
         }
@@ -270,7 +341,10 @@ impl LocalEngine {
                 rows: rows.clone(),
                 cached: Default::default(),
                 cache_home: false,
-                discover: Some((query.skip as u32, pageable && rows.len() == 1)),
+                discover: Some(DiscoverState {
+                    composite: query.cursor.is_some() || rows.len() > 1,
+                    parts,
+                }),
             },
         );
         serde_json::to_string(&json!({"id":id,"requests":rows})).map_err(|_| CoreError::Bridge)
@@ -396,3 +470,7 @@ mod tests {
 #[cfg(test)]
 #[path = "browse_selection_tests.rs"]
 mod selection_tests;
+
+#[cfg(test)]
+#[path = "browse_merged_tests.rs"]
+mod merged_tests;

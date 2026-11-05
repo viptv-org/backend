@@ -135,9 +135,9 @@ pub(super) async fn path_a(
     season: Option<u32>,
     episode: Option<u32>,
 ) -> Option<PathA> {
-    let season = season?;
+    let season = season.unwrap_or(1);
     let episode = episode?;
-    if id == 0 || episode == 0 {
+    if id == 0 {
         return None;
     }
     let release = viptv_engine::identity::MediaIdentity {
@@ -193,7 +193,6 @@ pub(super) async fn verify(
         || (q.category == "movie" && (q.season.is_some() || q.episode.is_some()))
         || (q.category == "tv" && q.season.is_none())
         || (q.season.is_some() != q.episode.is_some())
-        || q.episode == Some(0)
     {
         return Err("An exact movie or TV episode is required".into());
     }

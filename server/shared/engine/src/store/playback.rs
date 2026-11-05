@@ -1,6 +1,10 @@
 use super::*;
 use crate::{playback::PlaybackRecord, presentation::Card};
 
+// Ordering only: an older save still updates position and value.
+pub(super) fn monotonic_timestamp(stored: Option<u64>, now_millis: u64) -> u64 {
+    stored.map_or(now_millis, |stored| stored.max(now_millis))
+}
 pub(super) fn public_art(url: Option<&str>) -> Option<String> {
     let value = url?.trim();
     if value.len() > 2048 {
@@ -70,6 +74,8 @@ impl Store {
             return Ok(());
         }
         let old = self.playback(scope, &card.identity.kind, &card.identity.id)?;
+        let updated_at_millis =
+            monotonic_timestamp(old.as_ref().map(|old| old.updated_at_millis), now_millis);
         let completed = duration_millis > 0
             && position_millis.saturating_mul(100) >= duration_millis.saturating_mul(95);
         let mut presentation = card.clone();
@@ -104,9 +110,9 @@ impl Store {
             landscape: public_art(card.landscape.as_deref()),
             position_millis,
             duration_millis,
-            updated_at_millis: now_millis,
+            updated_at_millis,
             completed_at_millis: if completed {
-                Some(now_millis)
+                Some(updated_at_millis)
             } else {
                 old.and_then(|r| r.completed_at_millis)
             },

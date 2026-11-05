@@ -31,7 +31,20 @@ pub(super) struct PendingHome {
     pub(super) rows: Vec<CatalogRequest>,
     pub(super) cached: std::collections::HashMap<String, Vec<viptv_engine::presentation::Card>>,
     pub(super) cache_home: bool,
-    pub(super) discover: Option<(u32, bool)>,
+    pub(super) discover: Option<DiscoverState>,
+}
+
+#[derive(Clone)]
+pub(super) struct DiscoverState {
+    pub(super) parts: Vec<DiscoverPart>,
+    pub(super) composite: bool,
+}
+
+#[derive(Clone)]
+pub(super) struct DiscoverPart {
+    pub(super) id: String,
+    pub(super) skip: Option<u32>,
+    pub(super) pageable: bool,
 }
 
 impl LocalEngine {

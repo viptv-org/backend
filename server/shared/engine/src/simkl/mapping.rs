@@ -28,7 +28,7 @@ pub fn source_identity(parent: &Card, episode: Option<&Card>) -> Result<MediaIde
                 .identity
                 .episode
                 .as_ref()
-                .filter(|e| e.order == "aired" && e.season.is_some() && e.episode > 0)
+                .filter(|e| e.order == "aired")
                 .ok_or(Error::Unresolved)?;
             let season = coordinates.season.ok_or(Error::Unresolved)?;
             if episode.identity.id

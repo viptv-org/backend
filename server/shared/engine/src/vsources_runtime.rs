@@ -59,10 +59,10 @@ pub fn media_ref(
         }
     };
     let (season, episode) = if let Some(ep) = &identity.episode {
-        if ep.order != "aired" || ep.episode == 0 {
+        if ep.order != "aired" {
             return Err(Error::Unresolved);
         }
-        (Some(ep.season.ok_or(Error::Unresolved)?), Some(ep.episode))
+        (Some(ep.season_number()), Some(ep.episode))
     } else {
         (None, None)
     };
@@ -469,6 +469,15 @@ mod tests {
         let mapped = media_ref(&episode, Some(&parent), &[]).unwrap();
         assert_eq!(mapped.season, Some(2));
         assert_eq!(mapped.episode, Some(3));
+        episode.episode.as_mut().unwrap().episode = 0;
+        let mapped = media_ref(&episode, Some(&parent), &[]).unwrap();
+        assert_eq!(mapped.episode, Some(0));
+        episode.episode.as_mut().unwrap().episode = 3;
+        episode.episode.as_mut().unwrap().season = None;
+        let mapped = media_ref(&episode, Some(&parent), &[]).unwrap();
+        assert_eq!(mapped.season, Some(1));
+        assert_eq!(mapped.episode, Some(3));
+        episode.episode.as_mut().unwrap().season = Some(2);
         assert!(media_ref(&episode, None, &[]).is_err());
         episode.episode.as_mut().unwrap().order = "absolute".into();
         assert!(media_ref(&episode, Some(&parent), &[]).is_err());

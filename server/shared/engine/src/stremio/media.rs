@@ -104,24 +104,21 @@ pub fn episode_cards(meta: &Value, provider: &str, item: &Card) -> Result<Vec<Ca
                     if parts.len() == 3 { parts[2].parse::<u64>().ok() } else { None }
                 });
             if let Some(episode) = episode {
-                if episode == 0 {
-                    continue;
-                }
                 let episode = match u32::try_from(episode) {
                     Ok(episode) => episode,
                     Err(_) => continue,
                 };
                 let season = if video["season"].is_null() {
-                    None
+                    1
                 } else {
                     match video["season"].as_u64().and_then(|n| u32::try_from(n).ok()) {
-                        Some(season) => Some(season),
+                        Some(season) => season,
                         None => continue,
                     }
                 };
                 card.identity.episode = Some(EpisodeCoordinates {
                     order: "aired".into(),
-                    season,
+                    season: Some(season),
                     episode,
                 });
             }

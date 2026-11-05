@@ -65,7 +65,7 @@ pub(crate) async fn resolve_request(
         .map_err(|_| unavailable_mapping())?;
     if let Some(coordinates) = &resolved.target.episode {
         for (key, expected) in [
-            ("season", coordinates.season.unwrap_or(0)),
+            ("season", coordinates.season_number()),
             ("episode", coordinates.episode),
         ] {
             if !value[key].is_null() && value[key].as_u64() != Some(u64::from(expected)) {

@@ -359,6 +359,7 @@ fn stremio_cannot_impersonate_reserved_simkl_namespace_and_padded_episode_ids_ar
     assert!(!shared_lookup("movie", "simkl:movie:42"));
     assert!(!shared_lookup("series", "tt123:01:1"));
     assert!(!shared_lookup("series", "tt123:1:01"));
+    assert!(shared_lookup("series", "tt123:1:0"));
     assert!(shared_lookup("series", "tt123:1:1"));
     assert!(
         f.engine

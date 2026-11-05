@@ -138,7 +138,7 @@ pub fn episodes(value: &Value, parent: &Card) -> Result<Vec<Card>, Error> {
         };
         let season = u32::try_from(season).map_err(|_| Error::Unresolved)?;
         let episode = u32::try_from(episode).map_err(|_| Error::Unresolved)?;
-        if episode == 0 || !seen.insert((season, episode)) {
+        if !seen.insert((season, episode)) {
             return Err(Error::Unresolved);
         }
         let episode_id = id(value).ok_or(Error::Unresolved)?;

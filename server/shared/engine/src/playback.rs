@@ -98,15 +98,14 @@ pub fn resume_caption(identity: &MediaIdentity, remaining_millis: u64) -> String
     } else {
         format!("{}m left", remaining_millis.div_ceil(60000))
     };
-    match identity
-        .episode
-        .as_ref()
-        .filter(|episode| identity.kind == "series" && episode.episode > 0)
-    {
-        Some(episode) => match episode.season {
-            Some(season) => format!("S{season} E{} · {remaining}", episode.episode),
-            None => format!("E{} · {remaining}", episode.episode),
-        },
-        None => remaining,
+    if identity.kind != "series" {
+        return remaining;
+    }
+    let Some(episode) = identity.episode.as_ref() else {
+        return remaining;
+    };
+    match episode.season {
+        Some(season) => format!("S{season} E{} · {remaining}", episode.episode),
+        None => format!("E{} · {remaining}", episode.episode),
     }
 }

@@ -1,4 +1,4 @@
-//! Persistent JSON-lines shell for WASI and the wasm2brs Roku experiment.
+//! Persistent JSON-lines shell for the WASI experiment.
 use std::{
     collections::BTreeMap,
     io::{self, BufRead, BufWriter, Read, Write},

@@ -89,10 +89,10 @@ fn imported_key(db: &Connection, profile: i64, card: &Card) -> Result<Option<Key
     identity.kind = kind;
     identity.id = id;
     if let Some(episode) = &card.identity.episode {
-        let season = episode
-            .season
-            .filter(|_| episode.order == "aired" && episode.episode > 0)
-            .ok_or_else(invalid)?;
+        if episode.order != "aired" {
+            return Err(invalid());
+        }
+        let season = episode.season_number();
         identity.id = format!("{}:{season}:{}", identity.id, episode.episode);
         identity.episode = Some(episode.clone());
     }

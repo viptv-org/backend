@@ -214,6 +214,7 @@ impl LocalEngine {
                 episodes: vec![],
                 next_cursor: None,
                 seasons: vec![],
+                failures: vec![],
             };
             self.remember_detail_cards(&pending.scope, &proof)?;
         }

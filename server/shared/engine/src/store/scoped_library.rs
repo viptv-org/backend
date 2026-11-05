@@ -689,6 +689,13 @@ impl Store {
         let previous = self
             .playback_key(scope, &key)?
             .or_else(|| old.as_ref().map(|saved| saved.value.clone()));
+        let stored = previous
+            .as_ref()
+            .map(|old| old.updated_at_millis)
+            .into_iter()
+            .chain(old.as_ref().map(|saved| saved.value.updated_at_millis))
+            .max();
+        let at = super::playback::monotonic_timestamp(stored, at);
         let completed = duration > 0 && position.saturating_mul(100) >= duration.saturating_mul(95);
         let mut presentation = card.clone();
         if !verified {
@@ -876,6 +883,36 @@ mod tests {
                 .len(),
             2
         );
+    }
+    #[test]
+    fn scoped_progress_keeps_ordering_monotonic_and_still_updates_position() {
+        let (mut store, scope, a, _b) = setup();
+        let ca = card(Some(&a), "scoped", "Scoped", None);
+        store
+            .record_playback(&scope, &ca, 40_000, 100_000, 9_000)
+            .unwrap();
+        store
+            .record_playback(&scope, &ca, 70_000, 100_000, 6_000)
+            .unwrap();
+        let stale = store.playback_for_origin(&scope, &ca).unwrap().unwrap();
+        assert_eq!(stale.updated_at_millis, 9_000);
+        assert_eq!(stale.position_millis, 70_000);
+        store
+            .record_playback(&scope, &ca, 50_000, 100_000, 9_500)
+            .unwrap();
+        store
+            .record_playback(&scope, &ca, 80_000, 100_000, 6_500)
+            .unwrap();
+        let later = store.playback_for_origin(&scope, &ca).unwrap().unwrap();
+        assert_eq!(later.updated_at_millis, 9_500);
+        assert_eq!(later.position_millis, 80_000);
+        assert_eq!(store.history(&scope, 100).unwrap()[0].updated_at_millis, 9_500);
+        store
+            .record_playback(&scope, &ca, 97_000, 100_000, 1_000)
+            .unwrap();
+        let completed = store.playback_for_origin(&scope, &ca).unwrap().unwrap();
+        assert_eq!(completed.updated_at_millis, 9_500);
+        assert_eq!(completed.completed_at_millis, Some(9_500));
     }
     #[test]
     fn external_aliases_need_verified_metadata_and_keep_issuing_lookup_origin() {

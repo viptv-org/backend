@@ -1,6 +1,5 @@
 [workspace]
 members = ["crates/viptv-core"]
-exclude = ["adapters/tauri"]
 resolver = "2"
 
 [workspace.package]
