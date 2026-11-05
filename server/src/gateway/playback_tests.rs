@@ -387,6 +387,12 @@ async fn setup() -> (App, Peer) {
                     ),
                 );
             }
+            if state.load(Ordering::SeqCst) == 16 {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({"error":{"code":"input_cleanup_pending"}})),
+                );
+            }
             if state.load(Ordering::SeqCst) == 7 {
                 return (
                     StatusCode::TOO_MANY_REQUESTS,
@@ -412,7 +418,7 @@ async fn setup() -> (App, Peer) {
     });
     let routes=Router::new().route("/v1/capabilities",axum::routing::get(move|headers:axum::http::HeaderMap|{let mode=capacity_mode.clone();async move{
         let first=headers.get("authorization").and_then(|value|value.to_str().ok()).is_some_and(|value|value.ends_with('a'));
-        let capacity=if mode.load(Ordering::SeqCst)==4 && first{0}else{2};
+        let capacity=if (mode.load(Ordering::SeqCst)==4 && first)||mode.load(Ordering::SeqCst)==16{0}else{2};
         let scopes=if mode.load(Ordering::SeqCst)==6 {json!(["capabilities","create"])}else{json!(["capabilities","create","read","renew","release"])};
         Json(json!({"version":1,"ready":true,"torrent":mode.load(Ordering::SeqCst)!=5,"required_audio_index":mode.load(Ordering::SeqCst)!=11,"protocols":if mode.load(Ordering::SeqCst)==9{json!(["hls","native_mp4"])}else{json!(["hls"])},"namespaces":["first","second"],"scopes":scopes,"available":{"inputs":capacity,"outputs":capacity,"viewers":5}}))
     }}))
@@ -1407,6 +1413,44 @@ async fn fresh_playback_skips_full_gateways_and_unassigned_provider_sources_fail
     )
     .await;
     assert_eq!(error["error_code"], "source_not_found");
+}
+
+#[tokio::test]
+async fn a_gateway_with_no_advertised_room_is_still_asked_to_start_playback() {
+    let (app, peer) = setup().await;
+    let id = source(&app);
+    gateway(&app, "first", 0);
+    peer.mode.store(4, Ordering::SeqCst);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&id, "no-room", "roku"),
+    )
+    .await;
+    let ready = settled(&app, start["id"].as_str().unwrap()).await;
+    assert_eq!(ready["status"], "ready", "{ready}");
+    assert_eq!(*peer.starts.lock().unwrap(), vec!["first"]);
+}
+
+#[tokio::test]
+async fn a_gateway_refusal_reaches_the_viewer_instead_of_a_capacity_guess() {
+    let (app, peer) = setup().await;
+    let id = source(&app);
+    gateway(&app, "first", 0);
+    peer.mode.store(16, Ordering::SeqCst);
+    let (_, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&id, "still-closing", "roku"),
+    )
+    .await;
+    let refused = settled(&app, start["id"].as_str().unwrap()).await;
+    assert_eq!(refused["status"], "failed");
+    assert_eq!(refused["error_code"], "gateway_cleanup_pending");
 }
 
 #[cfg(target_os = "linux")]

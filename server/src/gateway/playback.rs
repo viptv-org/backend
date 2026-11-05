@@ -1295,22 +1295,27 @@ async fn choose(
                             .await?;
                     }
                     let available = capabilities.available.ok_or("gateway_protocol_invalid")?;
-                    if available.inputs == 0 || available.outputs == 0 || available.viewers == 0 {
-                        return Err("gateway_capacity");
-                    }
-                    Ok::<_, &'static str>(candidate)
+                    let room =
+                        available.inputs > 0 && available.outputs > 0 && available.viewers > 0;
+                    Ok::<_, &'static str>((candidate, room))
                 }
                 .boxed()
             })
             .buffered(4);
         let mut error = prior_error;
+        let mut roomless = None;
         while let Some(result) = candidates.next().await {
             match result {
-                Ok(candidate) => return Ok(candidate),
+                Ok((candidate, true)) => return Ok(candidate),
+                Ok((candidate, false)) => {
+                    if roomless.is_none() {
+                        roomless = Some(candidate);
+                    }
+                }
                 Err(reason) => error = reason,
             }
         }
-        Err(Error::Code(error))
+        roomless.ok_or(Error::Code(error))
     })
     .await
     .map_err(|_| Error::Code("gateway_unavailable"))?
