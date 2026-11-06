@@ -937,3 +937,140 @@ async fn an_addon_without_a_logo_serves_no_revision() {
     assert_eq!(upstream.hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     upstream.task.abort();
 }
+async fn configurable_upstream() -> (String, tokio::task::JoinHandle<()>) {
+    use axum::extract::Path;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let base = format!("http://{address}");
+    let task = tokio::spawn(async move {
+        let router = Router::new()
+            .route(
+                "/:token/manifest.json",
+                get(|Path(token): Path<String>| async move {
+                    let mut manifest = json!({"id":format!("fixture.{token}"),"name":"Configure addon","resources":["stream"],"types":["movie"]});
+                    if token.starts_with("configurable") {
+                        manifest["behaviorHints"] = json!({"configurable":true});
+                    }
+                    axum::Json(manifest)
+                }),
+            )
+            .route("/", axum::routing::any(|| async { StatusCode::OK }));
+        axum::serve(listener, router).await.unwrap();
+    });
+    crate::test_support::send_port_probe(address).await;
+    (base, task)
+}
+async fn configure_link(app: &App, token: &str, id: i64) -> (StatusCode, Value) {
+    request(
+        app,
+        token,
+        "POST",
+        &format!("{ROOT}/{id}/configure-link"),
+        Value::Null,
+    )
+    .await
+}
+async fn configure_error(body: &[u8]) -> Value {
+    serde_json::from_slice(body).unwrap()
+}
+#[tokio::test]
+async fn configure_links_are_owner_scoped_single_use_and_redirect_to_the_transport() {
+    let app = app();
+    let (base, server) = configurable_upstream().await;
+    let row = install(&app, &base, "configurable-private-token").await;
+    let id = row["id"].as_i64().unwrap();
+    assert_eq!(row["configurable"], true);
+    let (_, page) = request(&app, "member-token-1", "GET", ROOT, Value::Null).await;
+    assert_eq!(page["items"][0]["configurable"], true);
+    for listed in [&row, &page] {
+        assert!(!listed.to_string().contains("private-token"));
+        assert!(!listed.to_string().contains(&base));
+    }
+
+    let (status, denied) = configure_link(&app, "member-token-2", id).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denied["error_code"], "owner_required");
+
+    let (status, link) = configure_link(&app, "member-token-1", id).await;
+    assert_eq!(status, StatusCode::OK, "{link}");
+    assert_eq!(link["expires_in"], 300);
+    let path = link["configure_url"].as_str().unwrap().to_owned();
+    assert!(path.starts_with("/api/addons/configure/"), "{path}");
+    assert!(!link.to_string().contains("private-token") && !link.to_string().contains(&base));
+
+    let (status, headers, body) = raw_get(&app, "", &path).await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(
+        headers[axum::http::header::LOCATION],
+        format!("{base}/configurable-private-token/configure")
+    );
+    assert_eq!(headers[axum::http::header::CACHE_CONTROL], "no-store");
+    assert!(!String::from_utf8_lossy(&body).contains("private-token"));
+
+    let (status, _, body) = raw_get(&app, "", &path).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        configure_error(&body).await["error_code"],
+        "addon_configure_unavailable"
+    );
+
+    let (_, link) = configure_link(&app, "member-token-1", id).await;
+    let path = link["configure_url"].as_str().unwrap().to_owned();
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE addon_configure_tickets SET expires=expires-301", [])
+        .unwrap();
+    assert_eq!(raw_get(&app, "", &path).await.0, StatusCode::NOT_FOUND);
+
+    let (_, link) = configure_link(&app, "member-token-1", id).await;
+    let path = link["configure_url"].as_str().unwrap().to_owned();
+    app.db
+        .lock()
+        .unwrap()
+        .execute("DELETE FROM addons WHERE id=?1", [id])
+        .unwrap();
+    assert_eq!(raw_get(&app, "", &path).await.0, StatusCode::NOT_FOUND);
+    server.abort();
+}
+#[tokio::test]
+async fn configure_is_refused_for_addons_without_a_configurable_manifest() {
+    let app = app();
+    let (base, server) = configurable_upstream().await;
+    let row = install(&app, &base, "plain-private-token").await;
+    let id = row["id"].as_i64().unwrap();
+    assert_eq!(row["configurable"], false);
+    let (_, page) = request(&app, "member-token-1", "GET", ROOT, Value::Null).await;
+    assert_eq!(page["items"][0]["configurable"], false);
+    let (status, error) = configure_link(&app, "member-token-1", id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "addon_configure_unavailable");
+    assert!(!error.to_string().contains("private-token"));
+    let (status, error) = configure_link(&app, "member-token-1", id + 1000).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "addon_not_found");
+    server.abort();
+}
+#[tokio::test]
+async fn the_configure_redirect_replaces_only_manifest_json_in_the_transport_url() {
+    let app = app();
+    let (base, server) = configurable_upstream().await;
+    let (status, row) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        ROOT,
+        json!({"manifest_url":format!("{base}/configurable-query-private/manifest.json?key=abc")}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{row}");
+    let (_, link) = configure_link(&app, "member-token-1", row["id"].as_i64().unwrap()).await;
+    let path = link["configure_url"].as_str().unwrap();
+    let (status, headers, _) = raw_get(&app, "", path).await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(
+        headers[axum::http::header::LOCATION],
+        format!("{base}/configurable-query-private/configure?key=abc")
+    );
+    server.abort();
+}

@@ -8,6 +8,8 @@ use axum::{
         rejection::{JsonRejection, QueryRejection},
         Path, Query, State,
     },
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     Extension, Json,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -38,20 +40,34 @@ pub(super) fn record(
     id: i64,
     fixture: bool,
 ) -> Result<Value, Error> {
-    let (row, manifest) = manifest(db, vault, account, id)?;
-    let mut value = row;
-    match manifest {
-        Ok(manifest) => {
+    let (mut value, stored) = stored(db, vault, account, id)?;
+    match stored {
+        Ok((url, manifest)) => {
+            value["configurable"] = json!(configure_url(&url, &manifest).is_some());
             if let Some(path) = super::logo::path(id, &manifest, fixture) {
                 value["logo"] = json!(path);
             }
         }
         Err(code) => {
+            value["configurable"] = json!(false);
             value["configuration_error_code"] = json!(code);
             value["configuration_error"] = json!(account_api::description(code));
         }
     }
     Ok(value)
+}
+fn stored(
+    db: &Connection,
+    vault: Option<&crate::secret_store::Vault>,
+    account: i64,
+    id: i64,
+) -> Result<(Value, Result<(String, Value), &'static str>), Error> {
+    own(db, account, id)?;
+    let (name,url,manifest,enabled,version):(String,String,String,bool,i64)=db.query_row("SELECT substr(name,1,256),manifest_url,manifest,enabled,credentials_version FROM addons WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(storage)?;
+    let value = json!({"id":id,"name":name,"enabled":enabled,"credentials_encrypted":version==1,"manifest_url":null,"logo":null});
+    let manifest = credentials_v2::read(db, vault, account, id, url, manifest, version)
+        .map_err(|raw| crate::service_errors::provider(raw).unwrap_or("addon_protocol_invalid"));
+    Ok((value, manifest))
 }
 fn manifest(
     db: &Connection,
@@ -59,13 +75,23 @@ fn manifest(
     account: i64,
     id: i64,
 ) -> Result<(Value, Result<Value, &'static str>), Error> {
-    own(db, account, id)?;
-    let (name,url,manifest,enabled,version):(String,String,String,bool,i64)=db.query_row("SELECT substr(name,1,256),manifest_url,manifest,enabled,credentials_version FROM addons WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(storage)?;
-    let value = json!({"id":id,"name":name,"enabled":enabled,"credentials_encrypted":version==1,"manifest_url":null,"logo":null});
-    let manifest = credentials_v2::read(db, vault, account, id, url, manifest, version)
-        .map(|(_, manifest)| manifest)
-        .map_err(|raw| crate::service_errors::provider(raw).unwrap_or("addon_protocol_invalid"));
-    Ok((value, manifest))
+    let (value, stored) = stored(db, vault, account, id)?;
+    Ok((value, stored.map(|(_, manifest)| manifest)))
+}
+fn configure_url(manifest_url: &str, manifest: &Value) -> Option<String> {
+    if manifest
+        .pointer("/behaviorHints/configurable")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return None;
+    }
+    let mut url = url::Url::parse(manifest_url).ok()?;
+    if !url.path().ends_with("/manifest.json") {
+        return None;
+    }
+    url.path_segments_mut().ok()?.pop().push("configure");
+    Some(url.to_string())
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -255,6 +281,50 @@ pub(crate) async fn update(
     })
     .await
     .map(Json)
+}
+pub(crate) async fn configure_link(
+    State(app): State<App>,
+    Extension(lease): Extension<ResourceLease>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, Error> {
+    let vault = app.secret_vault.clone();
+    account_api::owner(app, lease, move |db, account| {
+        let (_, stored) = stored(db, vault.as_deref(), account, id)?;
+        let (url, manifest) = stored
+            .map_err(|raw| Error::Code(crate::service_errors::addon(raw).unwrap_or("addon_unavailable")))?;
+        configure_url(&url, &manifest).ok_or(Error::Code("addon_configure_unavailable"))?;
+        let ticket = credentials_v2::issue_configure_ticket(db, account, id)?;
+        Ok(json!({"configure_url":format!("/api/addons/configure/{ticket}"),"expires_in":credentials_v2::CONFIGURE_TICKET_SECS}))
+    })
+    .await
+    .map(Json)
+}
+pub(crate) async fn configure(
+    State(app): State<App>,
+    Path(ticket): Path<String>,
+) -> Result<Response, Error> {
+    let vault = app.secret_vault.clone();
+    let target = tokio::task::spawn_blocking(move || {
+        let db = app
+            .db
+            .lock()
+            .map_err(|_| Error::Code("addon_storage_unavailable"))?;
+        let Some((account, id)) = credentials_v2::redeem_configure_ticket(&db, &ticket)? else {
+            return Err(Error::Code("addon_configure_unavailable"));
+        };
+        let (_, stored) = stored(&db, vault.as_deref(), account, id)
+            .map_err(|_| Error::Code("addon_configure_unavailable"))?;
+        let (url, manifest) = stored
+            .map_err(|raw| Error::Code(crate::service_errors::addon(raw).unwrap_or("addon_unavailable")))?;
+        configure_url(&url, &manifest).ok_or(Error::Code("addon_configure_unavailable"))
+    })
+    .await
+    .map_err(|_| Error::Code("addon_storage_unavailable"))??;
+    Ok((
+        StatusCode::FOUND,
+        [(header::LOCATION, target), (header::CACHE_CONTROL, "no-store".into())],
+    )
+        .into_response())
 }
 pub(crate) async fn delete(
     State(app): State<App>,
