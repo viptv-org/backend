@@ -121,7 +121,8 @@ impl LocalEngine {
             &viptv_engine::preferences::RankingContext::for_device_height(device_max_height),
         )
     }
-    /// `context_json` is a `RankingContext`: device capability and series memory.
+    /// `context_json` is a `RankingContext`: device capability, series memory
+    /// and provider affinity.
     pub fn rank_sources_with_context(
         &self,
         profile: String,
