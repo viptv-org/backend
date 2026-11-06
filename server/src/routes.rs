@@ -430,12 +430,21 @@ fn looks_like_asset(path: &str) -> bool {
 }
 
 async fn spa_fallback(State(index): State<PathBuf>, request: Request, next: Next) -> Response {
-    let asset = looks_like_asset(request.uri().path());
+    let path = request.uri().path().to_owned();
+    let asset = looks_like_asset(&path);
     let response = next.run(request).await;
     if response.status() != StatusCode::NOT_FOUND || asset {
         return response;
     }
-    match tokio::fs::read(&index).await {
+    // The root may serve one app (the KMP web bundle) and the TV client under
+    // `/tv/`. Unmatched `/tv/*` browser paths belong to the latter, so use its
+    // index when it exists; everything else keeps the root index.
+    let tv_index = index.parent().map(|root| root.join("tv").join("index.html"));
+    let fallback = match (&tv_index, path.starts_with("/tv/")) {
+        (Some(tv), true) if tokio::fs::metadata(tv).await.is_ok() => tv.as_path(),
+        _ => index.as_path(),
+    };
+    match tokio::fs::read(fallback).await {
         Ok(bytes) if !bytes.is_empty() && bytes.len() <= MAX_INDEX_BYTES => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
