@@ -1669,6 +1669,93 @@ async fn a_kids_session_signs_out_and_revokes_its_own_grant_but_stays_out_of_pro
 }
 
 #[tokio::test]
+async fn kids_policy_reads_need_a_parent_grant_for_the_own_and_a_sibling_profile() {
+    let a = fixture();
+    let mut profiles = Vec::new();
+    for name in ["Kids", "Sibling"] {
+        let (status, profile) = request(
+            &a,
+            "member-token-1",
+            "POST",
+            "/api/profiles",
+            json!({"name":name}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{profile}");
+        profiles.push(profile["id"].as_str().unwrap().parse::<i64>().unwrap());
+    }
+    let (kid, sibling) = (profiles[0], profiles[1]);
+    for (method, path, body) in [
+        ("PUT", "/api/parent/pin".to_string(), json!({"pin":"7248"})),
+        (
+            "PUT",
+            format!("/api/profiles/{kid}/kids"),
+            json!({"enabled":true,"max_age":12}),
+        ),
+        (
+            "POST",
+            "/api/auth/profile".to_string(),
+            json!({"profile_id":kid.to_string()}),
+        ),
+    ] {
+        assert_eq!(
+            request(&a, "member-token-1", method, &path, body).await.0,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+    a.db.lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO auth_sessions(id,account_id,profile_id,access_hash,refresh_hash,csrf_hash,kind,origin,device_name,access_expires,refresh_expires,created_at) VALUES('kids-tv-session',1,?1,?2,'kids-tv-refresh','unused','device','tv','Kids TV',?3,?3,0)",
+            params![kid, auth::hash("kids-tv"), util::now() + 3600],
+        )
+        .unwrap();
+    for token in ["kids-tv", "member-token-1"] {
+        for policy in [kid, sibling] {
+            let (status, body) = request(
+                &a,
+                token,
+                "GET",
+                &format!("/api/profiles/{policy}/kids"),
+                Value::Null,
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{token} reads {policy} without the grant: {body}"
+            );
+            assert_eq!(body["error_code"], "parent_required", "{token} {policy}");
+        }
+    }
+    assert_eq!(
+        request(
+            &a,
+            "member-token-1",
+            "POST",
+            "/api/parent/unlock",
+            json!({"pin":"7248"})
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    for policy in [kid, sibling] {
+        let (status, body) = request(
+            &a,
+            "member-token-1",
+            "GET",
+            &format!("/api/profiles/{policy}/kids"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "the parent grant reads {policy}: {body}");
+        assert_eq!(body["enabled"], policy == kid);
+    }
+}
+
+#[tokio::test]
 async fn library_pages_and_atomic_toggle_are_profile_scoped() {
     let a = fixture();
     for id in ["c", "a", "b"] {
