@@ -13,6 +13,8 @@ pub(crate) struct Rank {
     device: Option<DeviceCapability>,
     #[serde(default)]
     series_memory: Option<SeriesMemory>,
+    #[serde(default)]
+    provider_affinity: Option<String>,
 }
 pub(crate) async fn rank(
     State(app): State<App>,
@@ -32,6 +34,7 @@ pub(crate) async fn rank(
     let ranking_context = RankingContext {
         device,
         series_memory: input.series_memory,
+        provider_affinity: input.provider_affinity,
         ..Default::default()
     };
     if ranking_context.validate().is_err() {

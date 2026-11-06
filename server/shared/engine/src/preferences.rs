@@ -409,6 +409,9 @@ pub struct RankingContext {
     pub device: DeviceCapability,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub series_memory: Option<SeriesMemory>,
+    /// The provider of the profile's last start that reached a presented frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_affinity: Option<String>,
 }
 
 fn is_unknown(support: &DecodeSupport) -> bool {
@@ -482,6 +485,10 @@ impl RankingContext {
                 .is_some_and(|memory| {
                     !memory_text(&memory.provider_id) || !memory_text(&memory.binge_group)
                 })
+            || self
+                .provider_affinity
+                .as_deref()
+                .is_some_and(|provider| !memory_text(provider))
         {
             return Err(Error::InvalidQuery);
         }
@@ -576,6 +583,7 @@ pub fn rank_sources(
     let capability = &context.device;
     let original_language = context.original_language.as_deref();
     let memory = context.series_memory.as_ref();
+    let affinity = context.provider_affinity.as_deref();
     let cap = match (preferences.max_quality_height, capability.max_height) {
         (Some(profile), Some(device)) => Some(profile.min(device)),
         (profile, device) => profile.or(device),
@@ -599,6 +607,8 @@ pub fn rank_sources(
             candidate.provider_id == memory.provider_id
                 && candidate.binge_group.as_deref() == Some(memory.binge_group.as_str())
         });
+        let affinity_provider =
+            affinity.is_some_and(|provider| candidate.provider_id == provider);
         let release = candidate.release_type.as_deref().map_or(2, |kind| {
             RELEASE_RANK
                 .iter()
@@ -630,8 +640,9 @@ pub fn rank_sources(
             } else {
                 -i64::from(candidate.quality_height.unwrap_or(0))
             },
-            release,
             hdr,
+            !affinity_provider,
+            release,
             torrent,
             seeders,
         )
