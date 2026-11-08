@@ -8,8 +8,8 @@ pub(super) fn sdk_source(stream: &SdkStream) -> Value {
         "title": stream.meta.resolution.map(|height| format!("{height}p")).unwrap_or_default(),
         "presentation": viptv_engine::vsources_runtime::presentation(stream),
         "quality_height": stream.meta.resolution,
-        "audio_languages": if stream.meta.languages.is_empty() {
-            stream.meta.audio_selection.as_ref().map(|audio| vec![audio.language.as_str()]).unwrap_or_default()
+        "audio_languages": if let Some(audio) = stream.meta.audio_selection.as_ref() {
+            vec![audio.language.as_str()]
         } else {
             stream.meta.languages.iter().map(|language| language.as_str()).collect::<Vec<_>>()
         },

@@ -13,7 +13,8 @@ async fn remembered_supplier_candidates_preserve_language_hard_filters_and_owner
  let(status,ranked)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",body.clone()).await;
  assert_eq!(status,StatusCode::OK,"{ranked}");assert_eq!(ranked["source_reuse_supported"],true);
  assert_eq!(ranked["source_reuse_ids"],json!([cards[1]["id"],cards[0]["id"]]));
- assert_eq!(ranked["source_reuse_preferred"],true);assert_eq!(ranked["source_reuse_fully_matches"],true);
+ assert_eq!(ranked["source_reuse_preferred"],true);assert_eq!(ranked["source_reuse_fully_matches"],true);assert_eq!(ranked["source_reuse_ready"],true);
+ assert_eq!(ranked["streams"].as_array().unwrap().iter().find(|row|row["id"]==cards[1]["id"]).unwrap()["reuse_audio_language"],"en");
  assert!(!ranked["automatic_source_ids"].as_array().unwrap().contains(&cards[3]["id"]));
  assert!(!ranked.to_string().contains("https://"));
  assert_eq!(request(&app,"member-token-2","POST","/api/profiles/1/source-ranking",body).await.0,StatusCode::FORBIDDEN);

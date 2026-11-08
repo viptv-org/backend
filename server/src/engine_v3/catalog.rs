@@ -355,6 +355,10 @@ pub(crate) async fn detail(
     Ok(detail)
 }
 
+pub(crate) async fn action_detail(State(app): State<App>, Extension(lease): Extension<ResourceLease>, Path((kind,id)): Path<(String,String)>, Query(page): Query<DetailPage>) -> ApiResult {
+    resolve(app, lease, kind, id, page, false).await
+}
+
 pub(crate) async fn title_card(
     app: App,
     lease: ResourceLease,

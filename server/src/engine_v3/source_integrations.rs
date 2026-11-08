@@ -341,10 +341,10 @@ pub(crate) fn available_db(db: &Connection, lease: &ResourceLease, id: i64) -> b
     };
     cfg!(feature="vsources-runtime") && db.query_row("SELECT EXISTS(SELECT 1 FROM engine_source_integrations s JOIN engine_profile_configuration p ON p.profile_id=s.profile_id JOIN json_each(p.value,'$.assignments') a WHERE s.id=?1 AND s.account_id=?2 AND s.profile_id=?3 AND s.enabled=1 AND json_extract(a.value,'$.connection_id')=?4 AND EXISTS(SELECT 1 FROM json_each(a.value,'$.enabled') c WHERE c.value='Sources'))",params![id,lease.principal.account_id(),profile,format!("vsources:{id}")],|r|r.get::<_,bool>(0)).unwrap_or(false)
 }
-#[cfg(all(test, feature = "vsources-runtime"))]
+#[cfg(feature = "vsources-runtime")]
 pub(crate) use runtime::canonical_card;
 #[cfg(feature = "vsources-runtime")]
-pub(crate) use runtime::spawn;
+pub(crate) use runtime::{spawn, authorization, publish_batch, sdk_metadata};
 
 pub(crate) fn cache_detail(
     app: &App,

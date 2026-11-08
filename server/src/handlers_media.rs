@@ -10,6 +10,9 @@ pub(crate) fn emit_batch(
     result: Result<Vec<Value>, String>,
     complete: bool,
 ) {
+    emit_batch_expected(a,j,source,result,complete,None);
+}
+pub(crate) fn emit_batch_expected(a: &App, j: &Job, source: &str, result: Result<Vec<Value>, String>, complete: bool, expected: Option<[u8;32]>) {
     if j.cancelled.load(std::sync::atomic::Ordering::Acquire) {
         return;
     }
@@ -76,7 +79,7 @@ pub(crate) fn emit_batch(
     let (streams, error, registration_error) = match result {
         Ok(r) => {
             let limit = j.reserve_sources(r.len().min(100));
-            let (streams, error) = a.register(source, r.into_iter().take(limit).collect(), &j.kind);
+            let (streams, error) = a.register_with_configuration(source, r.into_iter().take(limit).collect(), &j.kind, expected);
             {
                 let mut entries = a.streams.lock().unwrap();
                 for source in &streams {

@@ -14,6 +14,8 @@ use std::collections::HashSet;
 pub struct RememberedSource {
     pub provider_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_name: Option<String>,
     #[serde(default)]
     pub audio_languages: Vec<String>,
@@ -27,6 +29,7 @@ impl RememberedSource {
                 && !s.contains("://")
         };
         if !text(&self.provider_id)
+            || self.source_id.as_deref().is_some_and(|s| !text(s))
             || self.provider_name.as_deref().is_some_and(|s| !text(s))
             || self.audio_languages.len() > 8
             || self.audio_languages.iter().any(|s| {
@@ -46,6 +49,7 @@ pub struct ReusableSources {
     pub ids: Vec<String>,
     pub preferred: bool,
     pub fully_matches: bool,
+    pub ready: bool,
 }
 
 /// A title's explicit choice is never replaced by a cross-title preference.
@@ -56,8 +60,8 @@ pub fn reusable_source_context(
     preferences: &ProfilePreferences,
     context: &RankingContext,
 ) -> Result<ReusableSources, Error> {
-    match title.or(across_titles) {
-        Some(memory) => reusable_sources(rows, memory, preferences, context),
+    match preferred_source_memory(title, across_titles, preferences)? {
+        Some(memory) => reusable_sources(rows, &memory, preferences, context),
         None => Ok(ReusableSources::default()),
     }
 }
@@ -82,8 +86,16 @@ pub fn reusable_sources(
     if !preferences.remembered_source_reuse {
         return Ok(ReusableSources::default());
     }
+    let Some(effective) = preferred_source_memory(Some(memory), None, preferences)? else {
+        return Ok(ReusableSources::default());
+    };
+    let memory = &effective;
     let languages =
         source_audio_languages(&serde_json::json!({"audio_languages":memory.audio_languages}));
+    let cap = match (preferences.max_quality_height, context.device.max_height) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
     let eligible = rows
         .iter()
         .filter(|row| !row.id.is_empty() && !fails_hard_filter(row, &context.device))
@@ -100,12 +112,19 @@ pub fn reusable_sources(
         .collect::<Vec<_>>();
     let preferred = |row: &SourceCandidate| {
         row.provider_id == memory.provider_id
-            && memory.provider_name.as_deref().is_none_or(|wanted| {
+            && memory.source_id.as_deref().is_none_or(|wanted| {
                 row.presentation
                     .as_ref()
-                    .and_then(|p| p.provider_name.as_deref())
-                    .is_some_and(|name| name.eq_ignore_ascii_case(wanted))
+                    .and_then(|p| p.source_id.as_deref())
+                    == Some(wanted)
             })
+            && (memory.source_id.is_some()
+                || memory.provider_name.as_deref().is_none_or(|wanted| {
+                    row.presentation
+                        .as_ref()
+                        .and_then(|p| p.provider_name.as_deref())
+                        .is_some_and(|name| name.eq_ignore_ascii_case(wanted))
+                }))
     };
     let mut seen = HashSet::new();
     let mut ids = Vec::new();
@@ -121,15 +140,12 @@ pub fn reusable_sources(
             }
         }
     }
-    let cap = match (preferences.max_quality_height, context.device.max_height) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    };
     let first = ids
         .first()
         .and_then(|id| rows.iter().find(|row| row.id == *id));
     Ok(ReusableSources {
         preferred: first.is_some_and(preferred),
+        ready: first.is_some(),
         fully_matches: first.is_some_and(|row| {
             super::best_match_fully_matches(
                 row,
@@ -140,4 +156,94 @@ pub fn reusable_sources(
         }),
         ids,
     })
+}
+
+pub const PREFERRED_SOURCE_BUDGET_MS: u64 = 5000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreferredSourceDecision {
+    Wait,
+    Start,
+    Fallback,
+    Cancel,
+}
+
+pub fn preferred_source_decision(
+    ready: bool,
+    finished: bool,
+    elapsed_ms: u64,
+    cancelled: bool,
+) -> PreferredSourceDecision {
+    if cancelled {
+        PreferredSourceDecision::Cancel
+    } else if elapsed_ms >= PREFERRED_SOURCE_BUDGET_MS {
+        PreferredSourceDecision::Fallback
+    } else if ready {
+        PreferredSourceDecision::Start
+    } else if finished {
+        PreferredSourceDecision::Fallback
+    } else {
+        PreferredSourceDecision::Wait
+    }
+}
+
+pub fn preferred_source_memory(
+    title: Option<&RememberedSource>,
+    across: Option<&RememberedSource>,
+    preferences: &ProfilePreferences,
+) -> Result<Option<RememberedSource>, Error> {
+    let Some(memory) = title.or(across) else {
+        return Ok(None);
+    };
+    memory.validate()?;
+    if !preferences.remembered_source_reuse {
+        return Ok(None);
+    }
+    let mut memory = memory.clone();
+    memory.audio_languages =
+        source_audio_languages(&serde_json::json!({"audio_languages":memory.audio_languages}));
+    if let Some(language) = &preferences.preferred_audio_language {
+        memory.audio_languages =
+            source_audio_languages(&serde_json::json!({"audio_languages":[language]}));
+        if memory.audio_languages.is_empty() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(memory))
+}
+
+pub fn preferred_supplier_id(
+    memory: &RememberedSource,
+    enabled: &[(String, String)],
+) -> Option<String> {
+    if let Some(id) = &memory.source_id {
+        return enabled
+            .iter()
+            .find(|(known, _)| known == id)
+            .map(|(id, _)| id.clone());
+    }
+    let label = memory.provider_name.as_deref()?;
+    let mut matches = enabled
+        .iter()
+        .filter(|(_, name)| name.eq_ignore_ascii_case(label));
+    let first = matches.next()?;
+    matches.next().is_none().then(|| first.0.clone())
+}
+
+pub fn reuse_audio_language(
+    candidate: &SourceCandidate,
+    memory: Option<&RememberedSource>,
+    preferences: &ProfilePreferences,
+) -> Result<Option<String>, Error> {
+    let Some(memory) = preferred_source_memory(memory, None, preferences)? else {
+        return Ok(None);
+    };
+    let available =
+        source_audio_languages(&serde_json::json!({"audio_languages":candidate.audio_languages}));
+    Ok(memory.audio_languages.iter().find_map(|wanted| {
+        available
+            .iter()
+            .find(|actual| same_language(actual, wanted))
+            .cloned()
+    }))
 }

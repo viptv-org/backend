@@ -51,6 +51,7 @@ impl ProviderService {
                     .ok_or("Invalid provider scope")
             })
             .transpose()?;
+        let excluded_provider = request.get("exclude_provider_id").and_then(Value::as_i64);
         let parsed = MatchRequest::parse(&request, kind)?;
         if kind == "series" && (parsed.season.is_none() || parsed.episode.is_none()) {
             return Err("Series streams require season and episode".into());
@@ -64,7 +65,7 @@ impl ProviderService {
                 let candidates: Vec<_> = s
                     .candidates_filtered(Some(&kind), Some(&parsed))?
                     .into_iter()
-                    .filter(|c| only_provider.is_none_or(|id| c.provider_id == id))
+                    .filter(|c| only_provider.is_none_or(|id| c.provider_id == id) && excluded_provider != Some(c.provider_id))
                     .collect();
                 let mut groups =
                     std::collections::BTreeMap::<i64, std::collections::VecDeque<Candidate>>::new();
@@ -98,6 +99,7 @@ impl ProviderService {
                         .into_iter()
                         .filter(|c| {
                             only_provider.is_none_or(|id| c.provider_id == id)
+                                && excluded_provider != Some(c.provider_id)
                                 && !selected.contains(&c.id)
                         })
                         .take(remaining)
