@@ -70,7 +70,21 @@ pub(crate) async fn canonical_card(
     value: &Value,
     lease: &ResourceLease,
     revision: u64,
+    verified: Option<&crate::engine_v3::origins::MetadataProof>,
 ) -> Option<Card> {
+    if let Some(proof) = verified {
+        // Admission to this discovery already verified the title. Recheck its
+        // authority locally instead of fetching metadata/recommendations again.
+        let auth::Principal::Account { profile_id: Some(profile), .. } = lease.principal else { return None; };
+        configuration::validate_revision(app, profile, revision).ok()?;
+        {
+            let db = app.db.lock().ok()?;
+            proof.validate(&db, lease).ok()?;
+        }
+        let expected: Card = serde_json::from_value(value["card"].clone()).ok()?;
+        crate::engine_v3::origins::check_expected(Some(&expected), &proof.card).ok()?;
+        return Some(proof.card.clone());
+    }
     if value.get("metadata_origin").is_some() {
         let expected:Card=serde_json::from_value(value["card"].clone()).ok()?;
         return crate::engine_v3::origins::verified_card(app,&expected).await.ok();
@@ -243,7 +257,7 @@ pub(crate) fn spawn(
 ) {
     tokio::spawn(async move {
         let authorize = authorization(&app, &job, &source, proof, revision);
-        let Some(card) = canonical_card(&app, &value, &app.request_lease(), revision).await else {
+        let Some(card) = canonical_card(&app, &value, &app.request_lease(), revision, job.metadata_proof.as_ref()).await else {
             crate::handlers_media::emit(&app, &job, &source, Err("source_unresolved".into()));
             return;
         };

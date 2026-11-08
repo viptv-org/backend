@@ -218,6 +218,7 @@ pub(crate) async fn attempt(
                     value,
                     &app.request_lease(),
                     *revision,
+                    job.metadata_proof.as_ref(),
                 )
                 .await
                 else {
@@ -231,6 +232,7 @@ pub(crate) async fn attempt(
                     return;
                 };
                 let metadata = source_integrations::sdk_metadata(app, &card, &media, *revision);
+                tracing::info!(elapsed_ms = begun.elapsed().as_millis() as u64, "Preferred source metadata verified");
                 let mut selected = context.clone();
                 selected.memory.source_id = Some(supplier.clone());
                 let _ = viptv_engine::vsources_runtime::resolve_preferred_progressive(
@@ -245,6 +247,7 @@ pub(crate) async fn attempt(
                         if !authorize() {
                             return;
                         }
+                        tracing::info!(elapsed_ms = begun.elapsed().as_millis() as u64, streams = streams.len(), "Preferred supplier batch received");
                         let usable = streams
                             .into_iter()
                             .filter(|stream| {
@@ -272,6 +275,7 @@ pub(crate) async fn attempt(
                         if ready_published(&selected, job, source) && begun.elapsed() < budget {
                             ready_at.store(begun.elapsed().as_millis() as u64, Ordering::Release);
                             ready_flag.store(true, Ordering::Release);
+                            tracing::info!(elapsed_ms = begun.elapsed().as_millis() as u64, "Preferred source ready");
                             notify.notify_one();
                         }
                     },

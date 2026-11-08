@@ -807,7 +807,7 @@ async fn source_metadata_cache_is_scoped_to_the_validated_origin_even_for_equal_
     for id in [101, 102] {
         let value = json!({"type":"movie","id":"tt123","metadata_provider_id":"stremio","metadata_addon_id":id});
         let card =
-            crate::engine_v3::source_integrations::canonical_card(&scoped, &value, &lease, 0)
+            crate::engine_v3::source_integrations::canonical_card(&scoped, &value, &lease, 0, None)
                 .await
                 .unwrap();
         assert_eq!(card.provider_id, format!("addon:{id}"));
