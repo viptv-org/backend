@@ -174,7 +174,10 @@ impl App {
                 &headers,
                 &input.private_values
             ));
-            if source.starts_with("addon:") || source.starts_with("iptv:") {
+            // Keep the bounded, redacted supplier declaration for add-ons
+            // that multiplex sources. The connection name remains a fallback.
+            if (source.starts_with("addon:") || source.starts_with("iptv:"))
+                && public["presentation"]["provider_name"].as_str().is_none_or(|name| name.trim().is_empty()) {
                 public["presentation"]["provider_name"] = public["source_name"].clone();
             }
             public["delivery"] = json!(if input.torrent { "torrent" } else { "direct" });

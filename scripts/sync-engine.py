@@ -43,7 +43,19 @@ def export(source, revision, stage):
     archive = subprocess.check_output(["git", "-C", str(source), "archive", revision,
                                        f"{PACKAGE}/Cargo.toml", f"{PACKAGE}/src"])
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-        tar.extractall(stage, filter="data")
+        # Copy only regular Git files/directories inside the staging tree.
+        # This also supports Python versions predating tar's data filter.
+        base = stage.resolve()
+        for member in tar.getmembers():
+            target = (stage / member.name).resolve()
+            if not target.is_relative_to(base) or not (member.isdir() or member.isfile()):
+                raise SystemExit("Unexpected engine archive member")
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tar.extractfile(member) as source_file:
+                    target.write_bytes(source_file.read())
     package = stage / PACKAGE
     cargo = package / "Cargo.toml"
     text = cargo.read_text()

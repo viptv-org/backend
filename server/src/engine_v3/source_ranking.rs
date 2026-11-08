@@ -1,5 +1,5 @@
 use super::*;
-use viptv_engine::preferences::{DeviceCapability, RankingContext, SeriesMemory};
+use viptv_engine::preferences::{DeviceCapability, RankingContext, SeriesMemory, RememberedSource};
 use viptv_engine::stremio::SourceCandidate;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -13,6 +13,10 @@ pub(crate) struct Rank {
     device: Option<DeviceCapability>,
     #[serde(default)]
     series_memory: Option<SeriesMemory>,
+    #[serde(default)]
+    remembered_source: Option<RememberedSource>,
+    #[serde(default)]
+    cross_title_source: Option<RememberedSource>,
 }
 pub(crate) async fn rank(
     State(app): State<App>,
@@ -35,6 +39,10 @@ pub(crate) async fn rank(
         ..Default::default()
     };
     if ranking_context.validate().is_err() {
+        return Err("Invalid source selection".into());
+    }
+    if input.remembered_source.as_ref().is_some_and(|memory| memory.validate().is_err())
+        || input.cross_title_source.as_ref().is_some_and(|memory| memory.validate().is_err()) {
         return Err("Invalid source selection".into());
     }
     let app = app.with_lease(lease.clone());
@@ -137,6 +145,10 @@ pub(crate) async fn rank(
     drop(db);
     let ranking =
         viptv_engine::preferences::rank_sources(&mut candidates, &preferences.preferences, &ranking_context);
+    let automatic_source_ids = viptv_engine::preferences::automatic_source_ids(&candidates, &ranking_context.device);
+    let reuse = viptv_engine::preferences::reusable_source_context(&candidates,
+        input.remembered_source.as_ref(), input.cross_title_source.as_ref(),
+        &preferences.preferences, &ranking_context).map_err(|_| ApiError::from("Invalid source selection"))?;
     configuration::validate_revision(&app, profile, configuration.scope.revision)?;
     let ranked: Vec<_> = candidates
         .into_iter()
@@ -177,7 +189,8 @@ pub(crate) async fn rank(
         })
         .collect::<Vec<_>>();
     Ok(axum::Json(
-        json!({"streams":streams,"best_match_id":best_match_id,"best_match_ids":best_match_ids,"best_match_fully_matches":best_match_fully_matches,"quality_filters":filters,"total":total,"selection_note":selection_note}),
+        json!({"streams":streams,"best_match_id":best_match_id,"best_match_ids":best_match_ids,"best_match_fully_matches":best_match_fully_matches,"quality_filters":filters,"total":total,"selection_note":selection_note,
+            "source_reuse_supported":true,"source_reuse_ids":reuse.ids,"source_reuse_preferred":reuse.preferred,"source_reuse_fully_matches":reuse.fully_matches,"automatic_source_ids":automatic_source_ids}),
     ))
 }
 
