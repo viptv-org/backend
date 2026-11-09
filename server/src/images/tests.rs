@@ -1,4 +1,46 @@
 use super::*;
+
+#[tokio::test]
+async fn prepared_clearlogos_are_public_shared_revalidated_and_not_an_arbitrary_proxy() {
+    use tower::ServiceExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut png=Vec::new();
+    {
+        let mut encoder=png::Encoder::new(&mut png,3,1);
+        encoder.set_color(png::ColorType::Rgba);encoder.set_depth(png::BitDepth::Eight);
+        encoder.write_header().unwrap().write_image_data(&[0,0,0,0,0,0,0,255,0,0,0,0]).unwrap();
+    }
+    let count=Arc::new(AtomicUsize::new(0));let reads=count.clone();
+    let upstream=axum::Router::new().route("/clearlogo/tt123",axum::routing::get(move |headers:axum::http::HeaderMap| {
+        let png=png.clone();let reads=reads.clone();async move {
+            assert!(!headers.contains_key(header::COOKIE));assert!(!headers.contains_key(header::AUTHORIZATION));
+            reads.fetch_add(1,Ordering::SeqCst);([(header::CONTENT_TYPE,"image/png")],png)
+        }
+    }));
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
+    let server=tokio::spawn(async move { axum::serve(listener,upstream).await.unwrap(); });
+    let app=crate::auth_integration_tests::fixture();app.images.deliver_from(url::Url::parse(&format!("http://{address}/")).unwrap());
+    let router=crate::router(app);
+    let first=router.clone().oneshot(axum::http::Request::builder().uri("/api/images/clearlogo/v1/tt123.png")
+        .header(header::COOKIE,"untrusted=private").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(first.status(),StatusCode::OK);
+    assert_eq!(first.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],"*");
+    assert!(!first.headers().contains_key(header::SET_COOKIE));
+    assert!(first.headers()[header::CACHE_CONTROL].to_str().unwrap().contains("s-maxage=604800"));
+    let etag=first.headers()[header::ETAG].clone();
+    let bytes=axum::body::to_bytes(first.into_body(),1024*1024).await.unwrap();
+    let mut reader=png::Decoder::new(std::io::Cursor::new(bytes)).read_info().unwrap();
+    assert_eq!((reader.info().width,reader.info().height),(1,1));
+    let mut output=vec![0;reader.output_buffer_size()];reader.next_frame(&mut output).unwrap();
+    assert_eq!(output,[255,255,255,255]);
+    let second=router.clone().oneshot(axum::http::Request::builder().uri("/api/images/clearlogo/v1/tt123.png")
+        .header(header::IF_NONE_MATCH,etag).body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(second.status(),StatusCode::NOT_MODIFIED);assert_eq!(count.load(Ordering::SeqCst),1);
+    let invalid=router.oneshot(axum::http::Request::builder().uri("/api/images/clearlogo/v1/arbitrary")
+        .body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(invalid.status(),StatusCode::BAD_REQUEST);assert_eq!(count.load(Ordering::SeqCst),1);
+    server.abort();
+}
 #[test]
 fn descriptors_accept_only_public_provider_images_and_rewrite_asset_fields_only() {
     for href in [

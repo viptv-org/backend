@@ -96,7 +96,7 @@ impl Service {
         let mut cached = entry.lock().await;
         if let Some(value) = cached.value.as_ref().filter(|value| {
             cached.at.is_some_and(|at| {
-                at.elapsed() < if value.is_ok() { MAX_AGE } else { RETRY }
+                at.elapsed() < if value.is_ok() { if image.folder == "clearlogo" { Duration::from_secs(86400) } else { MAX_AGE } } else { RETRY }
             })
         }) {
             return value
@@ -127,6 +127,9 @@ impl Service {
             .await
             .map_err(|_| {tracing::warn!(image_folder=%image.folder,failure_class="deadline",elapsed_ms=started.elapsed().as_millis() as u64,"Public image fetch failed");()})?
             .map_err(|failure| {tracing::warn!(image_folder=%image.folder,failure_class=failure.provider_code(),elapsed_ms=started.elapsed().as_millis() as u64,"Public image fetch failed");()})?;
+            let bytes = if image.folder == "clearlogo" {
+                zeroize::Zeroizing::new(tokio::task::spawn_blocking(move || super::clearlogo::normalize(&bytes)).await.map_err(|_| ())??)
+            } else { bytes };
             let content_type = signature(&bytes).ok_or_else(|| {tracing::warn!(image_folder=%image.folder,failure_class="image_signature",elapsed_ms=started.elapsed().as_millis() as u64,"Public image fetch failed");()})?;
             Ok(Asset {
                 bytes: Arc::from(bytes.as_slice()),

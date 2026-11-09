@@ -17,6 +17,7 @@ pub(crate) mod http_v2;
 #[cfg(test)]
 mod http_v2_tests;
 pub(crate) mod logo;
+mod public_meta;
 mod subtitles;
 #[cfg(test)]
 mod tests;
@@ -70,6 +71,7 @@ pub struct Addons {
     engine_ids: Option<Arc<std::collections::HashSet<i64>>>,
     pub(crate) vault: Option<Arc<crate::secret_store::Vault>>,
     pub(crate) logos: Arc<logo::Cache>,
+    public_meta: Arc<public_meta::Cache>,
     protected_fetch: bool,
     meta_results: CachedMetaResults,
     fetch_failures: CachedFailures,
@@ -114,10 +116,12 @@ impl Addons {
                 credentials_v2::scope_legacy(&tx)?;
             }
             credentials_v2::init(&tx)?;
+            public_meta::init(&tx).map_err(|_| "Metadata cache initialization failed")?;
             crate::engine_v3::origins::init(&tx).map_err(|_| "Metadata origin initialization failed")?;
             tx.commit().map_err(|_| "Database initialization failed")?;
         }
         Ok(Self {
+            public_meta: Arc::new(public_meta::Cache::new(db.clone())),
             db,
             cache: Default::default(),
             flights: Default::default(),
@@ -388,6 +392,16 @@ impl Addons {
     }
     async fn fetch(&self, url: &str, ttl: i64) -> Result<Value, String> {
         self.checked_url(url)?;
+        if public_meta::identity(url).is_some() {
+            let this = self.clone();
+            let endpoint = url.to_owned();
+            return self.public_meta.load(url.to_owned(), move || async move {
+                let _permit = this.gate.acquire().await.map_err(|_| "Service stopping")?;
+                crate::source_http::json(this.checked_url(&endpoint)?, 8 * 1024 * 1024,
+                    Duration::from_secs(12), this.fixture_transport(), true)
+                    .await.map_err(|e| e.addon_code().to_owned())
+            }).await;
+        }
         let key = self.cache_key(url)?;
         if let Some((expiry, v, _)) = self.cache.lock().unwrap().get(&key) {
             if *expiry > now() {

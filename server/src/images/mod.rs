@@ -2,6 +2,7 @@ use crate::*;
 use std::time::Instant;
 mod cache;
 mod descriptor;
+mod clearlogo;
 pub(crate) use cache::Service;
 const MAX_AGE: Duration = Duration::from_secs(300);
 fn cache_control() -> String {
@@ -14,7 +15,17 @@ pub(crate) async fn get(
 ) -> Result<Response, ApiError> {
     let image = descriptor::Image::parts(&folder, &asset)
         .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "Invalid image reference".into()))?;
-    let asset = app.images.load(image).await?;
+    respond(app.images.load(image).await?, &headers, cache_control())
+}
+pub(crate) async fn clearlogo(
+    State(app): State<App>, Path(id): Path<String>, headers: axum::http::HeaderMap,
+) -> Result<Response, ApiError> {
+    let image = id.strip_suffix(".png").and_then(descriptor::Image::clearlogo)
+        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "Invalid image reference".into()))?;
+    respond(app.images.load(image).await?, &headers,
+        "public, max-age=86400, s-maxage=604800, stale-while-revalidate=604800".into())
+}
+fn respond(asset: cache::Asset, headers: &axum::http::HeaderMap, policy: String) -> Result<Response, ApiError> {
     let mut response = if matches_etag(&headers, &asset.etag) {
         StatusCode::NOT_MODIFIED.into_response()
     } else {
@@ -29,7 +40,7 @@ pub(crate) async fn get(
     };
     let headers = response.headers_mut();
     headers.insert(header::ETAG, asset.etag.parse().unwrap());
-    headers.insert(header::CACHE_CONTROL, cache_control().parse().unwrap());
+    headers.insert(header::CACHE_CONTROL, policy.parse().unwrap());
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_ORIGIN,
         axum::http::HeaderValue::from_static("*"),

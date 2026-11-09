@@ -5,6 +5,11 @@ pub(super) struct Image {
     pub asset: String,
 }
 impl Image {
+    pub fn clearlogo(id: &str) -> Option<Self> {
+        let digits = id.strip_prefix("tt")?;
+        if digits.is_empty() || digits.len() > 16 || !digits.bytes().all(|b| b.is_ascii_digit()) { return None; }
+        Some(Self { folder: "clearlogo".into(), asset: id.into() })
+    }
     pub fn parts(folder: &str, asset: &str) -> Option<Self> {
         if asset.len() > 160 || !matches!(folder, "posters" | "fanart" | "episodes") {
             return None;
@@ -83,6 +88,7 @@ impl Image {
         Self::parts(folder, asset)
     }
     pub fn direct(&self) -> String {
+        if self.folder == "clearlogo" { return format!("https://images.metahub.space/logo/medium/{}/img", self.asset); }
         format!("https://simkl.in/{}/{}", self.folder, self.asset)
     }
     pub fn proxy(&self) -> String {
