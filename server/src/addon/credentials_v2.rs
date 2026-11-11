@@ -4,6 +4,9 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
+pub(super) const CONFIGURE_TICKET_SECS: i64 = 300;
+const MAX_CONFIGURE_TICKETS: i64 = 16;
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Payload {
@@ -77,7 +80,8 @@ pub(crate) fn init(db: &Connection) -> Result<(), &'static str> {
         )
         .map_err(storage)?;
     }
-    db.execute_batch("CREATE TABLE IF NOT EXISTS addon_credentials_v2(addon_id INTEGER PRIMARY KEY REFERENCES addons(id) ON DELETE CASCADE,account_id INTEGER NOT NULL,secret TEXT NOT NULL);
+    db.execute_batch("CREATE TABLE IF NOT EXISTS addon_configure_tickets(ticket TEXT PRIMARY KEY,account_id INTEGER NOT NULL,addon_id INTEGER NOT NULL,expires INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS addon_credentials_v2(addon_id INTEGER PRIMARY KEY REFERENCES addons(id) ON DELETE CASCADE,account_id INTEGER NOT NULL,secret TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS addon_identity_v2(id INTEGER PRIMARY KEY AUTOINCREMENT);
         CREATE TABLE IF NOT EXISTS addon_encryption_accounts_v2(account_id INTEGER PRIMARY KEY);
         INSERT OR IGNORE INTO addon_identity_v2(id) SELECT id FROM addons;").map_err(storage)?;
@@ -371,6 +375,55 @@ pub(crate) fn encrypt_legacy(
         count += 1;
     }
     Ok(count)
+}
+
+pub(crate) fn issue_configure_ticket(
+    db: &Connection,
+    account: i64,
+    addon: i64,
+) -> Result<String, &'static str> {
+    let now = now();
+    db.execute(
+        "DELETE FROM addon_configure_tickets WHERE expires<=?1",
+        [now],
+    )
+    .map_err(storage)?;
+    db.execute(
+        "DELETE FROM addon_configure_tickets WHERE account_id=?1 AND ticket NOT IN (SELECT ticket FROM addon_configure_tickets WHERE account_id=?1 ORDER BY expires DESC LIMIT ?2)",
+        params![account, MAX_CONFIGURE_TICKETS],
+    )
+    .map_err(storage)?;
+    let ticket = crate::auth::token();
+    db.execute(
+        "INSERT INTO addon_configure_tickets(ticket,account_id,addon_id,expires) VALUES(?1,?2,?3,?4)",
+        params![ticket, account, addon, now + CONFIGURE_TICKET_SECS],
+    )
+    .map_err(storage)?;
+    Ok(ticket)
+}
+
+pub(crate) fn redeem_configure_ticket(
+    db: &Connection,
+    ticket: &str,
+) -> Result<Option<(i64, i64)>, &'static str> {
+    if ticket.is_empty() || ticket.len() > 128 {
+        return Ok(None);
+    }
+    let tx = db.unchecked_transaction().map_err(storage)?;
+    let row: Option<(i64, i64, i64)> = tx
+        .query_row(
+            "SELECT account_id,addon_id,expires FROM addon_configure_tickets WHERE ticket=?1",
+            [ticket],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(storage)?;
+    tx.execute("DELETE FROM addon_configure_tickets WHERE ticket=?1", [ticket])
+        .map_err(storage)?;
+    tx.commit().map_err(storage)?;
+    Ok(row
+        .filter(|(_, _, expires)| *expires > now())
+        .map(|(account, addon, _)| (account, addon)))
 }
 
 pub(crate) fn ownership(db: &Connection) -> Result<Value, &'static str> {

@@ -69,6 +69,19 @@ revision URL never receives the current or a removed logo. A request without
 `v`, or with an empty one, serves the current revision. The endpoint stays
 cached for a day because its URL changes with the logo.
 
+Every record also carries `configurable`, true only when the manifest sets
+`behaviorHints.configurable` and its transport URL ends in `/manifest.json`.
+POST `/api/addons/:id/configure-link` requires an account session owning the
+add-on and answers `{configure_url, expires_in}`; an add-on that is not
+configurable returns 404 `addon_configure_unavailable`. `configure_url` is the
+same-origin path `/api/addons/configure/<ticket>`: the ticket expires after five
+minutes, is deleted on first use, and answering it redirects (`302`, `no-store`)
+to the add-on's transport URL with its final `manifest.json` replaced by
+`configure` and the query kept. The ticket is not the manifest URL and no
+response body carries the token; only the redirect's `Location`, followed by the
+browser that redeemed the ticket, does. A used, expired, or since-deleted
+add-on's ticket returns 404 `addon_configure_unavailable`.
+
 ## Storage and runtime behavior
 
 The addon manifest URL can contain a token, and the manifest can repeat it in
@@ -170,9 +183,12 @@ late/cached source revocation and executable confirmation/keyring gates.
 Additional fixtures cover v2 management roles/cursors, private-address rejection,
 public and cross-origin redirects, loops and downgrade refusal, stale reinstall
 and revoked-session writes, cache trust separation and independent browsing slots.
+Configure fixtures cover the `configurable` flag, owner scoping, ticket single use
+and expiry, and redirect derivation for token paths and query strings.
 These are synthetic fixtures, not production migration or physical-device/UI
-acceptance. Client pin adoption, production migration/rollback, private-network
-exceptions and key rotation must each retain their own evidence boundary.
+acceptance. Client pin adoption, the Reconfigure page itself, production
+migration/rollback, private-network exceptions and key rotation must each retain
+their own evidence boundary.
 # Experimental v3 subtitle execution
 
 `GET /api/subtitles/{kind}/{id}` aggregates the active profile's enabled

@@ -196,6 +196,10 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
         )
         .route("/addons/:id/logo", get(addon::http_v2::logo))
         .route(
+            "/addons/:id/configure-link",
+            post(addon::http_v2::configure_link),
+        )
+        .route(
             "/iptv/connections",
             get(provider::connections_v2::list).post(provider::connections_v2::create),
         )
@@ -341,6 +345,10 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
             get(images::get).options(images::options),
         )
         .nest("/api", api)
+        .route(
+            "/api/addons/configure/:ticket",
+            get(addon::http_v2::configure),
+        )
         .route(
             "/api/simkl/callback",
             get(simkl::callback).layer(middleware::map_response(private_api_response)),

@@ -257,3 +257,31 @@ async fn invalid_capabilities_are_rejected() {
         assert!(body.to_string().contains("Invalid source selection"),"{body}");
     }
 }
+
+#[tokio::test]
+async fn provider_affinity_ranks_that_providers_rows_first_and_is_validated() {
+    let app=fixture();let owned=app.clone().with_lease(ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,role:"owner".into(),profile_id:Some(1),session_id:Some("s1".into())},session_id:Some("s1".into())});
+    for addon in ["sources-a","sources-b"]{
+        let db=app.db.lock().unwrap();
+        crate::addon::credentials_v2::store_checked(&db,app.secret_vault.as_ref().unwrap(),1,&format!("https://{addon}.example/manifest.json"),&json!({"id":addon,"name":addon,"version":"1","resources":["stream"],"types":["movie"]}),&None).unwrap();
+    }
+    let connections=owned.addons.engine_connections(1).unwrap().into_iter().filter(|c|c.capabilities.contains(&viptv_engine::capabilities::Capability::Sources)).collect::<Vec<_>>();
+    assert_eq!(connections.len(),2);
+    let(cards_a,error)=owned.register(&connections[0].id,vec![json!({"url":"https://media.example/a.mkv","name":"a","quality_height":1080})],"movie");assert!(error.is_none(),"{error:?}");
+    let(cards_b,error)=owned.register(&connections[1].id,vec![json!({"url":"https://media.example/b.mkv","name":"b","quality_height":1080})],"movie");assert!(error.is_none(),"{error:?}");
+    let job=Arc::new(Job{metadata_proof:None,source_slots:std::sync::atomic::AtomicUsize::new(0),cancelled:std::sync::atomic::AtomicBool::new(false),configuration_revision:None,media_id:None,exact_vod:None,kind:"movie".into(),created:Instant::now(),state:Mutex::new(JobState{events:vec![json!({"seq":1,"source":connections[0].id,"streams":cards_a}),json!({"seq":2,"source":connections[1].id,"streams":cards_b})],pending:0}),notify:Notify::new()});app.jobs.lock().unwrap().insert("rank-job".into(),job);
+    let ids=[cards_b[0]["id"].clone(),cards_a[0]["id"].clone()];
+    let names=|ranked:&Value|ranked["streams"].as_array().unwrap().iter().map(|s|s["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let(status,ranked)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids})).await;
+    assert_eq!(status,StatusCode::OK,"{ranked}");
+    assert_eq!(names(&ranked),["b","a"],"equal rows keep the arrival order");
+    let(status,ranked)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"provider_affinity":connections[0].id})).await;
+    assert_eq!(status,StatusCode::OK,"{ranked}");
+    assert_eq!(names(&ranked),["a","b"],"the affinity provider's row wins the tie");
+    assert_eq!(ranked["best_match_id"],cards_a[0]["id"]);
+    for invalid in [json!(""),json!("addon\n1"),json!("a".repeat(129))]{
+        let(status,body)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"provider_affinity":invalid})).await;
+        assert_eq!(status,StatusCode::BAD_REQUEST,"{invalid} {body}");
+        assert!(body.to_string().contains("Invalid source selection"),"{body}");
+    }
+}
