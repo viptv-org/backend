@@ -107,7 +107,7 @@ pub(crate) async fn poll(
     let db = app.db.lock().unwrap();
     app.require_media(&db)?;
     let state = job.state.lock().unwrap();
-    let mut response = axum::Json(json!({"events":state.events.iter().skip(query.after).cloned().collect::<Vec<_>>(),"done":state.pending==0}));
+    let mut response = axum::Json(json!({"events":state.events.iter().skip(query.after).cloned().collect::<Vec<_>>(),"done":state.pending==0,"phase":state.events.iter().rev().find_map(|e| e["phase"].as_str())}));
     if let Some(events) = response.0["events"].as_array_mut() {
         for event in events {
             if let Some(id)=event["source"].as_str().and_then(|s|s.strip_prefix("vsources:")).and_then(|id|id.parse::<i64>().ok()) {

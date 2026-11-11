@@ -1,5 +1,39 @@
 use crate::{auth_integration_tests::fixture,test_support::request,*};
 #[tokio::test]
+async fn remembered_supplier_candidates_preserve_language_hard_filters_and_owner_scope(){
+ let(app,cards)=rank_fixture(vec![
+  json!({"url":"https://media.example/first.mp4","name":"Other","quality_height":1080,"audio_languages":["en"],"presentation":{"provider_name":"Other"}}),
+  json!({"url":"https://media.example/manual.mp4","name":"Manual","quality_height":1080,"audio_languages":["eng"],"presentation":{"provider_name":"CineStream"}}),
+  json!({"url":"https://media.example/japanese.mp4","name":"Japanese","quality_height":1080,"audio_languages":["ja"],"presentation":{"provider_name":"CineStream"}}),
+  json!({"url":"https://media.example/3d.mp4","name":"3D","three_d":true,"quality_height":1080,"audio_languages":["en"],"presentation":{"provider_name":"CineStream"}}),
+ ]);
+ let ids=cards.iter().map(|row|row["id"].clone()).collect::<Vec<_>>();
+ let memory=json!({"provider_id":cards[0]["source_addon_id"],"provider_name":"CineStream","audio_languages":["en"]});
+ let body=json!({"ids":ids,"remembered_source":memory});
+ let(status,ranked)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",body.clone()).await;
+ assert_eq!(status,StatusCode::OK,"{ranked}");assert_eq!(ranked["source_reuse_supported"],true);
+ assert_eq!(ranked["source_reuse_ids"],json!([cards[1]["id"],cards[0]["id"]]));
+ assert_eq!(ranked["source_reuse_preferred"],true);assert_eq!(ranked["source_reuse_fully_matches"],true);assert_eq!(ranked["source_reuse_ready"],true);
+ assert_eq!(ranked["streams"].as_array().unwrap().iter().find(|row|row["id"]==cards[1]["id"]).unwrap()["reuse_audio_language"],"en");
+ assert!(!ranked["automatic_source_ids"].as_array().unwrap().contains(&cards[3]["id"]));
+ assert!(!ranked.to_string().contains("https://"));
+ assert_eq!(request(&app,"member-token-2","POST","/api/profiles/1/source-ranking",body).await.0,StatusCode::FORBIDDEN);
+ let(_,none)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"remembered_source":{"provider_id":memory["provider_id"],"audio_languages":["fr"]},"cross_title_source":memory})).await;
+ assert_eq!(none["source_reuse_ids"],json!([]));
+}
+#[tokio::test]
+async fn source_reuse_rejects_expiring_urls_and_honors_profile_opt_out(){
+ let(app,cards)=rank_fixture(vec![json!({"url":"https://media.example/stream.mp4","name":"Source","audio_languages":["en"]})]);
+ let ids=vec![cards[0]["id"].clone()];
+ let bad=json!({"provider_id":"https://media.example/private-capability","audio_languages":["en"]});
+ assert_eq!(request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"remembered_source":bad})).await.0,StatusCode::BAD_REQUEST);
+ let(_,prefs)=request(&app,"member-token-1","GET","/api/profiles/1/preferences",Value::Null).await;
+ let mut updated=prefs["preferences"].clone();updated["remembered_source_reuse"]=json!(false);
+ assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/preferences",json!({"revision":prefs["revision"],"preferences":updated})).await.0,StatusCode::OK);
+ let(_,ranked)=request(&app,"member-token-1","POST","/api/profiles/1/source-ranking",json!({"ids":ids,"remembered_source":{"provider_id":cards[0]["source_addon_id"],"audio_languages":["en"]}})).await;
+ assert_eq!(ranked["source_reuse_ids"],json!([]));
+}
+#[tokio::test]
 async fn ranking_preserves_private_grants_checks_owner_and_uses_structured_quality(){
  let app=fixture();let owned=app.clone().with_lease(ResourceLease{policy_revision:0,principal:auth::Principal::Account{account_id:1,role:"owner".into(),profile_id:Some(1),session_id:Some("s1".into())},session_id:Some("s1".into())});
  {let db=app.db.lock().unwrap();crate::addon::credentials_v2::store_checked(&db,app.secret_vault.as_ref().unwrap(),1,"https://source.example/manifest.json",&json!({"id":"sources","name":"Sources","version":"1","resources":["stream"],"types":["movie"]}),&None).unwrap();}

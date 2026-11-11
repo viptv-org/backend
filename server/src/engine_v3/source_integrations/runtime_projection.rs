@@ -8,8 +8,8 @@ pub(super) fn sdk_source(stream: &SdkStream) -> Value {
         "title": stream.meta.resolution.map(|height| format!("{height}p")).unwrap_or_default(),
         "presentation": viptv_engine::vsources_runtime::presentation(stream),
         "quality_height": stream.meta.resolution,
-        "audio_languages": if stream.meta.languages.is_empty() {
-            stream.meta.audio_selection.as_ref().map(|audio| vec![audio.language.as_str()]).unwrap_or_default()
+        "audio_languages": if let Some(audio) = stream.meta.audio_selection.as_ref() {
+            vec![audio.language.as_str()]
         } else {
             stream.meta.languages.iter().map(|language| language.as_str()).collect::<Vec<_>>()
         },
@@ -32,6 +32,51 @@ mod tests {
     use crate::{
         app_state::ResourceLease, auth, auth_integration_tests::fixture, test_support::request,
     };
+
+    fn verified_origin_title() -> (crate::App, crate::ResourceLease, serde_json::Value, u64, crate::engine_v3::origins::MetadataProof) {
+        let app = fixture().with_lease(ResourceLease {
+            policy_revision: 0,
+            principal: auth::Principal::Account { account_id: 1, role: "owner".into(), profile_id: Some(1), session_id: Some("s1".into()) },
+            session_id: Some("s1".into()),
+        });
+        app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id)VALUES(301,'Metadata','https://fixture.invalid/manifest.json',?1,1)", rusqlite::params![json!({"id":"fixture-metadata","name":"Metadata","resources":["meta"],"types":["movie"]}).to_string()]).unwrap();
+        crate::test_support::encrypt_fixture_sources(&app);
+        let lease = app.request_lease();
+        let revision = crate::engine_v3::configuration::read(&app, &lease, 1).unwrap().0.scope.revision;
+        let mut card: viptv_engine::presentation::Card = serde_json::from_value(json!({
+            "identity":{"id":"tt1375666","kind":"movie","ids":[{"namespace":"imdb","value":"tt1375666"}]},
+            "provider_id":"addon:301","title":"Verified title","badges":[]
+        })).unwrap();
+        crate::engine_v3::origins::stamp(&app, std::slice::from_mut(&mut card), "addon:301").unwrap();
+        let proof = crate::engine_v3::origins::MetadataProof::capture(&app, card.clone()).unwrap();
+        let value = crate::engine_v3::origins::source_value(&card);
+        (app, lease, value, revision, proof)
+    }
+
+    #[tokio::test]
+    async fn preferred_origin_reuses_verified_metadata_without_another_network_request() {
+        let (app, lease, value, revision, proof) = verified_origin_title();
+        // This metadata host does not exist. The verified job proof must be reused
+        // before any DNS, detail or recommendation lookup can run.
+        let card = tokio::time::timeout(std::time::Duration::from_millis(250), super::super::canonical_card(&app, &value, &lease, revision, Some(&proof))).await.unwrap().unwrap();
+        assert_eq!(card.title, "Verified title");
+        assert_eq!(card.metadata_origin, serde_json::from_value(value["metadata_origin"].clone()).ok());
+    }
+
+    #[tokio::test]
+    async fn reused_metadata_does_not_bypass_origin_or_configuration_revocation() {
+        let (app, lease, value, revision, proof) = verified_origin_title();
+        assert!(super::super::canonical_card(&app, &value, &lease, revision + 1, Some(&proof)).await.is_none());
+        app.db.lock().unwrap().execute("UPDATE addons SET enabled=0 WHERE id=301", []).unwrap();
+        assert!(super::super::canonical_card(&app, &value, &lease, revision, Some(&proof)).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn reused_metadata_rejects_changed_identity_assertions() {
+        let (app, lease, mut value, revision, proof) = verified_origin_title();
+        value["card"]["identity"]["ids"] = json!([{"namespace":"imdb","value":"tt9999999"}]);
+        assert!(super::super::canonical_card(&app, &value, &lease, revision, Some(&proof)).await.is_none());
+    }
 
     #[test]
     fn sdk_source_projects_languages_dubbing_and_subtitles() {

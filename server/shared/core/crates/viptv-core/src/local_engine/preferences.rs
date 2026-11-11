@@ -42,6 +42,8 @@ impl LocalEngine {
         profile: String,
         sources_json: String,
         context: &viptv_engine::preferences::RankingContext,
+        title: Option<&viptv_engine::preferences::RememberedSource>,
+        across: Option<&viptv_engine::preferences::RememberedSource>,
     ) -> Result<String, CoreError> {
         if sources_json.len() > 128 * 1024 {
             return Err(CoreError::InvalidInput);
@@ -83,13 +85,47 @@ impl LocalEngine {
             }
             candidates.push(grant.candidate.clone());
         }
-        let ranking = viptv_engine::preferences::rank_sources(
-            &mut candidates,
+        let ranking =
+            viptv_engine::preferences::rank_sources(&mut candidates, &preferences, context);
+        let reuse = viptv_engine::preferences::reusable_source_context(
+            &candidates,
+            title,
+            across,
             &preferences,
             context,
-        );
+        )
+        .map_err(|_| CoreError::InvalidInput)?;
+        let memory =
+            viptv_engine::preferences::preferred_source_memory(title, across, &preferences)
+                .map_err(|_| CoreError::InvalidInput)?;
+        let automatic =
+            viptv_engine::preferences::automatic_source_ids(&candidates, &context.device);
+        let streams = candidates
+            .iter()
+            .map(|candidate| {
+                let mut value = serde_json::to_value(candidate).map_err(|_| CoreError::Bridge)?;
+                if let Some(language) = viptv_engine::preferences::reuse_audio_language(
+                    candidate,
+                    memory.as_ref(),
+                    &preferences,
+                )
+                .map_err(|_| CoreError::InvalidInput)?
+                {
+                    value["reuse_audio_language"] = serde_json::json!(language);
+                }
+                Ok(value)
+            })
+            .collect::<Result<Vec<_>, CoreError>>()?;
         serde_json::to_string(&serde_json::json!({
-            "streams": candidates,
+            "streams": streams,
+            "source_reuse_supported": true,
+            "preferred_source_memory": memory,
+            "preferred_source_budget_ms": viptv_engine::preferences::PREFERRED_SOURCE_BUDGET_MS,
+            "source_reuse_ids": reuse.ids,
+            "source_reuse_ready": reuse.ready,
+            "source_reuse_preferred": reuse.preferred,
+            "source_reuse_fully_matches": reuse.fully_matches,
+            "automatic_source_ids": automatic,
             "best_match_ids": ranking.best_match_ids,
             "best_match_id": ranking.best_match_id,
             "best_match_fully_matches": ranking.best_match_fully_matches,
@@ -119,6 +155,8 @@ impl LocalEngine {
             profile,
             sources_json,
             &viptv_engine::preferences::RankingContext::for_device_height(device_max_height),
+            None,
+            None,
         )
     }
     /// `context_json` is a `RankingContext`: device capability, series memory
@@ -132,10 +170,29 @@ impl LocalEngine {
         if context_json.len() > 4096 {
             return Err(CoreError::InvalidInput);
         }
-        let context: viptv_engine::preferences::RankingContext =
+        let mut value: serde_json::Value =
             serde_json::from_str(&context_json).map_err(|_| CoreError::InvalidInput)?;
+        let fields = value.as_object_mut().ok_or(CoreError::InvalidInput)?;
+        let title = fields
+            .remove("remembered_source")
+            .map(serde_json::from_value::<viptv_engine::preferences::RememberedSource>)
+            .transpose()
+            .map_err(|_| CoreError::InvalidInput)?;
+        let across = fields
+            .remove("cross_title_source")
+            .map(serde_json::from_value::<viptv_engine::preferences::RememberedSource>)
+            .transpose()
+            .map_err(|_| CoreError::InvalidInput)?;
+        let context: viptv_engine::preferences::RankingContext =
+            serde_json::from_value(value).map_err(|_| CoreError::InvalidInput)?;
         context.validate().map_err(|_| CoreError::InvalidInput)?;
-        self.rank_sources_in_context(profile, sources_json, &context)
+        self.rank_sources_in_context(
+            profile,
+            sources_json,
+            &context,
+            title.as_ref(),
+            across.as_ref(),
+        )
     }
 }
 #[cfg(test)]
@@ -256,6 +313,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(contextual["best_match_id"], ranked["best_match_id"]);
+        let reuse_context = json!({"remembered_source": {"provider_id": sources[0]["provider_id"], "audio_languages": []}});
+        let reuse: Value = serde_json::from_str(
+            &engine
+                .rank_sources_with_context(
+                    "default".into(),
+                    sources.to_string(),
+                    reuse_context.to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reuse["source_reuse_supported"], true);
+        assert_eq!(reuse["source_reuse_ready"], true);
+        assert_eq!(reuse["source_reuse_ids"][0], ranked["best_match_id"]);
+        let wrong_audio = json!({"remembered_source": {"provider_id": sources[0]["provider_id"], "audio_languages": ["es"]}});
+        let reuse: Value = serde_json::from_str(
+            &engine
+                .rank_sources_with_context(
+                    "default".into(),
+                    sources.to_string(),
+                    wrong_audio.to_string(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reuse["source_reuse_ready"], false);
+        assert_eq!(reuse["source_reuse_ids"], json!([]));
         for invalid_context in [
             json!({"device": {"max_height": 100}}),
             json!({"device": {"video_codecs": [{"codec": "hevc", "support": "maybe"}]}}),
@@ -324,10 +408,18 @@ mod tests {
 }
 #[uniffi::export]
 impl LocalEngine {
- pub fn bootstrap_profile(&self,profile:String)->Result<String,CoreError>{
-  let home:serde_json::Value=serde_json::from_str(&self.home(profile.clone())?).map_err(|_|CoreError::Bridge)?;
-  let library:serde_json::Value=serde_json::from_str(&self.library(profile.clone(),0,100)?).map_err(|_|CoreError::Bridge)?;
-  let preferences:serde_json::Value=serde_json::from_str(&self.profile_preferences(profile)?).map_err(|_|CoreError::Bridge)?;
-  Ok(serde_json::json!({"home":home,"library":library,"preferences":preferences}).to_string())
- }
+    pub fn bootstrap_profile(&self, profile: String) -> Result<String, CoreError> {
+        let home: serde_json::Value =
+            serde_json::from_str(&self.home(profile.clone())?).map_err(|_| CoreError::Bridge)?;
+        let library: serde_json::Value =
+            serde_json::from_str(&self.library(profile.clone(), 0, 100)?)
+                .map_err(|_| CoreError::Bridge)?;
+        let preferences: serde_json::Value =
+            serde_json::from_str(&self.profile_preferences(profile)?)
+                .map_err(|_| CoreError::Bridge)?;
+        Ok(
+            serde_json::json!({"home":home,"library":library,"preferences":preferences})
+                .to_string(),
+        )
+    }
 }

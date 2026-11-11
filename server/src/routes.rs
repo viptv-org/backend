@@ -339,6 +339,7 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
         .layer(middleware::from_fn(gateway::diagnostics::observe))
         .layer(middleware::from_fn(images::negotiate));
     let mut r = Router::new()
+        .route("/api/images/clearlogo/v1/:id", get(images::clearlogo).options(images::options))
         .route(
             "/api/images/simkl/:folder/*asset",
             get(images::get).options(images::options),

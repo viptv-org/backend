@@ -490,6 +490,7 @@ async fn playback_controls_match_the_board_order_and_toggle_copy() {
         [
             "next_episode_button",
             "skip_intros",
+            "remembered_source_reuse",
             "source_selection",
             "max_quality_height",
             "hdr_preference",
@@ -504,7 +505,7 @@ async fn playback_controls_match_the_board_order_and_toggle_copy() {
     assert_eq!(next["label"], "Next episode button");
     assert_eq!(
         next["description"],
-        "Shows during the credits. Nothing ever plays on its own."
+        "Shows during the credits"
     );
     assert_eq!(next["choices"][0]["value"], true);
     let start_subtitles = controls

@@ -1,5 +1,5 @@
 use super::*;
-use viptv_engine::preferences::{DeviceCapability, RankingContext, SeriesMemory};
+use viptv_engine::preferences::{DeviceCapability, RankingContext, SeriesMemory, RememberedSource};
 use viptv_engine::stremio::SourceCandidate;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -13,6 +13,10 @@ pub(crate) struct Rank {
     device: Option<DeviceCapability>,
     #[serde(default)]
     series_memory: Option<SeriesMemory>,
+    #[serde(default)]
+    remembered_source: Option<RememberedSource>,
+    #[serde(default)]
+    cross_title_source: Option<RememberedSource>,
     #[serde(default)]
     provider_affinity: Option<String>,
 }
@@ -38,6 +42,10 @@ pub(crate) async fn rank(
         ..Default::default()
     };
     if ranking_context.validate().is_err() {
+        return Err("Invalid source selection".into());
+    }
+    if input.remembered_source.as_ref().is_some_and(|memory| memory.validate().is_err())
+        || input.cross_title_source.as_ref().is_some_and(|memory| memory.validate().is_err()) {
         return Err("Invalid source selection".into());
     }
     let app = app.with_lease(lease.clone());
@@ -110,41 +118,23 @@ pub(crate) async fn rank(
             kids::require_item(&db, &lease.principal, &grant.kind, media)?;
         }
         let card = cards.get(&id).ok_or_else(auth::forbidden)?;
-        let mut candidate = SourceCandidate {
-            presentation: viptv_engine::stremio::SourcePresentation::from_stream(card),
-            id,
-            provider_id: grant.producer.clone(),
-            label: card["name"].as_str().unwrap_or("Stream").into(),
-            detail: viptv_engine::stremio::source_detail(card),
-            quality_height: viptv_engine::stremio::source_quality_height(card),
-            audio_languages: card["audio_languages"]
-                .as_array()
-                .map(|languages| {
-                    languages
-                        .iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            delivery: card["delivery"]
-                .as_str()
-                .filter(|delivery| viptv_engine::stremio::DELIVERIES.contains(delivery))
-                .map(str::to_owned),
-            ..Default::default()
-        }
-        .with_release_facts(viptv_engine::stremio::source_release_facts(card));
-        candidate.binge_group = card["source_binge_group"].as_str().map(str::to_owned);
+        let candidate = candidate_from_card(id, &grant.producer, card);
         candidates.push(candidate);
     }
     drop(grants);
     drop(db);
     let ranking =
         viptv_engine::preferences::rank_sources(&mut candidates, &preferences.preferences, &ranking_context);
+    let automatic_source_ids = viptv_engine::preferences::automatic_source_ids(&candidates, &ranking_context.device);
+    let reuse = viptv_engine::preferences::reusable_source_context(&candidates,
+        input.remembered_source.as_ref(), input.cross_title_source.as_ref(),
+        &preferences.preferences, &ranking_context).map_err(|_| ApiError::from("Invalid source selection"))?;
     configuration::validate_revision(&app, profile, configuration.scope.revision)?;
     let ranked: Vec<_> = candidates
         .into_iter()
         .filter_map(|candidate| {
             let mut card = cards.remove(&candidate.id)?;
+            if let Ok(Some(language))=viptv_engine::preferences::reuse_audio_language(&candidate,input.remembered_source.as_ref().or(input.cross_title_source.as_ref()),&preferences.preferences) {card["reuse_audio_language"]=json!(language);}
             let addon_label = eligible
                 .iter()
                 .find(|connection| connection.id == candidate.provider_id)
@@ -180,7 +170,8 @@ pub(crate) async fn rank(
         })
         .collect::<Vec<_>>();
     Ok(axum::Json(
-        json!({"streams":streams,"best_match_id":best_match_id,"best_match_ids":best_match_ids,"best_match_fully_matches":best_match_fully_matches,"quality_filters":filters,"total":total,"selection_note":selection_note}),
+        json!({"streams":streams,"best_match_id":best_match_id,"best_match_ids":best_match_ids,"best_match_fully_matches":best_match_fully_matches,"quality_filters":filters,"total":total,"selection_note":selection_note,
+            "source_reuse_supported":true,"source_reuse_ready":reuse.ready,"source_reuse_ids":reuse.ids,"source_reuse_preferred":reuse.preferred,"source_reuse_fully_matches":reuse.fully_matches,"automatic_source_ids":automatic_source_ids}),
     ))
 }
 
@@ -210,4 +201,32 @@ fn display(candidate: &SourceCandidate, addon: Option<&str>) -> Value {
         .collect::<Vec<_>>()
         .join(" · ");
     json!({"title":candidate.label,"body":candidate.detail,"quality_label":quality,"format_label":format,"addon_label":addon,"provider_label":presentation.and_then(|p|p.provider_name.as_deref())})
+}
+
+pub(super) fn candidate_from_card(id: String, producer: &str, card: &Value) -> SourceCandidate {
+        let mut candidate = SourceCandidate {
+            presentation: viptv_engine::stremio::SourcePresentation::from_stream(card),
+            id,
+            provider_id: producer.to_owned(),
+            label: card["name"].as_str().unwrap_or("Stream").into(),
+            detail: viptv_engine::stremio::source_detail(card),
+            quality_height: viptv_engine::stremio::source_quality_height(card),
+            audio_languages: card["audio_languages"]
+                .as_array()
+                .map(|languages| {
+                    languages
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            delivery: card["delivery"]
+                .as_str()
+                .filter(|delivery| viptv_engine::stremio::DELIVERIES.contains(delivery))
+                .map(str::to_owned),
+            ..Default::default()
+        }
+        .with_release_facts(viptv_engine::stremio::source_release_facts(card));
+        candidate.binge_group = card["source_binge_group"].as_str().map(str::to_owned);
+    candidate
 }

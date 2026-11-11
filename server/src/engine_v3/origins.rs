@@ -305,7 +305,7 @@ pub(crate) async fn verified_card(
         };
         let axum::Json(value) = tokio::time::timeout(
             Duration::from_secs(15),
-            super::catalog::detail(
+            super::catalog::action_detail(
                 State(app.clone()),
                 Extension(app.request_lease()),
                 Path((parent.kind.clone(), parent.id.clone())),

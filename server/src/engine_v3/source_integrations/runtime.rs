@@ -70,7 +70,21 @@ pub(crate) async fn canonical_card(
     value: &Value,
     lease: &ResourceLease,
     revision: u64,
+    verified: Option<&crate::engine_v3::origins::MetadataProof>,
 ) -> Option<Card> {
+    if let Some(proof) = verified {
+        // Admission to this discovery already verified the title. Recheck its
+        // authority locally instead of fetching metadata/recommendations again.
+        let auth::Principal::Account { profile_id: Some(profile), .. } = lease.principal else { return None; };
+        configuration::validate_revision(app, profile, revision).ok()?;
+        {
+            let db = app.db.lock().ok()?;
+            proof.validate(&db, lease).ok()?;
+        }
+        let expected: Card = serde_json::from_value(value["card"].clone()).ok()?;
+        crate::engine_v3::origins::check_expected(Some(&expected), &proof.card).ok()?;
+        return Some(proof.card.clone());
+    }
     if value.get("metadata_origin").is_some() {
         let expected:Card=serde_json::from_value(value["card"].clone()).ok()?;
         return crate::engine_v3::origins::verified_card(app,&expected).await.ok();
@@ -187,33 +201,33 @@ pub(crate) async fn canonical_card(
 
     Some(card)
 }
-pub(crate) fn spawn(
-    app: App,
-    job: Arc<Job>,
-    source: String,
-    value: Value,
-    config: VsourcesConfiguration,
-    proof: [u8; 32],
-    revision: u64,
-) {
-    tokio::spawn(async move {
+pub(crate) fn sdk_metadata(app: &App, card: &viptv_engine::presentation::Card, media: &viptv_engine::vsources_runtime::SdkMediaRef, revision: u64) -> Option<viptv_engine::vsources_runtime::SdkResolvedMedia> {
+    let parent = if let Some(identity) = &card.parent_identity {
+        let addon_revision = app.addons.revision().ok()?;
+        let key = (app.request_lease().principal.key(), revision, card.provider_id.clone(), identity.kind.clone(), identity.id.clone(), addon_revision);
+        app.verified_cards.lock().ok()?.get(&key).filter(|parent|parent.metadata_origin==card.metadata_origin).cloned()?
+    } else { card.clone() };
+    viptv_engine::vsources_runtime::sdk_metadata(&parent, media)
+}
+
+pub(crate) fn authorization(app: &App, job: &Arc<Job>, source: &str, proof: [u8;32], revision: u64) -> Arc<dyn Fn() -> bool + Send + Sync> {
         let id = source
             .strip_prefix("vsources:")
             .and_then(|id| id.parse::<i64>().ok())
             .unwrap_or(0);
         let auth_app = app.clone();
-        let auth_source = source.clone();
+        let auth_source = source.to_owned();
         let lease = app.request_lease();
         let auth::Principal::Account {
             profile_id: Some(profile),
             ..
         } = lease.principal
         else {
-            return;
+            return Arc::new(|| false);
         };
         let auth_job = job.clone();
         let metadata_revision = app.addons.revision().ok();
-        let authorize: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+        Arc::new(move || {
             if auth_job
                 .cancelled
                 .load(std::sync::atomic::Ordering::Acquire)
@@ -229,8 +243,21 @@ pub(crate) fn spawn(
                 && available_db(&db, &lease, id)
                 && crate::sources::source_configuration(&db, &auth_source)
                     .is_ok_and(|current| current == Some(proof))
-        });
-        let Some(card) = canonical_card(&app, &value, &app.request_lease(), revision).await else {
+        })
+}
+pub(crate) fn spawn(
+    app: App,
+    job: Arc<Job>,
+    source: String,
+    value: Value,
+    config: VsourcesConfiguration,
+    proof: [u8; 32],
+    revision: u64,
+    excluded: Vec<String>,
+) {
+    tokio::spawn(async move {
+        let authorize = authorization(&app, &job, &source, proof, revision);
+        let Some(card) = canonical_card(&app, &value, &app.request_lease(), revision, job.metadata_proof.as_ref()).await else {
             crate::handlers_media::emit(&app, &job, &source, Err("source_unresolved".into()));
             return;
         };
@@ -240,11 +267,9 @@ pub(crate) fn spawn(
             &[],
         );
         let result = if let Ok(media) = media {
-            viptv_engine::vsources_runtime::resolve_progressive(config,media,authorize.clone(),app.cloudflare.clone(),|streams|{
-            if !authorize(){return;}let ttls:std::collections::HashMap<_,_>=streams.iter().map(|s|((s.url.to_string(),s.meta.audio_selection.as_ref().map(|audio|audio.audio_index)),s.ttl)).collect();let limit=job.reserve_sources(streams.len());let raw=streams.iter().take(limit).map(projection::sdk_source).collect::<Vec<_>>();
-            let (cards,error)=app.register_with_configuration(&source,raw,&job.kind,Some(proof));
-            if !authorize(){return;}let mut entries=app.streams.lock().unwrap();for card in &cards{if let Some(entry)=card["id"].as_str().and_then(|id|entries.get_mut(id)){entry.profile_revision=job.configuration_revision;entry.metadata_proof=job.metadata_proof.clone();entry.exact_vod=job.exact_vod.clone();entry.media_id=job.media_id.clone();if let Some(ttl)=ttls.get(&(entry.url.clone(),entry.required_audio_index)){entry.expire_upstream_after(*ttl);}}}drop(entries);
-            let mut state=job.state.lock().unwrap();let seq=state.events.len()+1;state.events.push(json!({"seq":seq,"source":source,"streams":cards,"error_code":error.map(|_|"source_format_unsupported")}));drop(state);job.notify.notify_waiters();
+            viptv_engine::vsources_runtime::resolve_progressive_excluding(config,media,excluded,authorize.clone(),app.cloudflare.clone(),|streams|{
+            publish_batch(&app, &job, &source, proof, &authorize, streams);
+
         }).await
         } else {
             Err(viptv_engine::Error::Unresolved)
@@ -258,4 +283,11 @@ pub(crate) fn spawn(
                 .map_err(|_| "source_unavailable".into()),
         );
     });
+}
+
+pub(crate) fn publish_batch(app: &App, job: &Arc<Job>, source: &str, proof: [u8;32], authorize: &Arc<dyn Fn() -> bool + Send + Sync>, streams: Vec<viptv_engine::vsources_runtime::SdkStream>) {
+            if !authorize(){return;}let ttls:std::collections::HashMap<_,_>=streams.iter().map(|s|((s.url.to_string(),s.meta.audio_selection.as_ref().map(|audio|audio.audio_index)),s.ttl)).collect();let limit=job.reserve_sources(streams.len());let raw=streams.iter().take(limit).map(projection::sdk_source).collect::<Vec<_>>();
+            let (cards,error)=app.register_with_configuration(&source,raw,&job.kind,Some(proof));
+            if !authorize(){return;}let mut entries=app.streams.lock().unwrap();for card in &cards{if let Some(entry)=card["id"].as_str().and_then(|id|entries.get_mut(id)){entry.profile_revision=job.configuration_revision;entry.metadata_proof=job.metadata_proof.clone();entry.exact_vod=job.exact_vod.clone();entry.media_id=job.media_id.clone();if let Some(ttl)=ttls.get(&(entry.url.clone(),entry.required_audio_index)){entry.expire_upstream_after(*ttl);}}}drop(entries);
+            let mut state=job.state.lock().unwrap();let seq=state.events.len()+1;state.events.push(json!({"seq":seq,"source":source,"streams":cards,"error_code":error.map(|_|"source_format_unsupported")}));drop(state);job.notify.notify_waiters();
 }

@@ -20,6 +20,7 @@ struct JobState {
     events: Vec<serde_json::Value>,
     done: bool,
     error: Option<String>,
+    phase: &'static str,
 }
 impl LocalEngine {
     pub(super) fn source_key(&self, profile: &str, id: &str) -> String {
@@ -260,7 +261,7 @@ impl LocalEngine {
             return Err(CoreError::InvalidInput);
         }
         let state = job.state.lock().map_err(|_| CoreError::Bridge)?;
-        Ok(json!({"id":job_id,"events":state.events.iter().filter(|e|e["seq"].as_u64().unwrap_or(0)>after).collect::<Vec<_>>(),"done":state.done,"error_code":state.error}).to_string())
+        Ok(json!({"id":job_id,"events":state.events.iter().filter(|e|e["seq"].as_u64().unwrap_or(0)>after).collect::<Vec<_>>(),"done":state.done,"error_code":state.error,"phase":state.phase}).to_string())
     }
     pub fn cancel_integration_sources(
         &self,
@@ -309,6 +310,7 @@ impl LocalEngine {
                 events: vec![],
                 done: false,
                 error: None,
+                phase: "fallback",
             }),
         });
         let mut jobs = self
@@ -343,8 +345,15 @@ impl LocalEngine {
         if card_json.len() > 64 * 1024 {
             return Err(CoreError::InvalidInput);
         }
-        let card: viptv_engine::presentation::Card =
+        let mut value: serde_json::Value =
             serde_json::from_str(&card_json).map_err(|_| CoreError::InvalidInput)?;
+        let discovery = value
+            .as_object_mut()
+            .ok_or(CoreError::InvalidInput)?
+            .remove("discovery")
+            .unwrap_or_else(|| json!({}));
+        let card: viptv_engine::presentation::Card =
+            serde_json::from_value(value).map_err(|_| CoreError::InvalidInput)?;
         card.validate_library()
             .map_err(|_| CoreError::InvalidInput)?;
         let (verified_scope, card) = self.verified_source_card(&profile, &card)?;
@@ -386,10 +395,53 @@ impl LocalEngine {
                 .validate_metadata_origin(&selected.scope, origin)
                 .map_err(|_| CoreError::InvalidInput)?;
         }
+        let preferences = store
+            .preferences(&selected.scope)
+            .map_err(|_| CoreError::Bridge)?
+            .preferences;
+        let memory = |key: &str| {
+            discovery
+                .get(key)
+                .cloned()
+                .map(serde_json::from_value::<viptv_engine::preferences::RememberedSource>)
+                .transpose()
+                .map_err(|_| CoreError::InvalidInput)
+        };
+        let memory = viptv_engine::preferences::preferred_source_memory(
+            memory("remembered_source")?.as_ref(),
+            memory("cross_title_source")?.as_ref(),
+            &preferences,
+        )
+        .map_err(|_| CoreError::InvalidInput)?;
+        let preferred = memory
+            .filter(|memory| memory.provider_id == connection.id)
+            .and_then(|memory| {
+                viptv_engine::vsources_runtime::preferred_supplier(&config, &memory)
+                    .ok()
+                    .flatten()
+                    .map(|supplier| (memory, supplier))
+            });
+        let ranking: viptv_engine::preferences::RankingContext = discovery
+            .get("ranking")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| CoreError::InvalidInput)?
+            .unwrap_or_default();
+        ranking.validate().map_err(|_| CoreError::InvalidInput)?;
+        let preferred_budget = discovery["preferred_budget_ms"]
+            .as_u64()
+            .unwrap_or(viptv_engine::preferences::PREFERRED_SOURCE_BUDGET_MS)
+            .min(viptv_engine::preferences::PREFERRED_SOURCE_BUDGET_MS);
+        let exclude_only =
+            discovery["exclude_preferred_source"].as_bool() == Some(true) || preferred_budget == 0;
         let (id, job) = self.admit_integration_job_with_origin(
             selected.scope.clone(),
             card.metadata_origin.clone(),
         )?;
+        if preferred.is_some() && !exclude_only {
+            job.state.lock().unwrap().phase = "preferred";
+        }
         drop(store);
         let store = self.store.clone();
         let scope = job.scope.clone();
@@ -415,12 +467,10 @@ impl LocalEngine {
                 .enable_all()
                 .build();
             let result = runtime.map_err(|_| ()).and_then(|rt| {
-                rt.block_on(viptv_engine::vsources_runtime::resolve_progressive(
-                    config,
-                    media,
-                    authorize.clone(),
-                    None,
-                    |streams| {
+                rt.block_on(async {
+                    let ready = AtomicBool::new(false);
+                    let notify = tokio::sync::Notify::new();
+                    let mut publish = |streams: Vec<viptv_engine::vsources_runtime::SdkStream>| {
                         if !authorize() {
                             return;
                         }
@@ -445,12 +495,85 @@ impl LocalEngine {
                                 candidate
                             })
                             .collect::<Vec<_>>();
+                        if let Some((memory, _)) = preferred.as_ref() {
+                            let mut eligible = sources.clone();
+                            viptv_engine::preferences::rank_sources(
+                                &mut eligible,
+                                &preferences,
+                                &ranking,
+                            );
+                            if viptv_engine::preferences::reusable_source_context(
+                                &eligible,
+                                Some(memory),
+                                None,
+                                &preferences,
+                                &ranking,
+                            )
+                            .is_ok_and(|reuse| reuse.ready && reuse.preferred)
+                            {
+                                ready.store(true, Ordering::Release);
+                                notify.notify_one();
+                            }
+                        }
                         let mut state = job.state.lock().unwrap();
                         let seq = state.events.len() + 1;
                         state.events.push(json!({"seq":seq,"sources":sources}));
-                    },
-                ))
-                .map_err(|_| ())
+                    };
+                    let excluded = preferred
+                        .as_ref()
+                        .map(|(_, supplier)| vec![supplier.clone()])
+                        .unwrap_or_default();
+                    if let Some((memory, supplier)) = preferred.as_ref().filter(|_| !exclude_only) {
+                        job.state.lock().unwrap().phase = "preferred";
+                        let started = Instant::now();
+                        let budget = std::time::Duration::from_millis(preferred_budget);
+                        let active = Arc::new(AtomicBool::new(true));
+                        let fence = active.clone();
+                        let base = authorize.clone();
+                        let authorize_preferred: Arc<dyn Fn() -> bool + Send + Sync> =
+                            Arc::new(move || {
+                                active.load(Ordering::Acquire)
+                                    && started.elapsed() < budget
+                                    && base()
+                            });
+                        {
+                            let preferred_work =
+                                viptv_engine::vsources_runtime::resolve_preferred_progressive(
+                                    config.clone(),
+                                    media.clone(),
+                                    supplier.clone(),
+                                    memory.audio_languages.first().cloned(),
+                                    viptv_engine::vsources_runtime::sdk_metadata(&card, &media),
+                                    authorize_preferred,
+                                    None,
+                                    &mut publish,
+                                );
+                            tokio::select! {
+                                _ = tokio::time::sleep(budget) => {},
+                                _ = notify.notified() => {},
+                                _ = preferred_work => {},
+                            }
+                        }
+                        fence.store(false, Ordering::Release);
+                        if ready.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                    }
+                    if !authorize() {
+                        return Err(());
+                    }
+                    job.state.lock().unwrap().phase = "fallback";
+                    viptv_engine::vsources_runtime::resolve_progressive_excluding(
+                        config,
+                        media,
+                        excluded,
+                        authorize.clone(),
+                        None,
+                        &mut publish,
+                    )
+                    .await
+                    .map_err(|_| ())
+                })
             });
             let mut state = job.state.lock().unwrap();
             state.done = true;

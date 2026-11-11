@@ -1,5 +1,7 @@
 use crate::Error;
 use serde::{Deserialize, Serialize};
+mod source_reuse;
+pub use source_reuse::{RememberedSource, ReusableSources, automatic_source_ids, reusable_sources, reusable_source_context, preferred_source_memory, reuse_audio_language, preferred_supplier_id, preferred_source_decision, PreferredSourceDecision, PREFERRED_SOURCE_BUDGET_MS};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceSelection {

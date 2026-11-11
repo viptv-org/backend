@@ -86,7 +86,7 @@ mod tests {
             .request_headers
             .insert("Referer".into(), "https://provider.example/".into());
         let (id, grant) = sdk_playable(profile.scope, &card, "vsources:owned", "job", stream);
-        assert_eq!(grant.candidate.audio_languages, ["en", "fr"]);
+        assert_eq!(grant.candidate.audio_languages, ["en"]);
         assert_eq!(grant.candidate.audio_flags, ["dubbed"]);
         assert!(grant.candidate.subbed);
         assert_eq!(grant.candidate.subtitle_languages, ["en"]);

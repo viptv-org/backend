@@ -108,7 +108,7 @@ pub(crate) async fn resolve(
             ..Default::default()
         })
     };
-    let value = catalog::detail(
+    let value = catalog::action_detail(
         State(app.clone()),
         Extension(lease.clone()),
         Path((identity.kind.clone(), identity.id.clone())),
@@ -132,7 +132,7 @@ pub(crate) async fn resolve(
                 .as_ref()
                 .and_then(|cursor| cursor.parse().ok())
                 .ok_or("This episode is unavailable")?;
-            let value = catalog::detail(
+            let value = catalog::action_detail(
                 State(app.clone()),
                 Extension(lease.clone()),
                 Path((identity.kind.clone(), identity.id.clone())),

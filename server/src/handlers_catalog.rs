@@ -104,6 +104,8 @@ pub(crate) async fn start_streams(
     State(a): State<App>,
     axum::Json(mut v): axum::Json<Value>,
 ) -> ApiResult {
+    #[cfg(feature = "vsources-runtime")]
+    crate::engine_v3::preferred_discovery::validate(&v)?;
     let only_provider = match v.get("only_provider_id") {
         None => None,
         Some(value) => Some(
@@ -145,6 +147,7 @@ pub(crate) async fn start_streams(
         for key in [
             "only_provider_id",
             "only_addons",
+            "remembered_source", "cross_title_source", "device_max_height", "exclude_preferred_source",
             "metadata_provider_id",
             "metadata_addon_id",
         ] {
@@ -218,7 +221,7 @@ pub(crate) async fn start_streams(
     let addons = a.addons.clone();
     let (sources, source_errors) = blocking(move || Ok(addons.entries_with_errors()?)).await?;
     let source_errors = source_errors.into_iter().take(32).collect::<Vec<_>>();
-    let sources = sources
+    let mut sources = sources
         .into_iter()
         .filter(|(_, _, m)| {
             only_provider.is_none() && addon::supports(m, "stream", &kind, &lookup_id)
@@ -308,8 +311,29 @@ pub(crate) async fn start_streams(
         jobs.insert(jid.clone(), job.clone());
         a.own_resource("job", &jid);
     }
+    let work_job = job.clone();
+    tokio::spawn(async move {
+    let job = work_job;
+    #[cfg(feature = "vsources-runtime")]
+    let preferred_context = crate::engine_v3::preferred_discovery::context(&a,&v).await.ok().flatten();
+    #[cfg(feature = "vsources-runtime")]
+    let preferred_enabled = preferred_context.is_some() && only_provider.is_none() && !only_addons;
+    #[cfg(feature = "vsources-runtime")]
+    let preferred = match preferred_context {
+        Some(context) if preferred_enabled => crate::engine_v3::preferred_discovery::attempt(&a,&job,&v,&sdk_sources,&mut sources,context).await,
+        _ => crate::engine_v3::preferred_discovery::Attempt::default(),
+    };
+    #[cfg(feature = "vsources-runtime")]
+    {
+        if preferred.started || !crate::engine_v3::preferred_discovery::authorized(&a,&job) {
+            job.state.lock().unwrap().pending=0;job.notify.notify_waiters();return;
+        }
+        if preferred_enabled {crate::engine_v3::preferred_discovery::phase(&job,"fallback");}
+        if let Some(id)=preferred.iptv_excluded {v["exclude_provider_id"]=json!(id);}
+    }
     #[cfg(feature = "vsources-runtime")]
     for (source, card, config, proof, revision) in sdk_sources {
+        let excluded = preferred.sdk_excluded.get(&source).cloned().unwrap_or_default();
         crate::engine_v3::source_integrations::spawn(
             a.clone(),
             job.clone(),
@@ -318,6 +342,7 @@ pub(crate) async fn start_streams(
             config,
             proof,
             revision,
+            excluded,
         );
     }
     if only_provider.is_none() {
@@ -368,5 +393,6 @@ pub(crate) async fn start_streams(
             emit(&a, &job, "iptv", r.map(|_| Vec::new()));
         });
     }
+    });
     Ok(axum::Json(json!({"id":jid})))
 }

@@ -46,6 +46,8 @@ mod search_health_tests;
 #[cfg(test)]
 mod search_stream_tests;
 pub(crate) mod source_integrations;
+#[cfg(feature = "vsources-runtime")]
+pub(crate) mod preferred_discovery;
 pub(crate) use controls::get as discovery_controls;
 pub(crate) mod configuration;
 pub(crate) mod anime_show;
@@ -277,6 +279,8 @@ pub(crate) async fn bootstrap(
         })
         .map(|s| s.json());
     let mut value=json!({"contract_version":3,"identity":identity,"capabilities":auth::account_capabilities(&lease.principal),"integrations":integrations,"home":initial.as_ref().map(|home| &home.snapshot),"profile_management":management,"library":bootstrap_library,"preferences":bootstrap_preferences,"library_import":import,"library_membership":membership,"continuation":continuation,"subtitle_availability":subtitle_availability,"playback_capabilities":{"required_audio_index":true},"revisions":revisions});
+    value["preferred_source_discovery_supported"] = json!(cfg!(feature = "vsources-runtime"));
+    value["clearlogo_image_supported"] = json!(true);
     value["navigation"] = navigation;
     if let Some(membership)=membership.as_ref(){
         let show_ratings = bootstrap_preferences

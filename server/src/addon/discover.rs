@@ -445,6 +445,9 @@ impl Addons {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let total = endpoints.len();
+        let public_issuers: std::collections::HashSet<i64> = endpoints.iter()
+            .filter(|(_, _, url)| super::public_meta::identity(url).is_some())
+            .map(|(id, _, _)| *id).collect();
         let owners: Vec<(i64, String)> = endpoints
             .iter()
             .map(|(addon, name, _)| (*addon, name.clone()))
@@ -555,7 +558,7 @@ impl Addons {
         if enrich {
             let mut cache = self.meta_results.lock().unwrap();
             cache.retain(|_, (expiry, _, _)| *expiry > now());
-            let expiry = now() + 3600;
+            let expiry = now() + if public_issuers.contains(&issuer) && kind == "series" { 900 } else { 3600 };
             if cache.len() >= 256 {
                 let drop: Vec<_> = cache.keys().take(64).cloned().collect();
                 for key in drop {
