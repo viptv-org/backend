@@ -121,7 +121,7 @@ impl Service {
                     2 * 1024 * 1024,
                     Duration::from_secs(3),
                     fixture.is_some(),
-                    false,
+                    image.folder == "clearlogo",
                 ),
             )
             .await
