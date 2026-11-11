@@ -1,5 +1,61 @@
 use super::*;
 #[tokio::test]
+async fn clearlogos_follow_validated_redirects_then_normalize_and_cache_the_image() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let reads = Arc::new(AtomicUsize::new(0));
+    let count = reads.clone();
+    let routes = axum::Router::new()
+        .route("/redirect", axum::routing::get(|| async {
+            (StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, "/image")])
+        }))
+        .route("/private", axum::routing::get(|| async {
+            (StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, "http://169.254.169.254/image")])
+        }))
+        .route("/image", axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let count = count.clone();
+            async move {
+                assert!(!headers.contains_key(header::AUTHORIZATION));
+                assert!(!headers.contains_key(header::COOKIE));
+                count.fetch_add(1, Ordering::SeqCst);
+                let mut bytes = Vec::new();
+                {
+                    let mut encoder = png::Encoder::new(&mut bytes, 3, 1);
+                    encoder.set_color(png::ColorType::GrayscaleAlpha);
+                    encoder.set_depth(png::BitDepth::Eight);
+                    encoder.write_header().unwrap().write_image_data(&[0,0, 0,255, 0,0]).unwrap();
+                }
+                bytes
+            }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+    let service = Service::new();
+    let target = url::Url::parse(&format!("http://{address}/redirect")).unwrap();
+    let image = descriptor::Image::clearlogo("tt1234").unwrap();
+    let asset = service.fetch(image.clone(), Some(target.clone())).await.unwrap();
+    assert_eq!(asset.content_type, "image/png");
+    let mut reader = png::Decoder::new(std::io::Cursor::new(&asset.bytes)).read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let output = reader.next_frame(&mut pixels).unwrap();
+    assert_eq!((output.width, output.height, output.color_type), (1, 1, png::ColorType::Rgba));
+    assert_eq!(&pixels[..output.buffer_size()], &[255,255,255,255]);
+    let cached = service.fetch(image, Some(target.clone())).await.unwrap();
+    assert_eq!(cached.etag, asset.etag);
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    assert_eq!(service.fetch(
+        descriptor::Image::parts("posters", "redirect_m.png").unwrap(),
+        Some(target),
+    ).await.err().unwrap().0, StatusCode::BAD_GATEWAY);
+    assert_eq!(service.fetch(
+        descriptor::Image::clearlogo("tt5678").unwrap(),
+        Some(url::Url::parse(&format!("http://{address}/private")).unwrap()),
+    ).await.err().unwrap().0, StatusCode::BAD_GATEWAY);
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
+    server.abort();
+}
+
+#[tokio::test]
 async fn fetches_are_bounded_coalesced_cached_and_never_forward_inbound_credentials() {
     use axum::routing::get;
     use std::sync::atomic::{AtomicUsize, Ordering};
