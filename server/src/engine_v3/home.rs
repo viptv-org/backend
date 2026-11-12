@@ -253,17 +253,26 @@ pub(super) async fn load(
     let (keys, mut parents): (Vec<_>, Vec<_>) = parents.into_iter().unzip();
     super::source_integrations::merge_cached(&app, &lease, configuration_revision, &mut parents);
     let backgrounds = keys.into_iter().zip(parents.into_iter().map(|card| card.landscape)).collect::<HashMap<_,_>>();
-    let previews = snapshot.rows.iter().map(|row| row.cards.iter().map(|card| {
-        let background = backgrounds.get(&preview_key(card)).and_then(|image| image.clone()).or_else(|| card.landscape.clone());
-        let entry = continuation.entries.iter().find(|entry| super::viewing_action::entry_matches(entry, card));
-        let (caption, progress) = if let Some(entry) = entry {
-            let (progress, remaining) = super::viewing_action::continuation_display(entry);
-            let label = super::viewing_action::action_label(&entry.card, entry.status == viptv_engine::continuation::ContinuationStatus::Resume);
-            (Some(remaining.map(|remaining| format!("{label} · {remaining}")).unwrap_or(label)), progress)
-        } else { (None, None) };
-        let action = if row.id == "continue" && entry.is_some() { "play" } else { "details" };
-        json!({"background":background,"caption":caption,"progress":progress,"action":action})
-    }).collect()).collect();
+    let previews = snapshot.rows.iter_mut().map(|row| {
+        let continuing = row.id == "continue";
+        row.cards.iter_mut().map(|card| {
+            let background = backgrounds.get(&preview_key(card)).and_then(|image| image.clone()).or_else(|| card.landscape.clone());
+            let entry = continuation.entries.iter().find(|entry| super::viewing_action::entry_matches(entry, card));
+            if continuing {
+                if let Some(entry) = entry.filter(|entry| entry.status == viptv_engine::continuation::ContinuationStatus::Resume) {
+                    card.subtitle = entry.card.subtitle.clone();
+                }
+            }
+            let (caption, progress, position) = if let Some(entry) = entry {
+                let progress = super::viewing_action::continuation_progress(entry);
+                let position = super::viewing_action::resume_position(entry);
+                let label = super::viewing_action::action_label(&entry.card, position);
+                (Some(label), progress, position)
+            } else { (None, None, None) };
+            let action = if continuing && entry.is_some() { "play" } else { "details" };
+            json!({"background":background,"caption":caption,"progress":progress,"action":action,"resume_position_millis":position})
+        }).collect()
+    }).collect();
     Ok(PresentedHome { snapshot, previews })
 }
 

@@ -243,6 +243,9 @@ pub(crate) fn snapshot(
     entries = merged.into_values().chain(unkeyed).collect();
     for (_, entry) in &mut entries {
         mark_finished(entry);
+        if entry.status == ContinuationStatus::Resume {
+            entry.card.subtitle = super::super::viewing_action::episode_caption(&entry.card);
+        }
     }
     entries.sort_by(|(a_order, a), (b_order, b)| {
         b_order

@@ -1,5 +1,6 @@
 use super::*;
 use crate::{auth_integration_tests::fixture, test_support::request};
+mod resume_presentation;
 
 struct Duplicate {
     app: App,
@@ -11,7 +12,11 @@ impl Drop for Duplicate {
 }
 
 async fn duplicate(scoped_newer: bool) -> Duplicate {
-    let title = json!({"title":"Owned continuation","runtime":2,"ids":{"simkl":20}});
+    duplicate_with_runtime(scoped_newer, Some(2)).await
+}
+
+async fn duplicate_with_runtime(scoped_newer: bool, runtime: Option<u64>) -> Duplicate {
+    let title = json!({"title":"Owned continuation","runtime":runtime,"ids":{"simkl":20}});
     let episodes = json!([
         {"title":"Owned previous","season":1,"episode":1,"aired":true,"ids":{"simkl":29}},
         {"title":"Owned current","season":1,"episode":2,"aired":true,"ids":{"simkl":30}},
@@ -68,11 +73,14 @@ async fn legacy_and_scoped_resume_coalesce_with_one_authoritative_clock_across_p
         assert_eq!(cards.len(),1,"{home}");
         assert_eq!(cards[0]["identity"],entry["card"]["identity"]);
         assert_eq!(cards[0]["view"]["preview"]["progress"],expected as f64/100000.0);
+        assert_eq!(cards[0]["view"]["preview"]["resume_position_millis"],expected);
         let action=call(&fixture.app,"POST","/api/profiles/1/viewing-action",json!({"card":cards[0]})).await;
         assert_eq!(action["resume"],true);
         assert_eq!(action["card"]["identity"],entry["card"]["identity"]);
         assert_eq!(action["progress"],cards[0]["view"]["preview"]["progress"]);
-        assert_eq!(action["remaining_label"],"2m left");
+        assert!(action["remaining_label"].is_null());
+        assert_eq!(action["resume_position_millis"],expected);
+        assert_eq!(action["label"],if scoped_newer { "Resume at 0:30" } else { "Resume at 0:10" });
         let db=fixture.app.db.lock().unwrap();
         assert_eq!(db.query_row("SELECT count(*) FROM progress",[],|r|r.get::<_,i64>(0)).unwrap(),1);
         assert_eq!(db.query_row("SELECT count(*) FROM engine_scoped_records WHERE record_kind='playback'",[],|r|r.get::<_,i64>(0)).unwrap(),1);

@@ -15,28 +15,38 @@ pub(super) fn entry_matches(entry: &ContinuationEntry, selected: &Card) -> bool 
         )
 }
 
-pub(super) fn continuation_display(entry: &ContinuationEntry) -> (Option<f64>, Option<String>) {
+pub(super) fn continuation_progress(entry: &ContinuationEntry) -> Option<f64> {
     if entry.status != ContinuationStatus::Resume || entry.record.duration_millis == 0 {
-        return (None, None);
+        return None;
     }
-    let progress =
-        (entry.record.position_millis as f64 / entry.record.duration_millis as f64).clamp(0.0, 1.0);
-    let remaining = entry
-        .record
-        .duration_millis
-        .saturating_sub(entry.record.position_millis)
-        .div_ceil(60_000);
-    (Some(progress), Some(format!("{remaining}m left")))
+    Some((entry.record.position_millis as f64 / entry.record.duration_millis as f64).clamp(0.0, 1.0))
 }
 
-pub(super) fn action_label(card: &Card, resume: bool) -> String {
-    let verb = if resume { "Resume" } else { "Play" };
-    match &card.identity.episode {
-        Some(episode) => match episode.season {
-            Some(season) => format!("{verb} S{season} E{}", episode.episode),
-            None => format!("{verb} E{}", episode.episode),
-        },
-        None => verb.to_owned(),
+pub(super) fn resume_position(entry: &ContinuationEntry) -> Option<u64> {
+    (entry.status == ContinuationStatus::Resume && entry.record.position_millis > 0)
+        .then_some(entry.record.position_millis)
+}
+
+pub(super) fn episode_caption(card: &Card) -> Option<String> {
+    card.identity.episode.as_ref().map(|episode| match episode.season {
+        Some(season) => format!("S{season} E{}", episode.episode),
+        None => format!("E{}", episode.episode),
+    })
+}
+
+pub(super) fn action_label(card: &Card, position: Option<u64>) -> String {
+    if let Some(position) = position.filter(|value| *value > 0) {
+        let seconds = position / 1000;
+        let clock = if seconds < 3600 {
+            format!("{}:{:02}", seconds / 60, seconds % 60)
+        } else {
+            format!("{}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60)
+        };
+        return format!("Resume at {clock}");
+    }
+    match episode_caption(card) {
+        Some(episode) => format!("Play {episode}"),
+        None => "Play".to_owned(),
     }
 }
 
@@ -148,7 +158,7 @@ pub(crate) async fn resolve(
     };
     let mut resume = false;
     let mut progress = None;
-    let mut remaining_label = None;
+    let mut resume_position_millis = None;
     if !request.restart {
         let mut offset = 0;
         loop {
@@ -160,7 +170,8 @@ pub(crate) async fn resolve(
             {
                 target = entry.card.clone();
                 resume = entry.status == ContinuationStatus::Resume;
-                (progress, remaining_label) = continuation_display(entry);
+                progress = continuation_progress(entry);
+                resume_position_millis = resume_position(entry);
                 break;
             }
             if page.complete {
@@ -182,8 +193,8 @@ pub(crate) async fn resolve(
     let preferences = preferences::get(State(app.clone()), Extension(lease.clone()), Path(profile))
         .await?
         .0;
-    let label = action_label(&target, resume);
-    let mut value = json!({"card":target,"label":label,"resume":resume,"progress":progress,"remaining_label":remaining_label,"source_selection":preferences["preferences"]["source_selection"]});
+    let label = action_label(&target, resume_position_millis);
+    let mut value = json!({"card":target,"label":label,"resume":resume,"resume_position_millis":resume_position_millis,"progress":progress,"remaining_label":null,"source_selection":preferences["preferences"]["source_selection"]});
     viewing_presentation::for_profile(&app, &lease, profile, &mut value)?;
     Ok(axum::Json(value))
 }
