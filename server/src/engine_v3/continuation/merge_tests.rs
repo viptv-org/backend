@@ -215,6 +215,7 @@ async fn bounded_legacy_queue_keeps_attribution_lookups_linear() {
 
 #[tokio::test]
 async fn attribution_does_not_promote_unverified_legacy_external_alias_claims() {
+    for imported in [false,true] {
     let fixture=duplicate(true).await;
     let mut legacy=fixture.card.identity.clone();legacy.id="opaque-child".into();
     let mut parent=fixture.card.parent_identity.clone().unwrap();
@@ -222,6 +223,10 @@ async fn attribution_does_not_promote_unverified_legacy_external_alias_claims() 
     let context=json!({"engine_identity":legacy,"engine_parent_identity":parent,"engine_provider_id":"simkl",
         "series_id":parent.id,"season":1,"episode":2});
     let db=fixture.app.db.lock().unwrap();
+    if imported {
+        let mut saved=fixture.card.clone();saved.identity=parent.clone();saved.parent_identity=None;
+        db.execute("INSERT INTO simkl_import_entries(profile_id,remote_id,remote_kind,local_id,local_kind,card,statistics,link_revision) VALUES(1,'simkl:tv:20','series','tt999','series',?1,'{}',0)",[serde_json::to_string(&saved).unwrap()]).unwrap();
+    }
     db.execute("UPDATE progress SET id=?1,context=?2",params![legacy.id,context.to_string()]).unwrap();
     let raw:String=db.query_row("SELECT value FROM engine_scoped_records WHERE record_kind='playback'",[],|r|r.get(0)).unwrap();
     let mut record:Value=serde_json::from_str(&raw).unwrap();
@@ -232,4 +237,5 @@ async fn attribution_does_not_promote_unverified_legacy_external_alias_claims() 
     drop(db);
     let page=call(&fixture.app,"GET","/api/profiles/1/continue",Value::Null).await;
     assert_eq!(page["entries"].as_array().unwrap().len(),2,"{page}");
+    }
 }

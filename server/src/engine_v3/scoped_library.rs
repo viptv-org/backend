@@ -941,8 +941,13 @@ pub(crate) fn continuation_key_db(
         record.metadata_origin = entry.card.metadata_origin.clone();
     }
     let card = record.card();
+    let imported = if shared_identity(&card.identity) {
+        imported_key(db, profile, &card)?
+    } else {
+        None
+    };
     let saved = Saved {
-        key: imported_key(db, profile, &card)?.unwrap_or(raw_key(&card)?),
+        key: imported.unwrap_or(raw_key(&card)?),
         updated: record.updated_at_millis,
         value: record,
         added: None,
