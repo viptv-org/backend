@@ -293,8 +293,12 @@ fn keep(
     }
 }
 fn prefer(entry: &ContinuationEntry, old: &ContinuationEntry) -> bool {
-    if entry.card.identity == old.card.identity
-        && entry.card.parent_identity == old.card.parent_identity
+    let identity = |card: &Card| {
+        let mut identity = viptv_engine::origin::verified_storage_identity(card);
+        identity.ids.clear();
+        identity
+    };
+    if identity(&entry.card) == identity(&old.card)
         && entry.card.metadata_origin == old.card.metadata_origin
     {
         let resume = |value: &ContinuationEntry| value.status == ContinuationStatus::Resume && value.record.can_resume();

@@ -98,7 +98,7 @@ async fn verified_import_alias_keeps_one_resume_across_storage_and_lookup_ids() 
 
 #[tokio::test]
 async fn real_episode_resume_and_active_rewatch_beat_a_stale_next_anchor_for_that_episode() {
-    for rewatch in [false,true] {
+    for (rewatch,extra_alias) in [(false,false),(true,false),(false,true)] {
         let fixture=duplicate(false).await;
         let mut previous=fixture.card.identity.clone();
         previous.id="simkl:tv:20:1:1".into();
@@ -112,6 +112,13 @@ async fn real_episode_resume_and_active_rewatch_beat_a_stale_next_anchor_for_tha
             if rewatch {
                 db.execute("UPDATE engine_scoped_records SET value=json_set(value,'$.completed_at_millis',1000) WHERE record_kind='playback'",[]).unwrap();
             }
+            if extra_alias {
+                let raw:String=db.query_row("SELECT value FROM engine_scoped_records WHERE record_kind='playback'",[],|r|r.get(0)).unwrap();
+                let mut record:Value=serde_json::from_str(&raw).unwrap();
+                record["identity"]["ids"].as_array_mut().unwrap().push(json!({"namespace":"tvdb","value":"300"}));
+                record["presentation"]["identity"]=record["identity"].clone();
+                db.execute("UPDATE engine_scoped_records SET lookup_identity=?1,value=?2 WHERE record_kind='playback'",params![record["identity"].to_string(),record.to_string()]).unwrap();
+            }
         }
         let next=call(&fixture.app,"POST","/api/profiles/1/continue/next",json!({"identity":previous,"parent_identity":fixture.card.parent_identity})).await;
         assert_eq!(next["status"],"Next","{next}");
@@ -121,7 +128,9 @@ async fn real_episode_resume_and_active_rewatch_beat_a_stale_next_anchor_for_tha
         assert_eq!(entry["status"],"Resume","{page}");
         assert_eq!(entry["record"]["position_millis"],30000);
         assert_eq!(entry["record"]["completed_at_millis"],if rewatch {json!(1000)} else {Value::Null});
-        assert_eq!(entry["card"]["identity"],serde_json::to_value(&fixture.card.identity).unwrap());
+        assert_eq!(entry["card"]["identity"]["id"],fixture.card.identity.id);
+        assert_eq!(entry["card"]["identity"]["episode"],serde_json::to_value(&fixture.card.identity.episode).unwrap());
+        if extra_alias { assert_eq!(entry["record"]["identity"]["ids"].as_array().unwrap().len(),2); }
     }
 }
 
@@ -161,4 +170,45 @@ async fn newer_completion_of_a_different_episode_does_not_restore_an_older_resum
     assert_eq!(page["entries"][0]["status"],"Pending");
     assert_eq!(page["entries"][0]["card"]["identity"],serde_json::to_value(card.identity).unwrap());
     assert_eq!(page["entries"][0]["record"]["position_millis"],100000);
+}
+
+#[tokio::test]
+async fn bounded_legacy_queue_keeps_attribution_lookups_linear() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for size in [64,512] {
+        let fixture=duplicate(true).await;
+        {
+            let db=fixture.app.db.lock().unwrap();
+            for n in 0..size {
+                let parent_id=format!("simkl:tv:{}",1000+n);
+                let mut identity=fixture.card.identity.clone();
+                identity.id=format!("{parent_id}:1:2");
+                let mut parent=fixture.card.parent_identity.clone().unwrap();parent.id=parent_id;
+                let context=json!({"engine_identity":identity,"engine_parent_identity":parent,"engine_provider_id":"simkl",
+                    "series_id":parent.id,"season":1,"episode":2});
+                db.execute("INSERT INTO progress(profile_id,id,type,name,position,duration,updated_at,context,title_id) VALUES(1,?1,'series','Owned queue fixture',10,100,50,?2,?3)",params![identity.id,context.to_string(),parent.id]).unwrap();
+            }
+        }
+        let counted=Arc::new(AtomicUsize::new(0)); let seen=counted.clone();
+        fixture.app.db.lock().unwrap().authorizer(Some(move |context:AuthContext<'_>| {
+            if let AuthAction::Read {table_name,column_name,..}=context.action {
+                if table_name=="simkl_import_entries" && column_name=="card" {seen.fetch_add(1,Ordering::Relaxed);}
+            }
+            Authorization::Allow
+        }));
+        let lease=ResourceLease {policy_revision:0,principal:auth::Principal::Account {account_id:1,role:"owner".into(),profile_id:Some(1),session_id:Some("s1".into())},session_id:Some("s1".into())};
+        let owned=fixture.app.clone().with_lease(lease.clone());
+        let began=std::time::Instant::now();
+        let page=snapshot(&owned,&lease,1,0,12).unwrap();
+        let snapshot_micros=began.elapsed().as_micros(); let lookups=counted.swap(0,Ordering::Relaxed);
+        assert_eq!(page.entries.len(),12); assert!(!page.complete);
+        assert!(lookups<=4*(size+1)+24,"{size} rows caused {lookups} import-card lookup authorizations");
+        let db=fixture.app.db.lock().unwrap(); let began=std::time::Instant::now();
+        for _ in 0..size { super::super::scoped_library::continuation_key_db(&db,1,&page.entries[0]).unwrap(); }
+        let key_micros=began.elapsed().as_micros(); let key_lookups=counted.load(Ordering::Relaxed);
+        db.authorizer(None::<fn(AuthContext<'_>)->Authorization>);
+        assert!(key_lookups<=size,"canonical key lookups grew beyond one per record");
+        println!("continuation-local-fixture rows={} snapshot_us={} import_card_read_authorizations={} canonical_keys_us={} canonical_key_lookups={}",size,snapshot_micros,lookups,key_micros,key_lookups);
+    }
 }
