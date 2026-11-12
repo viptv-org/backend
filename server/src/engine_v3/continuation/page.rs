@@ -46,6 +46,7 @@ pub(crate) fn snapshot(
     if offset > 10000 || !(1..=100).contains(&limit) {
         return Err("Invalid continuation page".into());
     }
+    let serving = super::super::origins::Serving::read(app, lease, profile)?;
     let db = app
         .db
         .lock()
@@ -226,17 +227,20 @@ pub(crate) fn snapshot(
     if queue["next_offset"].is_number() {
         return Err("History exceeds its bounded item limit".into());
     }
-    for (key, entry) in super::super::scoped_library::continuation_db(&db, app, profile)? {
-        entries.retain(|(_, old)| {
-            let mut card = old.record.card();
-            if let Some(parent) = &old.record.parent_identity {
-                card.identity = parent.clone();
-                card.parent_identity = None;
-            }
-            super::super::scoped_library::raw_key(&card).is_ok_and(|old| old != key)
-        });
-        entries.push((entry.record.updated_at_millis, entry));
+    let mut merged = std::collections::BTreeMap::new();
+    let mut unkeyed = Vec::new();
+    for (order, mut entry) in std::mem::take(&mut entries) {
+        attribute(&db, &serving, &mut entry.card)?;
+        match super::super::scoped_library::continuation_key_db(&db, profile, &entry) {
+            Ok(key) => keep(&mut merged, key, order, entry),
+            Err(_) => unkeyed.push((order, entry)),
+        }
     }
+    for (key, mut entry) in super::super::scoped_library::continuation_db(&db, app, profile)? {
+        attribute(&db, &serving, &mut entry.card)?;
+        keep(&mut merged, key, entry.record.updated_at_millis, entry);
+    }
+    entries = merged.into_values().chain(unkeyed).collect();
     for (_, entry) in &mut entries {
         mark_finished(entry);
     }
@@ -250,24 +254,13 @@ pub(crate) fn snapshot(
         (offset as usize + (limit as usize) < total).then(|| (offset + limit).to_string());
     let revision =
         configuration_revision.saturating_add(super::super::history::revision(&db, profile)?);
-    let mut entries = entries
+    let entries = entries
         .into_iter()
         .skip(offset as usize)
         .take(limit as usize)
         .map(|(_, entry)| entry)
         .collect::<Vec<_>>();
-    // Release the queue read first: attribution decrypts manifests through the vault and the database.
     drop(db);
-    let serving = super::super::origins::Serving::read(app, lease, profile)?;
-    {
-        let db = app
-            .db
-            .lock()
-            .map_err(|_| ApiError::from("Database unavailable"))?;
-        for entry in &mut entries {
-            attribute(&db, &serving, &mut entry.card)?;
-        }
-    }
     Ok(ContinuationPage {
         scope: super::super::scope(lease, profile, configuration_revision),
         revision,
@@ -275,6 +268,44 @@ pub(crate) fn snapshot(
         complete: next_cursor.is_none(),
         next_cursor,
     })
+}
+type MergeKey = (
+    super::super::scoped_library::Key,
+    Option<(String, bool)>,
+    Option<String>,
+    Option<String>,
+);
+fn keep(
+    entries: &mut std::collections::BTreeMap<MergeKey, (u64, ContinuationEntry)>,
+    key: super::super::scoped_library::Key,
+    order: u64,
+    entry: ContinuationEntry,
+) {
+    let identity = &entry.record.identity;
+    let key = (
+        key,
+        identity.episode.as_ref().map(|episode| (episode.order.clone(), episode.season_number() == 0)),
+        identity.edition.clone(),
+        entry.record.parent_identity.as_ref().and_then(|parent| parent.edition.clone()),
+    );
+    if entries.get(&key).is_none_or(|(_, old)| prefer(&entry, old)) {
+        entries.insert(key, (order, entry));
+    }
+}
+fn prefer(entry: &ContinuationEntry, old: &ContinuationEntry) -> bool {
+    let identity = |card: &Card| {
+        let mut identity = card.identity.clone();
+        identity.ids.clear();
+        identity
+    };
+    if identity(&entry.card) == identity(&old.card)
+        && entry.card.metadata_origin == old.card.metadata_origin
+    {
+        let resume = |value: &ContinuationEntry| value.status == ContinuationStatus::Resume && value.record.can_resume();
+        if resume(entry) && old.status == ContinuationStatus::Next { return true; }
+        if resume(old) && entry.status == ContinuationStatus::Next { return false; }
+    }
+    entry.record.updated_at_millis >= old.record.updated_at_millis
 }
 fn attribute(
     db: &Connection,

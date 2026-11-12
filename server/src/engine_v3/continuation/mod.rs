@@ -15,6 +15,8 @@ pub(crate) use visibility::update;
 mod tests;
 #[cfg(test)]
 mod release_tests;
+#[cfg(test)]
+mod merge_tests;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Page {
