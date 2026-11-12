@@ -294,7 +294,7 @@ fn keep(
 }
 fn prefer(entry: &ContinuationEntry, old: &ContinuationEntry) -> bool {
     let identity = |card: &Card| {
-        let mut identity = viptv_engine::origin::verified_storage_identity(card);
+        let mut identity = card.identity.clone();
         identity.ids.clear();
         identity
     };

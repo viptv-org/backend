@@ -212,3 +212,24 @@ async fn bounded_legacy_queue_keeps_attribution_lookups_linear() {
         println!("continuation-local-fixture rows={} snapshot_us={} import_card_read_authorizations={} canonical_keys_us={} canonical_key_lookups={}",size,snapshot_micros,lookups,key_micros,key_lookups);
     }
 }
+
+#[tokio::test]
+async fn attribution_does_not_promote_unverified_legacy_external_alias_claims() {
+    let fixture=duplicate(true).await;
+    let mut legacy=fixture.card.identity.clone();legacy.id="opaque-child".into();
+    let mut parent=fixture.card.parent_identity.clone().unwrap();
+    parent.ids.push(viptv_engine::identity::ExternalId {namespace:"imdb".into(),value:"tt999".into()});
+    let context=json!({"engine_identity":legacy,"engine_parent_identity":parent,"engine_provider_id":"simkl",
+        "series_id":parent.id,"season":1,"episode":2});
+    let db=fixture.app.db.lock().unwrap();
+    db.execute("UPDATE progress SET id=?1,context=?2",params![legacy.id,context.to_string()]).unwrap();
+    let raw:String=db.query_row("SELECT value FROM engine_scoped_records WHERE record_kind='playback'",[],|r|r.get(0)).unwrap();
+    let mut record:Value=serde_json::from_str(&raw).unwrap();
+    record["identity"]["id"]=json!("tt999:1:2");record["parent_identity"]["id"]=json!("tt999");
+    record["parent_identity"]["ids"]=json!([]);
+    record["presentation"]["identity"]=record["identity"].clone();record["presentation"]["parent_identity"]=record["parent_identity"].clone();
+    db.execute("UPDATE engine_scoped_records SET identity_id='tt999:1:2',lookup_id='tt999:1:2',lookup_identity=?1,value=?2 WHERE record_kind='playback'",params![record["identity"].to_string(),record.to_string()]).unwrap();
+    drop(db);
+    let page=call(&fixture.app,"GET","/api/profiles/1/continue",Value::Null).await;
+    assert_eq!(page["entries"].as_array().unwrap().len(),2,"{page}");
+}

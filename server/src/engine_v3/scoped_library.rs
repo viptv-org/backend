@@ -940,12 +940,13 @@ pub(crate) fn continuation_key_db(
     if record.metadata_origin.is_none() {
         record.metadata_origin = entry.card.metadata_origin.clone();
     }
+    let card = record.card();
     let saved = Saved {
-        key: verified_key_db(db, profile, &record.card())?,
+        key: imported_key(db, profile, &card)?.unwrap_or(raw_key(&card)?),
         updated: record.updated_at_millis,
         value: record,
         added: None,
-        verified: true,
+        verified: false,
     };
     Ok(parent_key(&saved)?.unwrap_or(saved.key))
 }
