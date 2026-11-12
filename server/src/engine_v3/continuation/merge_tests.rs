@@ -78,3 +78,87 @@ async fn legacy_and_scoped_resume_coalesce_with_one_authoritative_clock_across_p
         assert_eq!(db.query_row("SELECT count(*) FROM engine_scoped_records WHERE record_kind='playback'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 }
+
+#[tokio::test]
+async fn verified_import_alias_keeps_one_resume_across_storage_and_lookup_ids() {
+    let fixture=duplicate(true).await;
+    let mut parent=fixture.card.clone();
+    parent.identity=parent.parent_identity.take().unwrap();
+    {
+        let db=fixture.app.db.lock().unwrap();
+        db.execute("INSERT INTO simkl_import_entries(profile_id,remote_id,remote_kind,local_id,local_kind,card,statistics,link_revision) VALUES(1,'simkl:tv:20','series','tt2020','series',?1,'{}',0)",[serde_json::to_string(&parent).unwrap()]).unwrap();
+        db.execute("UPDATE engine_scoped_records SET identity_id='tt2020:1:2' WHERE record_kind='playback'",[]).unwrap();
+    }
+    let page=call(&fixture.app,"GET","/api/profiles/1/continue?limit=1",Value::Null).await;
+    assert_eq!(page["entries"].as_array().unwrap().len(),1);
+    assert_eq!(page["complete"],true,"coalescing precedes pagination: {page}");
+    assert_eq!(page["entries"][0]["record"]["position_millis"],30000);
+    assert_eq!(page["entries"][0]["card"]["identity"],serde_json::to_value(&fixture.card.identity).unwrap());
+}
+
+#[tokio::test]
+async fn real_episode_resume_and_active_rewatch_beat_a_stale_next_anchor_for_that_episode() {
+    for rewatch in [false,true] {
+        let fixture=duplicate(false).await;
+        let mut previous=fixture.card.identity.clone();
+        previous.id="simkl:tv:20:1:1".into();
+        previous.episode.as_mut().unwrap().episode=1;
+        previous.ids[0].value="29".into();
+        let context=json!({"engine_identity":previous,"engine_parent_identity":fixture.card.parent_identity,
+            "engine_provider_id":"simkl","series_id":"simkl:tv:20","season":1,"episode":1,"watched_override":true});
+        {
+            let db=fixture.app.db.lock().unwrap();
+            db.execute("UPDATE progress SET id=?1,position=100,duration=100,context=?2",params![previous.id,context.to_string()]).unwrap();
+            if rewatch {
+                db.execute("UPDATE engine_scoped_records SET value=json_set(value,'$.completed_at_millis',1000) WHERE record_kind='playback'",[]).unwrap();
+            }
+        }
+        let next=call(&fixture.app,"POST","/api/profiles/1/continue/next",json!({"identity":previous,"parent_identity":fixture.card.parent_identity})).await;
+        assert_eq!(next["status"],"Next","{next}");
+        let page=call(&fixture.app,"GET","/api/profiles/1/continue",Value::Null).await;
+        assert_eq!(page["entries"].as_array().unwrap().len(),1,"{page}");
+        let entry=&page["entries"][0];
+        assert_eq!(entry["status"],"Resume","{page}");
+        assert_eq!(entry["record"]["position_millis"],30000);
+        assert_eq!(entry["record"]["completed_at_millis"],if rewatch {json!(1000)} else {Value::Null});
+        assert_eq!(entry["card"]["identity"],serde_json::to_value(&fixture.card.identity).unwrap());
+    }
+}
+
+#[tokio::test]
+async fn episode_order_specials_and_editions_remain_separate_continuations() {
+    for variant in ["order","special","edition","parent_edition"] {
+        let fixture=duplicate(true).await;
+        let mut identity=fixture.card.identity.clone();
+        let mut parent=fixture.card.parent_identity.clone().unwrap();
+        match variant {
+            "order" => identity.episode.as_mut().unwrap().order="absolute".into(),
+            "special" => {identity.id="simkl:tv:20:0:2".into();identity.episode.as_mut().unwrap().season=Some(0);},
+            "edition" => identity.edition=Some("alternate cut".into()),
+            _ => parent.edition=Some("alternate cut".into()),
+        }
+        let coordinates=identity.episode.as_ref().unwrap();
+        let context=json!({"engine_identity":identity,"engine_parent_identity":parent,"engine_provider_id":"simkl",
+            "series_id":parent.id,"season":coordinates.season,"episode":coordinates.episode});
+        fixture.app.db.lock().unwrap().execute("UPDATE progress SET id=?1,context=?2",params![identity.id,context.to_string()]).unwrap();
+        let page=call(&fixture.app,"GET","/api/profiles/1/continue",Value::Null).await;
+        assert_eq!(page["entries"].as_array().unwrap().len(),2,"{variant}: {page}");
+    }
+}
+
+#[tokio::test]
+async fn newer_completion_of_a_different_episode_does_not_restore_an_older_resume() {
+    let fixture=duplicate(false).await;
+    let raw:String=fixture.app.db.lock().unwrap().query_row("SELECT value FROM engine_scoped_records WHERE record_kind='playback'",[],|r|r.get(0)).unwrap();
+    let mut record:Value=serde_json::from_str(&raw).unwrap();
+    let mut card=fixture.card.clone(); card.identity.id="simkl:tv:20:1:3".into();
+    card.identity.episode.as_mut().unwrap().episode=3; card.identity.ids[0].value="31".into();
+    record["identity"]=serde_json::to_value(&card.identity).unwrap(); record["presentation"]=serde_json::to_value(&card).unwrap();
+    record["position_millis"]=json!(100000);record["updated_at_millis"]=json!(400000);record["completed_at_millis"]=json!(400000);
+    fixture.app.db.lock().unwrap().execute("UPDATE engine_scoped_records SET identity_id=?1,lookup_id=?1,lookup_identity=?2,value=?3,updated_at_millis=400000 WHERE record_kind='playback'",params![card.identity.id,serde_json::to_string(&card.identity).unwrap(),record.to_string()]).unwrap();
+    let page=call(&fixture.app,"GET","/api/profiles/1/continue",Value::Null).await;
+    assert_eq!(page["entries"].as_array().unwrap().len(),1,"{page}");
+    assert_eq!(page["entries"][0]["status"],"Pending");
+    assert_eq!(page["entries"][0]["card"]["identity"],serde_json::to_value(card.identity).unwrap());
+    assert_eq!(page["entries"][0]["record"]["position_millis"],100000);
+}
