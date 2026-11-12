@@ -27,8 +27,8 @@ tokio = { version = "1", features = ["time", "rt", "sync", "macros", "net"], opt
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 futures = { version = "0.3", optional = true }
 
-vsources = { git = "https://github.com/viptv-org/vsources.git", rev = "320645b0a95ef1ba942e27b8ae4ee1c96ee5a523", default-features = false, optional = true }
-vsources-cloudflare = { git = "https://github.com/viptv-org/vsources.git", rev = "320645b0a95ef1ba942e27b8ae4ee1c96ee5a523", default-features = false, optional = true }
+vsources = { git = "https://github.com/viptv-org/vsources.git", rev = "4195c1d71d155270738ff52343e9e2b3c7f6433a", default-features = false, optional = true }
+vsources-cloudflare = { git = "https://github.com/viptv-org/vsources.git", rev = "4195c1d71d155270738ff52343e9e2b3c7f6433a", default-features = false, optional = true }
 async-trait = { version = "0.1", optional = true }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "gzip", "brotli", "deflate"], optional = true }
