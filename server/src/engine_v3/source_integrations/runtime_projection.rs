@@ -33,6 +33,112 @@ mod tests {
         app_state::ResourceLease, auth, auth_integration_tests::fixture, test_support::request,
     };
 
+    async fn sdk_registration_fixture() -> (crate::App, String, [u8; 32]) {
+        let app = fixture();
+        let (status, connection) = request(&app, "member-token-1", "PUT", "/api/profiles/1/source-integrations",
+            json!({"revision":0,"plugin_id":"vsources","configuration":{"tmdb_api_key":"fixture-sdk-key"}})).await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        let source = connection["configuration"]["assignments"].as_array().unwrap().iter()
+            .filter_map(|assignment| assignment["connection_id"].as_str())
+            .find(|id| id.starts_with("vsources:")).unwrap().to_owned();
+        let scoped = app.with_lease(ResourceLease {
+            policy_revision: 0,
+            principal: auth::Principal::Account {
+                account_id: 1, role: "owner".into(), profile_id: Some(1), session_id: Some("s1".into()),
+            },
+            session_id: Some("s1".into()),
+        });
+        let proof = crate::sources::source_configuration(&scoped.db.lock().unwrap(), &source).unwrap().unwrap();
+        (scoped, source, proof)
+    }
+
+    #[tokio::test]
+    async fn sdk_unknown_facts_are_not_reconstructed_from_display_text() {
+        let (app, source, _) = sdk_registration_fixture().await;
+        for display in ["Johnny English", "French Kiss", "Hindi Medium", "Catalog 1080p HEVC AAC"] {
+            let mut stream = SdkStream::new(
+                url::Url::parse("https://media.example/opaque.m3u8").unwrap(),
+                serde_json::from_str(r#""hls""#).unwrap(),
+            );
+            stream.label = Some(format!("{display} — Server 1"));
+            stream.meta.source_label = Some(display.into());
+            let (cards, error) = app.register(&source, vec![sdk_source(&stream)], "movie");
+            assert!(error.is_none()); assert_eq!(cards.len(), 1);
+            let card = &cards[0];
+            assert_eq!(card["audio_languages"], json!([]), "display: {display}");
+            assert!(card["quality_height"].is_null(), "display: {display}");
+            assert!(card["presentation"]["video_codec"].is_null());
+            assert_eq!(card["presentation"]["audio_codecs"], json!([]));
+            let candidate = crate::engine_v3::source_ranking::candidate_from_card("candidate".into(), &source, card);
+            assert!(candidate.audio_languages.is_empty()); assert!(candidate.quality_height.is_none());
+            assert!(candidate.presentation.unwrap().video_codec.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn sdk_declared_audio_and_subtitles_remain_independent() {
+        let (app, source, _) = sdk_registration_fixture().await;
+        let mut stream = SdkStream::new(url::Url::parse("https://media.example/opaque.m3u8").unwrap(),
+            serde_json::from_str(r#""hls""#).unwrap());
+        stream.meta.source_label = Some("Johnny English 1080p HEVC".into());
+        stream.meta.audio_selection = Some(serde_json::from_str(r#"{"language":"Fr","audio_index":0}"#).unwrap());
+        stream.meta.resolution = Some(720);
+        let mut raw = sdk_source(&stream);
+        raw["subbed"] = json!(true);
+        raw["subtitle_languages"] = json!(["en"]);
+        let (cards, error) = app.register(&source, vec![raw], "movie");
+        assert!(error.is_none());
+        let card = &cards[0];
+        assert_eq!(card["audio_languages"], json!(["fr"]));
+        assert_eq!(card["quality_height"], 720);
+        assert_eq!(card["subtitle_languages"], json!(["en"]));
+        let candidate = crate::engine_v3::source_ranking::candidate_from_card("candidate".into(), &source, card);
+        assert_eq!(candidate.audio_languages, ["fr"]);
+        assert!(candidate.subbed);
+        assert_eq!(candidate.subtitle_languages, ["en"]);
+    }
+
+    #[tokio::test]
+    async fn sdk_header_context_keeps_its_own_expiry_and_source_identity() {
+        let (app, source, proof) = sdk_registration_fixture().await;
+        let mut short = SdkStream::new(
+            url::Url::parse("https://media.example/shared.m3u8").unwrap(),
+            serde_json::from_str(r#""hls""#).unwrap(),
+        );
+        short.ttl = std::time::Duration::from_secs(10);
+        short.meta.audio_selection = Some(serde_json::from_str(r#"{"language":"En","audio_index":1}"#).unwrap());
+        short.meta.request_headers.insert("Referer".into(), "https://first.example/".into());
+        let mut long = short.clone(); long.ttl = std::time::Duration::from_secs(300);
+        long.meta.request_headers.insert("Referer".into(), "https://second.example/".into());
+        let job = std::sync::Arc::new(crate::app_state::Job {
+            metadata_proof: None, source_slots: std::sync::atomic::AtomicUsize::new(0),
+            cancelled: std::sync::atomic::AtomicBool::new(false), configuration_revision: None,
+            media_id: None, exact_vod: None, kind: "movie".into(), created: std::time::Instant::now(),
+            state: std::sync::Mutex::new(crate::app_state::JobState { events: vec![], pending: 0 }),
+            notify: tokio::sync::Notify::new(),
+        });
+        let authorize: std::sync::Arc<dyn Fn() -> bool + Send + Sync> = std::sync::Arc::new(|| true);
+        let mut duplicate = short.clone(); duplicate.ttl = std::time::Duration::from_secs(300);
+        duplicate.meta.request_headers.remove("Referer");
+        duplicate.meta.request_headers.insert("referer".into(), "https://first.example/".into());
+        super::super::publish_batch(&app, &job, &source, proof, &authorize, vec![short, long, duplicate]);
+        let cards = job.state.lock().unwrap().events[0]["streams"].as_array().unwrap().clone();
+        assert_eq!(cards.len(), 3);
+        assert_eq!(cards[0]["source_fingerprint"], cards[2]["source_fingerprint"]);
+        let distinct_identity = cards[0]["source_fingerprint"] != cards[1]["source_fingerprint"];
+        let entries = app.streams.lock().unwrap();
+        let first = &entries[cards[0]["id"].as_str().unwrap()];
+        let second = &entries[cards[1]["id"].as_str().unwrap()];
+        assert_eq!(first.required_audio_index, Some(1));
+        assert_eq!(first.headers["referer"], "https://first.example/");
+        assert_eq!(second.headers["referer"], "https://second.example/");
+        let duplicate = &entries[cards[2]["id"].as_str().unwrap()];
+        assert!(duplicate.upstream_deadline.unwrap().saturating_duration_since(std::time::Instant::now()) <= std::time::Duration::from_secs(10));
+        let distinct_expiry = second.upstream_deadline.unwrap().duration_since(first.upstream_deadline.unwrap()) >= std::time::Duration::from_secs(250);
+        assert!(distinct_identity && distinct_expiry, "header-scoped identity: {distinct_identity}; header-scoped expiry: {distinct_expiry}");
+        assert!(!cards[0].to_string().contains("first.example"));
+    }
+
     fn verified_origin_title() -> (crate::App, crate::ResourceLease, serde_json::Value, u64, crate::engine_v3::origins::MetadataProof) {
         let app = fixture().with_lease(ResourceLease {
             policy_revision: 0,
@@ -158,6 +264,11 @@ mod tests {
             cards[0]["source_fingerprint"],
             other[0]["source_fingerprint"]
         );
+        stream.meta.audio_selection.as_mut().unwrap().language = serde_json::from_str(r#""Fr""#).unwrap();
+        let (french, error) = scoped.register(source, vec![sdk_source(&stream)], "movie");
+        assert!(error.is_none());
+        assert_ne!(other[0]["source_fingerprint"], french[0]["source_fingerprint"]);
+        assert_eq!(french[0]["audio_languages"], json!(["fr"]));
         stream.meta.audio_selection.as_mut().unwrap().audio_index = 65536;
         assert!(scoped
             .register(source, vec![sdk_source(&stream)], "movie")

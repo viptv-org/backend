@@ -145,7 +145,7 @@ pub(crate) async fn rank(
         .collect();
     let mut heights = std::collections::BTreeMap::<u32, usize>::new();
     for card in &ranked {
-        if let Some(height) = viptv_engine::stremio::source_quality_height(card) {
+        if let Some(height) = viptv_engine::stremio::source_quality_height(&crate::sources::metadata_evidence(card["source"].as_str().unwrap_or(""), card)) {
             *heights.entry(height).or_default() += 1;
         }
     }
@@ -165,7 +165,7 @@ pub(crate) async fn rank(
         .into_iter()
         .filter(|card| {
             input.quality_height.is_none_or(|height| {
-                viptv_engine::stremio::source_quality_height(card) == Some(height)
+                viptv_engine::stremio::source_quality_height(&crate::sources::metadata_evidence(card["source"].as_str().unwrap_or(""), card)) == Some(height)
             })
         })
         .collect::<Vec<_>>();
@@ -204,13 +204,14 @@ fn display(candidate: &SourceCandidate, addon: Option<&str>) -> Value {
 }
 
 pub(super) fn candidate_from_card(id: String, producer: &str, card: &Value) -> SourceCandidate {
+        let evidence = crate::sources::metadata_evidence(producer, card);
         let mut candidate = SourceCandidate {
-            presentation: viptv_engine::stremio::SourcePresentation::from_stream(card),
+            presentation: viptv_engine::stremio::SourcePresentation::from_stream(&evidence),
             id,
             provider_id: producer.to_owned(),
             label: card["name"].as_str().unwrap_or("Stream").into(),
             detail: viptv_engine::stremio::source_detail(card),
-            quality_height: viptv_engine::stremio::source_quality_height(card),
+            quality_height: viptv_engine::stremio::source_quality_height(&evidence),
             audio_languages: card["audio_languages"]
                 .as_array()
                 .map(|languages| {
@@ -220,13 +221,17 @@ pub(super) fn candidate_from_card(id: String, producer: &str, card: &Value) -> S
                         .collect()
                 })
                 .unwrap_or_default(),
+            subbed: card["subbed"].as_bool().unwrap_or(false),
+            subtitle_languages: card["subtitle_languages"].as_array().map(|languages| {
+                languages.iter().filter_map(|value| value.as_str().map(str::to_owned)).collect()
+            }).unwrap_or_default(),
             delivery: card["delivery"]
                 .as_str()
                 .filter(|delivery| viptv_engine::stremio::DELIVERIES.contains(delivery))
                 .map(str::to_owned),
             ..Default::default()
         }
-        .with_release_facts(viptv_engine::stremio::source_release_facts(card));
+        .with_release_facts(viptv_engine::stremio::source_release_facts(&evidence));
         candidate.binge_group = card["source_binge_group"].as_str().map(str::to_owned);
     candidate
 }

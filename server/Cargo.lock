@@ -3108,7 +3108,7 @@ dependencies = [
 [[package]]
 name = "vsources"
 version = "0.1.0"
-source = "git+https://github.com/vynxc/vsources.git?rev=4dd3a114235d0569afccb3ffc3f07da440b0c6c1#4dd3a114235d0569afccb3ffc3f07da440b0c6c1"
+source = "git+https://github.com/viptv-org/vsources.git?rev=320645b0a95ef1ba942e27b8ae4ee1c96ee5a523#320645b0a95ef1ba942e27b8ae4ee1c96ee5a523"
 dependencies = [
  "async-trait",
  "futures",
@@ -3126,7 +3126,7 @@ dependencies = [
 [[package]]
 name = "vsources-cloudflare"
 version = "0.1.0"
-source = "git+https://github.com/vynxc/vsources.git?rev=4dd3a114235d0569afccb3ffc3f07da440b0c6c1#4dd3a114235d0569afccb3ffc3f07da440b0c6c1"
+source = "git+https://github.com/viptv-org/vsources.git?rev=320645b0a95ef1ba942e27b8ae4ee1c96ee5a523#320645b0a95ef1ba942e27b8ae4ee1c96ee5a523"
 dependencies = [
  "async-trait",
  "serde",
@@ -3141,7 +3141,7 @@ dependencies = [
 [[package]]
 name = "vsources-core"
 version = "0.1.0"
-source = "git+https://github.com/vynxc/vsources.git?rev=4dd3a114235d0569afccb3ffc3f07da440b0c6c1#4dd3a114235d0569afccb3ffc3f07da440b0c6c1"
+source = "git+https://github.com/viptv-org/vsources.git?rev=320645b0a95ef1ba942e27b8ae4ee1c96ee5a523#320645b0a95ef1ba942e27b8ae4ee1c96ee5a523"
 dependencies = [
  "async-trait",
  "fancy-regex",
@@ -3159,7 +3159,7 @@ dependencies = [
 [[package]]
 name = "vsources-extractors"
 version = "0.1.0"
-source = "git+https://github.com/vynxc/vsources.git?rev=4dd3a114235d0569afccb3ffc3f07da440b0c6c1#4dd3a114235d0569afccb3ffc3f07da440b0c6c1"
+source = "git+https://github.com/viptv-org/vsources.git?rev=320645b0a95ef1ba942e27b8ae4ee1c96ee5a523#320645b0a95ef1ba942e27b8ae4ee1c96ee5a523"
 dependencies = [
  "aes",
  "async-trait",
@@ -3181,7 +3181,7 @@ dependencies = [
 [[package]]
 name = "vsources-providers"
 version = "0.1.0"
-source = "git+https://github.com/vynxc/vsources.git?rev=4dd3a114235d0569afccb3ffc3f07da440b0c6c1#4dd3a114235d0569afccb3ffc3f07da440b0c6c1"
+source = "git+https://github.com/viptv-org/vsources.git?rev=320645b0a95ef1ba942e27b8ae4ee1c96ee5a523#320645b0a95ef1ba942e27b8ae4ee1c96ee5a523"
 dependencies = [
  "aes",
  "async-trait",
@@ -3206,7 +3206,7 @@ dependencies = [
 [[package]]
 name = "vsources-tt"
 version = "0.1.0"
-source = "git+https://github.com/vynxc/vsources.git?rev=4dd3a114235d0569afccb3ffc3f07da440b0c6c1#4dd3a114235d0569afccb3ffc3f07da440b0c6c1"
+source = "git+https://github.com/viptv-org/vsources.git?rev=320645b0a95ef1ba942e27b8ae4ee1c96ee5a523#320645b0a95ef1ba942e27b8ae4ee1c96ee5a523"
 dependencies = [
  "fancy-regex",
  "serde",
