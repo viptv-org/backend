@@ -83,3 +83,32 @@ ordinary launch/session/card/history models, logs or persistent request records.
 
 ## Shared logic
 The Rust backend remains the authoritative module for account/profile policy, catalog, source preparation, continuation, queue and history. Clients share versioned HTTP contracts and fixtures first. Add generated TypeScript/Kotlin clients after a reviewed schema exists. Rust FFI or a separate shared core is deferred until real duplicate policy justifies its packaging cost.
+
+## Provider subtitle timing prototype
+
+Provider subtitle attachment retains its lease/profile/media validation and
+also returns bounded canonical VTT plus its SHA-256. The immutable rebased SRT
+asset remains available to existing clients.
+
+`/api/playback/:id/subtitle-sync` supports POST with `{subtitle_id}`, GET, PUT
+with `{revision,manual}`, and DELETE with `{playback_generation}`. A subtitle
+must first be attached to this playback. Backend serializes correction requests
+per playback and revalidates lease, source proof, provider selection and gateway
+configuration on both sides of asynchronous work. Replacement, expiry and
+profile changes cannot adopt old results. Reads require a matching generation,
+subtitle hash, session media/audio identities, algorithm and nondecreasing
+revision. Manual mutation uses the current revision; late worker results cannot
+overwrite its policy.
+
+This routes optional analysis to the playback gateway for browsers. It does not
+analyze native-device audio or alter playback admission, media URL, producer,
+heartbeat timing or first frame. Unsupported gateway/acquisition paths retain
+original/manual timing. Session identities do not provide persistent release
+cache authority; confidence is an uncalibrated heuristic.
+
+Provider-only caption deliveries expose the existing track picker and subtitle
+appearance actions when the gateway advertises external caption support.
+
+The canonical provider-caption flow is advertised by delivery field
+`provider_subtitles_version: 1`; older backends keep the new browser controls
+hidden. External SRT attachment responses remain compatible with existing clients.

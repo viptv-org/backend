@@ -30,6 +30,8 @@ use std::{
 
 #[path = "playback_captions.rs"]
 mod captions;
+#[path = "playback_subtitle_sync.rs"]
+mod subtitle_sync;
 #[path = "playback_preferences.rs"]
 mod profile_preferences;
 #[path = "playback_view.rs"]
@@ -37,6 +39,7 @@ mod viewing;
 #[path = "playback_segments.rs"]
 mod playback_segments;
 pub(crate) use captions::attach as attach_subtitle;
+pub(crate) use subtitle_sync::{start as start_subtitle_sync, get as get_subtitle_sync, policy as subtitle_sync_policy, stop as stop_subtitle_sync};
 pub(crate) use playback_segments::segments as skip_segments;
 
 const LEASE: Duration = Duration::from_secs(60);
@@ -296,6 +299,7 @@ impl Prepared {
 }
 struct StateData {
     retained_subtitles: Vec<String>,
+    subtitle_sync: Option<subtitle_sync::Binding>,
     native: Option<NativeState>,
     status: &'static str,
     delivery: Option<Value>,
@@ -328,6 +332,7 @@ struct Entry {
     identity: [u8; 32],
     cancelled: AtomicBool,
     cancel_signal: tokio::sync::Notify,
+    subtitle_sync_gate: tokio::sync::Mutex<()>,
     state: Mutex<StateData>,
     permit: Mutex<Option<tokio::sync::OwnedSemaphorePermit>>,
 }
@@ -669,6 +674,7 @@ fn response(entry: &Entry) -> Value {
             state.error = Some("playback_expired");
             state.delivery = None;
             state.retained_subtitles.clear();
+            state.subtitle_sync = None;
             state.native.as_mut().unwrap().grant = None;
             entry.cancelled.store(true, Ordering::Release);
         }
@@ -723,6 +729,7 @@ fn terminate(entry: &Entry, status: &'static str, error: Option<&'static str>) -
     state.delivery = None;
     state.prepared = None;
     state.retained_subtitles.clear();
+            state.subtitle_sync = None;
     if let Some(native) = state.native.as_mut() {
         native.grant = None;
     }
@@ -1651,8 +1658,10 @@ async fn start_mode(
             identity: input.identity,
             cancelled: AtomicBool::new(false),
             cancel_signal: tokio::sync::Notify::new(),
+            subtitle_sync_gate: tokio::sync::Mutex::new(()),
             state: Mutex::new(StateData {
                 retained_subtitles: vec![],
+                subtitle_sync: None,
                 native: native_candidate.then(|| NativeState {
                     expires_at: native_expiry,
                     last_server_time: issued_at,
@@ -1953,6 +1962,10 @@ async fn prepare(
         delivery
     };
     delivery["live"] = json!(entry.live);
+    if delivery["external_subtitles_supported"] == true && !entry.live
+        && entry.proof.media_id.is_some() && matches!(entry.proof.kind.as_str(), "movie" | "series") {
+        delivery["provider_subtitles_version"] = json!(1);
+    }
     if let Some(appearance) = request.subtitle_appearance { delivery["subtitle_appearance"] = appearance; }
     validate_entry(&app, &entry).await?;
     tokio::task::spawn_blocking(move || {

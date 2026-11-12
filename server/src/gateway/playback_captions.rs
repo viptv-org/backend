@@ -133,6 +133,6 @@ pub(crate) async fn attach(
         .join(relative.trim_start_matches('/'))
         .map_err(|_| Error::Code("gateway_protocol_invalid"))?;
     Ok(Json(
-        json!({"url":url.as_str(),"format":"srt","language":caption.language,"label":caption.label,"timeline_offset_seconds":offset}),
+        json!({"url":url.as_str(),"format":"srt","language":caption.language,"label":caption.label,"timeline_offset_seconds":offset,"canonical_vtt":caption.content_vtt.as_ref(),"subtitle_hash":format!("{:x}",Sha256::digest(caption.content_vtt.as_bytes()))}),
     ))
 }

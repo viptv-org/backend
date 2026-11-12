@@ -266,6 +266,7 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
                     "/playback/:id/subtitles",
                     post(gateway::playback::attach_subtitle),
                 )
+                .route("/playback/:id/subtitle-sync", get(gateway::playback::get_subtitle_sync).post(gateway::playback::start_subtitle_sync).put(gateway::playback::subtitle_sync_policy).delete(gateway::playback::stop_subtitle_sync))
                 .route(
                     "/playback/:id/segments",
                     get(gateway::playback::skip_segments),
