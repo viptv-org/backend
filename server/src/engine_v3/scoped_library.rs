@@ -931,6 +931,24 @@ fn parent_key(s: &Saved<PlaybackRecord>) -> Result<Option<Key>, ApiError> {
         raw_key(&card)?
     }))
 }
+pub(crate) fn continuation_key_db(
+    db: &Connection,
+    profile: i64,
+    entry: &ContinuationEntry,
+) -> Result<Key, ApiError> {
+    let mut record = entry.record.clone();
+    if record.metadata_origin.is_none() {
+        record.metadata_origin = entry.card.metadata_origin.clone();
+    }
+    let saved = Saved {
+        key: verified_key_db(db, profile, &record.card())?,
+        updated: record.updated_at_millis,
+        value: record,
+        added: None,
+        verified: true,
+    };
+    Ok(parent_key(&saved)?.unwrap_or(saved.key))
+}
 fn selector(card: &Card) -> Result<String, ApiError> {
     encode(&(
         card.metadata_origin.as_ref().ok_or_else(invalid)?,
