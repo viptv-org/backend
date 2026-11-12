@@ -55,6 +55,21 @@ A caught-up entry (`CaughtUp`, `Upcoming`, or `Pending`: the finished episode is
 
 **Clock rule:** apply `record.position_millis` and `duration_millis` only for `Resume` when the record and rendered card refer to the same media identity. For `Next`, `record` is the actual completed prior history anchor, `previous_identity` names that anchor, and `card` is the verified next episode. Its progress is null and playback starts at zero. Never transfer the previous episode's position or duration to the next card. No target history record is manufactured. Other statuses do not assert resume progress.
 
+`POST /api/profiles/:id/viewing-action` accepts `{card,restart?:boolean}` and
+returns the authoritative target and label. Its nullable `resume_position_millis`
+contains the winning Resume record's positive saved position unless Restart is
+explicit. Home `Card.view.preview` carries the same nullable field. Next,
+Restart and absent/nonpositive positions carry null. Use the saved milliseconds
+directly for resume intent; metadata runtime and progress percentages are display
+facts.
+
+Resume labels are `Resume at M:SS` below one hour and `Resume at H:MM:SS` from
+one hour, flooring milliseconds to whole seconds for copy. A positive saved
+position below one second is `Resume at 0:00`. Other actions retain `Play` and
+typed episode context. `remaining_label` is null; Home preview captions use the
+action label. Resume continuation subtitles contain only typed `S1 E2`/`E2`
+coordinates or null, with existing progress bars and history facts retained.
+
 Resolve the next episode from one selected-provider metadata document:
 
 ```http

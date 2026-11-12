@@ -60,7 +60,8 @@ async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
     assert!(entry["updated_at_millis"].as_u64().unwrap() > 1000);
     let home = get(&app, "/api/bootstrap").await;
     let mut expected=entry["card"].clone();expected["view"]=super::viewing_presentation::card_view(&serde_json::from_value(expected.clone()).unwrap(),false,true);
-    expected["view"]["preview"]=json!({"background":"https://images.example/frame.jpg","caption":"Resume S2 E4 · 2m left","progress":0.3,"action":"play"});
+    expected["subtitle"]=json!("S2 E4");
+    expected["view"]["preview"]=json!({"background":"https://images.example/frame.jpg","caption":"Resume at 0:30","progress":0.3,"action":"play","resume_position_millis":30000});
     assert_eq!(home["home"]["rows"][0]["cards"][0], expected);
     let explicit=get(&app,"/api/profiles/1/home").await;
     assert_eq!(explicit["rows"][0]["cards"][0]["view"]["preview"],expected["view"]["preview"]);
@@ -74,11 +75,11 @@ async fn typed_history_and_home_round_trip_opaque_parent_and_real_progress() {
     super::source_integrations::cache_card(&app,&lease,0,serde_json::from_value(parent.clone()).unwrap());
     let rich=get(&app,"/api/profiles/1/home").await;
     assert_eq!(rich["rows"][0]["cards"][0]["landscape"],"https://images.example/frame.jpg");
-    assert_eq!(rich["rows"][0]["cards"][0]["view"]["preview"],json!({"background":"https://images.example/series-background.jpg","caption":"Resume S2 E4 · 2m left","progress":0.3,"action":"play"}));
+    assert_eq!(rich["rows"][0]["cards"][0]["view"]["preview"],json!({"background":"https://images.example/series-background.jpg","caption":"Resume at 0:30","progress":0.3,"action":"play","resume_position_millis":30000}));
     assert_eq!(request(&app,"member-token-1","PUT","/api/profiles/1/library",json!({"card":parent})).await.0,StatusCode::OK);
     let saved_home=get(&app,"/api/profiles/1/home").await;
     assert_eq!(saved_home["rows"][1]["cards"][0]["view"]["preview"]["action"],"details");
-    assert_eq!(saved_home["rows"][1]["cards"][0]["view"]["preview"]["caption"],"Resume S2 E4 · 2m left");
+    assert_eq!(saved_home["rows"][1]["cards"][0]["view"]["preview"]["caption"],"Resume at 0:30");
     assert!(
         home["home"]["revision"].as_u64().unwrap() > before["home"]["revision"].as_u64().unwrap()
     );
