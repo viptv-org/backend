@@ -28,5 +28,16 @@ class ReleaseAbiTests(unittest.TestCase):
                 release.inspect_abi('Shared library: [libc.so.6]', value)
 
 
+class BuildEvidenceTests(unittest.TestCase):
+    def test_accepts_one_successful_cargo_completion(self):
+        release.require_completed_build([{'reason': 'compiler-artifact'}, {'reason': 'build-finished', 'success': True}])
+
+    def test_rejects_missing_failed_or_ambiguous_completion(self):
+        success = {'reason': 'build-finished', 'success': True}
+        for records in [[], [{'reason': 'compiler-artifact'}], [{'reason': 'build-finished', 'success': False}], [success, success]]:
+            with self.subTest(records=records), self.assertRaisesRegex(ValueError, 'completion_required'):
+                release.require_completed_build(records)
+
+
 if __name__ == '__main__':
     unittest.main()

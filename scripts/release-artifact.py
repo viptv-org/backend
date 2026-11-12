@@ -35,6 +35,12 @@ def digest(path):
     return value.hexdigest()
 
 
+def require_completed_build(records):
+    finished = [row for row in records if row.get('reason') == 'build-finished']
+    if len(finished) != 1 or finished[0].get('success') is not True:
+        raise ValueError('successful_build_completion_required')
+
+
 def main(messages, output):
     root = Path.cwd().resolve()
     git = lambda *args: subprocess.check_output(['git', *args], text=True).strip()
@@ -42,6 +48,7 @@ def main(messages, output):
     if revision != os.environ['SOURCE_REVISION'] or git('status', '--porcelain', '--untracked-files=no'):
         raise ValueError('source_revision_or_cleanliness_mismatch')
     records = [json.loads(line) for line in Path(messages).read_text().splitlines() if line.startswith('{')]
+    require_completed_build(records)
     artifacts = [row for row in records if row.get('reason') == 'compiler-artifact'
                  and row.get('manifest_path') == str(root / 'server/Cargo.toml')
                  and row.get('target', {}).get('name') == 'viptv-server' and row.get('executable')]
