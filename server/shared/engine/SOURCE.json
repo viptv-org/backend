@@ -1,9 +1,9 @@
 {
   "repository": "https://github.com/viptv-org/core",
-  "revision": "afd31531097a3de22f94986f46a7552042d199f7",
+  "revision": "bd59c4ff6c78da7b16c089c32b436ee08a519db0",
   "path": "crates/viptv-engine",
   "manifest_transform": "viptv-provider path ../../provider",
-  "archive_sha256": "2542d96140d1fc4aa7c3afe4183daa23dfb35501005d1efbbf364475eb8776ed",
+  "archive_sha256": "0181f37413975c488853aa7f730b0709efdac2bd181b9cb65e83a9c7ef56577e",
   "files": {
     "Cargo.toml": "97da40a551412d4828539715672c92401a73078c7f8df18832b269f8b76c3e94",
     "src/capabilities.rs": "79905a097058b43742381c916958c0d88a2ff878d55139d08c2b94e40baa3656",
