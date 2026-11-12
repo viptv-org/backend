@@ -47,7 +47,9 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
     let id = started["id"].as_str().unwrap();
     let ready = settled(&app, id).await;
     assert_eq!(ready["delivery"]["external_subtitles_supported"], true);
+    assert_eq!(ready["delivery"]["provider_subtitles_version"], 1);
     assert_eq!(ready["delivery"]["subtitles_supported"], false);
+    assert_eq!(ready["actions"]["tracks"], true);
     let endpoint = format!("/api/playback/{id}/subtitles");
     let wrong = subtitles(&app, "tt2").await;
     assert_eq!(
@@ -87,6 +89,26 @@ async fn external_caption_attach_requires_exact_media_scope_and_an_advertised_ga
     assert_eq!(status, StatusCode::OK, "{caption}");
     assert_eq!(caption["format"], "srt");
     assert_eq!(caption["language"], "eng");
+    assert!(caption["canonical_vtt"].as_str().unwrap().contains("Café"));
+    assert_eq!(caption["subtitle_hash"],format!("{:x}",Sha256::digest(caption["canonical_vtt"].as_str().unwrap().as_bytes())));
+    let sync_endpoint=format!("/api/playback/{id}/subtitle-sync");
+    let (status,sync)=request(&app,"member-token-1","POST",&sync_endpoint,json!({"subtitle_id":selected})).await;
+    assert_eq!(status,StatusCode::OK,"{sync}");assert_eq!(sync["state"],"unavailable");assert_eq!(sync["subtitle_hash"],caption["subtitle_hash"]);
+    assert_eq!(request(&app,"member-token-2","GET",&sync_endpoint,Value::Null).await.0,StatusCode::NOT_FOUND);
+    let (status,manual)=request(&app,"member-token-1","PUT",&sync_endpoint,json!({"revision":1,"manual":true})).await;
+    assert_eq!(status,StatusCode::OK,"{manual}");assert_eq!(manual["revision"],2);assert_eq!(manual["manual"],true);
+    assert_ne!(request(&app,"member-token-1","PUT",&sync_endpoint,json!({"revision":1,"manual":false})).await.0,StatusCode::OK);
+    {
+        let mut records=peer.sync_records.lock().unwrap();
+        for record in records.values_mut(){record["audio_identity"]=json!("different_dub");}
+    }
+    assert_ne!(request(&app,"member-token-1","GET",&sync_endpoint,Value::Null).await.0,StatusCode::OK);
+    {
+        let mut records=peer.sync_records.lock().unwrap();
+        for record in records.values_mut(){record["audio_identity"]=json!("audio_fixture");}
+    }
+    assert_eq!(request(&app,"member-token-1","DELETE",&sync_endpoint,json!({"playback_generation":sync["playback_generation"]})).await.0,StatusCode::OK);
+    assert_ne!(request(&app,"member-token-1","GET",&sync_endpoint,Value::Null).await.0,StatusCode::OK);
     assert!(caption["url"]
         .as_str()
         .unwrap()

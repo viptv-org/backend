@@ -91,6 +91,7 @@ pub(super) fn actions(entry: &Entry, state: &StateData) -> Value {
         .delivery
         .as_ref()
         .is_some_and(|d| d["subtitles_supported"] == true);
+    let external = state.delivery.as_ref().is_some_and(|d| d["provider_subtitles_version"] == 1);
     json!({
         "pause":ready && !entry.live,
         "seek":ready && !entry.live,
@@ -98,8 +99,8 @@ pub(super) fn actions(entry: &Entry, state: &StateData) -> Value {
         "change_source":ready && bound(&entry.proof),
         "episodes":ready && !entry.live && episode,
         "next_episode":ready && !entry.live && episode && entry.next_episode_button,
-        "tracks":ready && bound(&entry.proof) && (selectable("audio_tracks") || selectable("subtitle_tracks") || subtitles),
-        "subtitle_style":ready && bound(&entry.proof) && subtitles && entry.caption_style,
+        "tracks":ready && bound(&entry.proof) && (selectable("audio_tracks") || selectable("subtitle_tracks") || subtitles || external),
+        "subtitle_style":ready && bound(&entry.proof) && (subtitles || external) && entry.caption_style,
         "report_progress":!entry.live && matches!(entry.proof.kind.as_str(),"movie"|"series")
     })
 }

@@ -5,6 +5,7 @@ use crate::{
 use axum::{extract::Path, http::StatusCode, response::IntoResponse, Json, Router};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -16,6 +17,7 @@ use std::{
 struct Peer {
     frames: Arc<Mutex<Vec<String>>>,
     captions: Arc<Mutex<Vec<Value>>>,
+    sync_records: Arc<Mutex<std::collections::HashMap<String,Value>>>,
     inputs: Arc<Mutex<Vec<Value>>>,
     outputs: Arc<Mutex<Vec<Value>>>,
     task: tokio::task::JoinHandle<()>,
@@ -353,6 +355,8 @@ async fn setup() -> (App, Peer) {
     let capacity_mode = mode.clone();
     let captions = Arc::new(Mutex::new(Vec::new()));
     let received_captions = captions.clone();
+    let sync_records=Arc::new(Mutex::new(std::collections::HashMap::<String,Value>::new()));
+    let sync_post=sync_records.clone();let sync_get=sync_records.clone();let sync_put=sync_records.clone();let sync_delete=sync_records.clone();
     let frames = Arc::new(Mutex::new(Vec::new()));
     let received_frames = frames.clone();
     let returned_frames = frames.clone();
@@ -455,6 +459,19 @@ async fn setup() -> (App, Peer) {
             received.lock().unwrap().push(body);
             Json(json!({"url":format!("/media/{id}/pgm_fixture/caption_{}.srt","c".repeat(64)),"format":"srt","timeline_offset_seconds":0.0}))
         }}))
+        .route("/v1/sessions/:id/subtitle-sync",axum::routing::post(move |Path(id):Path<String>,headers:axum::http::HeaderMap,Json(body):Json<Value>|{let records=sync_post.clone();async move{
+            assert!(headers["authorization"].to_str().unwrap().starts_with("Bearer pgk_"));
+            let value=json!({"version":1,"playback_generation":body["playback_generation"],"media_identity":"session_fixture","audio_identity":"audio_fixture","subtitle_hash":format!("{:x}",Sha256::digest(body["content_vtt"].as_str().unwrap().as_bytes())),"algorithm_version":"activity-offset-affine-v1","revision":1,"manual":false,"state":"unavailable","correction":null,"evidence":null});
+            records.lock().unwrap().insert(id,value.clone());Json(value)
+        }}).get(move |Path(id):Path<String>|{let records=sync_get.clone();async move{Json(records.lock().unwrap().get(&id).cloned().unwrap_or(Value::Null))}})
+        .put(move |Path(id):Path<String>,Json(body):Json<Value>|{let records=sync_put.clone();async move{
+            let mut records=records.lock().unwrap();let value=records.get_mut(&id).unwrap();
+            if value["revision"]!=body["revision"]{return (StatusCode::CONFLICT,Json(json!({"error":{"code":"idempotency_conflict"}}))).into_response();}
+            value["manual"]=body["manual"].clone();value["revision"]=json!(value["revision"].as_u64().unwrap()+1);Json(value.clone()).into_response()
+        }})
+        .delete(move |Path(id):Path<String>,Json(body):Json<Value>|{let records=sync_delete.clone();async move{let mut records=records.lock().unwrap();
+            if records.get(&id).is_some_and(|r|r["playback_generation"]==body["playback_generation"]){records.remove(&id);}Json(json!({"ok":true}))
+        }}))
         .route("/v1/sessions/:id/renew",axum::routing::post(move|Path(id):Path<String>|{let mode=renew_mode.clone();async move{
             match mode.load(Ordering::SeqCst) {
                 14 => (StatusCode::GONE, Json(json!({"error":{"code":"session_expired"}}))).into_response(),
@@ -469,6 +486,7 @@ async fn setup() -> (App, Peer) {
         app,
         Peer {
             captions,
+            sync_records,
             frames: returned_frames,
             inputs,
             outputs,
