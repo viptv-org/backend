@@ -1,8 +1,15 @@
 # viptv backend
 
 Actions runs the backend checks on pull requests into `edge` and `main` and on
-pushes to `edge`; delivery is otherwise by manual builds of the server container
-image (`Dockerfile`, `compose.yaml`). No automatic deploys.
+pushes to `edge`. The manual **backend release artifact** workflow builds an
+exact full commit matching the selected `main` or `edge` head with Rust1.98.0,
+locked dependencies and `live-runtime` plus the default SDK runtime enabled.
+Dispatch it only after that source's required checks pass. Its seven-day
+download contains an executable tar, source/tree/hash manifest and checksums;
+the tar preserves executable permissions. Ubuntu22.04 and an ELF GLIBC2.35
+ceiling keep the binary compatible with the Bookworm runtime. Verify the
+manifest and checksums before using it in a manually built server image
+(`Dockerfile`, `compose.yaml`). No automatic deploys.
 
 This repository owns the Rust backend and deployment packaging.
 

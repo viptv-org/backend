@@ -1,0 +1,100 @@
+name: backend release artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Approved source branch
+        type: choice
+        options: [main, edge]
+        default: main
+        required: true
+      revision:
+        description: Full commit SHA matching that branch head
+        type: string
+        required: true
+  pull_request:
+    branches: [edge, main]
+    paths:
+      - .github/workflows/release-artifact.yml
+      - scripts/release-artifact.py
+      - scripts/tests/test_release_artifact.py
+  push:
+    branches: [edge]
+    paths:
+      - .github/workflows/release-artifact.yml
+      - scripts/release-artifact.py
+      - scripts/tests/test_release_artifact.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s scripts/tests -p test_release_artifact.py -v
+
+  release:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    env:
+      SOURCE_BRANCH: ${{ inputs.branch }}
+      SOURCE_REVISION: ${{ inputs.revision }}
+      RUSTUP_TOOLCHAIN: 1.98.0
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_RELEASE_DEBUG: '0'
+      RUSTFLAGS: -C target-cpu=x86-64
+      LC_ALL: C
+    steps:
+      - name: Validate immutable branch head before checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+          branch, revision = os.environ['SOURCE_BRANCH'], os.environ['SOURCE_REVISION']
+          assert branch in ('main', 'edge'), 'main_or_edge_required'
+          assert re.fullmatch('[a-f0-9]{40}', revision), 'full_commit_sha_required'
+          assert os.environ['GITHUB_REF'] in ('refs/heads/main', 'refs/heads/edge'), 'approved_workflow_branch_required'
+          url = os.environ['GITHUB_API_URL'] + '/repos/' + os.environ['GITHUB_REPOSITORY'] + '/git/ref/heads/' + branch
+          request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          with urllib.request.urlopen(request, timeout=20) as response:
+              selected = json.load(response)['object']
+          assert selected['type'] == 'commit' and selected['sha'] == revision, 'branch_head_mismatch'
+          PY
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.revision }}
+          persist-credentials: false
+      - name: Check source and artifact contract
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+          python3 -m unittest discover -s scripts/tests -p test_release_artifact.py -v
+          python3 scripts/sync-engine.py check
+      - name: Install Rust 1.98
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Build optimized backend
+        timeout-minutes: 30
+        run: |
+          cargo build --locked --release --manifest-path server/Cargo.toml --target x86_64-unknown-linux-gnu --features live-runtime --bin viptv-server --message-format=json-render-diagnostics > "$RUNNER_TEMP/backend-build.jsonl"
+      - name: Verify ABI and package executable provenance
+        run: python3 scripts/release-artifact.py "$RUNNER_TEMP/backend-build.jsonl" "$RUNNER_TEMP/backend-artifact"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: backend-linux-x86_64-${{ inputs.revision }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backend-artifact/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
