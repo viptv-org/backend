@@ -1,6 +1,6 @@
 {
   "source": "viptv-org/core",
-  "revision": "47b85b5386617f455ade8b294a7a844b54f537c0",
+  "revision": "afd31531097a3de22f94986f46a7552042d199f7",
   "files": {
     "Cargo.toml": "9948397f580c7b5e17c31ab2a93d1fb18efde52838374ff0d0ad55b36bc70786",
     "src/candidate.rs": "44c308ed1f54f08dcfe3f8c23c2c92e0e1d1c97d8d42ad5480dc2bc434566d9a",

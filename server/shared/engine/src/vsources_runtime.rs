@@ -468,6 +468,28 @@ mod tests {
         }
     }
     #[test]
+    fn catalog_display_titles_do_not_fill_unknown_sdk_facts() {
+        for title in ["Johnny English", "French Kiss", "Hindi Medium", "The 1080p HEVC Story"] {
+            let mut stream = vsources::Stream::new(
+                Url::parse("https://media.example/opaque.m3u8").unwrap(),
+                vsources::types::Format::Hls,
+            );
+            stream.label = Some(format!("{title} — Server 1"));
+            stream.meta.source_id = Some("playimdb".into());
+            stream.meta.source_label = Some("PlayIMDb".into());
+            let source = candidate("opaque".into(), "vsources:owned", &stream);
+            assert!(source.audio_languages.is_empty());
+            assert!(source.quality_height.is_none());
+            assert!(source.detail.is_none());
+            assert_eq!(source.label, "PlayIMDb");
+            let presentation = source.presentation.unwrap();
+            assert!(presentation.quality.is_none());
+            assert!(presentation.video_codec.is_none());
+            assert!(presentation.audio_codecs.is_empty());
+            assert!(stream.label.as_deref().unwrap().contains(title));
+        }
+    }
+    #[test]
     fn required_audio_selection_overrides_other_available_languages() {
         let mut stream=vsources::Stream::new(Url::parse("https://media.example/clip.m3u8").unwrap(),vsources::types::Format::Hls);
         stream.meta.languages=vec![vsources::types::CountryCode::En,vsources::types::CountryCode::Fr];stream.meta.audio_selection=Some(vsources::types::AudioSelection{language:vsources::types::CountryCode::Fr,audio_index:1});
@@ -490,6 +512,33 @@ mod tests {
         assert_eq!(output.len(), 2);
         assert_eq!(output[0].meta.audio_selection.as_ref().unwrap().audio_index, 1);
         assert_eq!(output[1].meta.audio_selection.as_ref().unwrap().audio_index, 2);
+    }
+    #[test]
+    fn header_context_and_selected_language_survive_sdk_publication() {
+        let mut french = vsources::Stream::new(
+            Url::parse("https://media.example/shared.m3u8").unwrap(),
+            vsources::types::Format::Hls,
+        );
+        french.meta.languages = vec![CountryCode::En, CountryCode::Fr];
+        french.meta.audio_selection = Some(AudioSelection {
+            language: CountryCode::Fr, audio_index: 0,
+        });
+        french.meta.request_headers.insert("Referer".into(), "https://first.example/".into());
+        let mut other_context = french.clone();
+        other_context.meta.request_headers.insert("Referer".into(), "https://second.example/".into());
+        let mut english = french.clone();
+        english.meta.audio_selection = Some(AudioSelection {
+            language: CountryCode::En, audio_index: 1,
+        });
+        let mut seen = std::collections::HashSet::new();
+        let mut output = Vec::new();
+        publish_new(vec![french.clone(), other_context, english, french], &mut seen, &mut |batch| output.extend(batch));
+        assert_eq!(output.len(), 3);
+        assert_eq!(candidate("fr".into(), "vsources:owned", &output[0]).audio_languages, ["fr"]);
+        assert_eq!(candidate("en".into(), "vsources:owned", &output[2]).audio_languages, ["en"]);
+        assert_ne!(output[0].meta.request_headers, output[1].meta.request_headers);
+        let public = serde_json::to_string(&candidate("private".into(), "vsources:owned", &output[0])).unwrap();
+        assert!(!public.contains("media.example") && !public.contains("first.example"));
     }
     #[test]
     fn canonical_mapping_requires_exact_parent_episode_and_rejects_private_addresses() {
