@@ -1,5 +1,7 @@
 use super::*;
 mod input;
+mod declarations;
+pub(crate) use declarations::metadata_evidence;
 
 impl App {
     pub(crate) fn register(
@@ -143,7 +145,7 @@ impl App {
             } else {
                 json!([source, public["name"], public["title"]])
             };
-            if input.requires_gateway {
+            if input.requires_gateway || source.starts_with("vsources:") {
                 let canonical_headers: std::collections::BTreeMap<_, _> = headers.iter().collect();
                 identity = json!([
                     source,
@@ -162,6 +164,9 @@ impl App {
             }
             if let Some(index) = required_audio_index {
                 identity = json!([identity, index]);
+            }
+            if source.starts_with("vsources:") {
+                identity = json!([identity, public["audio_languages"]]);
             }
             public["source_fingerprint"] = json!(format!(
                 "{:x}",
@@ -505,26 +510,34 @@ fn source_card(
         card["reported_languages"] = json!(languages);
         card["audio_language_status"] = json!("unverified");
     }
-    if let Some(presentation) = viptv_engine::stremio::SourcePresentation::from_stream(&card) {
+    let (presentation, height, languages) = {
+        let evidence = metadata_evidence(source, &card);
+        let languages = if (explicit_audio_present && audio.is_empty())
+            || (explicit_language_present && audio.is_empty()
+                && card["reported_languages"].as_array().is_none_or(Vec::is_empty)) {
+            Vec::new()
+        } else {
+            viptv_engine::stremio::source_audio_languages(&evidence)
+        };
+        (viptv_engine::stremio::SourcePresentation::from_stream(&evidence),
+            viptv_engine::stremio::source_quality_height(&evidence), languages)
+    };
+    if let Some(presentation) = presentation {
         card["presentation"] = json!(presentation);
     }
-    if let Some(height) = viptv_engine::stremio::source_quality_height(&card) {
+    if let Some(height) = height {
         card["quality_height"] = json!(height);
     }
-    let languages = if (explicit_audio_present && audio.is_empty())
-        || (explicit_language_present
-            && audio.is_empty()
-            && card["reported_languages"]
-                .as_array()
-                .is_none_or(Vec::is_empty))
-    {
-        Vec::new()
-    } else {
-        viptv_engine::stremio::source_audio_languages(&card)
-    };
     card["audio_languages"] = json!(languages);
     if !languages.is_empty() {
         card["audio_language_status"] = json!("unverified");
+    }
+    if source.starts_with("vsources:") {
+        let subtitles = viptv_engine::stremio::source_audio_languages(&json!({
+            "audio_languages": raw["subtitle_languages"]
+        }));
+        card["subbed"] = json!(raw["subbed"].as_bool().unwrap_or(false) || !subtitles.is_empty());
+        card["subtitle_languages"] = json!(subtitles);
     }
     let mut evidence = card.clone();
     for key in ["release_type", "three_d", "dynamic_range", "audio_flags", "seeders"] {
@@ -532,7 +545,7 @@ fn source_card(
             evidence[key] = value.clone();
         }
     }
-    let facts = viptv_engine::stremio::source_release_facts(&evidence);
+    let facts = viptv_engine::stremio::source_release_facts(&metadata_evidence(source, &evidence));
     if let Value::Object(fields) = json!(facts) {
         card.as_object_mut().unwrap().extend(fields);
     }

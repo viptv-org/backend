@@ -285,9 +285,38 @@ pub(crate) fn spawn(
     });
 }
 
+fn transport_key<'a>(url: &str, audio_index: Option<u32>, headers: impl IntoIterator<Item = (&'a String, &'a String)>) -> (String, Option<u32>, Vec<(String, String)>) {
+    let mut headers = headers.into_iter().map(|(key, value)| (key.to_ascii_lowercase(), value.clone())).collect::<Vec<_>>();
+    headers.sort_unstable();
+    (url.to_owned(), audio_index, headers)
+}
+
 pub(crate) fn publish_batch(app: &App, job: &Arc<Job>, source: &str, proof: [u8;32], authorize: &Arc<dyn Fn() -> bool + Send + Sync>, streams: Vec<viptv_engine::vsources_runtime::SdkStream>) {
-            if !authorize(){return;}let ttls:std::collections::HashMap<_,_>=streams.iter().map(|s|((s.url.to_string(),s.meta.audio_selection.as_ref().map(|audio|audio.audio_index)),s.ttl)).collect();let limit=job.reserve_sources(streams.len());let raw=streams.iter().take(limit).map(projection::sdk_source).collect::<Vec<_>>();
-            let (cards,error)=app.register_with_configuration(&source,raw,&job.kind,Some(proof));
-            if !authorize(){return;}let mut entries=app.streams.lock().unwrap();for card in &cards{if let Some(entry)=card["id"].as_str().and_then(|id|entries.get_mut(id)){entry.profile_revision=job.configuration_revision;entry.metadata_proof=job.metadata_proof.clone();entry.exact_vod=job.exact_vod.clone();entry.media_id=job.media_id.clone();if let Some(ttl)=ttls.get(&(entry.url.clone(),entry.required_audio_index)){entry.expire_upstream_after(*ttl);}}}drop(entries);
-            let mut state=job.state.lock().unwrap();let seq=state.events.len()+1;state.events.push(json!({"seq":seq,"source":source,"streams":cards,"error_code":error.map(|_|"source_format_unsupported")}));drop(state);job.notify.notify_waiters();
+    if !authorize() { return; }
+    let mut ttls = std::collections::HashMap::new();
+    for stream in &streams {
+        let key = transport_key(stream.url.as_str(), stream.meta.audio_selection.as_ref().map(|audio| audio.audio_index), &stream.meta.request_headers);
+        ttls.entry(key).and_modify(|ttl: &mut std::time::Duration| *ttl = (*ttl).min(stream.ttl)).or_insert(stream.ttl);
+    }
+    let limit = job.reserve_sources(streams.len());
+    let raw = streams.iter().take(limit).map(projection::sdk_source).collect::<Vec<_>>();
+    let (cards, error) = app.register_with_configuration(source, raw, &job.kind, Some(proof));
+    if !authorize() { return; }
+    let mut entries = app.streams.lock().unwrap();
+    for card in &cards {
+        if let Some(entry) = card["id"].as_str().and_then(|id| entries.get_mut(id)) {
+            entry.profile_revision = job.configuration_revision;
+            entry.metadata_proof = job.metadata_proof.clone();
+            entry.exact_vod = job.exact_vod.clone();
+            entry.media_id = job.media_id.clone();
+            let key = transport_key(&entry.url, entry.required_audio_index, &entry.headers);
+            if let Some(ttl) = ttls.get(&key) { entry.expire_upstream_after(*ttl); }
+        }
+    }
+    drop(entries);
+    let mut state = job.state.lock().unwrap();
+    let seq = state.events.len() + 1;
+    state.events.push(json!({"seq":seq,"source":source,"streams":cards,"error_code":error.map(|_|"source_format_unsupported")}));
+    drop(state);
+    job.notify.notify_waiters();
 }
