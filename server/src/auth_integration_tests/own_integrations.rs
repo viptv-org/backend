@@ -1,5 +1,5 @@
 use super::*;
-use axum::{routing::get, Router};
+use axum::{routing::get, Json, Router};
 
 fn member_app() -> App {
     let mut app = fixture();
