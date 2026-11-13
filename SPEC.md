@@ -112,3 +112,12 @@ appearance actions when the gateway advertises external caption support.
 The canonical provider-caption flow is advertised by delivery field
 `provider_subtitles_version: 1`; older backends keep the new browser controls
 hidden. External SRT attachment responses remain compatible with existing clients.
+
+## Own-account integration management
+
+The non-visual [integration permission contract](https://github.com/viptv-org/design/blob/468a1afd3b5f5232171a673e823fa87863a641bb/specs/behavior/integration-permissions.md)
+permits owner/member account sessions to manage their own add-ons and SDK/IPTV
+configuration under current account/resource ownership and parent authority.
+`manage_integrations` is distinct from global `manage_account`; paired profile
+activation retains its existing profile-scoped authority. The visual DESIGN_REF
+and global administration policy remain unchanged.

@@ -57,8 +57,8 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
         json!({"manifest_url":url}),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::OK, "{error}");
+    assert_ne!(error["id"], id);
     request(
         &app,
         "member-token-1",
@@ -109,8 +109,8 @@ async fn account_management_is_encrypted_paged_redacted_and_preserves_identity()
             json!({"enabled":false}),
         )
         .await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{method}");
-        assert_eq!(error["error_code"], "owner_required", "{method}");
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method}");
+        assert_eq!(error["error_code"], "addon_not_found", "{method}");
     }
     let (_, disabled) = request(
         &app,
@@ -988,8 +988,8 @@ async fn configure_links_are_owner_scoped_single_use_and_redirect_to_the_transpo
     }
 
     let (status, denied) = configure_link(&app, "member-token-2", id).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(denied["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(denied["error_code"], "addon_not_found");
 
     let (status, link) = configure_link(&app, "member-token-1", id).await;
     assert_eq!(status, StatusCode::OK, "{link}");

@@ -1,13 +1,17 @@
 use super::*;
 use axum::{extract::OriginalUri, http::HeaderMap, Json};
 
-pub(crate) fn account_capabilities(principal: &Principal) -> Value {
+pub(crate) fn account_capabilities(db: &Connection, principal: &Principal) -> Value {
+    let integrations = matches!(principal, Principal::Account { role, .. } if matches!(role.as_str(), "owner" | "member"))
+        && principal.require_account_session().is_ok()
+        && crate::kids::require_parent(db, principal).is_ok();
     json!({
         "create_profiles": true,
         "can_create_profile": true,
         "manage_profiles": true,
         "can_manage_profiles": true,
         "manage_account": principal.is_owner(),
+        "manage_integrations": integrations,
     })
 }
 
@@ -111,7 +115,7 @@ pub(crate) async fn info(
                 "profile_id":profile_id.map(|value| value.to_string()),
                 "restricted":crate::kids::restricted(&db,&p)?,
                 "profiles":profiles,
-                "capabilities":account_capabilities(&p),
+                "capabilities":account_capabilities(&db, &p),
                 "can_create_profile":true,
                 "can_manage_profiles":true,
                 "profile_setup_required":presentation_required,

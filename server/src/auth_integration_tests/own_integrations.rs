@@ -34,6 +34,12 @@ fn parent(app: &App, unlocked: bool) {
 
 #[tokio::test]
 async fn capability_is_explicit_account_scoped_and_parent_effective() {
+    let fresh = fixture();
+    let (status, identity) = request(&fresh,"member-token-2","GET","/api/auth/me",Value::Null).await;
+    assert_eq!(status,StatusCode::OK,"{identity}");
+    assert_eq!(identity["profile_id"],Value::Null);
+    assert_eq!(identity["capabilities"]["manage_integrations"],true);
+    assert_eq!(identity["capabilities"]["manage_account"],false);
     let app = member_app();
     let tv = secondary_session(&app, "member-tv", 2, "device");
     let native = native_session(&app, "member-phone", 2);
@@ -80,6 +86,9 @@ async fn member_addon_crud_rechecks_ownership_device_and_parent_authority() {
     parent(&app,true);
     assert_eq!(request(&app,"member-token-2","PATCH",&path,json!({"enabled":false})).await.0,StatusCode::OK);
     let native = native_session(&app,"addon-native",2);
+    app.db.lock().unwrap().execute("UPDATE auth_sessions SET profile_id=2 WHERE id='addon-native'",[]).unwrap();
+    assert_eq!(request(&app,&native,"PATCH",&path,json!({"enabled":true})).await.0,StatusCode::FORBIDDEN);
+    app.db.lock().unwrap().execute("INSERT INTO parent_grants(session_id,expires) VALUES('addon-native',?1)",[util::now()+120]).unwrap();
     assert_eq!(request(&app,&native,"PATCH",&path,json!({"enabled":true})).await.0,StatusCode::OK);
     assert_eq!(request(&app,"member-token-2","DELETE",&path,Value::Null).await.0,StatusCode::OK);
     upstream.abort();
@@ -116,6 +125,8 @@ async fn member_iptv_configuration_refresh_and_defaults_stay_account_scoped() {
     assert_eq!(status,StatusCode::OK,"{result}");
     let id = result["id"].as_i64().unwrap();
     let path = format!("/api/iptv/connections/{id}");
+    let vod = format!("vod:{id}:fixture");
+    app.db.lock().unwrap().execute("INSERT INTO provider_vod(id,provider_id,stream_id,kind,name,normalized,extension) VALUES(?1,?2,'fixture','movie','Fixture','fixture','mp4')",params![vod,id]).unwrap();
     let tv = secondary_session(&app,"iptv-tv",2,"device");
     for (method,url,body,member_status) in [
         ("PATCH",path.clone(),json!({"enabled":true}),StatusCode::OK),
@@ -123,7 +134,7 @@ async fn member_iptv_configuration_refresh_and_defaults_stay_account_scoped() {
         ("POST",format!("{path}/refresh"),Value::Null,StatusCode::ACCEPTED),
         ("DELETE",format!("{path}/refresh"),Value::Null,StatusCode::OK),
         ("PUT","/api/iptv/live-default".into(),json!({"catalog_id":id}),StatusCode::OK),
-        ("PUT","/api/iptv/matches".into(),json!({"vod_id":"missing","metadata_id":"tmdb:1","type":"movie"}),StatusCode::NOT_FOUND),
+        ("PUT","/api/iptv/matches".into(),json!({"vod_id":vod,"metadata_id":"tmdb:1","type":"movie"}),StatusCode::OK),
     ] {
         assert_eq!(request(&app,"member-token-1",method,&url,body.clone()).await.0,StatusCode::NOT_FOUND,"cross-account {method} {url}");
         let (status,error) = request(&app,&tv,method,&url,body.clone()).await;
@@ -138,4 +149,34 @@ async fn member_iptv_configuration_refresh_and_defaults_stay_account_scoped() {
     assert_eq!(request(&app,"member-token-1","DELETE",&path,Value::Null).await.0,StatusCode::NOT_FOUND);
     assert_eq!(request(&app,"member-token-2","DELETE",&path,Value::Null).await.0,StatusCode::OK);
     upstream.abort();
+}
+
+#[test]
+fn integration_capability_rejects_unknown_roles_and_unavailable_parent_state() {
+    let app = member_app();
+    let db = app.db.lock().unwrap();
+    let principal = |role: &str| auth::Principal::Account {
+        account_id: 2, role: role.into(), profile_id: Some(2), session_id: Some("s2".into()),
+    };
+    assert_eq!(auth::account_capabilities(&db,&principal("unknown"))["manage_integrations"], false);
+    assert_eq!(auth::account_capabilities(&db,&principal("member"))["manage_integrations"], true);
+    db.execute("DROP TABLE kids_profiles", []).unwrap();
+    assert_eq!(auth::account_capabilities(&db,&principal("member"))["manage_integrations"], false);
+}
+
+#[tokio::test]
+async fn paired_profile_activation_remains_separate_from_account_integration_management() {
+    let app = member_app();
+    app.db.lock().unwrap().execute("INSERT INTO addons(id,name,manifest_url,manifest,account_id) VALUES(101,'Source',?1,?2,2)",params!["https://addons.example/manifest.json",json!({"id":"fixture","name":"Source","version":"1","resources":["stream"],"types":["movie"]}).to_string()]).unwrap();
+    crate::test_support::encrypt_fixture_sources(&app);
+    let tv = secondary_session(&app,"profile-tv",2,"device");
+    app.db.lock().unwrap().execute("UPDATE auth_sessions SET profile_id=2 WHERE id='profile-tv'",[]).unwrap();
+    let body = json!({"connection_id":"addon:101","enabled":false});
+    let path = "/api/profiles/2/addon-activation";
+    let (status, receipt) = request(&app,&tv,"PUT",path,body.clone()).await;
+    assert_eq!(status,StatusCode::OK,"{receipt}");
+    assert_eq!(request(&app,"member-token-1","PUT",path,body.clone()).await.0,StatusCode::FORBIDDEN);
+    parent(&app,false);
+    assert_eq!(request(&app,&tv,"PUT",path,body).await.0,StatusCode::FORBIDDEN);
+    assert!(app.db.lock().unwrap().query_row("SELECT enabled FROM addons WHERE id=101",[],|r|r.get::<_,bool>(0)).unwrap());
 }
