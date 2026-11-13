@@ -151,8 +151,8 @@ async fn member_iptv_configuration_refresh_and_defaults_stay_account_scoped() {
     upstream.abort();
 }
 
-#[test]
-fn integration_capability_rejects_unknown_roles_and_unavailable_parent_state() {
+#[tokio::test]
+async fn integration_capability_rejects_unknown_roles_and_unavailable_parent_state() {
     let app = member_app();
     let db = app.db.lock().unwrap();
     let principal = |role: &str| auth::Principal::Account {

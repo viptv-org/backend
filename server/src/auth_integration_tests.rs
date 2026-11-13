@@ -3642,8 +3642,8 @@ async fn household_administration_stays_owner_only_and_integrations_stay_account
         Guarded::new("GET", "/api/gateways/unknown/grants", Value::Null, Some(StatusCode::NOT_FOUND)),
         Guarded::new("PUT", "/api/gateways/unknown/grants", json!({"account_id":2,"enabled":true}), Some(StatusCode::NOT_FOUND)),
         Guarded::new("POST", "/api/gateways/unknown/check", Value::Null, Some(StatusCode::NOT_FOUND)).member_code("gateway_not_found"),
-        Guarded::new("PUT", "/api/profiles/1/source-integrations", json!({"revision":0,"plugin_id":"vsources","configuration":{"tmdb_api_key":"fixture-write-only-key"}}), None).member_code("forbidden"),
-        Guarded::new("DELETE", "/api/profiles/1/source-integrations/addon:1?revision=0", Value::Null, None).member_code("forbidden"),
+        Guarded::new("PUT", "/api/profiles/1/source-integrations", json!({"revision":0,"plugin_id":"vsources","configuration":{"tmdb_api_key":"fixture-write-only-key"}}), None).member_code("profile_required"),
+        Guarded::new("DELETE", "/api/profiles/1/source-integrations/addon:1?revision=0", Value::Null, None).member_code("profile_required"),
         Guarded::new("DELETE", "/api/account/devices/second-browser", Value::Null, Some(StatusCode::OK)),
         Guarded::new("DELETE", "/api/devices/second-tv", Value::Null, Some(StatusCode::OK)).tv_code("forbidden"),
     ];
