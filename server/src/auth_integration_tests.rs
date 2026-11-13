@@ -3853,3 +3853,5 @@ async fn server_admin_routes_stay_owner_only() {
         );
     }
 }
+
+mod own_integrations;
