@@ -3610,7 +3610,7 @@ impl Guarded {
 }
 
 #[tokio::test]
-async fn household_writes_need_the_owner_account_session() {
+async fn household_administration_stays_owner_only_and_integrations_stay_account_scoped() {
     let a = fixture();
     let tv = secondary_session(&a, "tv-one", 1, "device");
     secondary_session(&a, "second-browser", 1, "browser");
@@ -3624,17 +3624,17 @@ async fn household_writes_need_the_owner_account_session() {
     let gateway = json!({"name":"Living room","endpoint":"https://gateway.example","namespace":"main","integration_key":"pgk_short"});
     let calls = vec![
         Guarded::new("PUT", "/api/parent/pin", json!({"pin":"7248"}), Some(StatusCode::OK)),
-        Guarded::new("POST", "/api/addons", json!({"manifest_url":""}), Some(StatusCode::BAD_REQUEST)),
-        Guarded::new("PATCH", "/api/addons/10", json!({"enabled":false}), Some(StatusCode::OK)),
-        Guarded::new("DELETE", "/api/addons/11", Value::Null, Some(StatusCode::OK)),
-        Guarded::new("POST", "/api/iptv/connections", json!({"name":"Living room","url":"not-a-url","username":"viewer","password":"secret"}), Some(StatusCode::BAD_REQUEST)),
-        Guarded::new("PATCH", "/api/iptv/connections/999", json!({"enabled":false}), Some(StatusCode::NOT_FOUND)),
-        Guarded::new("DELETE", "/api/iptv/connections/999", Value::Null, Some(StatusCode::NOT_FOUND)),
-        Guarded::new("PUT", "/api/iptv/connections/999/credentials", json!({"password":"replacement"}), Some(StatusCode::NOT_FOUND)),
-        Guarded::new("POST", "/api/iptv/connections/999/refresh", Value::Null, Some(StatusCode::NOT_FOUND)),
-        Guarded::new("DELETE", "/api/iptv/connections/999/refresh", Value::Null, Some(StatusCode::NOT_FOUND)),
-        Guarded::new("PUT", "/api/iptv/matches", json!({"vod_id":"missing-vod","metadata_id":"tmdb:1","type":"movie"}), Some(StatusCode::NOT_FOUND)),
-        Guarded::new("PUT", "/api/iptv/live-default", json!({"catalog_id":999}), Some(StatusCode::NOT_FOUND)),
+        Guarded::new("POST", "/api/addons", json!({"manifest_url":""}), Some(StatusCode::BAD_REQUEST)).member_code("invalid_addon_endpoint"),
+        Guarded::new("PATCH", "/api/addons/10", json!({"enabled":false}), Some(StatusCode::OK)).member_code("addon_not_found"),
+        Guarded::new("DELETE", "/api/addons/11", Value::Null, Some(StatusCode::OK)).member_code("addon_not_found"),
+        Guarded::new("POST", "/api/iptv/connections", json!({"name":"Living room","url":"not-a-url","username":"viewer","password":"secret"}), Some(StatusCode::BAD_REQUEST)).member_code("invalid_provider_endpoint"),
+        Guarded::new("PATCH", "/api/iptv/connections/999", json!({"enabled":false}), Some(StatusCode::NOT_FOUND)).member_code("provider_not_found"),
+        Guarded::new("DELETE", "/api/iptv/connections/999", Value::Null, Some(StatusCode::NOT_FOUND)).member_code("provider_not_found"),
+        Guarded::new("PUT", "/api/iptv/connections/999/credentials", json!({"password":"replacement"}), Some(StatusCode::NOT_FOUND)).member_code("provider_not_found"),
+        Guarded::new("POST", "/api/iptv/connections/999/refresh", Value::Null, Some(StatusCode::NOT_FOUND)).member_code("provider_not_found"),
+        Guarded::new("DELETE", "/api/iptv/connections/999/refresh", Value::Null, Some(StatusCode::NOT_FOUND)).member_code("provider_not_found"),
+        Guarded::new("PUT", "/api/iptv/matches", json!({"vod_id":"missing-vod","metadata_id":"tmdb:1","type":"movie"}), Some(StatusCode::NOT_FOUND)).member_code("stream_candidate_not_found"),
+        Guarded::new("PUT", "/api/iptv/live-default", json!({"catalog_id":999}), Some(StatusCode::NOT_FOUND)).member_code("catalog_unavailable"),
         Guarded::new("POST", "/api/gateways", gateway.clone(), Some(StatusCode::BAD_REQUEST)),
         Guarded::new("PUT", "/api/gateways/unknown", gateway, Some(StatusCode::NOT_FOUND)),
         Guarded::new("PATCH", "/api/gateways/unknown", json!({"enabled":false}), Some(StatusCode::NOT_FOUND)),
@@ -3642,8 +3642,8 @@ async fn household_writes_need_the_owner_account_session() {
         Guarded::new("GET", "/api/gateways/unknown/grants", Value::Null, Some(StatusCode::NOT_FOUND)),
         Guarded::new("PUT", "/api/gateways/unknown/grants", json!({"account_id":2,"enabled":true}), Some(StatusCode::NOT_FOUND)),
         Guarded::new("POST", "/api/gateways/unknown/check", Value::Null, Some(StatusCode::NOT_FOUND)).member_code("gateway_not_found"),
-        Guarded::new("PUT", "/api/profiles/1/source-integrations", json!({"revision":0,"plugin_id":"vsources","configuration":{"tmdb_api_key":"fixture-write-only-key"}}), None),
-        Guarded::new("DELETE", "/api/profiles/1/source-integrations/addon:1?revision=0", Value::Null, None),
+        Guarded::new("PUT", "/api/profiles/1/source-integrations", json!({"revision":0,"plugin_id":"vsources","configuration":{"tmdb_api_key":"fixture-write-only-key"}}), None).member_code("profile_required"),
+        Guarded::new("DELETE", "/api/profiles/1/source-integrations/addon:1?revision=0", Value::Null, None).member_code("profile_required"),
         Guarded::new("DELETE", "/api/account/devices/second-browser", Value::Null, Some(StatusCode::OK)),
         Guarded::new("DELETE", "/api/devices/second-tv", Value::Null, Some(StatusCode::OK)).tv_code("forbidden"),
     ];
@@ -3821,8 +3821,8 @@ async fn native_account_sessions_manage_devices_and_the_household_pin_by_role() 
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(error["error_code"], "account_session_required");
     let (status, error) = request(&a, &native_member, "PATCH", "/api/addons/10", json!({"enabled":false})).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "addon_not_found");
 }
 
 #[tokio::test]
@@ -3853,3 +3853,5 @@ async fn server_admin_routes_stay_owner_only() {
         );
     }
 }
+
+mod own_integrations;

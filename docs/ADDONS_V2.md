@@ -47,9 +47,11 @@ Addon management is `/api/addons` only. Its list always redacts `manifest_url`;
 PATCH changes only `enabled`, and DELETE removes an owned entry. These can
 inspect, disable or remove archived legacy rows without decrypting them (the row
 reports its configuration error); enabling one does not make its credentials
-usable. Paired viewing devices with a selected profile may list and manage the
-account's shared addons, as TV settings require; parent restrictions apply and
-browser/native account sessions are unchanged. `/api/catalogs`, `/api/discover`
+usable. Paired viewing devices with a selected profile may list shared addons and
+change their profile's integration assignments under the profile/parent gate.
+Account-level install, credential configuration, enable/disable and deletion
+require a browser/native account session belonging to the account, including
+members; parent restrictions apply. `/api/catalogs`, `/api/discover`
 and `/api/meta` remain the catalog read contract.
 
 A manifest's `logo` URL can repeat the add-on's private token, so list rows never
@@ -81,6 +83,18 @@ to the add-on's transport URL with its final `manifest.json` replaced by
 response body carries the token; only the redirect's `Location`, followed by the
 browser that redeemed the ticket, does. A used, expired, or since-deleted
 add-on's ticket returns 404 `addon_configure_unavailable`.
+
+## Account integration authority
+
+`/api/auth/me` and `/api/bootstrap` expose the same explicit
+`capabilities.manage_integrations` boolean. It permits owner/member account
+sessions to configure their own add-ons and SDK/IPTV sources, refresh their
+IPTV connections and edit their own metadata mappings/live default. Locked
+parent authority and ordinary paired viewing-device sessions receive `false`.
+Unknown or unavailable parent authority never grants this capability.
+The [integration permission contract](https://github.com/viptv-org/design/blob/468a1afd3b5f5232171a673e823fa87863a641bb/specs/behavior/integration-permissions.md) defines this boundary.
+`manage_account` and global owner administration remain separate. Every write
+still checks its current session, parent authority and resource ownership.
 
 ## Storage and runtime behavior
 

@@ -209,7 +209,7 @@ pub(crate) async fn request(
     Path(id): Path<i64>,
 ) -> Result<(axum::http::StatusCode, Json<Value>), Error> {
     let configured = app.secret_vault.is_some();
-    let result = account_api::owner_work(app, lease, move |db, account| {
+    let result = account_api::work(app, lease, move |db, account| {
         super::connections_v2::managed(db, account, id)?;
         if !configured {
             return Err(Error::Code("secret_store_not_configured"));
@@ -228,7 +228,7 @@ pub(crate) async fn cancel(
     Extension(lease): Extension<ResourceLease>,
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, Error> {
-    account_api::owner_work(app,lease,move |db,account| {
+    account_api::work(app,lease,move |db,account| {
         super::connections_v2::managed(db,account,id)?;
         db.execute("UPDATE provider_refresh_v2 SET state='cancelled',token=?2,finished_at=?3,next_at=NULL,error_code=NULL WHERE provider_id=?1",params![id,uuid::Uuid::new_v4().to_string(),crate::util::now()]).map_err(storage)?;
         Ok(status(db,id)?)
@@ -341,8 +341,8 @@ mod tests {
         );
         for method in ["POST", "DELETE"] {
             let (status, error) = http(&f.app, "member-token-2", method, &path, Value::Null).await;
-            assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
-            assert_eq!(error["error_code"], "owner_required");
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+            assert_eq!(error["error_code"], "provider_not_found");
         }
         let (_, before) = http(
             &f.app,

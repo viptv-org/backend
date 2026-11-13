@@ -119,10 +119,10 @@ async fn connection_crud_encrypts_immediately_and_preserves_account_defaults() {
         input(&base, "user-one", "private-password"),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::OK, "{error}");
+    assert_ne!(error["id"], id);
     let (_, member_page) = request(&app, "member-token-2", "GET", ROOT, Value::Null).await;
-    assert!(member_page["items"].as_array().unwrap().is_empty());
+    assert_eq!(member_page["items"].as_array().unwrap().len(), 1);
     let (_, second) = request(
         &app,
         "member-token-1",
@@ -172,11 +172,11 @@ async fn connection_crud_encrypts_immediately_and_preserves_account_defaults() {
         json!({"enabled":false}),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "provider_not_found");
     let (status, error) = request(&app, "member-token-2", "DELETE", &path, Value::Null).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(error["error_code"], "owner_required");
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(error["error_code"], "provider_not_found");
     assert_eq!(
         provider::v2::live_catalog(&app.db.lock().unwrap(), 1, None).unwrap(),
         Some(id)
