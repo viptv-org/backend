@@ -176,17 +176,20 @@ fn skip_types_convert_to_milliseconds_prefer_pure_over_mixed_and_ignore_impossib
             super::segments::Segment {
                 kind: "recap",
                 start_ms: 0,
-                end_ms: 30_000
+                end_ms: 30_000,
+                mixed: false
             },
             super::segments::Segment {
                 kind: "intro",
                 start_ms: 310_571,
-                end_ms: 400_571
+                end_ms: 400_571,
+                mixed: false
             },
             super::segments::Segment {
                 kind: "credits",
                 start_ms: 1_290_000,
-                end_ms: 1_380_000
+                end_ms: 1_380_000,
+                mixed: false
             },
         ]
     );
@@ -201,15 +204,20 @@ fn skip_types_convert_to_milliseconds_prefer_pure_over_mixed_and_ignore_impossib
             super::segments::Segment {
                 kind: "intro",
                 start_ms: 80_000,
-                end_ms: 170_000
+                end_ms: 170_000,
+                mixed: true
             },
             super::segments::Segment {
                 kind: "credits",
                 start_ms: 1_300_500,
-                end_ms: 1_390_000
+                end_ms: 1_390_000,
+                mixed: true
             },
         ]
     );
+    let wire = serde_json::to_value(parse(&mixed_only)).unwrap();
+    assert_eq!(wire[0]["mixed"], true);
+    assert!(serde_json::to_value(parse(&document)).unwrap()[0].get("mixed").is_none());
     assert!(parse(&json!({"found":false,"results":[]})).is_empty());
     assert!(parse(&json!({"statusCode":500})).is_empty());
 }
@@ -315,7 +323,8 @@ fn theintrodb_groups_timestamps_mapping_nulls_to_media_bounds() {
         vec![super::segments::Segment {
             kind: "intro",
             start_ms: 0,
-            end_ms: 24_716
+            end_ms: 24_716,
+            mixed: false
         }]
     );
 }
@@ -337,12 +346,14 @@ fn skipdb_maps_outro_to_credits_and_ignores_preview() {
             super::segments::Segment {
                 kind: "intro",
                 start_ms: 229_500,
-                end_ms: 246_500
+                end_ms: 246_500,
+                mixed: false
             },
             super::segments::Segment {
                 kind: "credits",
                 start_ms: 3_434_000,
-                end_ms: 3_500_000
+                end_ms: 3_500_000,
+                mixed: false
             },
         ]
     );
@@ -620,17 +631,20 @@ fn animeskip_timestamps_end_at_the_next_timestamp_and_ignore_unknown_types() {
             super::segments::Segment {
                 kind: "recap",
                 start_ms: 0,
-                end_ms: 24_500
+                end_ms: 24_500,
+                mixed: false
             },
             super::segments::Segment {
                 kind: "intro",
                 start_ms: 90_000,
-                end_ms: 180_000
+                end_ms: 180_000,
+                mixed: false
             },
             super::segments::Segment {
                 kind: "credits",
                 start_ms: 1_290_000,
-                end_ms: 1_350_000
+                end_ms: 1_350_000,
+                mixed: false
             },
         ])
     );
@@ -681,7 +695,8 @@ fn animeskip_falls_back_to_the_season_coordinates_when_no_release_episode_is_kno
         Some(vec![super::segments::Segment {
             kind: "intro",
             start_ms: 20_000,
-            end_ms: 110_000
+            end_ms: 110_000,
+            mixed: false
         }])
     );
     let missing = Target {

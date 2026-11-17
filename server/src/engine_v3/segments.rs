@@ -32,6 +32,8 @@ pub(crate) struct Segment {
     pub(crate) kind: &'static str,
     pub(crate) start_ms: u64,
     pub(crate) end_ms: u64,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) mixed: bool,
 }
 
 #[derive(Clone)]
@@ -372,7 +374,7 @@ fn var_or(name: &str, fallback: &str) -> String {
 }
 
 pub(crate) fn parse(document: &Value) -> Vec<Segment> {
-    let mut segments: Vec<(Segment, bool)> = Vec::new();
+    let mut segments: Vec<Segment> = Vec::new();
     for result in document["results"]
         .as_array()
         .into_iter()
@@ -400,14 +402,14 @@ pub(crate) fn parse(document: &Value) -> Vec<Segment> {
             kind,
             start_ms,
             end_ms,
+            mixed,
         };
-        match segments.iter_mut().find(|(existing, _)| existing.kind == kind) {
-            Some(existing) if existing.1 && !mixed => *existing = (segment, mixed),
+        match segments.iter_mut().find(|existing| existing.kind == kind) {
+            Some(existing) if existing.mixed && !mixed => *existing = segment,
             Some(_) => {}
-            None => segments.push((segment, mixed)),
+            None => segments.push(segment),
         }
     }
-    let mut segments: Vec<Segment> = segments.into_iter().map(|(segment, _)| segment).collect();
     segments.sort_by_key(|segment| segment.start_ms);
     segments
 }
@@ -438,6 +440,7 @@ fn introdb_segment(list: &Value, kind: &'static str) -> Option<Segment> {
             kind,
             start_ms,
             end_ms,
+            mixed: false,
         });
     }
     None
@@ -462,6 +465,7 @@ pub(crate) fn parse_skipdb(document: &Value) -> Vec<Segment> {
             kind,
             start_ms,
             end_ms,
+            mixed: false,
         });
     }
     segments.sort_by_key(|segment| segment.start_ms);
@@ -548,6 +552,7 @@ fn animeskip_timestamps(timestamps: &Value) -> Vec<Segment> {
             kind,
             start_ms: *start_ms,
             end_ms: *end_ms,
+            mixed: false,
         });
     }
     segments
