@@ -73,6 +73,11 @@ pub(crate) async fn progress(
     {
         return Err("Conflicting playback metadata origin".into());
     }
+    crate::gateway::diagnostics::storage(if q.record.metadata_origin.is_some() {
+        "scoped"
+    } else {
+        "legacy"
+    });
     if q.record.metadata_origin.is_some() {
         {
             let db = app
