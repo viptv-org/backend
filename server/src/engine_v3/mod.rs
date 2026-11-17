@@ -50,6 +50,9 @@ pub(crate) mod source_integrations;
 pub(crate) mod preferred_discovery;
 pub(crate) use controls::get as discovery_controls;
 pub(crate) mod configuration;
+pub(crate) mod anime_filler;
+#[cfg(test)]
+mod anime_filler_tests;
 pub(crate) mod anime_show;
 #[cfg(test)]
 mod anime_show_tests;

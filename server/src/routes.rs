@@ -71,6 +71,7 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
             get(crash_reports::get_one).delete(crash_reports::remove),
         )
         .route("/bootstrap", get(engine_v3::bootstrap))
+        .route("/anime/filler", get(engine_v3::anime_filler::episodes))
         .route(
             "/profiles",
             get(engine_v3::profiles::list).post(engine_v3::profiles::create),
