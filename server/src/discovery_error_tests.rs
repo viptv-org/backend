@@ -79,21 +79,9 @@ async fn plaintext_sources_fail_closed_without_blocking_indexes_or_encrypted_sib
         .0,
         StatusCode::OK
     );
-    let (status, start) = request(
+    let events = discover(
         &app,
-        "member-token-1",
-        "POST",
-        "/api/streams",
         json!({"type":"movie","id":"tt1234567","only_addons":true}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{start}");
-    let (_, events) = request(
-        &app,
-        "member-token-1",
-        "GET",
-        &format!("/api/streams/{}", start["id"].as_str().unwrap()),
-        Value::Null,
     )
     .await;
     assert_eq!(events["events"][0]["error_code"], code);
@@ -402,18 +390,29 @@ async fn discover(app: &App, value: Value) -> Value {
     let (status, started) = request(app, "member-token-1", "POST", "/api/streams", value).await;
     assert_eq!(status, StatusCode::OK, "{started}");
     let path = format!("/api/streams/{}", started["id"].as_str().unwrap());
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut after = 0;
         loop {
-            let (status, result) = request(app, "member-token-1", "GET", &path, Value::Null).await;
+            let (status, result) = request(
+                app,
+                "member-token-1",
+                "GET",
+                &format!("{path}?after={after}&wait_ms=10000"),
+                Value::Null,
+            )
+            .await;
             assert_eq!(status, StatusCode::OK, "{result}");
+            after += result["events"].as_array().map_or(0, Vec::len);
             if result["done"] == true {
-                return result;
+                break;
             }
-            tokio::task::yield_now().await;
         }
     })
     .await
-    .unwrap()
+    .unwrap();
+    let (status, result) = request(app, "member-token-1", "GET", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    result
 }
 fn no_diagnostics(value: &Value, base: &str) {
     let body = value.to_string();
