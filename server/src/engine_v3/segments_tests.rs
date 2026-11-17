@@ -531,6 +531,146 @@ async fn an_episode_card_whose_own_ids_are_opaque_uses_its_parent_show() {
     );
     stack_task.abort();
 }
+fn show_episode_card(id: &str, show_ids: Value, season: u32, episode: u32) -> Card {
+    serde_json::from_value(json!({
+        "identity":{"id":format!("{id}:{season}:{episode}"),"kind":"series","ids":[],"episode":{"order":"aired","season":season,"episode":episode},"edition":null},
+        "provider_id":"cinemeta","title":"Episode","subtitle":null,"description":null,
+        "poster":null,"landscape":null,"logo":null,"progress":null,"badges":[],
+        "parent_identity":{"id":id,"kind":"series","ids":show_ids,"episode":null,"edition":null}
+    }))
+    .unwrap()
+}
+
+fn shippuden_card(season: u32, episode: u32) -> Card {
+    show_episode_card(
+        "tt0988824",
+        json!([
+            {"namespace":"imdb","value":"tt0988824"},
+            {"namespace":"tmdb","value":"31910"},
+            {"namespace":"tvdb","value":"79824"}
+        ]),
+        season,
+        episode,
+    )
+}
+
+fn shippuden_fribb() -> Value {
+    json!([
+        {"type":"TV","mal_id":1735,"anilist_id":1735,"tvdb_id":79824,"themoviedb_id":{"tv":31910},"imdb_id":["tt0988824"]},
+        {"type":"MOVIE","mal_id":2472,"anilist_id":2472,"tvdb_id":79824,"themoviedb_id":{"tv":31910},"imdb_id":["tt0988982"],"season":{"tvdb":0,"tmdb":0}},
+        {"type":"OVA","mal_id":10075,"anilist_id":10075,"tvdb_id":79824,"themoviedb_id":{"tv":31910},"imdb_id":["tt0988824"],"season":{"tvdb":0,"tmdb":0}}
+    ])
+}
+
+fn shippuden_rows() -> Value {
+    json!({
+        "1735/72": [
+            {"interval":{"startTime":90.0,"endTime":180.0},"skipType":"op","skipId":"op","episodeLength":1420.0}
+        ]
+    })
+}
+
+#[tokio::test]
+async fn a_show_episode_without_anime_ids_asks_aniskip_for_its_listed_release_episode() {
+    let (mut app, stack_task) = stack().await;
+    let source = source(shippuden_rows()).await;
+    let fribb = fribb(shippuden_fribb()).await;
+    app.segments = Arc::new(Service::fixture(Some(&source.base), None, None, None));
+    app.cross_ids = Arc::new(super::cross_ids::Service::fixture(&fribb.base));
+    let card = shippuden_card(4, 1);
+    let resolved = target(&app, &lease(), &card).await.unwrap();
+    assert_eq!(resolved.mal, Some(1735));
+    assert_eq!(resolved.anilist, Some(1735));
+    assert_eq!(resolved.release_episode, Some(72));
+    assert_eq!((resolved.season, resolved.episode), (Some(4), 1));
+    assert_eq!(resolved.tvdb, Some(79824));
+    assert_eq!(
+        answer(&app, &lease(), Some(&card)).await,
+        json!({"segments":[{"kind":"intro","start_ms":90000,"end_ms":180000}]})
+    );
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    stack_task.abort();
+}
+
+#[tokio::test]
+async fn a_show_episode_the_anime_episode_list_does_not_name_asks_for_no_release_episode() {
+    let (mut app, stack_task) = stack().await;
+    let source = source(shippuden_rows()).await;
+    let fribb = fribb(shippuden_fribb()).await;
+    app.segments = Arc::new(Service::fixture(Some(&source.base), None, None, None));
+    app.cross_ids = Arc::new(super::cross_ids::Service::fixture(&fribb.base));
+    for card in [shippuden_card(4, 3), shippuden_card(1, 1), shippuden_card(0, 1)] {
+        let resolved = target(&app, &lease(), &card).await.unwrap();
+        assert_eq!(resolved.release_episode, None);
+        assert_eq!(answer(&app, &lease(), Some(&card)).await, json!({"segments":[]}));
+    }
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    stack_task.abort();
+}
+
+#[tokio::test]
+async fn two_anime_entries_listing_the_same_show_episode_ask_for_no_release_episode() {
+    let (mut app, stack_task) = stack().await;
+    let source = source(json!({"99001/1": [], "99002/1": []})).await;
+    let fribb = fribb(json!([
+        {"type":"TV","mal_id":99001,"anilist_id":99001,"tvdb_id":79900,"themoviedb_id":{"tv":7990},"imdb_id":["tt5559900"]},
+        {"type":"TV","mal_id":99002,"anilist_id":99002,"tvdb_id":79900,"themoviedb_id":{"tv":7990},"imdb_id":["tt5559900"]}
+    ]))
+    .await;
+    app.segments = Arc::new(Service::fixture(Some(&source.base), None, None, None));
+    app.cross_ids = Arc::new(super::cross_ids::Service::fixture(&fribb.base));
+    let card = show_episode_card(
+        "tt5559900",
+        json!([
+            {"namespace":"imdb","value":"tt5559900"},
+            {"namespace":"tvdb","value":"79900"}
+        ]),
+        1,
+        1,
+    );
+    let resolved = target(&app, &lease(), &card).await.unwrap();
+    assert_eq!(resolved.release_episode, None);
+    assert_eq!(answer(&app, &lease(), Some(&card)).await, json!({"segments":[]}));
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    stack_task.abort();
+}
+
+#[tokio::test]
+async fn a_split_cour_show_episode_reaches_the_cour_whose_season_and_episode_list_name_it() {
+    let (mut app, stack_task) = stack().await;
+    let source = source(fixture_rows()).await;
+    let fribb = fribb(json!([
+        {"type":"TV","mal_id":16498,"anilist_id":16498,"tvdb_id":267440,"themoviedb_id":{"tv":1429},"imdb_id":["tt2560140"],"season":{"tvdb":1}},
+        {"type":"TV","mal_id":35760,"anilist_id":99147,"tvdb_id":267440,"themoviedb_id":{"tv":1429},"imdb_id":["tt2560140"],"season":{"tvdb":3}},
+        {"type":"TV","mal_id":38524,"anilist_id":104578,"tvdb_id":267440,"themoviedb_id":{"tv":1429},"imdb_id":["tt2560140"],"season":{"tvdb":3},"episode_offset":{"tvdb":12}}
+    ]))
+    .await;
+    app.segments = Arc::new(Service::fixture(Some(&source.base), None, None, None));
+    app.cross_ids = Arc::new(super::cross_ids::Service::fixture(&fribb.base));
+    let card = show_episode_card(
+        "tt2560140",
+        json!([
+            {"namespace":"imdb","value":"tt2560140"},
+            {"namespace":"tvdb","value":"267440"},
+            {"namespace":"tmdb","value":"1429"}
+        ]),
+        3,
+        22,
+    );
+    let resolved = target(&app, &lease(), &card).await.unwrap();
+    assert_eq!(resolved.mal, Some(38524));
+    assert_eq!(resolved.anilist, Some(104578));
+    assert_eq!(resolved.release_episode, Some(10));
+    assert_eq!(
+        answer(&app, &lease(), Some(&card)).await,
+        json!({"segments":[
+            {"kind":"intro","start_ms":310571,"end_ms":400571},
+            {"kind":"credits","start_ms":1290000,"end_ms":1380000}
+        ]})
+    );
+    stack_task.abort();
+}
+
 async fn animeskip_source(episodes: Value) -> Source {
     let reads = Arc::new(AtomicUsize::new(0));
     let count = reads.clone();

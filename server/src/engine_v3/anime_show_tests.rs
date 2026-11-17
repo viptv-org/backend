@@ -109,6 +109,10 @@ fn meta_of(addon: i64, id: &str) -> Value {
             "videos":tvdb_videos("tt9876543", &[(1,1),(2,1),(3,1)])}}),
         (4, "tt7441658") => json!({"meta":{"id":"tt7441658","type":"series","name":"Black Clover","tvdb_id":"364223","moviedb_id":"73223",
             "videos":tvdb_videos("tt7441658", &[(1,30)])}}),
+        (4, "tt0988824") => json!({"meta":{"id":"tt0988824","type":"series","name":"Naruto Shippuden","tvdb_id":"79824","moviedb_id":"31910",
+            "videos":tvdb_videos("tt0988824", &[(3,18),(4,2)])}}),
+        (4, "tt5559900") => json!({"meta":{"id":"tt5559900","type":"series","name":"Twin Cour","tvdb_id":"79900","moviedb_id":"7990",
+            "videos":tvdb_videos("tt5559900", &[(1,2)])}}),
         (15, "mal:20") => json!({"meta":{"id":"mal:20","type":"series","name":"Naruto","imdb_id":"tt0409591","_tmdbId":"46260","_tvdbId":"78857","_malId":"20","_kitsuId":"11",
             "videos":videos("kitsu:11", &[1,2,3])}}),
         (15, "mal:16498") => json!({"meta":{"id":"mal:16498","type":"series","name":"Attack on Titan","imdb_id":"tt2560140","_tvdbId":"267440","_tmdbId":"1429","_malId":"16498",
@@ -193,6 +197,9 @@ async fn simkl_search(Query(query): Query<HashMap<String, String>>) -> axum::res
         (Some("16498"), _) => Some(5001),
         (Some("21"), _) => Some(402),
         (Some("31"), _) => Some(403),
+        (Some("1735"), _) => Some(7000),
+        (Some("99001"), _) => Some(7001),
+        (Some("99002"), _) => Some(7002),
         (Some("20"), _) | (_, Some("11")) => Some(401),
         _ => None,
     };
@@ -210,6 +217,9 @@ async fn simkl_title(Path(id): Path<String>) -> axum::Json<Value> {
         "403" => json!({"title":"Coordinates missing","ids":{"simkl":403,"mal":31,"tvdb":999}}),
         "5000" => json!({"title":"Attack on Titan Season 3 Part 2","type":"anime","anime_type":"tv","ids":{"simkl":5000,"mal":38524,"imdb":"tt2560140","tmdb":1429,"tvdb":267440}}),
         "5001" => json!({"title":"Attack on Titan","type":"anime","anime_type":"tv","ids":{"simkl":5001,"mal":16498,"imdb":"tt2560140","tmdb":1429,"tvdb":267440}}),
+        "7000" => json!({"title":"Naruto Shippuden","type":"anime","anime_type":"tv","ids":{"simkl":7000,"mal":1735,"imdb":"tt0988824","tmdb":31910,"tvdb":79824}}),
+        "7001" => json!({"title":"Twin Cour","type":"anime","anime_type":"tv","ids":{"simkl":7001,"mal":99001,"imdb":"tt5559900","tmdb":7990,"tvdb":79900}}),
+        "7002" => json!({"title":"Twin Cour Recap","type":"anime","anime_type":"tv","ids":{"simkl":7002,"mal":99002,"imdb":"tt5559900","tmdb":7990,"tvdb":79900}}),
         "6000" => json!({"title":"Black Clover Second Season","type":"anime","anime_type":"tv","ids":{"simkl":6000,"imdb":"tt7441658","tmdb":336735,"tvdb":364223}}),
         _ => Value::Null,
     })
@@ -234,6 +244,15 @@ async fn simkl_episodes(Path(id): Path<String>) -> axum::Json<Value> {
             .collect::<Vec<_>>(),
         "5001" => (1..=3)
             .map(|n| json!({"type":"episode","episode":n,"aired":true,"tvdb":{"season":1,"episode":n},"ids":{"simkl_id":5100+n}}))
+            .collect::<Vec<_>>(),
+        "7000" => [(71, 3, 18), (72, 4, 1), (73, 4, 2)]
+            .into_iter()
+            .map(|(number, season, episode)| {
+                json!({"type":"episode","episode":number,"aired":true,"tvdb":{"season":season,"episode":episode},"ids":{"simkl_id":7000+number}})
+            })
+            .collect::<Vec<_>>(),
+        "7001" | "7002" => (1..=2)
+            .map(|n| json!({"type":"episode","episode":n,"aired":true,"tvdb":{"season":1,"episode":n},"ids":{"simkl_id":7100+n}}))
             .collect::<Vec<_>>(),
         "6000" => (1..=30)
             .map(|n| json!({"type":"episode","episode":n,"aired":true,"tvdb":{"season":1,"episode":n},"ids":{"simkl_id":6000+n}}))
