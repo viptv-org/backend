@@ -43,6 +43,8 @@ async fn source(rows: Value) -> Source {
                         assert!(
                             query.contains("types[]=op")
                                 && query.contains("types[]=ed")
+                                && query.contains("types[]=mixed-op")
+                                && query.contains("types[]=mixed-ed")
                                 && query.contains("types[]=recap")
                                 && query.contains("episodeLength=0"),
                             "{query}"
@@ -156,11 +158,13 @@ fn episode_card(season: u32, episode: u32) -> Card {
 }
 
 #[test]
-fn skip_types_convert_to_milliseconds_and_ignore_mixed_or_impossible_intervals() {
+fn skip_types_convert_to_milliseconds_prefer_pure_over_mixed_and_ignore_impossible_intervals() {
     let document = json!({"found":true,"results":[
+        {"interval":{"startTime":300.0,"endTime":390.0},"skipType":"mixed-op"},
         {"interval":{"startTime":310.571,"endTime":400.571},"skipType":"op"},
         {"interval":{"startTime":1290.0,"endTime":1380.0},"skipType":"ed"},
         {"interval":{"startTime":400.0,"endTime":500.0},"skipType":"mixed-op"},
+        {"interval":{"startTime":1280.0,"endTime":1370.0},"skipType":"mixed-ed"},
         {"interval":{"startTime":0.0,"endTime":30.0},"skipType":"recap"},
         {"interval":{"startTime":100.0,"endTime":90.0},"skipType":"ed"},
         {"interval":{"startTime":-5.0,"endTime":10.0},"skipType":"op"},
@@ -183,6 +187,26 @@ fn skip_types_convert_to_milliseconds_and_ignore_mixed_or_impossible_intervals()
                 kind: "credits",
                 start_ms: 1_290_000,
                 end_ms: 1_380_000
+            },
+        ]
+    );
+    let mixed_only = json!({"found":true,"results":[
+        {"interval":{"startTime":1300.5,"endTime":1390.0},"skipType":"mixed-ed"},
+        {"interval":{"startTime":80.0,"endTime":170.0},"skipType":"mixed-op"},
+        {"interval":{"startTime":90.0,"endTime":180.0},"skipType":"mixed-op"}
+    ]});
+    assert_eq!(
+        parse(&mixed_only),
+        vec![
+            super::segments::Segment {
+                kind: "intro",
+                start_ms: 80_000,
+                end_ms: 170_000
+            },
+            super::segments::Segment {
+                kind: "credits",
+                start_ms: 1_300_500,
+                end_ms: 1_390_000
             },
         ]
     );

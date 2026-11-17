@@ -254,7 +254,7 @@ impl Service {
             return Vec::new();
         }
         let url = format!(
-            "{}/v2/skip-times/{mal}/{episode}?types[]=op&types[]=ed&types[]=recap&episodeLength=0",
+            "{}/v2/skip-times/{mal}/{episode}?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&types[]=recap&episodeLength=0",
             self.aniskip.base.trim_end_matches('/')
         );
         self.aniskip
@@ -372,17 +372,19 @@ fn var_or(name: &str, fallback: &str) -> String {
 }
 
 pub(crate) fn parse(document: &Value) -> Vec<Segment> {
-    let mut segments: Vec<Segment> = Vec::new();
+    let mut segments: Vec<(Segment, bool)> = Vec::new();
     for result in document["results"]
         .as_array()
         .into_iter()
         .flatten()
         .take(MAX_RESULTS)
     {
-        let kind = match result["skipType"].as_str() {
-            Some("op") => "intro",
-            Some("ed") => "credits",
-            Some("recap") => "recap",
+        let (kind, mixed) = match result["skipType"].as_str() {
+            Some("op") => ("intro", false),
+            Some("ed") => ("credits", false),
+            Some("mixed-op") => ("intro", true),
+            Some("mixed-ed") => ("credits", true),
+            Some("recap") => ("recap", false),
             _ => continue,
         };
         let (Some(start_ms), Some(end_ms)) = (
@@ -391,15 +393,21 @@ pub(crate) fn parse(document: &Value) -> Vec<Segment> {
         ) else {
             continue;
         };
-        if end_ms <= start_ms || segments.iter().any(|segment| segment.kind == kind) {
+        if end_ms <= start_ms {
             continue;
         }
-        segments.push(Segment {
+        let segment = Segment {
             kind,
             start_ms,
             end_ms,
-        });
+        };
+        match segments.iter_mut().find(|(existing, _)| existing.kind == kind) {
+            Some(existing) if existing.1 && !mixed => *existing = (segment, mixed),
+            Some(_) => {}
+            None => segments.push((segment, mixed)),
+        }
     }
+    let mut segments: Vec<Segment> = segments.into_iter().map(|(segment, _)| segment).collect();
     segments.sort_by_key(|segment| segment.start_ms);
     segments
 }
