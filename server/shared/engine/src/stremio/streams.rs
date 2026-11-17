@@ -112,6 +112,8 @@ pub struct SourceCandidate {
     /// The add-on's `behaviorHints.bingeGroup`; series memory scopes it by provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binge_group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_fingerprint: Option<String>,
 }
 impl SourceCandidate {
     /// Copy normalized release facts onto this candidate.
