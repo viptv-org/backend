@@ -112,6 +112,13 @@ impl AnimeShow {
         Some(ReleaseEpisode { season, episode })
     }
 
+    pub(crate) fn listed_release_episode(&self, tvdb: TvdbEpisode) -> Option<ReleaseEpisode> {
+        match &self.layout {
+            Layout::Aired => None,
+            Layout::Segments { .. } => self.release_episode(tvdb),
+        }
+    }
+
     fn details_document(&self, release: &Value) -> Value {
         if let Some(document) = &self.document {
             let mut document = document.clone();

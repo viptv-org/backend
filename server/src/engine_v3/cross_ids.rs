@@ -10,6 +10,7 @@ const BASE_VARIABLE: &str = "VIPTV_FRIBB_BASE";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_RESPONSE: usize = 32 * 1024 * 1024;
+const SHOW_NAMESPACES: [&str; 3] = ["tvdb", "tmdb", "imdb"];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CrossIds {
@@ -83,9 +84,19 @@ impl CrossIds {
         }
         self.mal = self.mal.or(entry.mal);
         self.anilist = self.anilist.or(entry.anilist);
-        self.season = self.season.or(entry.season);
+        self.season = self.season.or(entry.season.filter(|season| *season > 0));
         self.episode_offset = self.episode_offset.or(entry.episode_offset);
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnimeEntry {
+    pub(crate) mal: u64,
+    pub(crate) anilist: Option<u64>,
+    pub(crate) tvdb: Option<u64>,
+    pub(crate) tmdb: Option<u64>,
+    pub(crate) imdb: Option<String>,
+    pub(crate) tvdb_season: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -132,7 +143,7 @@ impl Entry {
             tvdb: raw.tvdb_id,
             tmdb,
             imdb,
-            season: raw.season.and_then(|season| season.tvdb).filter(|season| *season > 0),
+            season: raw.season.and_then(|season| season.tvdb),
             episode_offset: raw
                 .episode_offset
                 .and_then(|offset| offset.tvdb)
@@ -175,7 +186,7 @@ struct RawTmdb {
 
 struct Mapping {
     entries: Vec<Entry>,
-    index: HashMap<String, usize>,
+    index: HashMap<String, Vec<usize>>,
 }
 
 impl Mapping {
@@ -192,7 +203,34 @@ impl Mapping {
     fn lookup(&self, id: &ExternalId) -> Option<&Entry> {
         self.index
             .get(&format!("{}:{}", id.namespace, id.value))
+            .and_then(|positions| positions.first())
             .map(|position| &self.entries[*position])
+    }
+
+    fn anime_entries(&self, ids: &[ExternalId]) -> Vec<AnimeEntry> {
+        let mut positions: Vec<usize> = ids
+            .iter()
+            .filter(|id| SHOW_NAMESPACES.contains(&id.namespace.as_str()))
+            .filter_map(|id| self.index.get(&format!("{}:{}", id.namespace, id.value)))
+            .flatten()
+            .copied()
+            .collect();
+        positions.sort_unstable();
+        positions.dedup();
+        positions
+            .into_iter()
+            .filter_map(|position| {
+                let entry = &self.entries[position];
+                Some(AnimeEntry {
+                    mal: entry.mal?,
+                    anilist: entry.anilist,
+                    tvdb: entry.tvdb,
+                    tmdb: entry.tmdb,
+                    imdb: entry.imdb.clone(),
+                    tvdb_season: entry.season,
+                })
+            })
+            .collect()
     }
 }
 
@@ -214,7 +252,10 @@ impl<'de> serde::de::Visitor<'de> for MappingVisitor<'_> {
             };
             let position = entries.len();
             for key in entry.keys.iter().cloned() {
-                index.entry(key).or_insert(position);
+                let positions: &mut Vec<usize> = index.entry(key).or_default();
+                if !positions.contains(&position) {
+                    positions.push(position);
+                }
             }
             entries.push(entry);
         }
@@ -270,6 +311,13 @@ impl Service {
             }
         }
         cross
+    }
+
+    pub(crate) async fn anime_entries(&self, ids: &[ExternalId]) -> Vec<AnimeEntry> {
+        self.mapping()
+            .await
+            .map(|mapping| mapping.anime_entries(ids))
+            .unwrap_or_default()
     }
 
     async fn mapping(&self) -> Option<Arc<Mapping>> {

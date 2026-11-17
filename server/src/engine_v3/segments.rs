@@ -23,6 +23,8 @@ const MAX_SECONDS: f64 = 86_400.0;
 const MAX_MILLISECONDS: f64 = 86_400_000.0;
 const MAX_INFERRED_MS: u64 = 600_000;
 const MAX_CACHED: usize = 4096;
+const MAX_CROSSWALK_CANDIDATES: usize = 4;
+const SHOW_NAMESPACES: [&str; 3] = ["tvdb", "tmdb", "imdb"];
 const FRESH: Duration = Duration::from_secs(24 * 60 * 60);
 const NO_DATA: Duration = Duration::from_secs(60 * 60);
 const BACKOFF: Duration = Duration::from_secs(60);
@@ -620,34 +622,136 @@ pub(crate) async fn target(app: &App, lease: &ResourceLease, card: &Card) -> Opt
     let cross = app.cross_ids.resolve(&ids).await;
 
     let mut release_episode = None;
+    let mut mal = cross.mal.or_else(|| id_u64(&ids, "mal"));
+    let mut anilist = cross.anilist.or_else(|| id_u64(&ids, "anilist"));
     let mut tvdb = cross.tvdb;
     let mut tmdb = cross.tmdb;
     let mut imdb = cross.imdb;
+    let shown = super::anime_show::TvdbEpisode {
+        season,
+        episode: coordinates.episode,
+    };
     if let Some(release) = &release {
         if let Some(show) =
             super::anime_show::resolve(&app.clone().with_lease(lease.clone()), release).await
         {
             release_episode = show
-                .release_episode(super::anime_show::TvdbEpisode {
-                    season,
-                    episode: coordinates.episode,
-                })
+                .release_episode(shown)
                 .map(|release_episode| release_episode.episode);
             tvdb = tvdb.or_else(|| id_u64(&show.identity().ids, "tvdb"));
             tmdb = tmdb.or_else(|| id_u64(&show.identity().ids, "tmdb"));
             imdb = imdb.or_else(|| id_str(&show.identity().ids, "imdb"));
         }
+    } else {
+        let show = if parent.is_empty() { own } else { parent };
+        if let Some(crosswalk) = crosswalk(app, lease, show, shown).await {
+            mal = Some(crosswalk.mal);
+            anilist = crosswalk.anilist;
+            release_episode = Some(crosswalk.episode);
+        }
     }
     Some(Target {
         season: Some(season),
         episode: coordinates.episode,
-        mal: cross.mal.or_else(|| id_u64(&ids, "mal")),
-        anilist: cross.anilist.or_else(|| id_u64(&ids, "anilist")),
+        mal,
+        anilist,
         release_episode,
         tvdb,
         tmdb,
         imdb,
     })
+}
+
+struct Crosswalk {
+    mal: u64,
+    anilist: Option<u64>,
+    episode: u32,
+}
+
+async fn crosswalk(
+    app: &App,
+    lease: &ResourceLease,
+    show: &[ExternalId],
+    shown: super::anime_show::TvdbEpisode,
+) -> Option<Crosswalk> {
+    if shown.season == 0 {
+        return None;
+    }
+    let mut candidates: Vec<_> = app
+        .cross_ids
+        .anime_entries(show)
+        .await
+        .into_iter()
+        .filter(|entry| entry.tvdb_season.is_none_or(|season| season == shown.season))
+        .filter(|entry| {
+            agrees(show, "tvdb", entry.tvdb.map(|value| value.to_string()).as_deref())
+                && agrees(show, "tmdb", entry.tmdb.map(|value| value.to_string()).as_deref())
+        })
+        .collect();
+    candidates.sort_by_key(|entry| entry.mal);
+    candidates.dedup_by_key(|entry| entry.mal);
+    if candidates.is_empty() || candidates.len() > MAX_CROSSWALK_CANDIDATES {
+        return None;
+    }
+    let app = app.clone().with_lease(lease.clone());
+    let mut found = None;
+    for entry in candidates {
+        let ids: Vec<ExternalId> = [
+            ("mal", Some(entry.mal.to_string())),
+            ("anilist", entry.anilist.map(|value| value.to_string())),
+            ("tvdb", entry.tvdb.map(|value| value.to_string())),
+            ("tmdb", entry.tmdb.map(|value| value.to_string())),
+            ("imdb", entry.imdb.clone()),
+        ]
+        .into_iter()
+        .filter_map(|(namespace, value)| {
+            Some(ExternalId {
+                namespace: namespace.into(),
+                value: value?,
+            })
+        })
+        .collect();
+        let release = MediaIdentity {
+            id: format!("mal:{}", entry.mal),
+            kind: "series".into(),
+            ids,
+            episode: None,
+            edition: None,
+        };
+        let anime = super::anime_show::resolve(&app, &release).await?;
+        if !same_show(show, &anime.identity().ids) {
+            continue;
+        }
+        let Some(episode) = anime.listed_release_episode(shown) else {
+            continue;
+        };
+        let mapped = Crosswalk {
+            mal: entry.mal,
+            anilist: entry.anilist,
+            episode: episode.episode,
+        };
+        if found.replace(mapped).is_some() {
+            return None;
+        }
+    }
+    found
+}
+
+fn agrees(ids: &[ExternalId], namespace: &str, value: Option<&str>) -> bool {
+    match (id_str(ids, namespace), value) {
+        (Some(known), Some(value)) => known == value,
+        _ => true,
+    }
+}
+
+fn same_show(show: &[ExternalId], resolved: &[ExternalId]) -> bool {
+    let shared: Vec<bool> = SHOW_NAMESPACES
+        .iter()
+        .filter_map(|namespace| {
+            Some(id_str(show, namespace)? == id_str(resolved, namespace)?)
+        })
+        .collect();
+    !shared.is_empty() && shared.iter().all(|same| *same)
 }
 
 fn id_u64(ids: &[ExternalId], namespace: &str) -> Option<u64> {
