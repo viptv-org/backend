@@ -68,6 +68,7 @@ pub(crate) async fn save(
     } else {
         None
     };
+    crate::gateway::diagnostics::storage(if evidence.is_some() { "scoped" } else { "legacy" });
     blocking(move || {
         if let Some(evidence) = evidence {
             let mut db=app.db.lock().map_err(|_|ApiError::from("Database unavailable"))?;
@@ -120,6 +121,9 @@ pub(crate) async fn remove(
     } else {
         None
     };
+    crate::gateway::diagnostics::storage(
+        if selector.metadata_origin.is_some() || selector.card.is_some() { "scoped" } else { "legacy" },
+    );
     blocking(move || {
         if !["movie", "series"].contains(&kind.as_str())
             || id.is_empty()

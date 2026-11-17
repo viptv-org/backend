@@ -1,7 +1,7 @@
 use axum::{extract::Request, middleware::Next, response::Response};
 use sha2::{Digest, Sha256};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     future::Future,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
@@ -12,6 +12,11 @@ static SEQUENCE: AtomicU64 = AtomicU64::new(1);
 tokio::task_local! {
     pub(crate) static TRACE: String;
     pub(crate) static STAGES: RefCell<Vec<(&'static str, Duration)>>;
+    static STORAGE: Cell<&'static str>;
+}
+
+pub(crate) fn storage(kind: &'static str) {
+    let _ = STORAGE.try_with(|storage| storage.set(kind));
 }
 
 pub(crate) async fn timed<T>(stage: &'static str, future: impl Future<Output = T>) -> T {
@@ -37,9 +42,19 @@ pub(crate) fn tag(value: &str) -> String {
         .collect()
 }
 
-pub(crate) fn operation(path: &str) -> &'static str {
+pub(crate) fn operation(method: &str, path: &str) -> &'static str {
     let path = path.strip_prefix("/api").unwrap_or(path);
-    if path == "/playback" {
+    let profile_route: Vec<&str> = path
+        .strip_prefix("/profiles/")
+        .map(|rest| rest.split('/').skip(1).collect())
+        .unwrap_or_default();
+    if method == "PUT" && profile_route == ["progress"] {
+        "progress_write"
+    } else if (method == "PUT" && profile_route == ["library"])
+        || (method == "DELETE" && profile_route.len() == 3 && profile_route[0] == "library")
+    {
+        "library_write"
+    } else if path == "/playback" {
         "playback_start"
     } else if path.starts_with("/playback/") && path.ends_with("/heartbeat") {
         "playback_heartbeat"
@@ -54,16 +69,18 @@ pub(crate) fn operation(path: &str) -> &'static str {
     }
 }
 
-pub(crate) async fn observe(request: Request, next: Next) -> Response {
-    let op = operation(request.uri().path());
-    let session = request
-        .uri()
-        .path()
-        .split('/')
-        .skip_while(|part| *part != "playback")
+fn tag_after(path: &str, name: &str) -> String {
+    path.split('/')
+        .skip_while(|part| *part != name)
         .nth(1)
         .map(tag)
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+pub(crate) async fn observe(request: Request, next: Next) -> Response {
+    let op = operation(request.method().as_str(), request.uri().path());
+    let session = tag_after(request.uri().path(), "playback");
+    let profile = tag_after(request.uri().path(), "profiles");
     let method = request.method().as_str().to_owned();
     let trace = format!(
         "{}-{}",
@@ -76,7 +93,7 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
     STAGES
         .scope(
             RefCell::new(Vec::new()),
-            async move {
+            STORAGE.scope(Cell::new(""), async move {
                 let response = TRACE
                     .scope(
                         trace,
@@ -96,6 +113,9 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
                                     Some((stage, stage_ms)) => tracing::warn!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, slowest_stage=stage, slowest_stage_ms=stage_ms, "API request failed"),
                                     None => tracing::warn!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, "API request failed"),
                                 }
+                            } else if matches!(op, "progress_write" | "library_write") {
+                                let storage = STORAGE.with(Cell::get);
+                                tracing::info!(operation=op,trace=%event_trace,profile_tag=%profile,%method,storage,status,elapsed_ms,"API request completed");
                             } else if op != "api_other" {
                                 match slowest {
                                     Some((stage, stage_ms)) => tracing::info!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, slowest_stage=stage, slowest_stage_ms=stage_ms, "API request completed"),
@@ -108,7 +128,7 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
                     )
                     .await;
                 response
-            },
+            }),
         )
         .await
 }
@@ -175,13 +195,73 @@ mod tests {
             assert!(!logs.contains(secret));
         }
     }
+    #[tokio::test]
+    async fn successful_progress_and_library_writes_are_logged_without_ids() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = Capture(bytes.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let subscriber = tracing::Dispatch::new(subscriber);
+        let app = axum::Router::new()
+            .route(
+                "/api/profiles/:id/progress",
+                axum::routing::put(|| async {
+                    storage("scoped");
+                    axum::http::StatusCode::OK
+                }),
+            )
+            .route(
+                "/api/profiles/:id/library/:kind/:item",
+                axum::routing::delete(|| async {
+                    storage("legacy");
+                    axum::http::StatusCode::OK
+                }),
+            )
+            .layer(axum::middleware::from_fn(observe));
+        for (method, uri) in [
+            ("PUT", "/api/profiles/4242/progress"),
+            ("DELETE", "/api/profiles/4242/library/movie/tt-private-title"),
+        ] {
+            let request = Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = app
+                .clone()
+                .oneshot(request)
+                .with_subscriber(subscriber.clone())
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+        }
+        let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        let progress = logs.lines().find(|line| line.contains("progress_write")).expect(&logs);
+        let library = logs.lines().find(|line| line.contains("library_write")).expect(&logs);
+        for (line, kind) in [(progress, "storage=\"scoped\""), (library, "storage=\"legacy\"")] {
+            for fact in ["INFO", "status=200", "elapsed_ms", "trace", kind, &format!("profile_tag={}", tag("4242"))] {
+                assert!(line.contains(fact), "missing {fact} in {line}");
+            }
+        }
+        for private in ["4242/", "tt-private-title"] {
+            assert!(!logs.contains(private));
+        }
+    }
     #[test]
     fn diagnostic_fields_do_not_include_paths_queries_or_credentials() {
+        assert_eq!(operation("PUT", "/api/profiles/7/progress"), "progress_write");
+        assert_eq!(operation("PUT", "/api/profiles/7/library"), "library_write");
+        assert_eq!(operation("DELETE", "/api/profiles/7/library/movie/x"), "library_write");
+        assert_eq!(operation("GET", "/api/profiles/7/library"), "api_other");
+        assert_eq!(operation("GET", "/api/profiles/7/library/membership"), "api_other");
         assert_eq!(
-            operation("/api/playback/private-token/heartbeat"),
+            operation("POST", "/api/playback/private-token/heartbeat"),
             "playback_heartbeat"
         );
-        assert_eq!(operation("/api/something/private-password"), "api_other");
+        assert_eq!(operation("GET", "/api/something/private-password"), "api_other");
         let value = tag("private-token");
         assert_eq!(value.len(), 16);
         assert!(!value.contains("private-token"));
