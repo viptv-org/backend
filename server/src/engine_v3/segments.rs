@@ -32,6 +32,8 @@ pub(crate) struct Segment {
     pub(crate) kind: &'static str,
     pub(crate) start_ms: u64,
     pub(crate) end_ms: u64,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) mixed: bool,
 }
 
 #[derive(Clone)]
@@ -254,7 +256,7 @@ impl Service {
             return Vec::new();
         }
         let url = format!(
-            "{}/v2/skip-times/{mal}/{episode}?types[]=op&types[]=ed&types[]=recap&episodeLength=0",
+            "{}/v2/skip-times/{mal}/{episode}?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&types[]=recap&episodeLength=0",
             self.aniskip.base.trim_end_matches('/')
         );
         self.aniskip
@@ -379,10 +381,12 @@ pub(crate) fn parse(document: &Value) -> Vec<Segment> {
         .flatten()
         .take(MAX_RESULTS)
     {
-        let kind = match result["skipType"].as_str() {
-            Some("op") => "intro",
-            Some("ed") => "credits",
-            Some("recap") => "recap",
+        let (kind, mixed) = match result["skipType"].as_str() {
+            Some("op") => ("intro", false),
+            Some("ed") => ("credits", false),
+            Some("mixed-op") => ("intro", true),
+            Some("mixed-ed") => ("credits", true),
+            Some("recap") => ("recap", false),
             _ => continue,
         };
         let (Some(start_ms), Some(end_ms)) = (
@@ -391,14 +395,20 @@ pub(crate) fn parse(document: &Value) -> Vec<Segment> {
         ) else {
             continue;
         };
-        if end_ms <= start_ms || segments.iter().any(|segment| segment.kind == kind) {
+        if end_ms <= start_ms {
             continue;
         }
-        segments.push(Segment {
+        let segment = Segment {
             kind,
             start_ms,
             end_ms,
-        });
+            mixed,
+        };
+        match segments.iter_mut().find(|existing| existing.kind == kind) {
+            Some(existing) if existing.mixed && !mixed => *existing = segment,
+            Some(_) => {}
+            None => segments.push(segment),
+        }
     }
     segments.sort_by_key(|segment| segment.start_ms);
     segments
@@ -430,6 +440,7 @@ fn introdb_segment(list: &Value, kind: &'static str) -> Option<Segment> {
             kind,
             start_ms,
             end_ms,
+            mixed: false,
         });
     }
     None
@@ -454,6 +465,7 @@ pub(crate) fn parse_skipdb(document: &Value) -> Vec<Segment> {
             kind,
             start_ms,
             end_ms,
+            mixed: false,
         });
     }
     segments.sort_by_key(|segment| segment.start_ms);
@@ -540,6 +552,7 @@ fn animeskip_timestamps(timestamps: &Value) -> Vec<Segment> {
             kind,
             start_ms: *start_ms,
             end_ms: *end_ms,
+            mixed: false,
         });
     }
     segments
