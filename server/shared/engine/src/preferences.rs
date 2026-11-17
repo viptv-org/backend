@@ -111,8 +111,10 @@ pub struct ProfilePreferences {
     pub hdr_preference: HdrPreference,
     /// Show the Next episode action during credits; never auto-plays.
     pub next_episode_button: bool,
-    /// Skip marked intros/recaps when the content provides markers.
+    /// Skip marked intros/recaps when playback runs into them.
     pub skip_intros: bool,
+    /// Skip marked credits when playback runs into them.
+    pub skip_credits: bool,
     /// Switch the display to the video frame rate where the platform allows it.
     pub match_frame_rate: bool,
     /// Reuse the source the viewer last picked for a title; off shows the picker.
@@ -120,6 +122,7 @@ pub struct ProfilePreferences {
 }
 /// Wire/stored form: rows saved before `subtitle_mode` derive it from
 /// `subtitles_enabled`; a sent `subtitle_mode` decides `subtitles_enabled`.
+/// A row without `skip_credits` reads with both skips on.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredPreferences {
@@ -140,8 +143,10 @@ struct StoredPreferences {
     hdr_preference: HdrPreference,
     #[serde(default = "default_next_episode_button")]
     next_episode_button: bool,
-    #[serde(default)]
+    #[serde(default = "default_skip")]
     skip_intros: bool,
+    #[serde(default)]
+    skip_credits: Option<bool>,
     #[serde(default = "default_match_frame_rate")]
     match_frame_rate: bool,
     #[serde(default = "default_remembered_source_reuse")]
@@ -166,7 +171,8 @@ impl From<StoredPreferences> for ProfilePreferences {
             subtitle_background_color: value.subtitle_background_color,
             hdr_preference: value.hdr_preference,
             next_episode_button: value.next_episode_button,
-            skip_intros: value.skip_intros,
+            skip_intros: value.skip_intros || value.skip_credits.is_none(),
+            skip_credits: value.skip_credits.unwrap_or(true),
             match_frame_rate: value.match_frame_rate,
             remembered_source_reuse: value.remembered_source_reuse,
         }
@@ -186,7 +192,8 @@ impl Default for ProfilePreferences {
             subtitle_background_color: default_background(),
             hdr_preference: HdrPreference::Any,
             next_episode_button: true,
-            skip_intros: false,
+            skip_intros: true,
+            skip_credits: true,
             match_frame_rate: true,
             remembered_source_reuse: true,
         }
@@ -221,6 +228,9 @@ fn default_scale() -> f64 {
 fn default_next_episode_button() -> bool {
     true
 }
+fn default_skip() -> bool {
+    true
+}
 fn default_match_frame_rate() -> bool {
     true
 }
@@ -241,6 +251,8 @@ fn color(value: &str, alpha: bool) -> bool {
 impl ProfilePreferences {
     /// Parse a full replacement. A client that only knows on/off sends no
     /// `subtitle_mode`; keep an existing `foreign` while subtitles stay on.
+    /// A client that sends no `skip_credits` keeps the stored credits choice
+    /// and its own `skip_intros`.
     pub fn from_update(
         value: serde_json::Value,
         previous: &ProfilePreferences,
@@ -248,8 +260,14 @@ impl ProfilePreferences {
         let sent_mode = value
             .get("subtitle_mode")
             .is_some_and(|mode| !mode.is_null());
+        let predates_credits = value.get("skip_credits").is_none_or(|v| v.is_null());
+        let sent_intros = value.get("skip_intros").and_then(serde_json::Value::as_bool);
         let mut preferences: Self =
             serde_json::from_value(value).map_err(|_| Error::InvalidQuery)?;
+        if predates_credits {
+            preferences.skip_credits = previous.skip_credits;
+            preferences.skip_intros = sent_intros.unwrap_or(previous.skip_intros);
+        }
         if !sent_mode
             && preferences.subtitles_enabled
             && previous.subtitle_mode == SubtitleMode::Foreign

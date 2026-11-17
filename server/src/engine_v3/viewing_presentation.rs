@@ -240,7 +240,8 @@ pub(crate) fn preference_controls(value: &mut Value) {
     };
     value["controls"] = json!([
         {"id":"next_episode_button","group":"playback","label":"Next episode button","description":"Shows during the credits","choices":choices(vec![("On",json!(true)),("Off",json!(false))])},
-        {"id":"skip_intros","group":"playback","label":"Skip intros and recaps","description":"Shows shortcuts when the title provides segment markers","choices":choices(vec![("On",json!(true)),("Off",json!(false))])},
+        {"id":"skip_intros","group":"playback","label":"Skip intros and recaps automatically","description":"Skips them when you play into them. Seek into one to watch it.","choices":choices(vec![("On",json!(true)),("Off",json!(false))])},
+        {"id":"skip_credits","group":"playback","label":"Skip credits and outros automatically","description":"Jumps to any scene after them. At the end of an episode, Up next takes over.","choices":choices(vec![("On",json!(true)),("Off",json!(false))])},
         {"id":"remembered_source_reuse","group":"playback","label":"Remember source choices","description":"Reuse successful manual choices for this title on this device","choices":choices(vec![("On",json!(true)),("Off",json!(false))])},
         {"id":"source_selection","group":"playback","label":"Default source","description":"How Play chooses between sources","choices":choices(vec![("Best match",json!("best")),("Ask every time",json!("ask"))])},
         {"id":"max_quality_height","group":"playback","label":"Preferred quality","description":"Best match aims for this, then falls back","choices":choices(vec![("Auto",Value::Null),("4K",json!(2160)),("1080p",json!(1080)),("720p",json!(720)),("480p",json!(480))])},

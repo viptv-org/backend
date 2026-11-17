@@ -319,28 +319,42 @@ fn three_d(line: &str) -> bool {
     }) || pattern!(r"(?i)\bH(?:alf)?[ .-]?(?:SBS|OU)\b").is_match(line)
 }
 
+/// `Multi`/`Multiple` count audio tracks; `Multi Subs`/`Multiple Subtitle` are
+/// subtitle evidence only.
+fn multi_audio(line: &str) -> bool {
+    pattern!(r"(?i)\bmulti(?:ple)?\b")
+        .find_iter(line)
+        .any(|m| !pattern!(r"(?i)^[ .-]*m?sub").is_match(&line[m.end()..]))
+        || pattern!(r"(?i)\btri(?:ple)?[ .-]*(?:audio|dub\w*)\b").is_match(line)
+}
+
+/// `Dual` counts audio tracks; `Dual Sub`/`Dual Subs` are subtitle evidence only.
+fn dual_audio(line: &str) -> bool {
+    pattern!(r"(?i)\bdual[ .-]*(?:audio|áudio|line|lang\w*)\b").is_match(line)
+        || pattern!(r"(?i)\bdual\b")
+            .find_iter(line)
+            .any(|m| !pattern!(r"(?i)^[ .-]*(?:sub|!)").is_match(&line[m.end()..]))
+}
+
+/// The whole-token dub markers add-ons write. `DUAL` and `MULTI` count audio
+/// tracks and never imply a dub; only one of these words does.
+fn dubbed(line: &str) -> bool {
+    pattern!(r"(?i)\b(?:dub|dubs|dubbed|dubbing|dublado)\b").is_match(line)
+}
+
 fn audio_flags(line: &str, out: &mut Vec<&'static str>) {
     let mut push = |value: &'static str| {
         if !out.contains(&value) {
             out.push(value);
         }
     };
-    // `Multi Subs`/`Multiple Subtitle` are subtitle evidence only.
-    let multi = pattern!(r"(?i)\bmulti(?:ple)?\b")
-        .find_iter(line)
-        .any(|m| !pattern!(r"(?i)^[ .-]*m?sub").is_match(&line[m.end()..]))
-        || pattern!(r"(?i)\btri(?:ple)?[ .-]*(?:audio|dub\w*)\b").is_match(line);
-    if multi {
+    if multi_audio(line) {
         push("multi");
     }
-    let dual = pattern!(r"(?i)\bdual[ .-]*(?:audio|áudio|line|lang\w*)\b").is_match(line)
-        || pattern!(r"(?i)\bdual\b")
-            .find_iter(line)
-            .any(|m| !pattern!(r"(?i)^[ .-]*(?:sub|!)").is_match(&line[m.end()..]));
-    if dual {
+    if dual_audio(line) {
         push("dual");
     }
-    if pattern!(r"(?i)\b(?:dubbed|dublado|dubbing|dubs?)\b").is_match(line) {
+    if dubbed(line) {
         push("dubbed");
     }
 }

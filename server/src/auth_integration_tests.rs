@@ -1453,6 +1453,25 @@ async fn remembered_source_reuse_defaults_true_round_trips_and_survives_older_cl
 }
 
 #[tokio::test]
+async fn skip_credits_defaults_on_saves_off_and_survives_clients_without_it() {
+    let a = fixture();
+    let (_, defaults) = request(&a, "member-token-1", "GET", "/api/profiles/1/preferences", Value::Null).await;
+    assert_eq!(defaults["preferences"]["skip_intros"], true);
+    assert_eq!(defaults["preferences"]["skip_credits"], true);
+    let mut off = defaults["preferences"].clone();
+    off["skip_credits"] = json!(false);
+    off["skip_intros"] = json!(false);
+    let (status, saved) = request(&a, "member-token-1", "PUT", "/api/profiles/1/preferences", json!({"revision":0,"preferences":off})).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!((saved["preferences"]["skip_intros"].clone(), saved["preferences"]["skip_credits"].clone()), (json!(false), json!(false)));
+    let mut older = saved["preferences"].clone();
+    older.as_object_mut().unwrap().remove("skip_credits");
+    let (status, kept) = request(&a, "member-token-1", "PUT", "/api/profiles/1/preferences", json!({"revision":1,"preferences":older})).await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!((kept["preferences"]["skip_intros"].clone(), kept["preferences"]["skip_credits"].clone()), (json!(false), json!(false)));
+}
+
+#[tokio::test]
 async fn kids_policy_requires_parent_pin_and_blocks_unknown_content_and_exit() {
     let a = fixture();
     let (_, child) = request(
