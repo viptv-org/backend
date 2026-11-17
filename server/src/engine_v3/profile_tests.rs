@@ -490,6 +490,7 @@ async fn playback_controls_match_the_board_order_and_toggle_copy() {
         [
             "next_episode_button",
             "skip_intros",
+            "skip_credits",
             "remembered_source_reuse",
             "source_selection",
             "max_quality_height",
@@ -522,7 +523,14 @@ async fn playback_controls_match_the_board_order_and_toggle_copy() {
     );
     let prefs = &snapshot["preferences"];
     assert_eq!(prefs["next_episode_button"], true);
-    assert_eq!(prefs["skip_intros"], false);
+    assert_eq!(prefs["skip_intros"], true);
+    assert_eq!(prefs["skip_credits"], true);
+    let credits = controls
+        .iter()
+        .find(|control| control["id"] == "skip_credits")
+        .unwrap();
+    assert_eq!(credits["label"], "Skip credits and outros automatically");
+    assert_eq!(credits["choices"][0]["value"], true);
     assert_eq!(prefs["match_frame_rate"], true);
 }
 

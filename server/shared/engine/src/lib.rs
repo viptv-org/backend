@@ -55,3 +55,5 @@ pub mod continuation;
 pub mod home_browse;
 
 pub mod origin;
+
+pub mod subtitle_sync;
