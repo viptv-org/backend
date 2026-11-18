@@ -727,6 +727,15 @@ async fn native_renewal_is_immutable_and_expired_authority_cannot_be_revived() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(refused["error_code"], "invalid_playback_request");
+    let (status, reported) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        &format!("/api/playback/{id}/heartbeat"),
+        json!({"buffering": {"rebuffer_count": 1, "buffered_ahead_seconds": 4.0}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reported}");
     let (status, renewed) = request(
         &app,
         "member-token-1",
