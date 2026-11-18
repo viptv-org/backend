@@ -36,6 +36,8 @@ mod subtitle_sync;
 mod profile_preferences;
 #[path = "playback_view.rs"]
 mod viewing;
+#[path = "playback_buffering.rs"]
+mod buffering;
 #[path = "playback_segments.rs"]
 mod playback_segments;
 pub(crate) use captions::attach as attach_subtitle;
@@ -653,6 +655,10 @@ async fn source(app: &App, lease: &ResourceLease, id: String) -> Result<Source, 
     .map_err(|_| Error::Code("provider_storage_unavailable"))?
 }
 fn response(entry: &Entry) -> Value {
+    response_with(entry, None)
+}
+fn response_with(entry: &Entry, stats: Option<&buffering::BufferingStats>) -> Value {
+    let stats = stats.unwrap_or(&buffering::BufferingStats::EMPTY);
     let mut state = entry.state.lock().unwrap();
     if state.status == "ready" {
         if let Some(native) = state.native.as_mut() {
@@ -694,7 +700,7 @@ fn response(entry: &Entry) -> Value {
     } else {
         util::now() as u64
     };
-    tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), status = state.status, expires_at, error_code = state.error.unwrap_or("none"), gateway_session_tag = %state.remote.as_ref().map(|remote| super::diagnostics::tag(&remote.viewer)).unwrap_or_default(), "Playback lease state");
+    tracing::info!(session_tag = %super::diagnostics::tag(&entry.id), status = state.status, expires_at, error_code = state.error.unwrap_or("none"), gateway_session_tag = %state.remote.as_ref().map(|remote| super::diagnostics::tag(&remote.viewer)).unwrap_or_default(), rebuffer_count = stats.rebuffer_count, rebuffer_ms = stats.rebuffer_ms, buffered_ahead_seconds = stats.buffered_ahead_seconds, throughput_kbps = stats.throughput_kbps, source_bitrate_kbps = stats.source_bitrate_kbps, video_decoder = stats.video_decoder.as_deref(), audio_decoder = stats.audio_decoder.as_deref(), dropped_frames = stats.dropped_frames, "Playback lease state");
     let renew_after = state.viewer_lease.renew_after;
     let mut value = json!({"id":entry.id,"status":state.status,"delivery":state.delivery,"live":entry.live,"error_code":state.error,"error":error,"expires_at":expires_at,"renew_after_seconds":renew_after});
     if let Some(prepared) = state.prepared.as_ref() { value["plan"] = prepared.plan(); }
@@ -2154,12 +2160,18 @@ pub(crate) async fn renew(
     Path(id): Path<String>,
     request: axum::extract::Request,
 ) -> Result<Json<Value>, Error> {
-    let body = control_body(request, 2).await?;
+    let body = control_body(request, buffering::HEARTBEAT_BODY_LIMIT).await?;
     let entry = app.gateway_playbacks.snapshot(&id, &lease)?;
-    if !body.is_empty() && (body.as_ref() != b"{}" || entry.state.lock().unwrap().native.is_some())
-    {
-        return Err(Error::Code("invalid_playback_request"));
-    }
+    let stats = match buffering::parse(&body) {
+        Some(buffering::HeartbeatBody::Empty) => None,
+        Some(buffering::HeartbeatBody::EmptyObject)
+            if entry.state.lock().unwrap().native.is_none() =>
+        {
+            None
+        }
+        Some(buffering::HeartbeatBody::Buffering(stats)) => Some(stats),
+        _ => return Err(Error::Code("invalid_playback_request")),
+    };
     if let Err(error) = validate_entry(&app, &entry).await {
         let code = match &error {
             Error::Code(code) => *code,
@@ -2203,7 +2215,7 @@ pub(crate) async fn renew(
             return Err(error);
         }
         refresh_grant(&app, &entry);
-        return Ok(Json(response(&entry)));
+        return Ok(Json(response_with(&entry, stats.as_ref())));
     }
     entry.state.lock().unwrap().touch();
     let remote = entry.state.lock().unwrap().remote.clone();
@@ -2259,7 +2271,7 @@ pub(crate) async fn renew(
     let retained = entry.state.lock().unwrap().retained_subtitles.clone();
     app.subtitle_selections.keep_alive(&retained, &lease)?;
     refresh_grant(&app, &entry);
-    Ok(Json(response(&entry)))
+    Ok(Json(response_with(&entry, stats.as_ref())))
 }
 pub(crate) async fn stop(
     State(app): State<App>,

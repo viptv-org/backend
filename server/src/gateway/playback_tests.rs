@@ -892,6 +892,111 @@ async fn ordinary_direct_and_gateway_heartbeat_preserve_empty_json_compatibility
     }
 }
 
+#[derive(Clone)]
+struct LogCapture(Arc<Mutex<Vec<u8>>>);
+impl std::io::Write for LogCapture {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn heartbeat_buffering_stats_reach_the_lease_log_and_stay_optional() {
+    use tracing::instrument::WithSubscriber;
+    // Parallel tests' scoped WARN subscribers otherwise cache INFO callsites as disabled.
+    let _ = tracing::subscriber::set_global_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(std::io::sink)
+            .finish(),
+    );
+    let (app, _peer) = setup().await;
+    gateway(&app, "first", 1);
+    let source = source(&app);
+    let (status, start) = request(
+        &app,
+        "member-token-1",
+        "POST",
+        "/api/playback",
+        body(&source, "heartbeat_buffering", "android"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = start["id"].as_str().unwrap().to_owned();
+    let initial = settled(&app, &id).await;
+    assert_eq!(initial["delivery"]["kind"], "direct");
+    let path = format!("/api/playback/{id}/heartbeat");
+    let heartbeat = |body: Value| {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = LogCapture(bytes.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let (app, path) = (app.clone(), path.clone());
+        async move {
+            let (status, response) = request(&app, "member-token-1", "POST", &path, body)
+                .with_subscriber(subscriber)
+                .await;
+            let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+            let line = logs
+                .lines()
+                .find(|line| line.contains("Playback lease state"))
+                .unwrap_or_default()
+                .to_owned();
+            (status, response, line)
+        }
+    };
+
+    let (status, response, line) = heartbeat(json!({"buffering": {
+        "rebuffer_count": 2,
+        "rebuffer_ms": 1500,
+        "buffered_ahead_seconds": 12.5,
+        "throughput_kbps": 24000,
+        "source_bitrate_kbps": 8000,
+        "video_decoder": "c2.android.hevc.decoder",
+        "audio_decoder": "https://user:pass@host/Some.Movie.mkv",
+        "dropped_frames": 3,
+        "future_field": 1
+    }}))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response["status"], "ready");
+    for fact in [
+        "rebuffer_count=2",
+        "rebuffer_ms=1500",
+        "buffered_ahead_seconds=12.5",
+        "throughput_kbps=24000",
+        "source_bitrate_kbps=8000",
+        "video_decoder=\"c2.android.hevc.decoder\"",
+        "dropped_frames=3",
+    ] {
+        assert!(line.contains(fact), "missing {fact} in {line}");
+    }
+    let delivery_url = initial["delivery"]["url"].as_str().unwrap();
+    for secret in ["audio_decoder", "future_field", "Some.Movie", "user:pass", delivery_url] {
+        assert!(!line.contains(secret), "leaked {secret} in {line}");
+    }
+
+    for body in [Value::Null, json!({})] {
+        let (status, response, line) = heartbeat(body).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(response["delivery"], initial["delivery"]);
+        assert!(line.contains("Playback lease state"));
+        assert!(!line.contains("rebuffer_count"), "{line}");
+    }
+
+    let oversized = json!({"buffering": {"video_decoder": "x".repeat(4096)}});
+    let (status, response, _) = heartbeat(oversized).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(response["error_code"], "invalid_playback_request");
+}
+
 #[tokio::test]
 async fn conversion_and_track_choices_require_and_reach_the_authorized_gateway() {
     let (app, peer) = setup().await;

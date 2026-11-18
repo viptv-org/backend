@@ -68,9 +68,10 @@ Licenses and source notices accompany the exports. No rqbit, media execution,
 archive extraction or native runtime is added to the backend dependency graph.
 
 The control routes enforce closed/duplicate-sensitive JSON, 16 KiB start bodies,
-identity encoding, bodyless native poll/heartbeat/release/cancellation, ten-second
-control and five-second support deadlines, and no-store responses. Ordinary
-direct/gateway heartbeat also accepts the established empty JSON object only.
+identity encoding, bodyless native poll/release/cancellation, ten-second
+control and five-second support deadlines, and no-store responses. Heartbeat
+accepts no body or a 2 KiB `{"buffering":{...}}` stats object; ordinary
+direct/gateway heartbeat also accepts the empty JSON object.
 Native ready serialization
 uses the core's dedicated bounded private serializer; no private grant enters
 ordinary launch/session/card/history models, logs or persistent request records.

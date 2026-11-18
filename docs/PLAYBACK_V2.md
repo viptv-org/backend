@@ -64,9 +64,17 @@ original URL/required headers; this deliberately discloses them to an authorized
 device. Gateway delivery contains an absolute URL under the registered gateway
 origin/path prefix, without an integration key or arbitrary upstream JSON.
 
-POST /api/playback/:id/heartbeat renews the viewer. Existing direct/gateway
-clients may send the established empty JSON object `{}` or no body; arbitrary
-payloads are refused. Native torrent heartbeat requires no body. DELETE releases
+POST /api/playback/:id/heartbeat renews the viewer. Direct/gateway clients may
+send no body, `{}` or `{"buffering":{...}}`; native torrent heartbeat sends no
+body or `{"buffering":{...}}`. Any other top-level field is refused and bodies
+are capped at 2 KiB. `buffering` holds optional stats for the window since the
+previous heartbeat, written to the "Playback lease state" log line:
+`rebuffer_count` (integer, ≤ 10000), `rebuffer_ms` (integer, ≤ 3600000),
+`buffered_ahead_seconds` (number, 0–86400), `throughput_kbps` (integer,
+≤ 10000000), `source_bitrate_kbps` (integer, ≤ 1000000), `video_decoder` and
+`audio_decoder` (≤ 64 chars of letters, digits, `.`, `_`, `-`, space) and
+`dropped_frames` (integer, ≤ 10000000). Unknown, mistyped or out-of-range stats
+are dropped without failing the heartbeat. Never send URLs or file names. DELETE releases
 only that viewer. Status reads do not renew. Use a 20-second heartbeat and respect the
 returned expiry. Resuming after backgrounding should renew/validate before
 trusting a cached URL. Terminal responses include an actionable error and stable
