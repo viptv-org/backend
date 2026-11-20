@@ -40,6 +40,8 @@ mod viewing;
 mod buffering;
 #[path = "playback_segments.rs"]
 mod playback_segments;
+#[path = "playback_handover.rs"]
+mod handover;
 pub(crate) use captions::attach as attach_subtitle;
 pub(crate) use subtitle_sync::{start as start_subtitle_sync, get as get_subtitle_sync, policy as subtitle_sync_policy, stop as stop_subtitle_sync};
 pub(crate) use playback_segments::segments as skip_segments;
@@ -205,6 +207,7 @@ struct Source {
 }
 #[derive(Clone)]
 struct Remote {
+    output: handover::Output,
     client_frame_ack: bool,
     target: Arc<AuthorizedGateway>,
     viewer: String,
@@ -335,6 +338,7 @@ struct Entry {
     cancelled: AtomicBool,
     cancel_signal: tokio::sync::Notify,
     subtitle_sync_gate: tokio::sync::Mutex<()>,
+    output: handover::Output,
     state: Mutex<StateData>,
     permit: Mutex<Option<tokio::sync::OwnedSemaphorePermit>>,
 }
@@ -461,7 +465,7 @@ impl Registry {
                 drop(registry);
                 stream::iter(releases)
                     .for_each_concurrent(4, |remote| async move {
-                        release_remote(&remote.client, &remote.target, &remote.viewer).await;
+                        release_remote(&remote).await;
                     })
                     .await;
             }
@@ -742,21 +746,22 @@ fn terminate(entry: &Entry, status: &'static str, error: Option<&'static str>) -
     state.touch();
     state.remote.take()
 }
-async fn release_remote(client: &Client, target: &AuthorizedGateway, viewer: &str) {
-    if !protocol::identifier(viewer) {
-        return;
+async fn release_remote(remote: &Remote) {
+    if protocol::identifier(&remote.viewer) {
+        let _ = remote
+            .client
+            .request(
+                &remote.target.gateway.endpoint,
+                remote.target.key.expose(),
+                reqwest::Method::DELETE,
+                &format!("v1/sessions/{}", remote.viewer),
+                None,
+                None,
+                Duration::from_secs(5),
+            )
+            .await;
     }
-    let _ = client
-        .request(
-            &target.gateway.endpoint,
-            target.key.expose(),
-            reqwest::Method::DELETE,
-            &format!("v1/sessions/{viewer}"),
-            None,
-            None,
-            Duration::from_secs(5),
-        )
-        .await;
+    remote.output.released();
 }
 /// The reason a viewer the gateway refuses to renew has already ended, read from the session the
 /// gateway keeps for it. `None` when the session is still live, so a transient renewal failure
@@ -805,9 +810,7 @@ async fn cancel_gateway_preparation(entry: &Arc<Entry>) {
     }
 }
 struct Cleanup {
-    client: Client,
-    target: Arc<AuthorizedGateway>,
-    viewer: String,
+    remote: Remote,
     armed: bool,
 }
 
@@ -1233,7 +1236,7 @@ pub(crate) async fn cancel_request(
         (remote, entry)
     };
     if let Some(remote) = remote {
-        release_remote(&remote.client, &remote.target, &remote.viewer).await;
+        release_remote(&remote).await;
     }
     if let Some(entry) = entry {
         cancel_gateway_preparation(&entry).await;
@@ -1243,11 +1246,9 @@ pub(crate) async fn cancel_request(
 impl Drop for Cleanup {
     fn drop(&mut self) {
         if self.armed {
-            let client = self.client.clone();
-            let target = self.target.clone();
-            let viewer = self.viewer.clone();
+            let remote = self.remote.clone();
             tokio::spawn(async move {
-                release_remote(&client, &target, &viewer).await;
+                release_remote(&remote).await;
             });
         }
     }
@@ -1665,6 +1666,7 @@ async fn start_mode(
             cancelled: AtomicBool::new(false),
             cancel_signal: tokio::sync::Notify::new(),
             subtitle_sync_gate: tokio::sync::Mutex::new(()),
+            output: handover::Output::new(),
             state: Mutex::new(StateData {
                 retained_subtitles: vec![],
                 subtitle_sync: None,
@@ -1759,7 +1761,7 @@ fn schedule_preparation(
         if let Some(code) = failure {
             tracing::warn!(session_tag = %super::diagnostics::tag(&worker.id), error_code = code, "Playback preparation failed");
             if let Some(remote) = terminate(&worker, "failed", Some(code)) {
-                release_remote(&remote.client, &remote.target, &remote.viewer).await;
+                release_remote(&remote).await;
             }
         }
     }));
@@ -1891,9 +1893,8 @@ async fn prepare(
                 body["output"]["required_audio_index"] = json!(index);
             }
         }
-        let value = app
-            .gateway_client
-            .request(
+        let value = handover::create(&app, &entry, || {
+            app.gateway_client.request(
                 &target.gateway.endpoint,
                 target.key.expose(),
                 reqwest::Method::POST,
@@ -1910,12 +1911,18 @@ async fn prepare(
                     35
                 }),
             )
-            .await?;
+        })
+        .await?;
         let mut remote = protocol::Session::parse(value)?;
         let mut cleanup = Cleanup {
-            client: app.gateway_client.clone(),
-            target: target.clone(),
-            viewer: remote.id.clone(),
+            remote: Remote {
+                output: entry.output.clone(),
+                client_frame_ack,
+                target: target.clone(),
+                viewer: remote.id.clone(),
+                client: app.gateway_client.clone(),
+                expires_at: remote.expires_at,
+            },
             armed: true,
         };
         {
@@ -1924,13 +1931,7 @@ async fn prepare(
                 return Err(Error::Code("playback_expired"));
             }
             state.viewer_lease = viewer_lease.renewing(remote.renew_after_seconds);
-            state.remote = Some(Remote {
-                client_frame_ack,
-                target: target.clone(),
-                viewer: remote.id.clone(),
-                client: app.gateway_client.clone(),
-                expires_at: remote.expires_at,
-            });
+            state.remote = Some(cleanup.remote.clone());
         }
         loop {
             validate_entry(&app, &entry).await?;
@@ -1950,14 +1951,14 @@ async fn prepare(
                     &target.gateway.endpoint,
                     target.key.expose(),
                     reqwest::Method::GET,
-                    &format!("v1/sessions/{}", cleanup.viewer),
+                    &format!("v1/sessions/{}", cleanup.remote.viewer),
                     None,
                     None,
                     Duration::from_secs(5),
                 )
                 .await?;
             remote = protocol::Session::parse(value)?;
-            if remote.id != cleanup.viewer {
+            if remote.id != cleanup.remote.viewer {
                 return Err(Error::Code("gateway_protocol_invalid"));
             }
         }
@@ -2019,7 +2020,7 @@ pub(crate) async fn get(
             Error::Auth(error) => error.api_error_code().unwrap_or("authorization_expired"),
         };
         if let Some(remote) = terminate(&entry, "expired", Some(code)) {
-            release_remote(&remote.client, &remote.target, &remote.viewer).await;
+            release_remote(&remote).await;
         }
         cancel_gateway_preparation(&entry).await;
         if !native || matches!(&error, Error::Auth(_)) {
@@ -2113,7 +2114,7 @@ pub(crate) async fn first_frame(
         if let Err(code) = outcome {
             if code != "playback_starting" {
                 if let Some(remote) = terminate(&entry, "failed", Some(code)) {
-                    release_remote(&remote.client, &remote.target, &remote.viewer).await;
+                    release_remote(&remote).await;
                 }
             }
             return Err(Error::Code(code));
@@ -2178,7 +2179,7 @@ pub(crate) async fn renew(
             Error::Auth(error) => error.api_error_code().unwrap_or("authorization_expired"),
         };
         if let Some(remote) = terminate(&entry, "expired", Some(code)) {
-            release_remote(&remote.client, &remote.target, &remote.viewer).await;
+            release_remote(&remote).await;
         }
         cancel_gateway_preparation(&entry).await;
         return Err(error);
@@ -2241,7 +2242,7 @@ pub(crate) async fn renew(
                     return Err(Error::Code(error));
                 };
                 if let Some(remote) = terminate(&entry, "failed", Some(reason)) {
-                    release_remote(&remote.client, &remote.target, &remote.viewer).await;
+                    release_remote(&remote).await;
                 }
                 return Err(Error::Code(reason));
             }
@@ -2253,7 +2254,7 @@ pub(crate) async fn renew(
         if !remote.live() || remote.expires_at <= util::now() as u64 {
             let failure = remote.failure();
             if let Some(remote) = terminate(&entry, "failed", Some(failure)) {
-                release_remote(&remote.client, &remote.target, &remote.viewer).await;
+                release_remote(&remote).await;
             }
             return Err(Error::Code(failure));
         }
@@ -2303,7 +2304,7 @@ async fn release_playback(
         terminate(entry, "released", None)
     };
     if let Some(remote) = remote {
-        release_remote(&remote.client, &remote.target, &remote.viewer).await;
+        release_remote(&remote).await;
     }
     cancel_gateway_preparation(entry).await;
     Ok(())
