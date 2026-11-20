@@ -34,7 +34,7 @@ fn bound(proof: &Proof) -> bool {
         || proof.media_id.as_ref().is_some_and(|id| !id.is_empty())
         || proof.live_channel_id.is_some()
 }
-fn same_target(a: &Proof, b: &Proof) -> bool {
+pub(super) fn same_target(a: &Proof, b: &Proof) -> bool {
     if a.kind != b.kind {
         return false;
     }
