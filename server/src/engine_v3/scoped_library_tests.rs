@@ -76,6 +76,61 @@ async fn progress(app: &App, card: &Value, position: u64) -> Value {
     )
     .await
 }
+#[derive(Clone)]
+struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for Capture {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+#[tokio::test]
+async fn progress_write_and_resume_lookup_log_matching_record_tags_and_reasons_without_ids() {
+    use tracing::instrument::WithSubscriber;
+    let (app, task, _) = stack().await;
+    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let writer = Capture(bytes.clone());
+    let subscriber = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+    let paused = detail(&app, 101, "private-episode-paused").await;
+    let finished = detail(&app, 102, "private-episode-finished").await;
+    let untouched = detail(&app, 101, "private-episode-untouched").await;
+    progress(&app, &paused, 41000).with_subscriber(subscriber.clone()).await;
+    progress(&app, &finished, 99000).await;
+    let owned = profile_app(&app);
+    let db = app.db.lock().unwrap();
+    let card = |value: &Value| -> Card { serde_json::from_value(value.clone()).unwrap() };
+    for (value, reason, position) in [(&paused, "found", 41.0), (&finished, "not_resumable", 0.0), (&untouched, "no_record", 0.0)] {
+        let outcome = resume_outcome_db(&db, 1, &card(value)).unwrap();
+        assert_eq!((outcome.reason, outcome.position), (reason, position));
+    }
+    tracing::dispatcher::with_default(&subscriber, || resume_db(&db, &owned, 1, &card(&paused)).unwrap());
+    drop(db);
+    let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+    let write = logs.lines().find(|line| line.contains("progress_write")).expect(&logs);
+    let resume = logs.lines().find(|line| line.contains("Playback resume resolved")).expect(&logs);
+    let tag = |line: &str| line.split("record_tag=").nth(1).unwrap().split(' ').next().unwrap().trim_matches('"').to_owned();
+    assert_eq!(tag(write).len(), 16, "{write}");
+    assert_eq!(tag(write), tag(resume), "{write}\n{resume}");
+    for fact in ["position_ms=41000", "duration_ms=100000", "ended=false", "storage=\"scoped\""] {
+        assert!(write.contains(fact), "missing {fact} in {write}");
+    }
+    for fact in ["resume_reason=\"found\"", "resume_position_seconds=41"] {
+        assert!(resume.contains(fact), "missing {fact} in {resume}");
+    }
+    for private in ["private-episode", "Fixture", "UNTRUSTED"] {
+        assert!(!logs.contains(private), "{private} leaked: {logs}");
+    }
+    task.abort();
+}
 #[tokio::test]
 async fn same_opaque_ids_are_separate_from_each_other_and_from_legacy_for_every_read() {
     let (app, task, _) = stack().await;

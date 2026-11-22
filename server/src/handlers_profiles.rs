@@ -251,6 +251,7 @@ pub(crate) async fn save_progress(
     let tracking_app=a.clone();
     let tracking_value=v.clone();
     let v=match engine_v3::anime_show::canonical_progress(&a,&v).await{Some(value)=>value,None=>v};
+    crate::gateway::diagnostics::record_key("shared",v["type"].as_str().unwrap_or_default(),v["id"].as_str().unwrap_or_default());
     let result=blocking(move || {
     let id = text(&v, "id", 512)?;
     let kind = media_type(&v)?;

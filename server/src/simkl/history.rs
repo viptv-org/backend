@@ -73,6 +73,7 @@ pub(crate) async fn progress(
     {
         return Err("Conflicting playback metadata origin".into());
     }
+    crate::gateway::diagnostics::progress(q.record.position_millis, q.record.duration_millis, q.ended);
     crate::gateway::diagnostics::storage(if q.record.metadata_origin.is_some() {
         "scoped"
     } else {

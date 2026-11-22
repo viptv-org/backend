@@ -13,10 +13,29 @@ tokio::task_local! {
     pub(crate) static TRACE: String;
     pub(crate) static STAGES: RefCell<Vec<(&'static str, Duration)>>;
     static STORAGE: Cell<&'static str>;
+    static PROGRESS: Cell<(u64, u64, bool)>;
+    static RECORD: RefCell<String>;
 }
 
 pub(crate) fn storage(kind: &'static str) {
     let _ = STORAGE.try_with(|storage| storage.set(kind));
+}
+
+pub(crate) fn progress(position_ms: u64, duration_ms: u64, ended: bool) {
+    let _ = PROGRESS.try_with(|progress| progress.set((position_ms, duration_ms, ended)));
+}
+
+pub(crate) fn record_tag(scope: &str, kind: &str, id: &str) -> String {
+    tag(&format!("{scope}/{kind}/{id}"))
+}
+
+pub(crate) fn record_key(scope: &str, kind: &str, id: &str) {
+    let _ = RECORD.try_with(|record| *record.borrow_mut() = record_tag(scope, kind, id));
+}
+
+pub(crate) fn resume(reason: &'static str, position_seconds: f64, record_tag: &str, lookup_tag: &str) {
+    let trace = TRACE.try_with(Clone::clone).unwrap_or_default();
+    tracing::info!(operation="playback_start",%trace,resume_reason=reason,resume_position_seconds=position_seconds,record_tag,lookup_tag,"Playback resume resolved");
 }
 
 pub(crate) async fn timed<T>(stage: &'static str, future: impl Future<Output = T>) -> T {
@@ -93,7 +112,7 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
     STAGES
         .scope(
             RefCell::new(Vec::new()),
-            STORAGE.scope(Cell::new(""), async move {
+            STORAGE.scope(Cell::new(""), PROGRESS.scope(Cell::new((0, 0, false)), RECORD.scope(RefCell::new(String::new()), async move {
                 let response = TRACE
                     .scope(
                         trace,
@@ -113,7 +132,12 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
                                     Some((stage, stage_ms)) => tracing::warn!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, slowest_stage=stage, slowest_stage_ms=stage_ms, "API request failed"),
                                     None => tracing::warn!(operation=op,trace=%event_trace,session_tag=%session,status, elapsed_ms, "API request failed"),
                                 }
-                            } else if matches!(op, "progress_write" | "library_write") {
+                            } else if op == "progress_write" {
+                                let storage = STORAGE.with(Cell::get);
+                                let (position_ms, duration_ms, ended) = PROGRESS.with(Cell::get);
+                                let record_tag = RECORD.with(|record| record.borrow().clone());
+                                tracing::info!(operation=op,trace=%event_trace,profile_tag=%profile,%method,storage,position_ms,duration_ms,ended,%record_tag,status,elapsed_ms,"API request completed");
+                            } else if op == "library_write" {
                                 let storage = STORAGE.with(Cell::get);
                                 tracing::info!(operation=op,trace=%event_trace,profile_tag=%profile,%method,storage,status,elapsed_ms,"API request completed");
                             } else if op != "api_other" {
@@ -128,7 +152,7 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
                     )
                     .await;
                 response
-            }),
+            }))),
         )
         .await
 }
@@ -210,6 +234,8 @@ mod tests {
                 "/api/profiles/:id/progress",
                 axum::routing::put(|| async {
                     storage("scoped");
+                    progress(90500, 1440000, false);
+                    record_key("shared", "series", "tt-private-title:1:2");
                     axum::http::StatusCode::OK
                 }),
             )
@@ -246,9 +272,29 @@ mod tests {
                 assert!(line.contains(fact), "missing {fact} in {line}");
             }
         }
+        for fact in ["position_ms=90500", "duration_ms=1440000", "ended=false", &format!("record_tag={}", record_tag("shared", "series", "tt-private-title:1:2"))] {
+            assert!(progress.contains(fact), "missing {fact} in {progress}");
+        }
         for private in ["4242/", "tt-private-title"] {
             assert!(!logs.contains(private));
         }
+    }
+    #[test]
+    fn resume_lookup_logs_reason_position_and_tags_without_ids() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = Capture(bytes.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let key = record_tag("shared", "series", "tt-private-title:1:2");
+        tracing::subscriber::with_default(subscriber, || resume("found", 734.5, &key, &key));
+        let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        for fact in ["playback_start", "resume_reason=\"found\"", "resume_position_seconds=734.5", &format!("record_tag=\"{key}\""), &format!("lookup_tag=\"{key}\"")] {
+            assert!(logs.contains(fact), "missing {fact} in {logs}");
+        }
+        assert!(!logs.contains("tt-private-title"));
     }
     #[test]
     fn diagnostic_fields_do_not_include_paths_queries_or_credentials() {
