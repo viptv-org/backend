@@ -575,6 +575,7 @@ pub(crate) fn record_db(
             .map(|s| s.key.clone())
             .unwrap_or(raw_key(card)?)
     };
+    crate::gateway::diagnostics::record_key(&key.0, &key.1, &key.2);
     let prior = by_key::<PlaybackRecord>(db, profile, "playback", &key)?
         .or(legacy_playback_key(db, profile, &key)?)
         .or_else(|| old.clone());
@@ -1189,6 +1190,39 @@ pub(crate) fn resume_db(
     card: &Card,
 ) -> Result<f64, ApiError> {
     validate_current(db, app, profile, card)?;
+    let tag = |key: &Key| crate::gateway::diagnostics::record_tag(&key.0, &key.1, &key.2);
+    match resume_outcome_db(db, profile, card) {
+        Ok(outcome) => {
+            crate::gateway::diagnostics::resume(
+                outcome.reason,
+                outcome.position,
+                &outcome.record.as_ref().map(tag).unwrap_or_default(),
+                &tag(&outcome.lookup),
+            );
+            Ok(outcome.position)
+        }
+        Err(error) => {
+            if error.0 == StatusCode::CONFLICT {
+                let lookup = verified_key_db(db, profile, card).ok();
+                crate::gateway::diagnostics::resume("conflict", 0.0, "", &lookup.as_ref().map(tag).unwrap_or_default());
+            }
+            Err(error)
+        }
+    }
+}
+
+pub(crate) struct ResumeOutcome {
+    pub position: f64,
+    pub reason: &'static str,
+    pub record: Option<Key>,
+    pub lookup: Key,
+}
+
+pub(crate) fn resume_outcome_db(
+    db: &Connection,
+    profile: i64,
+    card: &Card,
+) -> Result<ResumeOutcome, ApiError> {
     let desired = verified_key_db(db, profile, card)?;
     let mut prior = by_key::<PlaybackRecord>(db, profile, "playback", &desired)?;
     if let Some(saved) = &prior {
@@ -1196,17 +1230,33 @@ pub(crate) fn resume_db(
             return Err(conflict());
         }
     }
+    let mut mismatch = None;
     if prior.is_none() {
-        prior = lookup::<PlaybackRecord>(db, profile, "playback", card)?.filter(|saved| {
-            saved.key == desired || metadata_assertions_match(&saved.value.card(), card)
-        });
+        let found = lookup::<PlaybackRecord>(db, profile, "playback", card)?;
+        let (matched, other) = match found {
+            Some(saved) if saved.key == desired || metadata_assertions_match(&saved.value.card(), card) => (Some(saved), None),
+            other => (None, other.map(|saved| saved.key)),
+        };
+        prior = matched;
+        mismatch = other;
     }
     if prior.is_none() && desired.0 == "shared" {
         prior = legacy_playback_key(db, profile, &desired)?;
     }
-    Ok(prior
-        .filter(|saved| saved.value.can_resume())
-        .map_or(0.0, |saved| saved.value.position_millis as f64 / 1000.0))
+    if prior.is_none() && mismatch.is_none() {
+        if let Some(raw) = raw_key(card).ok().filter(|raw| *raw != desired) {
+            if by_key::<PlaybackRecord>(db, profile, "playback", &raw)?.is_some() {
+                mismatch = Some(raw);
+            }
+        }
+    }
+    let (position, reason, record) = match prior {
+        Some(saved) if saved.value.can_resume() => (saved.value.position_millis as f64 / 1000.0, "found", Some(saved.key)),
+        Some(saved) => (0.0, "not_resumable", Some(saved.key)),
+        None if mismatch.is_some() => (0.0, "key_mismatch", mismatch),
+        None => (0.0, "no_record", None),
+    };
+    Ok(ResumeOutcome { position, reason, record, lookup: desired })
 }
 
 pub(crate) fn playback_keys_db(db: &Connection, profile: i64, card: &Card) -> Vec<Key> {
