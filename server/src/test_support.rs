@@ -148,3 +148,40 @@ pub(crate) async fn send_port_probe(address: std::net::SocketAddr) {
         .error_for_status()
         .expect("fake server answers the host port probe");
 }
+
+#[derive(Clone, Default)]
+pub(crate) struct CapturedLogs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl CapturedLogs {
+    pub(crate) fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+impl std::io::Write for CapturedLogs {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+pub(crate) fn capture_logs(level: tracing::Level) -> (tracing::Dispatch, CapturedLogs) {
+    // Parallel tests' scoped subscribers otherwise cache INFO callsites as disabled.
+    let _ = tracing::subscriber::set_global_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(std::io::sink)
+            .finish(),
+    );
+    let logs = CapturedLogs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    (tracing::Dispatch::new(subscriber), logs)
+}

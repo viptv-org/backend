@@ -892,28 +892,9 @@ async fn ordinary_direct_and_gateway_heartbeat_preserve_empty_json_compatibility
     }
 }
 
-#[derive(Clone)]
-struct LogCapture(Arc<Mutex<Vec<u8>>>);
-impl std::io::Write for LogCapture {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 #[tokio::test]
 async fn heartbeat_buffering_stats_reach_the_lease_log_and_stay_optional() {
     use tracing::instrument::WithSubscriber;
-    // Parallel tests' scoped WARN subscribers otherwise cache INFO callsites as disabled.
-    let _ = tracing::subscriber::set_global_default(
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_writer(std::io::sink)
-            .finish(),
-    );
     let (app, _peer) = setup().await;
     gateway(&app, "first", 1);
     let source = source(&app);
@@ -931,19 +912,13 @@ async fn heartbeat_buffering_stats_reach_the_lease_log_and_stay_optional() {
     assert_eq!(initial["delivery"]["kind"], "direct");
     let path = format!("/api/playback/{id}/heartbeat");
     let heartbeat = |body: Value| {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let writer = LogCapture(bytes.clone());
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
+        let (subscriber, captured) = crate::test_support::capture_logs(tracing::Level::INFO);
         let (app, path) = (app.clone(), path.clone());
         async move {
             let (status, response) = request(&app, "member-token-1", "POST", &path, body)
                 .with_subscriber(subscriber)
                 .await;
-            let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+            let logs = captured.text();
             let line = logs
                 .lines()
                 .find(|line| line.contains("Playback lease state"))
