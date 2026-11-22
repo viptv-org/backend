@@ -76,30 +76,11 @@ async fn progress(app: &App, card: &Value, position: u64) -> Value {
     )
     .await
 }
-#[derive(Clone)]
-struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
-impl std::io::Write for Capture {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
 #[tokio::test]
 async fn progress_write_and_resume_lookup_log_matching_record_tags_and_reasons_without_ids() {
     use tracing::instrument::WithSubscriber;
     let (app, task, _) = stack().await;
-    let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let writer = Capture(bytes.clone());
-    let subscriber = tracing::Dispatch::new(
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish(),
-    );
+    let (subscriber, captured) = crate::test_support::capture_logs(tracing::Level::INFO);
     let paused = detail(&app, 101, "private-episode-paused").await;
     let finished = detail(&app, 102, "private-episode-finished").await;
     let untouched = detail(&app, 101, "private-episode-untouched").await;
@@ -114,7 +95,7 @@ async fn progress_write_and_resume_lookup_log_matching_record_tags_and_reasons_w
     }
     tracing::dispatcher::with_default(&subscriber, || resume_db(&db, &owned, 1, &card(&paused)).unwrap());
     drop(db);
-    let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+    let logs = captured.text();
     let write = logs.lines().find(|line| line.contains("progress_write")).expect(&logs);
     let resume = logs.lines().find(|line| line.contains("Playback resume resolved")).expect(&logs);
     let tag = |line: &str| line.split("record_tag=").nth(1).unwrap().split(' ').next().unwrap().trim_matches('"').to_owned();

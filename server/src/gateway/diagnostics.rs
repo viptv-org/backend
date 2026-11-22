@@ -160,33 +160,13 @@ pub(crate) async fn observe(request: Request, next: Next) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        io::Write,
-        sync::{Arc, Mutex},
-    };
+    use crate::test_support::capture_logs;
     use tower::ServiceExt;
     use tracing::instrument::WithSubscriber;
 
-    #[derive(Clone)]
-    struct Capture(Arc<Mutex<Vec<u8>>>);
-    impl Write for Capture {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
     #[tokio::test]
     async fn failed_heartbeat_emits_correlated_status_without_payload() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let writer = Capture(bytes.clone());
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::WARN)
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
+        let (subscriber, captured) = capture_logs(tracing::Level::WARN);
         let app = axum::Router::new()
             .route(
                 "/playback/:id/heartbeat",
@@ -205,7 +185,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status().as_u16(), 502);
-        let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        let logs = captured.text();
         for fact in [
             "playback_heartbeat",
             "502",
@@ -221,14 +201,7 @@ mod tests {
     }
     #[tokio::test]
     async fn successful_progress_and_library_writes_are_logged_without_ids() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let writer = Capture(bytes.clone());
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
-        let subscriber = tracing::Dispatch::new(subscriber);
+        let (subscriber, captured) = capture_logs(tracing::Level::INFO);
         let app = axum::Router::new()
             .route(
                 "/api/profiles/:id/progress",
@@ -264,7 +237,7 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status().as_u16(), 200);
         }
-        let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        let logs = captured.text();
         let progress = logs.lines().find(|line| line.contains("progress_write")).expect(&logs);
         let library = logs.lines().find(|line| line.contains("library_write")).expect(&logs);
         for (line, kind) in [(progress, "storage=\"scoped\""), (library, "storage=\"legacy\"")] {
@@ -281,16 +254,10 @@ mod tests {
     }
     #[test]
     fn resume_lookup_logs_reason_position_and_tags_without_ids() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let writer = Capture(bytes.clone());
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_ansi(false)
-            .with_writer(move || writer.clone())
-            .finish();
+        let (subscriber, captured) = capture_logs(tracing::Level::INFO);
         let key = record_tag("shared", "series", "tt-private-title:1:2");
-        tracing::subscriber::with_default(subscriber, || resume("found", 734.5, &key, &key));
-        let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        tracing::dispatcher::with_default(&subscriber, || resume("found", 734.5, &key, &key));
+        let logs = captured.text();
         for fact in ["playback_start", "resume_reason=\"found\"", "resume_position_seconds=734.5", &format!("record_tag=\"{key}\""), &format!("lookup_tag=\"{key}\"")] {
             assert!(logs.contains(fact), "missing {fact} in {logs}");
         }
