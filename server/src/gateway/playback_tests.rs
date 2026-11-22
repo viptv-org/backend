@@ -2146,6 +2146,8 @@ mod required_audio_tests;
 mod grant_refresh_tests;
 #[path = "playback_handover_tests.rs"]
 mod handover_tests;
+#[path = "playback_failure_tests.rs"]
+mod failure_tests;
 
 #[tokio::test]
 async fn next_episode_action_follows_the_profile_preference() {

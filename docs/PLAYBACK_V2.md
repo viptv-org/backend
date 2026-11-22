@@ -80,6 +80,19 @@ returned expiry. Resuming after backgrounding should renew/validate before
 trusting a cached URL. Terminal responses include an actionable error and stable
 error_code; no provider diagnostics, credentials or gateway error text are echoed.
 
+POST /api/playback-failures records one client-declared playback failure and
+answers 204. It needs a profile session (403 `profile_required` otherwise). The
+body is a closed JSON object of at most 1 KiB: `cause` (`renderer`,
+`undecodable`, `stall`, `start_timeout` or `open_failed`), `first_frame`
+(boolean), and optional `operation` (≤ 64 letters, digits, `_`, `.`, `-`),
+`status` (HTTP status 100–599), `position_ms` (integer, ≤ 31 days) and
+`playback_id` (≤ 128 letters, digits, `_`, `.`, `-`, `:`). Anything else is 400
+`invalid_playback_failure`. Each accepted report writes one WARN "Playback
+failure reported" line with account and profile tags, the fields above and the
+`session_tag` of `playback_id` when that playback belongs to the calling
+session; the raw id is never logged. Each session may log 30 reports a minute;
+further reports still answer 204 and are dropped.
+
 Gateway answers keep their own classification instead of a gateway-connectivity
 failure: `playback_starting` while a viewer is not ready yet (retryable, never
 terminal), `caption_invalid` and `caption_capacity` for a subtitle the gateway
