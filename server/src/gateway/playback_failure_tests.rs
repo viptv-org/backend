@@ -6,13 +6,7 @@ use tracing::instrument::WithSubscriber;
 const SECOND_SESSION: &str = "member-token-1-second";
 
 async fn report(app: &App, token: &str, body: String) -> (StatusCode, String) {
-    let bytes = Arc::new(Mutex::new(Vec::new()));
-    let writer = LogCapture(bytes.clone());
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_ansi(false)
-        .with_writer(move || writer.clone())
-        .finish();
+    let (subscriber, logs) = crate::test_support::capture_logs(tracing::Level::INFO);
     let response = crate::router(app.clone())
         .oneshot(
             Request::builder()
@@ -26,22 +20,13 @@ async fn report(app: &App, token: &str, body: String) -> (StatusCode, String) {
         .with_subscriber(subscriber)
         .await
         .unwrap();
-    let logs = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+    let logs = logs.text();
     let line = logs
         .lines()
         .filter(|line| line.contains("Playback failure reported"))
         .collect::<Vec<_>>()
         .join("\n");
     (response.status(), line)
-}
-
-fn global_subscriber() {
-    let _ = tracing::subscriber::set_global_default(
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_writer(std::io::sink)
-            .finish(),
-    );
 }
 
 fn second_profile_session(app: &App) {
@@ -54,7 +39,6 @@ fn second_profile_session(app: &App) {
 
 #[tokio::test]
 async fn every_cause_is_logged_once_with_its_bounded_fields() {
-    global_subscriber();
     let app = fixture();
     for cause in ["renderer", "undecodable", "stall", "start_timeout", "open_failed"] {
         let (status, line) = report(
@@ -85,7 +69,6 @@ async fn every_cause_is_logged_once_with_its_bounded_fields() {
 
 #[tokio::test]
 async fn invalid_reports_are_rejected_without_a_log_line() {
-    global_subscriber();
     let app = fixture();
     let long = "a".repeat(65);
     let oversized = "a".repeat(1100);
@@ -117,7 +100,6 @@ async fn invalid_reports_are_rejected_without_a_log_line() {
 
 #[tokio::test]
 async fn reports_need_a_profile_session() {
-    global_subscriber();
     let app = fixture();
     let body = json!({"cause":"stall","first_frame":true}).to_string();
     let (status, line) = report(&app, "member-token-2", body.clone()).await;
@@ -129,7 +111,6 @@ async fn reports_need_a_profile_session() {
 
 #[tokio::test]
 async fn only_the_callers_own_playback_is_tagged() {
-    global_subscriber();
     let (app, _peer) = setup().await;
     gateway(&app, "first", 1);
     second_profile_session(&app);
@@ -155,7 +136,6 @@ async fn only_the_callers_own_playback_is_tagged() {
 
 #[tokio::test]
 async fn reports_beyond_the_session_rate_are_dropped_silently() {
-    global_subscriber();
     let app = fixture();
     second_profile_session(&app);
     let body = json!({"cause":"stall","first_frame":true}).to_string();
