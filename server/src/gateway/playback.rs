@@ -42,6 +42,8 @@ mod buffering;
 mod playback_segments;
 #[path = "playback_handover.rs"]
 mod handover;
+#[path = "playback_failures.rs"]
+pub(crate) mod failures;
 pub(crate) use captions::attach as attach_subtitle;
 pub(crate) use subtitle_sync::{start as start_subtitle_sync, get as get_subtitle_sync, policy as subtitle_sync_policy, stop as stop_subtitle_sync};
 pub(crate) use playback_segments::segments as skip_segments;

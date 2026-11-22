@@ -286,6 +286,10 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
                 )
                 .route("/playback/:id/heartbeat", post(gateway::playback::renew))
                 .route(
+                    "/playback-failures",
+                    post(gateway::playback::failures::report),
+                )
+                .route(
                     "/playback/:id/progress",
                     get(gateway::playback::progress),
                 )

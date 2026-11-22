@@ -73,6 +73,8 @@ pub(crate) fn operation(method: &str, path: &str) -> &'static str {
         || (method == "DELETE" && profile_route.len() == 3 && profile_route[0] == "library")
     {
         "library_write"
+    } else if path == "/playback-failures" {
+        "playback_failure"
     } else if path == "/playback" {
         "playback_start"
     } else if path.starts_with("/playback/") && path.ends_with("/heartbeat") {
