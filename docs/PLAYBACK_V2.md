@@ -231,6 +231,15 @@ playback. The route reads the playback's own item and follows the existing
 playback authorization, lease and error contract; live playback answers with no
 segments.
 
+POST /api/segments answers the same shape for a title played without a playback
+session, such as a downloaded file. The body is `{"card": <Card>}`, the card the
+client plays, capped at 64 KiB with no other fields; external ids must be short
+tokens of letters, digits and `_ - . :`. It needs a profile session (401
+without a session, 403 without a profile), allows 120 lookups per profile per
+hour (`429 segments_rate_limited`), and answers `400 invalid_segments_request`
+for a malformed body. Lookups, caches and the empty-answer rules are the
+playback route's.
+
 The server always returns the segments it knows: the profile's "Skip intros and
 recaps" preference is applied by the client, which also uses `credits.start_ms`
 to time the next-episode panel. Segments come from four upstream sources,
