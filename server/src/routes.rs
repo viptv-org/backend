@@ -272,6 +272,7 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
                     "/playback/:id/segments",
                     get(gateway::playback::skip_segments),
                 )
+                .route("/segments", post(gateway::playback::segments_by_title))
                 .route(
                     "/playback/:id/first-frame",
                     post(gateway::playback::first_frame),

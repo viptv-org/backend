@@ -945,3 +945,106 @@ async fn an_anime_episode_asks_animeskip_with_its_anilist_show_and_release_episo
     );
     stack_task.abort();
 }
+
+async fn by_title(app: &crate::App, token: Option<&str>, body: String) -> (StatusCode, Value) {
+    use tower::ServiceExt;
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/segments")
+        .header("content-type", "application/json");
+    if let Some(token) = token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    let response = crate::router(app.clone())
+        .oneshot(request.body(axum::body::Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+fn title_body(card: &Card) -> String {
+    json!({ "card": card }).to_string()
+}
+
+#[tokio::test]
+async fn a_title_lookup_answers_what_the_playback_route_answers_for_the_same_card() {
+    let (mut app, stack_task) = stack().await;
+    let source = source(fixture_rows()).await;
+    let fribb = fribb(json!([])).await;
+    app.segments = Arc::new(Service::fixture(Some(&source.base), None, None, None));
+    app.cross_ids = Arc::new(super::cross_ids::Service::fixture(&fribb.base));
+    for card in [episode_card(3, 22), episode_card(3, 23)] {
+        let (status, value) = by_title(&app, Some("member-token-1"), title_body(&card)).await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(value, answer(&app, &lease(), Some(&card)).await);
+    }
+    let (_, known) = by_title(&app, Some("member-token-1"), title_body(&episode_card(3, 22))).await;
+    assert_eq!(
+        known,
+        json!({"segments":[
+            {"kind":"intro","start_ms":310571,"end_ms":400571},
+            {"kind":"credits","start_ms":1290000,"end_ms":1380000}
+        ]})
+    );
+    let mut movie = episode_card(3, 22);
+    movie.identity.episode = None;
+    movie.parent_identity = None;
+    let (status, value) = by_title(&app, Some("member-token-1"), title_body(&movie)).await;
+    assert_eq!((status, value), (StatusCode::OK, json!({"segments":[]})));
+    stack_task.abort();
+}
+
+#[tokio::test]
+async fn a_title_lookup_needs_a_profile_session() {
+    let app = crate::auth_integration_tests::fixture();
+    let body = title_body(&episode_card(3, 22));
+    let (status, _) = by_title(&app, None, body.clone()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = by_title(&app, Some("not-a-token"), body.clone()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = by_title(&app, Some("member-token-2"), body).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn malformed_title_lookups_are_rejected() {
+    let app = crate::auth_integration_tests::fixture();
+    let card = serde_json::to_value(episode_card(3, 22)).unwrap();
+    let mut unsafe_id = card.clone();
+    unsafe_id["identity"]["ids"][0]["value"] = json!("tt1&x=y");
+    let mut many_ids = card.clone();
+    many_ids["identity"]["ids"] =
+        json!((0..33).map(|n| json!({"namespace":"tmdb","value":n.to_string()})).collect::<Vec<_>>());
+    let mut oversized = card.clone();
+    oversized["description"] = json!("a".repeat(70 * 1024));
+    for body in [
+        json!({"card":card,"extra":1}).to_string(),
+        json!({"card":{"title":"x"}}).to_string(),
+        json!({"card":unsafe_id}).to_string(),
+        json!({"card":many_ids}).to_string(),
+        json!({"card":oversized}).to_string(),
+        "[]".into(),
+        String::new(),
+    ] {
+        let (status, value) = by_title(&app, Some("member-token-1"), body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{}", &body[..body.len().min(120)]);
+        assert_eq!(value["error_code"], "invalid_segments_request");
+    }
+}
+
+#[tokio::test]
+async fn title_lookups_beyond_the_hourly_allowance_are_refused() {
+    let app = crate::auth_integration_tests::fixture();
+    let mut movie = episode_card(3, 22);
+    movie.identity.episode = None;
+    let body = title_body(&movie);
+    for _ in 0..120 {
+        let (status, value) = by_title(&app, Some("member-token-1"), body.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+    }
+    let (status, value) = by_title(&app, Some("member-token-1"), body).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(value["error_code"], "segments_rate_limited");
+}

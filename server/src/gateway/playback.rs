@@ -39,7 +39,7 @@ mod viewing;
 #[path = "playback_buffering.rs"]
 mod buffering;
 #[path = "playback_segments.rs"]
-mod playback_segments;
+pub(crate) mod playback_segments;
 #[path = "playback_handover.rs"]
 mod handover;
 #[path = "playback_failures.rs"]
@@ -50,7 +50,7 @@ pub(crate) mod rate;
 pub(crate) mod downloads;
 pub(crate) use captions::attach as attach_subtitle;
 pub(crate) use subtitle_sync::{start as start_subtitle_sync, get as get_subtitle_sync, policy as subtitle_sync_policy, stop as stop_subtitle_sync};
-pub(crate) use playback_segments::segments as skip_segments;
+pub(crate) use playback_segments::{by_title as segments_by_title, segments as skip_segments};
 
 const LEASE: Duration = Duration::from_secs(60);
 const RENEW_AFTER: u64 = 20;

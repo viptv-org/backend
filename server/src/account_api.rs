@@ -250,6 +250,8 @@ pub(crate) fn details(code: &str) -> (StatusCode, &'static str) {
             "delivery_unsupported" => (StatusCode::NOT_ACCEPTABLE, "This source cannot be delivered with this device's playback capabilities."),
             "download_unsupported" => (StatusCode::NOT_ACCEPTABLE, "This source can't be downloaded. Choose another source."),
             "download_rate_limited" => (StatusCode::TOO_MANY_REQUESTS, "Too many downloads were started. Wait a while before starting more."),
+            "invalid_segments_request" => (StatusCode::BAD_REQUEST, "This skip segment request is invalid."),
+            "segments_rate_limited" => (StatusCode::TOO_MANY_REQUESTS, "Too many skip segment lookups. Wait a while before trying again."),
             "gateway_already_configured" => (StatusCode::CONFLICT, "This gateway and namespace are already configured in your account. Edit the existing connection."),
             "gateway_checks_busy" => (StatusCode::SERVICE_UNAVAILABLE, "Gateway checks are busy. Try again shortly."),
             "invalid_gateway_configuration" => (StatusCode::BAD_REQUEST, "Check the gateway name, namespace and priority."),
