@@ -2494,3 +2494,6 @@ pub(crate) async fn control_deadline(
 #[cfg(test)]
 #[path = "playback_native_tests.rs"]
 mod native_tests;
+#[cfg(test)]
+#[path = "playback_download_tests.rs"]
+mod download_tests;

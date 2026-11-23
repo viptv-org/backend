@@ -143,6 +143,41 @@ stream_id rotation happens at handoff. Promoting a released, expired or failed
 preparation answers its terminal response and touches nothing else; promoting a
 started one is idempotent and returns its current state.
 
+## Download admission
+
+POST /api/playback with `"purpose": "download"` gives a device a delivery it can
+save to storage. `purpose` defaults to `"playback"`; any other value is
+`invalid_playback_request`. The body is otherwise a normal start body; `prepare`,
+`resume`, `replace_source`, a non-zero `position` and the decoder-start route are
+`invalid_playback_request`. Profile preferences are not applied.
+
+The answer is `200` and final; there is no id, lease, heartbeat or DELETE:
+
+```json
+{"purpose": "download", "status": "ready",
+ "delivery": {"kind": "direct", "url": "https://...", "headers": {},
+  "format": "original", "size": 7340032000, "expires_at": null}}
+```
+
+`size` is the full byte length when the source reports it, else null.
+`expires_at` is the URL's expiry in Unix seconds when known, else null; on
+expiry, discover the source again and resume with a Range request.
+`required_audio_index` is present when the source has one. A torrent source on a
+session that negotiated the version 2 runtime answers
+`{"kind": "native_torrent", "format": "original", "size", "expires_at": null,
+"grant"}`, where `grant` is the playback `native_torrent` grant: start the
+runtime with it before `grant.expires_at`; it is never renewed.
+
+Only direct delivery is admitted. A live channel, a source or device that needs
+the gateway (Roku, Vizio, `can_play_direct: false`, `force_gateway`, a
+conversion or track choice, a torrent without the negotiated runtime) or a URL
+the direct probe can't reach answers `406 download_unsupported`. Source grants,
+profile and session fences and provider connection limits are checked as for
+playback. Each profile may admit 60 downloads per hour; more answer
+`429 download_rate_limited`. Download admission writes no Continue Watching,
+viewing, progress or scrobble state and logs one `Download admission accepted`
+line with session and profile tags and the delivery kind.
+
 ## Authorization and routing
 
 Sources must have been issued by backend discovery for the exact caller scope.
