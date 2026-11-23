@@ -1,4 +1,4 @@
-use super::{control_body, Error};
+use super::{control_body, rate::Limiter, Error};
 use crate::{
     app_state::{App, ResourceLease},
     gateway::diagnostics::tag,
@@ -11,16 +11,11 @@ use axum::{
     Extension,
 };
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    sync::Mutex,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 pub(crate) const BODY_LIMIT: usize = 1024;
 const REPORTS_PER_WINDOW: u32 = 30;
 const WINDOW: Duration = Duration::from_secs(60);
-const TRACKED_SESSIONS: usize = 4096;
 const MAX_POSITION_MS: u64 = 31 * 24 * 60 * 60 * 1000;
 
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -79,26 +74,8 @@ fn parse(body: &[u8]) -> Option<Report> {
     valid.then_some(report)
 }
 
-#[derive(Default)]
-pub(crate) struct Limiter(Mutex<HashMap<String, (Instant, u32)>>);
-
-impl Limiter {
-    fn admit(&self, session: &str, now: Instant) -> bool {
-        let mut windows = self.0.lock().unwrap();
-        if windows.len() >= TRACKED_SESSIONS && !windows.contains_key(session) {
-            windows.retain(|_, (start, _)| now.duration_since(*start) < WINDOW);
-            if windows.len() >= TRACKED_SESSIONS {
-                return false;
-            }
-        }
-        let (start, count) = windows.entry(session.to_owned()).or_insert((now, 0));
-        if now.duration_since(*start) >= WINDOW {
-            *start = now;
-            *count = 0;
-        }
-        *count += 1;
-        *count <= REPORTS_PER_WINDOW
-    }
+pub(crate) fn limiter() -> Limiter {
+    Limiter::new(REPORTS_PER_WINDOW, WINDOW)
 }
 
 pub(crate) async fn report(

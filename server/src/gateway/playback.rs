@@ -44,6 +44,10 @@ mod playback_segments;
 mod handover;
 #[path = "playback_failures.rs"]
 pub(crate) mod failures;
+#[path = "playback_rate.rs"]
+pub(crate) mod rate;
+#[path = "playback_downloads.rs"]
+pub(crate) mod downloads;
 pub(crate) use captions::attach as attach_subtitle;
 pub(crate) use subtitle_sync::{start as start_subtitle_sync, get as get_subtitle_sync, policy as subtitle_sync_policy, stop as stop_subtitle_sync};
 pub(crate) use playback_segments::segments as skip_segments;
@@ -151,9 +155,23 @@ pub(crate) struct Facts {
     )]
     native_torrent: Option<NativeCapability>,
 }
+#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Purpose {
+    #[default]
+    Playback,
+    Download,
+}
+impl Purpose {
+    fn is_playback(&self) -> bool {
+        *self == Self::Playback
+    }
+}
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Start {
+    #[serde(default, skip_serializing_if = "Purpose::is_playback")]
+    purpose: Purpose,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     replace_source: Option<viewing::ReplaceSource>,
     #[serde(skip)]
@@ -879,7 +897,7 @@ fn core_request(request: &Start) -> Result<viptv_core::dto::PlaybackV2Request, E
     }
     serde_json::to_value(request)
         .and_then(|mut v| {
-            if let Some(fields) = v.as_object_mut() { fields.remove("resume"); fields.remove("replace_source"); fields.remove("prepare"); }
+            if let Some(fields) = v.as_object_mut() { fields.remove("resume"); fields.remove("replace_source"); fields.remove("prepare"); fields.remove("purpose"); }
             if let Some(fields) = v["client"].as_object_mut() { fields.remove("supports_required_audio_index"); }
             serde_json::from_value(camel(v))
         })
@@ -1109,9 +1127,45 @@ async fn prepare_native(
     Ok(())
 }
 
-async fn prepare_runtime(app: &App, entry: &Entry, source: &Source) -> Result<(), Error> {
+struct RuntimeInput {
+    info_hash: String,
+    input: viptv_core::native_torrent::NativeTorrentInput,
+    expected_file_size: Option<u64>,
+    trackers: Vec<String>,
+}
+impl RuntimeInput {
+    fn grant(self, file_index: Option<u32>, issued_at: u64, expires_at: u64) -> viptv_core::torrent_runtime::TorrentRuntimeGrant {
+        viptv_core::torrent_runtime::TorrentRuntimeGrant {
+            id: uuid::Uuid::new_v4().to_string(),
+            server_time: issued_at,
+            expires_at,
+            info_hash: self.info_hash,
+            file_index,
+            archive_index: None,
+            input: self.input,
+            trackers: self.trackers,
+            expected_file_size: self.expected_file_size,
+        }
+    }
+}
+fn runtime_scope_current(app: &App, caller: &ResourceLease, source: &Source) -> Result<(), Error> {
+    let caller = native_scope(caller)?;
+    let source_scope = native_scope(&source.proof.lease)?;
+    if !viptv_core::native_torrent_policy::same_native_scope(&caller, &source_scope)
+        || !app
+            .gateway_playbacks
+            .runtime_negotiated
+            .lock()
+            .unwrap()
+            .contains(&(caller.scope_key, caller.session_id))
+    {
+        return Err(Error::Code("source_not_found"));
+    }
+    Ok(())
+}
+async fn runtime_input(source: &Source) -> Result<RuntimeInput, Error> {
     use base64::Engine;
-    use viptv_core::{native_torrent::NativeTorrentInput, torrent_runtime::TorrentRuntimeGrant};
+    use viptv_core::native_torrent::NativeTorrentInput;
     let mut trackers = source.trackers.clone();
     let (hash, input, size) = if let Some(hash) = magnet_hash(source) {
         let input = NativeTorrentInput {
@@ -1151,19 +1205,12 @@ async fn prepare_runtime(app: &App, entry: &Entry, source: &Source) -> Result<()
         };
         (metadata.info_hash_hex(), input, size)
     };
+    Ok(RuntimeInput { info_hash: hash, input, expected_file_size: size, trackers })
+}
+async fn prepare_runtime(app: &App, entry: &Entry, source: &Source) -> Result<(), Error> {
+    let runtime = runtime_input(source).await?;
     validate_entry(app, entry).await?;
-    let caller = native_scope(&entry.lease)?;
-    let source_scope = native_scope(&source.proof.lease)?;
-    if !viptv_core::native_torrent_policy::same_native_scope(&caller, &source_scope)
-        || !app
-            .gateway_playbacks
-            .runtime_negotiated
-            .lock()
-            .unwrap()
-            .contains(&(caller.scope_key, caller.session_id))
-    {
-        return Err(Error::Code("source_not_found"));
-    }
+    runtime_scope_current(app, &entry.lease, source)?;
     let db = app.db.lock().unwrap();
     entry.lease.validate(&db)?;
     validate_source(&db, &entry.proof)?;
@@ -1175,17 +1222,7 @@ async fn prepare_runtime(app: &App, entry: &Entry, source: &Source) -> Result<()
         .native
         .as_mut()
         .ok_or(Error::Code("playback_expired"))?;
-    let grant = TorrentRuntimeGrant {
-        id: uuid::Uuid::new_v4().to_string(),
-        server_time: util::now() as u64,
-        expires_at: native.expires_at,
-        info_hash: hash,
-        file_index: source.file_index,
-        archive_index: None,
-        input,
-        trackers,
-        expected_file_size: size,
-    };
+    let grant = runtime.grant(source.file_index, util::now() as u64, native.expires_at);
     viptv_core::torrent_runtime::ready_response(
         &entry.id,
         native.position,
@@ -1444,6 +1481,20 @@ fn validate(request: &Start) -> Result<(), Error> {
     }
     Ok(())
 }
+fn direct_eligible(source: &Source, request: &Start) -> bool {
+    !source.requires_torrent_gateway
+        && request.client.can_play_direct
+        && !matches!(request.client.platform, Platform::Roku | Platform::Vizio)
+        && (!matches!(request.client.platform, Platform::Web | Platform::Webos)
+            || (source.url.starts_with("https://") && source.headers.is_empty()))
+        && (source.required_audio_index.is_none() || request.client.supports_required_audio_index)
+        && !request.force_gateway
+        && request.conversion == Conversion::Auto
+        && request.audio_track.is_none()
+        && request.subtitle_track.is_none()
+        && request.audio_language.is_none()
+        && !request.subtitles_off
+}
 pub(crate) async fn start(
     State(app): State<App>,
     Extension(lease): Extension<ResourceLease>,
@@ -1472,6 +1523,9 @@ async fn start_mode(
         request.position = 0.0;
     }
     validate(&request)?;
+    if request.purpose == Purpose::Download {
+        return downloads::admit(app, lease, request).await;
+    }
     let request_identity = viptv_core::native_torrent_policy::NativeTorrentRequestIdentity {
         scope: native_scope(&lease)?,
         request: core_request(&request)?,
@@ -1524,19 +1578,7 @@ async fn start_mode(
     if input.live && request.position != 0.0 {
         return Err(Error::Code("invalid_playback_request"));
     }
-    let native = !input.requires_torrent_gateway
-        && request.client.can_play_direct
-        && !matches!(request.client.platform, Platform::Roku | Platform::Vizio)
-        && (!matches!(request.client.platform, Platform::Web | Platform::Webos)
-            || (input.url.starts_with("https://") && input.headers.is_empty()));
-    let direct = native
-        && (input.required_audio_index.is_none() || request.client.supports_required_audio_index)
-        && !request.force_gateway
-        && request.conversion == Conversion::Auto
-        && request.audio_track.is_none()
-        && request.subtitle_track.is_none()
-        && request.audio_language.is_none()
-        && !request.subtitles_off;
+    let direct = direct_eligible(&input, &request);
     let native_candidate = native_candidate(&app, &lease, &input, &request);
     if input.requires_torrent_gateway
         && request

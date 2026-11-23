@@ -5,6 +5,7 @@ use url::Url;
 pub(crate) struct Destination {
     pub url: String,
     pub headers: BTreeMap<String, String>,
+    pub size: Option<u64>,
 }
 pub(crate) struct Probe {
     slots: tokio::sync::Semaphore,
@@ -45,6 +46,7 @@ impl Probe {
             return Ok(Some(Destination {
                 url: raw.into(),
                 headers: headers.clone(),
+                size: None,
             }));
         }
         match tokio::time::timeout(Duration::from_secs(8), async {
@@ -77,6 +79,20 @@ fn next(current: &Url, location: &str, fixture: bool) -> Option<Url> {
     }
     source_http::validate(&target, fixture).ok()?;
     Some(target)
+}
+fn size(response: &reqwest::Response) -> Option<u64> {
+    let header = |name| response.headers().get(name)?.to_str().ok();
+    let size = if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        header(reqwest::header::CONTENT_RANGE)?
+            .strip_prefix("bytes ")?
+            .split_once('/')?
+            .1
+            .parse()
+            .ok()?
+    } else {
+        header(reqwest::header::CONTENT_LENGTH)?.parse().ok()?
+    };
+    (size > 0).then_some(size)
 }
 async fn inspect<F, Fut>(
     raw: &str,
@@ -166,6 +182,7 @@ where
                 return Ok(Some(Destination {
                     url: target.into(),
                     headers,
+                    size: size(&response),
                 }))
             }
             301 | 302 | 303 | 307 | 308 if hop < 4 => {
