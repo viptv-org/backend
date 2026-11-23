@@ -231,3 +231,48 @@ async fn authority_revoked_while_waiting_for_probe_capacity_prevents_dns_or_medi
         Err(Error::Code("playback_expired"))
     ));
 }
+
+#[tokio::test]
+async fn the_probe_reports_the_full_size_from_a_range_or_a_plain_answer() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/ranged",
+                    get(|| async {
+                        (
+                            axum::http::StatusCode::PARTIAL_CONTENT,
+                            [("content-range", "bytes 0-0/7340032000")],
+                            "x",
+                        )
+                    }),
+                )
+                .route("/plain", get(|| async { "abc" }))
+                .route(
+                    "/unknown",
+                    get(|| async {
+                        (
+                            axum::http::StatusCode::PARTIAL_CONTENT,
+                            [("content-range", "bytes 0-0/*")],
+                            "x",
+                        )
+                    }),
+                ),
+        )
+        .await
+        .ok()
+        .unwrap()
+    });
+    for (path, expected) in [("ranged", Some(7_340_032_000)), ("plain", Some(3)), ("unknown", None)] {
+        let found = inspect(&format!("{base}/{path}"), &BTreeMap::new(), true, &|| async { Ok(()) })
+            .await
+            .ok()
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.size, expected, "{path}");
+    }
+    task.abort();
+}

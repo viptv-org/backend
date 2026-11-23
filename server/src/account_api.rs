@@ -248,6 +248,8 @@ pub(crate) fn details(code: &str) -> (StatusCode, &'static str) {
             "gateway_startup_timeout" => (StatusCode::GATEWAY_TIMEOUT, "The gateway took too long to prepare this source. Try again or choose another source."),
             "source_unavailable" => (StatusCode::BAD_GATEWAY, "The source could not be reached or inspected. Try another source."),
             "delivery_unsupported" => (StatusCode::NOT_ACCEPTABLE, "This source cannot be delivered with this device's playback capabilities."),
+            "download_unsupported" => (StatusCode::NOT_ACCEPTABLE, "This source can't be downloaded. Choose another source."),
+            "download_rate_limited" => (StatusCode::TOO_MANY_REQUESTS, "Too many downloads were started. Wait a while before starting more."),
             "gateway_already_configured" => (StatusCode::CONFLICT, "This gateway and namespace are already configured in your account. Edit the existing connection."),
             "gateway_checks_busy" => (StatusCode::SERVICE_UNAVAILABLE, "Gateway checks are busy. Try again shortly."),
             "invalid_gateway_configuration" => (StatusCode::BAD_REQUEST, "Check the gateway name, namespace and priority."),
