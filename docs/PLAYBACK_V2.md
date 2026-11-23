@@ -173,8 +173,8 @@ the gateway (Roku, Vizio, `can_play_direct: false`, `force_gateway`, a
 conversion or track choice, a torrent without the negotiated runtime) or a URL
 the direct probe can't reach answers `406 download_unsupported`. Source grants,
 profile and session fences and provider connection limits are checked as for
-playback. Each profile may admit 60 downloads per hour; more answer
-`429 download_rate_limited`. Download admission writes no Continue Watching,
+playback. Each profile may make 60 download requests per hour, refused ones
+included; more answer `429 download_rate_limited`. Download admission writes no Continue Watching,
 viewing, progress or scrobble state and logs one `Download admission accepted`
 line with session and profile tags and the delivery kind.
 
