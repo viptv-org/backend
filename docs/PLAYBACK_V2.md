@@ -240,6 +240,15 @@ hour (`429 segments_rate_limited`), and answers `400 invalid_segments_request`
 for a malformed body. Lookups, caches and the empty-answer rules are the
 playback route's.
 
+POST /api/resume answers the session profile's saved position for one card
+without starting playback, for a downloaded file that plays before the next
+history sync. The body is `{"card": <Card>}`. It returns
+`{"position_seconds": <number>, "reason": <string>}` with the same lookup, 95 %
+completion rule and reason codes as playback start: `found`, `not_resumable`,
+`key_mismatch` or `no_record`. It needs a profile session (401 without a
+session, 403 without a profile), allows 120 lookups per profile per hour
+(`429 resume_rate_limited`), and never logs ids or titles.
+
 The server always returns the segments it knows: the profile's "Skip intros and
 recaps" preference is applied by the client, which also uses `credits.start_ms`
 to time the next-episode panel. Segments come from four upstream sources,

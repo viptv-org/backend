@@ -1259,6 +1259,19 @@ pub(crate) fn resume_outcome_db(
     Ok(ResumeOutcome { position, reason, record, lookup: desired })
 }
 
+pub(crate) fn resume_outcome_checked_db(
+    db: &Connection,
+    app: &App,
+    profile: i64,
+    card: &Card,
+) -> Result<ResumeOutcome, ApiError> {
+    app.require_profile(db, profile)?;
+    let lease = app.request_lease();
+    lease.validate(db)?;
+    kids::scoped::require_card_db(db, &lease.principal, card)?;
+    resume_outcome_db(db, profile, card)
+}
+
 pub(crate) fn playback_keys_db(db: &Connection, profile: i64, card: &Card) -> Vec<Key> {
     let mut keys: Vec<Key> = verified_key_db(db, profile, card).into_iter().collect();
     if let Ok(raw) = raw_key(card) {

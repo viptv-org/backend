@@ -14,6 +14,8 @@ pub(crate) async fn blocking<T: Send + 'static>(
 #[derive(Debug)]
 pub struct ApiError(pub StatusCode, pub String);
 pub(crate) const MSG_PROFILE_REQUIRED: &str = "Profile selection required";
+pub(crate) const MSG_RESUME_RATE_LIMITED: &str =
+    "Too many resume lookups. Wait before trying again.";
 pub(crate) const MSG_PARENT_REQUIRED: &str = "Parent PIN required";
 pub(crate) const MSG_PARENT_PIN_INVALID: &str = "Incorrect parent PIN";
 pub(crate) const MSG_LEAVE_PIN_REQUIRED: &str = "Profile PIN required";
@@ -76,6 +78,7 @@ impl ApiError {
             MSG_PASSWORD_INCORRECT => Some(CODE_PASSWORD_INCORRECT),
             MSG_PASSWORD_TOO_SHORT => Some(CODE_PASSWORD_TOO_SHORT),
             "Provider connection limit reached" => Some("provider_connection_limit"),
+            MSG_RESUME_RATE_LIMITED => Some("resume_rate_limited"),
             _ => None,
         }
     }
@@ -200,6 +203,7 @@ pub struct App {
     pub(crate) playback_failure_limits: Arc<gateway::playback::rate::Limiter>,
     pub(crate) download_admission_limits: Arc<gateway::playback::rate::Limiter>,
     pub(crate) segment_lookup_limits: Arc<gateway::playback::rate::Limiter>,
+    pub(crate) resume_lookup_limits: Arc<gateway::playback::rate::Limiter>,
     pub(crate) subtitle_selections: Arc<engine_v3::subtitles::Selections>,
     pub(crate) segments: Arc<engine_v3::segments::Service>,
     pub(crate) cross_ids: Arc<engine_v3::cross_ids::Service>,
@@ -437,6 +441,7 @@ impl App {
             playback_failure_limits: Arc::new(gateway::playback::failures::limiter()),
             download_admission_limits: Arc::new(gateway::playback::downloads::limiter()),
             segment_lookup_limits: Arc::new(gateway::playback::playback_segments::limiter()),
+            resume_lookup_limits: Arc::new(engine_v3::resume::limiter()),
             live_cache: Default::default(),
             live_fetch_gates: Default::default(),
             streams: Default::default(),
