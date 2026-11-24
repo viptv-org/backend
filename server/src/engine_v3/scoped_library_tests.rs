@@ -1385,3 +1385,49 @@ async fn home_favorites_reads_about_twelve_rows_when_unrestricted() {
         "home favourites read {steps} rows just to produce 12 cards"
     );
 }
+
+#[tokio::test]
+async fn resume_endpoint_returns_saved_position_and_reason_without_ids() {
+    use tracing::instrument::WithSubscriber;
+    let (app, task, _) = stack().await;
+    let (subscriber, captured) = crate::test_support::capture_logs(tracing::Level::INFO);
+    let paused = detail(&app, 101, "private-episode-paused").await;
+    let finished = detail(&app, 102, "private-episode-finished").await;
+    let untouched = detail(&app, 101, "private-episode-untouched").await;
+    progress(&app, &paused, 41000).with_subscriber(subscriber.clone()).await;
+    progress(&app, &finished, 99000).await;
+    for (card, reason, position) in [
+        (&paused, "found", 41.0),
+        (&finished, "not_resumable", 0.0),
+        (&untouched, "no_record", 0.0),
+    ] {
+        let (status, value) = request(
+            &app,
+            "member-token-1",
+            "POST",
+            "/api/resume",
+            json!({"card": card}),
+        )
+        .with_subscriber(subscriber.clone())
+        .await;
+        assert_eq!(status, StatusCode::OK, "{value}");
+        assert_eq!(value["reason"], reason);
+        assert_eq!(value["position_seconds"], position);
+    }
+    let logs = captured.text();
+    for private in ["private-episode", "Fixture", "UNTRUSTED"] {
+        assert!(!logs.contains(private), "{private} leaked: {logs}");
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn resume_endpoint_requires_a_profile() {
+    let (app, task, _) = stack().await;
+    let card = json!({"identity":{"kind":"movie","id":"tt1","ids":[]},"provider_id":"stremio","title":"T","badges":[]});
+    let (status, value) =
+        request(&app, "member-token-2", "POST", "/api/resume", json!({"card": card})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{value}");
+    assert_eq!(value["error_code"], "profile_required");
+    task.abort();
+}

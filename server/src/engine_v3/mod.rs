@@ -90,6 +90,7 @@ mod provider_identity_tests;
 pub(crate) mod viewing_action;
 pub(crate) mod viewing_presentation;
 pub(crate) mod origins;
+pub(crate) mod resume;
 pub(crate) mod scoped_library;
 #[cfg(test)] mod origin_tests;
 mod simkl_catalog;
