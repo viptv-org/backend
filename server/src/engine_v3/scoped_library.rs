@@ -1265,10 +1265,14 @@ pub(crate) fn resume_outcome_checked_db(
     profile: i64,
     card: &Card,
 ) -> Result<ResumeOutcome, ApiError> {
-    app.require_profile(db, profile)?;
-    let lease = app.request_lease();
-    lease.validate(db)?;
-    kids::scoped::require_card_db(db, &lease.principal, card)?;
+    if card.metadata_origin.is_some() {
+        validate_current(db, app, profile, card)?;
+    } else {
+        app.require_profile(db, profile)?;
+        let lease = app.request_lease();
+        lease.validate(db)?;
+        kids::scoped::require_card_db(db, &lease.principal, card)?;
+    }
     resume_outcome_db(db, profile, card)
 }
 
