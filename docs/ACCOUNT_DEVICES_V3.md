@@ -31,6 +31,28 @@ this list and, when the account is the owner, signs devices out. Parent
 restrictions remain enforced. Cookie mutations require the existing exact-origin
 and CSRF protections. Responses are no-store.
 
+## Packaged client origin exception
+
+The installed Samsung Tizen and webOS packages run from `file:` and therefore
+send `Origin: null` with `Sec-Fetch-Site: cross-site` on every call. That is an
+opaque origin, not a concrete one, so `check_origin` keeps rejecting it: browser
+register, login, recover, refresh, profile and logout entry points stay pinned to
+the configured origins and their CSRF and exact-origin rules are unchanged.
+
+Only the bearer/device-pairing surface accepts an opaque origin. Requests
+transporting no ambient cookie may pair and refresh, because the credential they
+receive is a bearer token and a foreign page cannot read it back across origins.
+The packaged flow covers `POST /api/auth/device/code`, `POST /api/auth/device/token`,
+`POST /api/auth/device/refresh`, `GET /api/auth/me`, `POST /api/auth/profile` and
+`POST /api/auth/logout` with an `Authorization: Bearer` credential.
+
+The `/api` router answers preflight and actual requests carrying the literal
+`null` origin with `Access-Control-Allow-Origin: null`, the methods and headers
+the TV client uses, `Date` and `Retry-After` exposure (the client derives its
+clock offset from `Date`) and never `Access-Control-Allow-Credentials`. Other
+origins receive no CORS header, so a foreign page cannot read a response even
+when it holds a bearer token.
+
 Creation timestamps are not last-activity timestamps. The client labels them
 “Signed in …” and does not invent operating-system or model information absent
 from the host. The supplied `W3Account` board informs the KMP view; new confirmation,

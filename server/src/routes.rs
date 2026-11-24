@@ -1,4 +1,28 @@
 use super::*;
+use axum::http::{HeaderName, HeaderValue, Method};
+use tower_http::cors::{AllowOrigin, CorsLayer};
+
+fn packaged_tv_cors() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list([HeaderValue::from_static("null")]))
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            HeaderName::from_static("x-csrf-token"),
+        ])
+        .expose_headers([header::DATE, header::RETRY_AFTER])
+        .max_age(Duration::from_secs(600))
+}
 
 pub fn router(app: App) -> Router {
     router_with_viewers(app, None)
@@ -344,7 +368,8 @@ pub fn router_with_viewers(app: App, tv_dashboard: Option<std::path::PathBuf>) -
         .layer(middleware::map_response(private_api_response))
         .layer(middleware::from_fn(gateway::playback::control_deadline))
         .layer(middleware::from_fn(gateway::diagnostics::observe))
-        .layer(middleware::from_fn(images::negotiate));
+        .layer(middleware::from_fn(images::negotiate))
+        .layer(packaged_tv_cors());
     let mut r = Router::new()
         .route("/api/images/clearlogo/v1/:id", get(images::clearlogo).options(images::options))
         .route(

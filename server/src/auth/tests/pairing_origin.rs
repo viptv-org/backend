@@ -51,6 +51,17 @@ fn the_served_origin_pairs_while_browser_routes_stay_pinned() {
         HeaderValue::from_static("http://watch.example:8443"),
     );
     assert!(check_device_origin(&insecure, configured).is_err());
+    let mut packaged = served("tv.example", Some("null"));
+    assert!(check_origin(&packaged, configured).is_err());
+    assert!(check_device_origin(&packaged, configured).is_ok());
+    packaged.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+    assert!(check_origin(&packaged, configured).is_err());
+    assert!(check_device_origin(&packaged, configured).is_ok());
+    let mut file = served("tv.example", Some("file://"));
+    assert!(check_origin(&file, configured).is_err());
+    assert!(check_device_origin(&file, configured).is_ok());
+    file.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+    assert!(check_device_origin(&file, configured).is_ok());
 }
 
 #[test]
