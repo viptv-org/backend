@@ -145,13 +145,21 @@ fn cross_site(h: &HeaderMap) -> bool {
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v == "cross-site")
 }
-fn request_origin(h: &HeaderMap) -> Result<Option<url::Origin>, ApiError> {
+enum RequestOrigin {
+    Absent,
+    Opaque,
+    Concrete(url::Origin),
+}
+fn request_origin(h: &HeaderMap) -> Result<RequestOrigin, ApiError> {
     let Some(value) = h.get(header::ORIGIN) else {
-        return Ok(None);
+        return Ok(RequestOrigin::Absent);
     };
-    Ok(Some(
-        parse_origin(value.to_str().map_err(|_| forbidden())?)?.origin(),
-    ))
+    let value = value.to_str().map_err(|_| forbidden())?.trim();
+    // A packaged Samsung widget runs from file: and sends Origin: null; device flows hold no ambient cookie.
+    if value.eq_ignore_ascii_case("null") || value.to_ascii_lowercase().starts_with("file:") {
+        return Ok(RequestOrigin::Opaque);
+    }
+    Ok(RequestOrigin::Concrete(parse_origin(value)?.origin()))
 }
 fn served_origin(h: &HeaderMap) -> Result<url::Origin, ApiError> {
     let host = h
@@ -164,8 +172,10 @@ pub(crate) fn check_origin(h: &HeaderMap, configured: &[url::Url]) -> Result<(),
     if cross_site(h) {
         return Err(forbidden());
     }
-    let Some(origin) = request_origin(h)? else {
-        return Ok(());
+    let origin = match request_origin(h)? {
+        RequestOrigin::Absent => return Ok(()),
+        RequestOrigin::Opaque => return Err(forbidden()),
+        RequestOrigin::Concrete(origin) => origin,
     };
     let allowed: Vec<url::Origin> = if configured.is_empty() {
         vec![served_origin(h)?]
@@ -180,10 +190,11 @@ pub(crate) fn check_origin(h: &HeaderMap, configured: &[url::Url]) -> Result<(),
 }
 /// A paired device holds a bearer credential, so any origin this server answers on may pair.
 pub(crate) fn check_device_origin(h: &HeaderMap, configured: &[url::Url]) -> Result<(), ApiError> {
-    if cross_site(h) {
+    let origin = request_origin(h)?;
+    if cross_site(h) && !matches!(origin, RequestOrigin::Opaque) {
         return Err(forbidden());
     }
-    let Some(origin) = request_origin(h)? else {
+    let RequestOrigin::Concrete(origin) = origin else {
         return Ok(());
     };
     let mut allowed: Vec<url::Origin> = configured.iter().map(|c| c.origin()).collect();

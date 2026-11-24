@@ -1699,6 +1699,7 @@ fn profile_rows_outside_the_world_size_project_no_choice_and_still_rename() {
 mod device_code_invalidates;
 mod device_deny;
 mod device_token_errors;
+mod packaged_client;
 mod pairing_origin;
 mod session_cap;
 mod stale_authority;
